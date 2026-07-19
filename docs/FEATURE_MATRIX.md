@@ -6,7 +6,7 @@
 |---|---|---|
 | Public/private configuration | Implemented and tested | One source tree; public defaults plus ignored local override; production rejects mock CLI/local secrets; machine-neutral BuildInfo |
 | Windows distribution | Implemented and locally packaged | Stable appId/AUMID, unsigned per-user Simplified Chinese assisted NSIS and portable ZIP; uninstall preserves AppData/Grok data |
-| Release evidence | Implemented, generated and published | SHA256SUMS, CycloneDX SBOM, third-party licenses; public GitHub Release and verified artifact attestations from the `v0.4.0` tag |
+| Release evidence | Implemented, generated and published | SHA256SUMS, CycloneDX SBOM, third-party licenses; public GitHub Release and verified artifact attestations from the latest `v0.4.1` tag |
 | Public-source safety | Implemented and passed | Repository/artifact scanner, Gitleaks workflow, expanded ignore rules; generated host/evidence/runtime data excluded |
 | First-run wizard | Implemented | System/DPAPI/CLI/models/ACP/account/workspace/Computer checks; official install command, skip/rerun and capability degradation |
 | Diagnostics/support bundle | Implemented and tested | Copyable result, preview before export, only versions/capabilities/redacted logs; no prompts/sessions/screenshots/content/full paths/proxy address |

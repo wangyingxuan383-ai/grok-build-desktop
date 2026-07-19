@@ -7,6 +7,11 @@
 - Fixed PowerShell 5.1 desktop-shortcut, packaged-window smoke and v0.3 UI probe scripts when the executable argument is omitted; release hashing now uses the .NET SHA-256 implementation instead of relying on cmdlet auto-loading.
 - Rebuilt the local self-use package, regenerated the sole desktop shortcut and verified both a cold packaged launch and a shortcut launch expose the visible main window.
 
+### Verified
+
+- Version `0.4.1` passed 148 automated tests, public-safety scanning, Fuses/resource checks, local cold/shortcut launch, GitHub CI, Gitleaks, CodeQL, clean-runner NSIS lifecycle and EXE/ZIP attestations.
+- Published `v0.4.1` as the latest public GitHub Release; its installer and portable ZIP both return successful anonymous download responses.
+
 ## 0.4.0 - 2026-07-19
 
 ### Added
