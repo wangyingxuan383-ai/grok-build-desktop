@@ -28,6 +28,7 @@
 ### Fixed
 
 - Made Computer Use foreground activation temporarily join the relevant Windows input queues and always detach them afterward, eliminating intermittent `SetForegroundWindow` rejection in packaged and CI-launched probes.
+- Codex mirror fallback now checks that the bundled reader exists before launching Python, avoiding Windows Store aliases or slow process lookup from consuming the test and UI timeout.
 
 ### Security
 
