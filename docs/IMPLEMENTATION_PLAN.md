@@ -495,4 +495,5 @@
 - [x] 自动化覆盖配置隔离、敏感扫描、支持包脱敏、Windows 路径、向导、更新、文件搜索、隐私提醒、IPC 和资源哈希；打包脚本额外强制 Fuses/产物扫描，IME/会话搜索由 Renderer 实现并列入发布 UI 回归。
 - [ ] 在 Windows 10 22H2 与 Windows 11 x64、中文用户名、标准权限、不同 CLI/代理/路径/DPI/显示器和安装/ZIP 场景完成验收。
 - [x] 本地公开源码和最终产物通过敏感信息扫描；已在干净 `npm ci` 后用一条 fail-fast 命令生成完整产物；默认验证已拆分为不触碰真实 Grok/Codex 数据的离线流程。
-- [ ] GitHub CI/溯源/Draft Release 与干净 VM 的安装、升级、卸载、登录、对话、恢复和 Computer Use 仍须在首次公开仓库标签上执行后才能公开 Release。
+- [x] 首次公开仓库标签已通过 GitHub CI、Gitleaks、CodeQL、版本一致性、公开产物扫描、干净 Windows Runner 的 NSIS 安装/覆盖升级/卸载/AppData 保留、EXE/ZIP 构建溯源，并成功创建 Draft Release。
+- [ ] Draft Release 仍须由用户在目标 Windows 10/11 设备人工完成安装、登录、对话、恢复、更新提示和 Computer Use 验收后再公开。

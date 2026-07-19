@@ -44,7 +44,8 @@
 - Unsigned NSIS and portable ZIP were generated with the required names, passed source/artifact scanning, resource and Fuse verification, and produced SHA-256, CycloneDX SBOM and third-party license reports.
 - `win-unpacked` and the portable ZIP extracted to a Chinese path containing a space on a non-system drive both opened a visible window. The first Fuse build exposed and fixed a browser-snapshot incompatibility before final packaging.
 - After the foreground-activation hardening, the 24-step Computer Use harness passed three consecutive runs with zero wrong-window or unconfirmed high-impact actions.
-- Windows 10, clean-VM installer upgrade/uninstall and GitHub Draft Release/attestation remain release-operator gates; they are not claimed by this local verification.
+- The public GitHub CI, Gitleaks, CodeQL v4 and tagged Draft Release workflows passed; the clean Windows runner also passed NSIS install, overwrite upgrade, uninstall and AppData-retention checks, and both EXE/ZIP attestations verified.
+- Windows 10/11 target-device installation plus human login, conversation, recovery, update-prompt and Computer Use checks remain the gate before the Draft Release is made public.
 
 ## 0.3.1 - 2026-07-18
 
