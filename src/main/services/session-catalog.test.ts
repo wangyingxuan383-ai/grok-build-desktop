@@ -1,0 +1,55 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { SessionCatalog } from "./session-catalog";
+
+describe("SessionCatalog", () => {
+  it("finds Grok workspace folders case-insensitively on Windows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-test-"));
+    const grokHome = join(root, ".grok");
+    const encodedWorkspace = encodeURIComponent("d:\\Workspace\\Project");
+    const sessionId = "019f0000-test";
+    const sessionDir = join(grokHome, "sessions", encodedWorkspace, sessionId);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(join(sessionDir, "summary.json"), JSON.stringify({
+      session_summary: "Existing Grok session",
+      created_at: "2026-01-01T00:00:00Z",
+      num_chat_messages: 2,
+    }));
+    const catalog = new SessionCatalog(join(root, "app-data"), grokHome);
+    const rows = await catalog.list("D:\\workspace\\project");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(sessionId);
+    expect(rows[0]?.title).toBe("Existing Grok session");
+  });
+
+  it("persists pin state and exports user/assistant history as Markdown", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-export-"));
+    const grokHome = join(root, ".grok");
+    const cwd = "D:\\Workspace\\Project";
+    const sessionId = "019f0000-export";
+    const sessionDir = join(grokHome, "sessions", encodeURIComponent(cwd), sessionId);
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(join(sessionDir, "summary.json"), JSON.stringify({
+      session_summary: "Export test",
+      created_at: "2026-01-01T00:00:00Z",
+      num_chat_messages: 2,
+    }));
+    await writeFile(join(sessionDir, "chat_history.jsonl"), [
+      JSON.stringify({ type: "user", content: "你好" }),
+      JSON.stringify({ type: "assistant", content: [{ text: "已完成" }] }),
+      JSON.stringify({ type: "assistant", content: "隐藏说明", synthetic_reason: "system" }),
+    ].join("\n"));
+
+    const catalog = new SessionCatalog(join(root, "app-data"), grokHome);
+    await catalog.pin(sessionId, true);
+    expect((await catalog.list(cwd))[0]?.pinned).toBe(true);
+
+    const markdown = await catalog.exportMarkdown(cwd, sessionId);
+    expect(markdown).toContain("# Export test");
+    expect(markdown).toContain("## 用户\n\n你好");
+    expect(markdown).toContain("## Grok\n\n已完成");
+    expect(markdown).not.toContain("隐藏说明");
+  });
+});

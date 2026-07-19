@@ -1,0 +1,7 @@
+{
+  "channel": "local",
+  "repository": "owner/grok-build-desktop",
+  "allowPrerelease": true,
+  "debug": true,
+  "mockCliPath": "D:\\Tools\\fake-grok.exe"
+}

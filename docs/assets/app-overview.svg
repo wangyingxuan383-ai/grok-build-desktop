@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="860" viewBox="0 0 1440 860" role="img" aria-label="Grok Build Desktop 假数据界面预览">
+  <rect width="1440" height="860" fill="#0d0f12"/><rect width="280" height="860" fill="#12151a"/><rect x="280" width="1160" height="64" fill="#101318" stroke="#2a3037"/>
+  <rect x="18" y="18" width="32" height="32" rx="8" fill="#273039" stroke="#4c5a66"/><text x="34" y="41" text-anchor="middle" fill="#fff" font-family="Segoe UI,Microsoft YaHei" font-weight="700">G</text>
+  <text x="64" y="41" fill="#f0f3f5" font-family="Segoe UI,Microsoft YaHei" font-size="18" font-weight="700">Grok Build</text>
+  <rect x="16" y="78" width="248" height="46" rx="9" fill="#171b20" stroke="#30363d"/><text x="32" y="107" fill="#d8dde2" font-family="Microsoft YaHei" font-size="15">示例项目</text>
+  <rect x="16" y="140" width="248" height="40" rx="8" fill="#0c0e11" stroke="#30363d"/><text x="34" y="165" fill="#8f98a3" font-family="Microsoft YaHei">搜索会话</text>
+  <text x="18" y="214" fill="#9ca5ae" font-family="Microsoft YaHei" font-size="13">Grok 会话</text>
+  <rect x="8" y="228" width="264" height="68" rx="9" fill="#20272e"/><rect x="8" y="228" width="3" height="68" fill="#45a9df"/><text x="28" y="253" fill="#f0f3f5" font-family="Microsoft YaHei" font-size="14" font-weight="700">完善登录页面</text><text x="28" y="277" fill="#8f98a3" font-family="Microsoft YaHei" font-size="12">刚刚 · 8 条消息</text>
+  <text x="304" y="30" fill="#f1f4f6" font-family="Microsoft YaHei" font-size="17" font-weight="700">完善登录页面</text><text x="304" y="50" fill="#8f98a3" font-family="Segoe UI" font-size="12">D:\Workspace\示例项目</text>
+  <rect x="1210" y="17" width="202" height="34" rx="17" fill="#171b20" stroke="#30363d"/><text x="1311" y="39" text-anchor="middle" fill="#dce2e7" font-family="Segoe UI" font-size="13">test-user@example.com</text>
+  <rect x="780" y="106" width="560" height="72" rx="16" fill="#252a31"/><text x="810" y="149" fill="#f0f3f5" font-family="Microsoft YaHei" font-size="17">请为登录表单增加清晰的错误提示。</text>
+  <rect x="350" y="220" width="980" height="50" rx="10" fill="#12161b" stroke="#30363d"/><text x="376" y="251" fill="#d8dde2" font-family="Microsoft YaHei" font-size="16">›  执行过程</text><text x="1275" y="251" fill="#8f98a3" font-family="Microsoft YaHei" font-size="13">3 项</text>
+  <text x="350" y="326" fill="#8f98a3" font-family="Microsoft YaHei" font-size="13">最终回复</text><text x="350" y="370" fill="#eef2f5" font-family="Microsoft YaHei" font-size="20" font-weight="700">已完成登录表单的错误状态与中文提示。</text>
+  <text x="350" y="412" fill="#c7cdd3" font-family="Microsoft YaHei" font-size="16">• 保持键盘焦点和中文输入法组合事件</text><text x="350" y="446" fill="#c7cdd3" font-family="Microsoft YaHei" font-size="16">• 网络失败时提供重试入口</text><text x="350" y="480" fill="#c7cdd3" font-family="Microsoft YaHei" font-size="16">• 未在 Renderer 暴露账号凭据</text>
+  <rect x="350" y="670" width="980" height="134" rx="17" fill="#161a1f" stroke="#45a9df"/><text x="376" y="710" fill="#8f98a3" font-family="Microsoft YaHei" font-size="16">给 Grok 发送消息…</text><text x="376" y="776" fill="#8f98a3" font-family="Microsoft YaHei" font-size="14">＋   12K / 500K     Grok 4.5     high     Agent</text><circle cx="1290" cy="770" r="22" fill="#265f7e"/><text x="1290" y="778" text-anchor="middle" fill="#fff" font-family="Segoe UI" font-size="24">↑</text>
+  <text x="20" y="842" fill="#68727c" font-family="Microsoft YaHei" font-size="11">此图仅为使用假账号、假路径和假会话绘制的界面示意。</text>
+</svg>
