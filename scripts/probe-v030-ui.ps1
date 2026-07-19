@@ -1,11 +1,14 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$Executable = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release\win-unpacked\Grok Build Desktop.exe'),
+    [string]$Executable,
     [int]$Port = 9332,
     [switch]$LiveRisk
 )
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($Executable)) {
+    $Executable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
+}
 $Executable = [IO.Path]::GetFullPath($Executable)
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Executable not found: $Executable" }
 if (Get-Process -Name 'Grok Build Desktop' -ErrorAction SilentlyContinue) { throw 'Close the running Grok Build Desktop instance before the v0.3 UI probe.' }
