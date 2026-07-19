@@ -16,6 +16,7 @@
 ### Changed
 
 - Fixed the public source build on Node.js 24 LTS and npm lockfile. `bootstrap.ps1` now performs Chinese preflight checks and modifies the desktop only when `-CreateShortcut` is explicitly requested.
+- Pinned npm 11.6.2 locally and in GitHub Actions so the lockfile is not reinterpreted by a newer npm bundled with a later Node.js 24 patch release.
 - Split deterministic offline `verify.ps1` from opt-in `verify-live.ps1`; the default path does not read real auth data, query quota, mutate plugins or invoke a paid model.
 - Public packages include only `out/main`, `out/preload` and `out/renderer`; historical test evidence and cleanup scripts can no longer enter `app.asar`.
 - Public verification and packaging now prepare Electron's lazy binary once before parallel tests and fail immediately on any non-zero native command instead of continuing to produce a false-success package.
