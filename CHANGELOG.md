@@ -12,12 +12,14 @@
 - Added `Ctrl+Shift+F` current-session search with virtual-list positioning, narrow-window sidebar collapse, a UI recovery/diagnostics entry, pre-version UI metadata backup and a product icon made from repository-owned assets.
 - Added Chinese README, contribution/security/privacy documentation, sanitized UI preview, Issue/PR templates, CI, Gitleaks, CodeQL, Dependabot, Draft Release and artifact-attestation workflows.
 - Added SHA-256, CycloneDX SBOM and third-party license generation plus offline/public-safety/Fuse/resource-integrity verification scripts.
+- Added an explicit clean-runner NSIS lifecycle test for first install, overwrite upgrade, uninstall and `%APPDATA%` retention; it refuses to mutate a normal developer machine.
 
 ### Changed
 
 - Fixed the public source build on Node.js 24 LTS and npm lockfile. `bootstrap.ps1` now performs Chinese preflight checks and modifies the desktop only when `-CreateShortcut` is explicitly requested.
 - Pinned npm 11.6.2 locally and in GitHub Actions so the lockfile is not reinterpreted by a newer npm bundled with a later Node.js 24 patch release.
 - Split deterministic offline `verify.ps1` from opt-in `verify-live.ps1`; the default path does not read real auth data, query quota, mutate plugins or invoke a paid model.
+- GitHub CI now skips only foreground-desktop Computer Use actions unavailable to hosted service sessions while still compiling and self-testing the native host; local verification continues to run the complete 24-step foreground flow.
 - Public packages include only `out/main`, `out/preload` and `out/renderer`; historical test evidence and cleanup scripts can no longer enter `app.asar`.
 - Public verification and packaging now prepare Electron's lazy binary once before parallel tests and fail immediately on any non-zero native command instead of continuing to produce a false-success package.
 - The default font stack now prioritizes Segoe UI and Microsoft YaHei, Chinese IME composition/virtual-key 229 cannot trigger send, and layouts adapt from 1280×720 through high-DPI displays.

@@ -44,6 +44,9 @@ jobs:
       - name: Public artifact scan
         shell: powershell
         run: .\scripts\check-public-safety.ps1 -ArtifactPath release
+      - name: Clean-runner NSIS install, upgrade and uninstall
+        shell: powershell
+        run: .\scripts\test-installer-lifecycle.ps1 -AllowMutation
       - name: Upload workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
