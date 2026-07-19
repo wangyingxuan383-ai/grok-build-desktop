@@ -64,6 +64,8 @@ export class CodexSessionCatalog {
     let lastUserRequest: string | undefined;
     let lastAssistantAction: string | undefined;
     try {
+      const readerAvailable = await stat(reader).then((value) => value.isFile()).catch(() => false);
+      if (!readerAvailable) throw new Error("Grok Codex 读取器不存在");
       const output = await runFile("python", [reader, "codex", "show", row.path, "--json"]);
       const parsed = JSON.parse(output) as { turns?: Array<{ role?: string; text?: string; tool_calls?: unknown[]; tool_results?: unknown[]; inert?: boolean }>; warnings?: string[]; last_user_request?: string; last_assistant_action?: string };
       turns = (parsed.turns ?? []).map(normalizeReaderTurn).filter((value): value is CodexTurn => Boolean(value));
