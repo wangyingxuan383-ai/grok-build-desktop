@@ -1,0 +1,7 @@
+{
+  "channel": "stable",
+  "repository": "",
+  "allowPrerelease": false,
+  "debug": false,
+  "mockCliPath": ""
+}

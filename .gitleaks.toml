@@ -1,0 +1,8 @@
+title = "Grok Build Desktop public repository rules"
+
+[allowlist]
+description = "Synthetic credential strings used only by redaction tests"
+paths = [
+  '''.*\.test\.ts$''',
+  '''.*\.contract\.test\.ts$'''
+]

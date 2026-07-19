@@ -1,0 +1,48 @@
+# Dependencies and build output
+node_modules/
+out/
+release/
+coverage/
+.vite/
+playwright-report/
+test-results/
+
+# Local development configuration and environment
+.env
+.env.*
+!.env.example
+app.local.json
+local/
+*.local.json
+
+# Runtime data, credentials, logs and acceptance evidence
+auth.json
+accounts.vault
+settings.json
+user-data/
+*.jsonl
+*.log
+*.tmp
+*.bak
+*.lnk
+out-*/
+docs/private/
+docs/local/
+
+# Generated native/release security material
+resources/native/**/GrokComputerHost.exe
+resources/resource-manifest.json
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.sig
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
