@@ -30,7 +30,7 @@ jobs:
         run: npm ci
       - name: Offline verification
         shell: powershell
-        run: .\scripts\verify.ps1
+        run: .\scripts\verify.ps1 -SkipInteractiveComputer
       - name: Build unpacked application and verify fuses
         shell: powershell
         run: |
