@@ -1,9 +1,13 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$Executable = (Join-Path (Split-Path -Parent $PSScriptRoot) 'release\win-unpacked\Grok Build Desktop.exe')
+    [string]$Executable
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($Executable)) {
+    $Root = Split-Path -Parent $PSScriptRoot
+    $Executable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
+}
 $ResolvedExecutable = [System.IO.Path]::GetFullPath($Executable)
 if (-not (Test-Path -LiteralPath $ResolvedExecutable -PathType Leaf)) {
     throw "Executable not found: $ResolvedExecutable"

@@ -19,7 +19,14 @@ $Artifacts = Get-ChildItem -LiteralPath $Release -File | Where-Object {
     $_.Name -match '\.(exe|zip|json)$' -and $_.Name -ne 'builder-debug.yml'
 } | Sort-Object Name
 $Lines = foreach ($Artifact in $Artifacts) {
-    $Hash = (Get-FileHash -LiteralPath $Artifact.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $Stream = [IO.File]::OpenRead($Artifact.FullName)
+    $Sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $Hash = ([BitConverter]::ToString($Sha256.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $Sha256.Dispose()
+        $Stream.Dispose()
+    }
     "$Hash  $($Artifact.Name)"
 }
 [IO.File]::WriteAllLines((Join-Path $Release 'SHA256SUMS.txt'), $Lines, [Text.UTF8Encoding]::new($false))

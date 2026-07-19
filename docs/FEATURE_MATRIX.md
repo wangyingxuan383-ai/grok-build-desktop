@@ -6,7 +6,7 @@
 |---|---|---|
 | Public/private configuration | Implemented and tested | One source tree; public defaults plus ignored local override; production rejects mock CLI/local secrets; machine-neutral BuildInfo |
 | Windows distribution | Implemented and locally packaged | Stable appId/AUMID, unsigned per-user Simplified Chinese assisted NSIS and portable ZIP; uninstall preserves AppData/Grok data |
-| Release evidence | Implemented and generated | SHA256SUMS, CycloneDX SBOM, third-party licenses; GitHub Draft Release and artifact attestations run on `v*` tags |
+| Release evidence | Implemented, generated and published | SHA256SUMS, CycloneDX SBOM, third-party licenses; public GitHub Release and verified artifact attestations from the `v0.4.0` tag |
 | Public-source safety | Implemented and passed | Repository/artifact scanner, Gitleaks workflow, expanded ignore rules; generated host/evidence/runtime data excluded |
 | First-run wizard | Implemented | System/DPAPI/CLI/models/ACP/account/workspace/Computer checks; official install command, skip/rerun and capability degradation |
 | Diagnostics/support bundle | Implemented and tested | Copyable result, preview before export, only versions/capabilities/redacted logs; no prompts/sessions/screenshots/content/full paths/proxy address |
@@ -19,7 +19,7 @@
 | In-session search | Implemented | `Ctrl+Shift+F`, result count, previous/next and Virtuoso turn positioning |
 | Stability recovery | Implemented | Existing single-instance lock, UI error reload/diagnostics actions, per-version UI metadata backup without copying Grok sessions |
 | GitHub project files | Implemented | Chinese README, sanitized SVG preview, CONTRIBUTING/SECURITY/privacy, templates, CI/Release/CodeQL/Dependabot |
-| Cross-device release gate | Pending external matrix | Windows 11/local portable smoke passed; Windows 10, clean-VM NSIS lifecycle, multiple hardware DPI/displays and public Actions require release-operator execution |
+| Cross-device release gate | Partially verified | Windows 11/local portable smoke and clean Windows Runner NSIS lifecycle passed; Windows 10 and multiple physical DPI/display configurations remain pending |
 
 ## v0.3.1 Computer Use UX fixes
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - 2026-07-20
+
+### Fixed
+
+- Fixed PowerShell 5.1 desktop-shortcut, packaged-window smoke and v0.3 UI probe scripts when the executable argument is omitted; release hashing now uses the .NET SHA-256 implementation instead of relying on cmdlet auto-loading.
+- Rebuilt the local self-use package, regenerated the sole desktop shortcut and verified both a cold packaged launch and a shortcut launch expose the visible main window.
+
 ## 0.4.0 - 2026-07-19
 
 ### Added
@@ -45,7 +52,7 @@
 - `win-unpacked` and the portable ZIP extracted to a Chinese path containing a space on a non-system drive both opened a visible window. The first Fuse build exposed and fixed a browser-snapshot incompatibility before final packaging.
 - After the foreground-activation hardening, the 24-step Computer Use harness passed three consecutive runs with zero wrong-window or unconfirmed high-impact actions.
 - The public GitHub CI, Gitleaks, CodeQL v4 and tagged Draft Release workflows passed; the clean Windows runner also passed NSIS install, overwrite upgrade, uninstall and AppData-retention checks, both EXE/ZIP attestations verified, and the uploaded portable ZIP opened visibly after downloading it back into a Chinese path on a non-system drive.
-- Windows 10/11 target-device installation plus human login, conversation, recovery, update-prompt and Computer Use checks remain the gate before the Draft Release is made public.
+- At the release owner's explicit request on 2026-07-20, `v0.4.0` was promoted from Draft to a public GitHub Release so the installer and portable ZIP are visible; the broader Windows 10/11 hardware matrix remains tracked separately.
 
 ## 0.3.1 - 2026-07-18
 
