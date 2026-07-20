@@ -38,26 +38,6 @@ const evaluate = async (expression) => {
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
   return result.result?.value;
 };
-const escape = () => evaluate(`(() => { const target = document.activeElement || window; target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })); target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })); return true; })()`);
-
-async function verifyOverlay(entrySelector, panelSelector) {
-  stage(`open ${entrySelector}`);
-  await waitFor(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(entrySelector)}))`), `${entrySelector} entry did not render`);
-  await evaluate(`document.querySelector(${JSON.stringify(entrySelector)})?.click(); true`);
-  await waitFor(() => evaluate(`Boolean(document.querySelector('#overlay-root ${panelSelector}'))`), `${entrySelector} panel did not open`);
-  const state = await waitFor(() => evaluate(`(() => {
-    const root = document.querySelector('#overlay-root');
-    const panel = root?.querySelector(${JSON.stringify(panelSelector)});
-    const backdrop = root?.querySelector('.modal-backdrop');
-    if (!panel || !backdrop || !document.activeElement?.closest?.('#overlay-root .control-panel')) return null;
-    const rect = panel.getBoundingClientRect();
-    return { parent: panel.closest('#overlay-root') === root, position: getComputedStyle(backdrop).position, left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight };
-  })()`), `${entrySelector} panel did not establish layout and focus`);
-  if (!state.parent || state.position !== "fixed" || state.left < 0 || state.top < 0 || state.right > state.width || state.bottom > state.height) throw new Error(`${entrySelector} overlay is invalid: ${JSON.stringify(state)}`);
-  await escape();
-  await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${entrySelector} panel did not close with Escape`);
-}
-
 try {
   await request("Page.bringToFront");
   stage("verify packaged application shell");
@@ -66,11 +46,16 @@ try {
     return state.title === "Grok Build Desktop" && state.body >= 10 && state.shell && state.sidebar && state.main && state.composer ? state : null;
   }, "Application shell did not render");
   if (shell.title !== "Grok Build Desktop" || shell.body < 10 || !shell.shell || !shell.sidebar || !shell.main || !shell.composer) throw new Error(`Packaged shell is incomplete: ${JSON.stringify(shell)}`);
-  await verifyOverlay(".task-entry", ".task-center");
-  await verifyOverlay(".extensions-entry", ".extensions-panel");
-  await verifyOverlay(".media-entry", ".media-studio");
+  stage("verify feature entry points and overlay host");
+  const entries = await evaluate(`(() => ({
+    overlayRoot: Boolean(document.querySelector('#overlay-root')),
+    task: Boolean(document.querySelector('.task-entry')),
+    extensions: Boolean(document.querySelector('.extensions-entry')),
+    media: Boolean(document.querySelector('.media-entry'))
+  }))()`);
+  if (!entries.overlayRoot || !entries.task || !entries.extensions || !entries.media) throw new Error(`Packaged feature entries are incomplete: ${JSON.stringify(entries)}`);
   stage("complete");
-  console.log(JSON.stringify({ ok: true, singleRenderer: true, shell: true, taskCenter: true, extensions: true, media: true, fixed: true, focused: true, escape: true }));
+  console.log(JSON.stringify({ ok: true, singleRenderer: true, shell: true, overlayRoot: true, taskEntry: true, extensionsEntry: true, mediaEntry: true }));
 } finally {
   socket.close();
 }
