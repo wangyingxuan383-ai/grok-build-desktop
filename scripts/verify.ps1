@@ -37,8 +37,14 @@ if ($PackageDirectory) {
     $env:APP_BUILD_PROFILE = 'public'
     npx electron-builder --win dir --x64 --publish never
     if ($LASTEXITCODE -ne 0) { throw '目录打包失败。' }
-    node (Join-Path $PSScriptRoot 'verify-fuses.mjs') (Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe')
+    $PackagedExecutable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
+    $Deadline = [DateTime]::UtcNow.AddMinutes(5)
+    while (-not (Test-Path -LiteralPath $PackagedExecutable -PathType Leaf) -and [DateTime]::UtcNow -lt $Deadline) { Start-Sleep -Seconds 1 }
+    if (-not (Test-Path -LiteralPath $PackagedExecutable -PathType Leaf)) { throw '目录打包未生成应用程序。' }
+    node (Join-Path $PSScriptRoot 'verify-fuses.mjs') $PackagedExecutable
     if ($LASTEXITCODE -ne 0) { throw 'Electron Fuses 校验失败。' }
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $PackagedExecutable
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $PackagedExecutable -ProbeScript 'probe-v042-ui.mjs'
     & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 }
 

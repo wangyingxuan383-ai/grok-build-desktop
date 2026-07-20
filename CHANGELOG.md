@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.5.0 - 2026-07-20
+
+### Added
+
+- Added safe custom model providers for OpenAI Chat Completions, OpenAI Responses and Anthropic Messages, including editable presets, model discovery, connection tests, desktop/CLI defaults and external read-only Grok model discovery.
+- Added current-user Windows Task Scheduler automations for one-time, daily, weekly and one-minute-or-longer intervals. Prompts and pending confirmations use Windows DPAPI; workers run without a BrowserWindow and preserve recoverable Grok sessions and run history.
+- Added server-authoritative prompt queues, same-turn interjection, queue editing/reordering/removal, session forks, three rewind modes, app-only session archive metadata and a unified task/inbox center.
+- Added deterministic Task Scheduler headless probing and a two-stage tagged Release workflow that keeps assets in Draft until downloaded hashes, attestations, installer lifecycle, portable UI and scheduled-worker checks pass.
+
+### Changed
+
+- Custom provider credentials use `GROK_DESKTOP_PROVIDER_<ID>_KEY` user environment variables or explicit existing-variable references. Keys never enter TOML, Renderer payloads, command arguments, logs or support bundles.
+- Grok private extensions now follow the current official queue/interjection/fork/rewind/background-task/sub-Agent wire contracts and degrade independently when an older CLI lacks an optional capability.
+- The task center now combines queued prompts, terminal/monitor jobs, live sub-Agents, session loops, persistent automations and pending confirmations without adding a permanent right sidebar.
+
+### Fixed
+
+- Fixed whole-window backgrounds overriding fixed overlay positioning. Root dialogs now render under a dedicated `#overlay-root`, preserve viewport bounds and focus, lock background scrolling and close topmost-first with Escape.
+- Fixed fixed-position modal visibility detection so keyboard focus trapping remains active when Chromium reports a null `offsetParent`; packaged CDP acceptance now verifies focus establishment and Tab containment.
+- Fixed same-format custom-background replacement so the previous app-owned image remains recoverable until the new file has completed its atomic swap.
+- Fixed scheduled worker/uninstall startup so they do not race the normal automatic task-registration repair path.
+- Fixed provider update/removal failures after model reload so TOML, the application-owned provider index, replacement credentials and removed credentials all roll back as one transaction.
+- Fixed queued persistent automations counting one another as active global runs. Distinct atomic slot files now enforce the configured maximum without a three-or-more-task waiting deadlock.
+- Pending scheduled-task notifications can launch or focus the interactive app directly into the task center; headless completion notifications no longer claim an unavailable click action.
+- Scheduled-task completions and failures now enter the unified inbox exactly once, even when the terminal event is replayed.
+- A scheduled worker that can no longer decrypt its DPAPI prompt now records a terminal failed run and releases all locks instead of leaving a stale running record.
+
+### Security
+
+- Provider TOML writes modify only the marked application block, check the original hash, validate the complete file, replace atomically, keep five backups and roll back when Grok validation fails.
+- Non-loopback plain HTTP endpoints require an explicit warning confirmation. Provider networking honors the configured Electron proxy without exposing secrets to Renderer code.
+- Scheduled tasks run as the current interactive user with least privilege, reject concurrent runs, cap global concurrency, coalesce missed runs and pause high-impact actions for an expiring encrypted confirmation.
+
+### Verification
+
+- TypeScript, the production build, public source safety scan, high-level dependency audit and 193 offline tests passed locally; two explicit live Computer Use tests remain excluded from the default suite by design. Final packaged artifact scanning is repeated after the release files are regenerated.
+- Grok CLI `0.2.106 (bde89716f6)` accepted the isolated custom-model TOML, ACP initialization, session creation, live reasoning-effort switch, media command and injected Computer Skill without a paid prompt.
+- The packaged application passed content-aware cold startup plus full-window-background overlay probes, real current-user Task Scheduler headless wakeup, NSIS first-install/overwrite/uninstall with AppData retention, portable launch from a Chinese path containing spaces, Fuse verification and the unique desktop-shortcut check.
+- The canonical Setup/Portable/SBOM/license hashes are emitted in the accompanying `SHA256SUMS.txt`; the GitHub workflow downloads the Draft assets and verifies this manifest plus both executable attestations before publishing.
+
+## 0.4.2 - 2026-07-20
+
+### Added
+
+- Added a portal-based, keyboard-accessible Codex-style composer palette for files, images, path-only folder attachments, workspace references, Computer Use and Skills from enabled plugins.
+- Added one-shot Computer/Skill capability chips with per-session draft restoration. Computer selection now emits a generic `/computer <instruction>` only when the user sends the message and does not enumerate or start a target beforehand.
+- Added a fully Chinese native Electron menu with fixed links to the owner's repository, Releases, Issues and xAI documentation.
+- Added global dark, light, system and custom-color themes plus application-owned background images with conversation/window scope, fit, position, opacity, blur and adaptive light/dark masking.
+- Added the v0.5.0 Windows Task Scheduler design to `docs/SCHEDULED_TASKS_ROADMAP.md`; no scheduling runtime is included in v0.4.2.
+
+### Changed
+
+- Theme colors now use semantic variables across chat, Markdown, Shiki, Mermaid, Monaco Diff, KaTeX, extensions, diagnostics, onboarding, tool cards, scrollbars and the composer. The last known non-sensitive theme is painted before React mounts to avoid a startup theme flash.
+- Repository/update destinations are fixed to `wangyingxuan383-ai/grok-build-desktop`; they are not inferred from Git remotes, Actions forks or local environment variables.
+- Device-code process cleanup and Windows process-tree termination tests now use deterministic bounded waits instead of real-network timing.
+
+### Fixed
+
+- Fixed the permanent packaged black screen: disabling Electron's file-protocol privilege fuse caused `BrowserWindow.loadFile()` to return `net::ERR_FILE_NOT_FOUND` for the renderer entry inside `app.asar` on Windows.
+- Kept ASAR integrity, `OnlyLoadAppFromAsar`, Renderer sandboxing, CSP, navigation restrictions and typed IPC validation enabled while allowing the packaged `file://` renderer to load.
+- Added a visible Chinese startup-recovery page with reload, log, diagnostic-export and default-window recovery actions when the Renderer cannot load.
+- Removed the clipped legacy composer menu and the pre-send Computer application/window picker; the large palette now lives outside the composer's overflow boundary.
+
+### Security
+
+- Theme images are format/size validated, copied under `%APPDATA%`, and exposed only through the exact read-only `grok-theme://background/current` resource. Paths and image content are excluded from logs and support bundles.
+- Native-menu external links pass an exact fixed-destination allowlist before opening; Renderer filesystem, process and shell access remains unavailable.
+
+### Verification
+
+- Packaged smoke testing now connects to a temporary loopback DevTools endpoint and requires a rendered `.app-shell`, non-empty body text and the correct document title; a window handle alone can no longer pass a black screen.
+- TypeScript, the production build, the public-safety scanner, npm high-level audit and 167 automated tests passed locally; 2 opt-in live Computer Use cases remain intentionally skipped by the offline suite.
+- The opt-in real Grok Computer Use acceptance was also rerun separately: visual control reached the exact fixture result, while the high-impact delete sentinel requested confirmation and was not executed after rejection.
+- Final unsigned Setup/portable ZIP, SHA-256, CycloneDX SBOM and license report were regenerated for `0.4.2`; packaged content/UI/theme smokes, the portable Chinese-and-space path launch, Fuse checks and the sole desktop shortcut cold launch all passed locally.
+- The broken `v0.4.0` and `v0.4.1` public releases were withdrawn to Draft while the corrected `v0.4.2` package is verified.
+
 ## 0.4.1 - 2026-07-20
 
 ### Fixed
@@ -7,10 +83,10 @@
 - Fixed PowerShell 5.1 desktop-shortcut, packaged-window smoke and v0.3 UI probe scripts when the executable argument is omitted; release hashing now uses the .NET SHA-256 implementation instead of relying on cmdlet auto-loading.
 - Rebuilt the local self-use package, regenerated the sole desktop shortcut and verified both a cold packaged launch and a shortcut launch expose the visible main window.
 
-### Verified
+### Release history
 
-- Version `0.4.1` passed 148 automated tests, public-safety scanning, Fuses/resource checks, local cold/shortcut launch, GitHub CI, Gitleaks, CodeQL, clean-runner NSIS lifecycle and EXE/ZIP attestations.
-- Published `v0.4.1` as the latest public GitHub Release; its installer and portable ZIP both return successful anonymous download responses.
+- Version `0.4.1` passed its original automated, packaging, installer-lifecycle and attestation checks, but the old smoke test only asserted a window handle and missed the empty Renderer document.
+- It was withdrawn after the black-screen report and is superseded by `v0.4.2`.
 
 ## 0.4.0 - 2026-07-19
 

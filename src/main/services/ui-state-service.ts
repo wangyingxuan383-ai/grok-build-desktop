@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ComposerDraftState } from "../../shared/types";
+import type { ComposerCapabilitySelection, ComposerDraftState } from "../../shared/types";
 import { JsonStore } from "./json-store";
 
 interface UiStateData {
@@ -18,11 +18,11 @@ export class UiStateService {
     return (await this.store.get()).drafts[normalizeKey(key)] ?? null;
   }
 
-  async setDraft(key: string, text: string): Promise<void> {
+  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection): Promise<void> {
     const data = await this.store.get();
     const normalized = normalizeKey(key);
-    if (!text) delete data.drafts[normalized];
-    else data.drafts[normalized] = { key, text, updatedAt: new Date().toISOString() };
+    if (!text && !capability) delete data.drafts[normalized];
+    else data.drafts[normalized] = { key, text, capability, updatedAt: new Date().toISOString() };
     await this.store.set(data);
   }
 

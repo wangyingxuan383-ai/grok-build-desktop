@@ -38,4 +38,13 @@ describe("ExtensionService normalization", () => {
     await writeFile(join(root, "hook.js"), "export default { changed: true };");
     expect((await service.preview(root)).fingerprint).not.toBe(first.fingerprint);
   });
+
+  it("offers Skills only from enabled plugins in the composer palette", async () => {
+    const service = new ExtensionService(async () => ({ cliPath: "" }) as never, async () => undefined, { log: async () => undefined } as never);
+    service.listPlugins = async () => [
+      { id: "on", name: "Documents", enabled: true, trusted: true, skills: ["documents"], commands: [], agents: [], hookCount: 0, mcpServerCount: 0 },
+      { id: "off", name: "Disabled", enabled: false, trusted: true, skills: ["hidden"], commands: [], agents: [], hookCount: 0, mcpServerCount: 0 },
+    ];
+    expect(await service.listSkills()).toEqual([{ name: "documents", source: "Documents", command: "/documents", description: "由 Documents 插件提供" }]);
+  });
 });

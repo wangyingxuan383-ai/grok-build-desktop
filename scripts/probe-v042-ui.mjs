@@ -1,0 +1,101 @@
+const endpoint = process.argv[2];
+if (!endpoint) throw new Error("CDP endpoint is required");
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitFor(action, message, timeout = 20_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(150); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
+const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer target unavailable");
+const socket = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
+let id = 0; const pending = new Map();
+socket.onmessage = ({ data }) => { const message = JSON.parse(data); const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id); message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); };
+const request = (method, params = {}) => new Promise((resolve, reject) => { const requestId = ++id; pending.set(requestId, { resolve, reject }); socket.send(JSON.stringify({ id: requestId, method, params })); });
+const evaluate = async (expression) => { const result = await request("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(result.exceptionDetails.text); return result.result?.value; };
+const pressKey = async (key) => { if (key === "Escape") await evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })); true"); else { await request("Input.dispatchKeyEvent", { type: "keyDown", key, code: key }); await request("Input.dispatchKeyEvent", { type: "keyUp", key, code: key }); } await sleep(100); };
+try {
+  await request("Page.bringToFront");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell .composer, .app-shell .workspace-empty'))"), "Application content did not render");
+  await waitFor(() => evaluate("document.querySelector('.app-shell')?.classList.contains('background-conversation')"), "Conversation background scope was not restored");
+  const backgroundLoaded = await evaluate(`new Promise((resolve) => { const image = new Image(); image.onload = () => resolve({ ok: true, width: image.naturalWidth, height: image.naturalHeight }); image.onerror = () => resolve({ ok: false }); image.src = 'grok-theme://background/current'; })`);
+  if (!backgroundLoaded?.ok || backgroundLoaded.width !== 1 || backgroundLoaded.height !== 1) throw new Error(`Fixed theme protocol did not load the app-owned image: ${JSON.stringify(backgroundLoaded)}`);
+  await request("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
+  await sleep(250);
+  await evaluate("document.querySelector('.add-button')?.click(); true");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.add-palette'))"), "Add palette did not open");
+  const paletteBounds = await evaluate(`(() => { const rect = document.querySelector('.add-palette').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
+  if (paletteBounds.left < 0 || paletteBounds.top < 0 || paletteBounds.right > paletteBounds.width || paletteBounds.bottom > paletteBounds.height) throw new Error(`Add palette was clipped at 1280x720: ${JSON.stringify(paletteBounds)}`);
+  const palette = await evaluate("document.querySelector('.add-palette')?.innerText || ''");
+  for (const value of ["文件和图片", "文件夹", "工作区文件", "控制电脑", "插件 Skills", "管理扩展和 Skills"]) if (!palette.includes(value)) throw new Error(`Add palette is missing ${value}`);
+  await evaluate("document.querySelector('.add-palette [data-palette-item]')?.focus(); true");
+  await sleep(100);
+  for (let index = 0; index < 3; index += 1) await pressKey("ArrowDown");
+  const focusedPaletteItem = await evaluate("document.activeElement?.textContent || ''");
+  if (!focusedPaletteItem.includes("控制电脑")) throw new Error(`Arrow-key navigation focused the wrong item: ${focusedPaletteItem}`);
+  await pressKey("Enter");
+  await waitFor(() => evaluate("document.querySelector('.capability-chip.computer')?.textContent.includes('@Computer')"), "One-shot Computer chip did not appear");
+  if (await evaluate("Boolean(document.querySelector('.computer-picker, .computer-live-strip'))")) throw new Error("Selecting Computer opened or started the legacy window picker");
+  await evaluate("document.querySelector('.add-button')?.click(); true");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.add-palette'))"), "Add palette did not reopen");
+  await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('.add-palette'))"), "Reopened palette did not establish focus");
+  await pressKey("Escape");
+  await waitFor(() => evaluate("!document.querySelector('.add-palette')"), "Escape did not close the palette");
+  await sleep(150);
+  const restoredFocus = await evaluate("({ tag: document.activeElement?.tagName, cls: document.activeElement?.className || '', composer: document.activeElement === document.querySelector('.composer textarea') })");
+  if (!restoredFocus.composer) throw new Error(`Escape closed the palette but did not restore composer focus: ${JSON.stringify(restoredFocus)}`);
+  await request("Emulation.setDeviceMetricsOverride", { width: 3840, height: 2160, deviceScaleFactor: 1, mobile: false });
+  await evaluate("document.querySelector('.add-button')?.click(); true");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.add-palette'))"), "Add palette did not open in 4K viewport");
+  const largeBounds = await evaluate(`(() => { const rect = document.querySelector('.add-palette').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
+  if (largeBounds.left < 0 || largeBounds.top < 0 || largeBounds.right > largeBounds.width || largeBounds.bottom > largeBounds.height) throw new Error(`Add palette was clipped at 4K: ${JSON.stringify(largeBounds)}`);
+  await pressKey("Escape");
+  await request("Emulation.clearDeviceMetricsOverride");
+  await evaluate("document.querySelector('.topbar .icon-button:last-child')?.click(); true");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.theme-editor'))"), "Theme editor did not open");
+  const selectCount = await evaluate("document.querySelectorAll('.theme-editor select').length");
+  if (selectCount < 1) throw new Error("Theme mode selector is missing");
+  const backgroundEditor = await evaluate("document.querySelector('.theme-background')?.innerText || ''");
+  for (const value of ["背景范围", "适配方式", "图片透明度", "模糊", "遮罩"]) if (!backgroundEditor.includes(value)) throw new Error(`Background editor is missing ${value}`);
+  await evaluate(`(() => { const select = [...document.querySelectorAll('.theme-background select')].find(node => node.parentElement?.textContent?.includes('背景范围')); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, 'window'); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await waitFor(() => evaluate("document.querySelector('.app-shell')?.classList.contains('background-window')"), "Whole-window background scope did not apply immediately");
+  const overlayBounds = await evaluate(`(() => {
+    const root = document.querySelector('#overlay-root');
+    const panel = root?.querySelector('.control-panel');
+    const backdrop = root?.querySelector('.modal-backdrop');
+    if (!root || !panel || !backdrop) return null;
+    const rect = panel.getBoundingClientRect();
+    const backdropStyle = getComputedStyle(backdrop);
+    return { parent: panel.closest('#overlay-root') === root, left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight, backdropPosition: backdropStyle.position };
+  })()`);
+  if (!overlayBounds?.parent || overlayBounds.backdropPosition !== 'fixed' || overlayBounds.left < 0 || overlayBounds.top < 0 || overlayBounds.right > overlayBounds.width || overlayBounds.bottom > overlayBounds.height) {
+    throw new Error(`Whole-window background displaced the settings overlay: ${JSON.stringify(overlayBounds)}`);
+  }
+  await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))"), "Settings overlay did not establish keyboard focus");
+  const focusCycle = await evaluate(`(() => {
+    const panel = document.querySelector('#overlay-root .control-panel');
+    const visible = (node) => { const style = getComputedStyle(node); return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0; };
+    const items = [...panel.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')].filter(visible);
+    items.at(-1)?.focus();
+    return { count: items.length, first: items[0]?.textContent || items[0]?.getAttribute('aria-label') || items[0]?.tagName, last: items.at(-1)?.textContent || items.at(-1)?.getAttribute('aria-label') || items.at(-1)?.tagName };
+  })()`);
+  if (focusCycle.count < 2) throw new Error(`Settings overlay has too few focusable controls: ${JSON.stringify(focusCycle)}`);
+  await pressKey("Tab");
+  const cycledInside = await evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))");
+  if (!cycledInside) throw new Error("Tab escaped the topmost settings overlay");
+  await evaluate(`(() => { const select = document.querySelector('.theme-editor select'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, 'light'); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await waitFor(() => evaluate("document.documentElement.dataset.themeResolved === 'light'"), "Light theme did not apply immediately");
+  await evaluate(`(() => { const select = document.querySelector('.theme-editor select'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, 'dark'); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await waitFor(() => evaluate("document.documentElement.dataset.themeResolved === 'dark'"), "Dark theme did not restore");
+  await evaluate(`(() => { const select = document.querySelector('.theme-editor select'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, 'custom'); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+  await waitFor(() => evaluate("document.querySelectorAll('.theme-color-grid input[type=color]').length === 6"), "Custom color controls did not render");
+  const customText = await evaluate("document.querySelector('.theme-editor')?.innerText || ''");
+  for (const value of ["深色预设", "浅色预设", "选择背景图片"]) if (!customText.includes(value)) throw new Error(`Theme editor is missing ${value}`);
+  await evaluate("document.querySelector('#overlay-root .control-panel > header button')?.click(); true");
+  await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), "Settings panel did not close");
+  for (const selector of ['.task-entry', '.extensions-entry', '.media-entry']) {
+    await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
+    await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${selector} panel did not open in overlay root`);
+    const bounds = await evaluate(`(() => { const rect = document.querySelector('#overlay-root .control-panel').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
+    if (bounds.left < 0 || bounds.top < 0 || bounds.right > bounds.width || bounds.bottom > bounds.height) throw new Error(`${selector} panel escaped viewport: ${JSON.stringify(bounds)}`);
+    await pressKey("Escape");
+    await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${selector} panel did not close`);
+  }
+  console.log(JSON.stringify({ ok: true, addPalette: true, oneShotComputer: true, legacyPicker: false, themeEditor: true, lightDarkSwitch: true, customColors: true, backgroundProtocol: true, backgroundScopes: true, overlayRoot: true, overlayPanels: true }));
+} finally { socket.close(); }

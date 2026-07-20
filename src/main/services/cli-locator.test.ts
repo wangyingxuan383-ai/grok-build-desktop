@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AppSettings } from "../../shared/types";
 import { buildCliEnv, isLockedBinaryError, parseVersion } from "./cli-locator";
+import { DEFAULT_THEME } from "./theme-service";
 
 const settings: AppSettings = {
+  theme: DEFAULT_THEME,
   cliPath: "",
   httpProxy: "http://127.0.0.1:8080",
   httpsProxy: "http://127.0.0.1:8080",

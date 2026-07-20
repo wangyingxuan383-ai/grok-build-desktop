@@ -1,4 +1,5 @@
 import githubDarkDefault from "@shikijs/themes/github-dark-default";
+import githubLightDefault from "@shikijs/themes/github-light-default";
 import bash from "@shikijs/langs/bash";
 import css from "@shikijs/langs/css";
 import diff from "@shikijs/langs/diff";
@@ -16,12 +17,12 @@ import { createHighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 
 const highlighter = createHighlighterCore({
-  themes: [githubDarkDefault],
+  themes: [githubDarkDefault, githubLightDefault],
   langs: [bash, css, diff, html, javascript, json, markdown, powershell, python, sql, tsx, typescript, yaml],
   engine: createJavaScriptRegexEngine(),
 });
 
-export async function highlightCode(source: string, language: string): Promise<string> {
+export async function highlightCode(source: string, language: string, light = false): Promise<string> {
   const instance = await highlighter;
-  return instance.codeToHtml(source, { lang: language, theme: "github-dark-default" });
+  return instance.codeToHtml(source, { lang: language, theme: light ? "github-light-default" : "github-dark-default" });
 }

@@ -160,7 +160,7 @@ export class ExtensionService {
 
   async listSkills(): Promise<SkillSummary[]> {
     const plugins = await this.listPlugins();
-    return plugins.flatMap((plugin) => plugin.skills.map((name) => ({ name, source: plugin.name, command: `/${name}`, description: `由 ${plugin.name} 插件提供` })));
+    return plugins.filter((plugin) => plugin.enabled).flatMap((plugin) => plugin.skills.map((name) => ({ name, source: plugin.name, command: `/${name}`, description: `由 ${plugin.name} 插件提供` })));
   }
 
   async listHooks(): Promise<HookSummary[]> {

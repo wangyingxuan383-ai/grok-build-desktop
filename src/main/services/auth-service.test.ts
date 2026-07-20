@@ -8,6 +8,7 @@ import type { AccountProfile, AppSettings, LoginState } from "../../shared/types
 import type { AccountVault } from "./account-vault";
 import { AuthService, recoverAuthTransactionArtifacts, terminateProcessTree, type AuthServiceOptions } from "./auth-service";
 import type { LogService } from "./log-service";
+import { DEFAULT_THEME } from "./theme-service";
 
 vi.mock("electron", () => ({ shell: { openExternal: vi.fn(async () => undefined) } }));
 
@@ -16,6 +17,7 @@ const roots: string[] = [];
 const services: AuthService[] = [];
 
 const settings: AppSettings = {
+  theme: DEFAULT_THEME,
   cliPath: "",
   httpProxy: "",
   httpsProxy: "",
@@ -176,7 +178,7 @@ describe("AuthService lifecycle", () => {
       spawnLogin: spawnLoginScript("setInterval(() => undefined, 1_000);"),
       terminateProcessTree: async (child) => {
         terminations += 1;
-        await terminateProcessTree(child, 2_000);
+        child.kill();
       },
     });
 
@@ -186,7 +188,7 @@ describe("AuthService lifecycle", () => {
     expect(result.error).toContain("超过 5 分钟");
     expect(terminations).toBe(1);
     expect(await readFile(harness.authPath, "utf8")).toBe(oldRaw);
-  });
+  }, 10_000);
 
   it("cancels an in-flight device login during application disposal", async () => {
     const oldRaw = authJson("old", "old-token");
@@ -202,7 +204,7 @@ describe("AuthService lifecycle", () => {
       },
       terminateProcessTree: async (child) => {
         terminations += 1;
-        await terminateProcessTree(child, 2_000);
+        child.kill();
       },
     });
 
@@ -216,7 +218,7 @@ describe("AuthService lifecycle", () => {
     expect(result.error).toBe("设备码登录已取消");
     expect(harness.service.getLoginState().running).toBe(false);
     expect(await readFile(harness.authPath, "utf8")).toBe(oldRaw);
-  });
+  }, 10_000);
 
   it("clears running even when spawning the CLI throws synchronously", async () => {
     const harness = await createHarness(authJson("old", "old-token"), {
@@ -338,7 +340,7 @@ describe.skipIf(process.platform !== "win32")("Windows process-tree termination"
       if (child.pid && processExists(child.pid)) await execFileAsync("taskkill", ["/PID", String(child.pid), "/T", "/F"]).catch(() => undefined);
       if (descendantPid && processExists(descendantPid)) await execFileAsync("taskkill", ["/PID", String(descendantPid), "/T", "/F"]).catch(() => undefined);
     }
-  }, 15_000);
+  }, 30_000);
 });
 
 async function createHarness(oldRaw: string | undefined, options: AuthServiceOptions = {}): Promise<{

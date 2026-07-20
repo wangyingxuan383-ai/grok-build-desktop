@@ -8,6 +8,8 @@ interface SessionMetadata {
   renames: Record<string, string>;
   unread: Record<string, "ok" | "error">;
   pinned: Record<string, boolean>;
+  archived?: Record<string, boolean>;
+  parents?: Record<string, string>;
 }
 
 interface GrokSummary {
@@ -29,7 +31,7 @@ export class SessionCatalog {
     userDataPath: string,
     private readonly grokHome = join(homedir(), ".grok"),
   ) {
-    this.meta = new JsonStore(join(userDataPath, "session-metadata.json"), { renames: {}, unread: {}, pinned: {} });
+    this.meta = new JsonStore(join(userDataPath, "session-metadata.json"), { renames: {}, unread: {}, pinned: {}, archived: {}, parents: {} });
   }
 
   sessionRoot(cwd: string): string {
@@ -69,6 +71,8 @@ export class SessionCatalog {
           effort: summary.reasoning_effort,
           status,
           pinned: Boolean(metadata.pinned?.[entry.name]),
+          archived: Boolean(metadata.archived?.[entry.name]),
+          parentSessionId: metadata.parents?.[entry.name],
         };
       } catch {
         return null;
@@ -78,7 +82,7 @@ export class SessionCatalog {
     return rows
       .filter((row): row is SessionSummary => Boolean(row))
       .filter((row) => !normalized || row.title.toLowerCase().includes(normalized) || row.id.includes(normalized))
-      .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.localeCompare(a.updatedAt));
+      .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(Boolean(a.archived)) - Number(Boolean(b.archived)) || b.updatedAt.localeCompare(a.updatedAt));
   }
 
   async rename(sessionId: string, title: string): Promise<void> {
@@ -106,6 +110,17 @@ export class SessionCatalog {
     await this.meta.set(metadata);
   }
 
+  async archive(sessionId: string, archived: boolean): Promise<void> {
+    const metadata = await this.meta.get();
+    metadata.archived ??= {};
+    if (archived) metadata.archived[sessionId] = true; else delete metadata.archived[sessionId];
+    await this.meta.set(metadata);
+  }
+
+  async recordFork(parentSessionId: string, childSessionId: string): Promise<void> {
+    const metadata = await this.meta.get(); metadata.parents ??= {}; metadata.parents[childSessionId] = parentSessionId; await this.meta.set(metadata);
+  }
+
   async delete(cwd: string, sessionId: string): Promise<void> {
     const root = await this.resolveSessionRoot(cwd);
     const target = resolve(root, sessionId);
@@ -116,6 +131,11 @@ export class SessionCatalog {
     delete metadata.renames[sessionId];
     delete metadata.unread[sessionId];
     delete metadata.pinned[sessionId];
+    if (metadata.archived) delete metadata.archived[sessionId];
+    if (metadata.parents) {
+      delete metadata.parents[sessionId];
+      for (const [child, parent] of Object.entries(metadata.parents)) if (parent === sessionId) delete metadata.parents[child];
+    }
     await this.meta.set(metadata);
   }
 

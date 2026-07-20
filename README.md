@@ -16,7 +16,12 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 - 项目范围 Codex 会话只读镜像，并可创建独立 Grok 接力会话。
 - OAuth 周/月/按量额度（取决于当前 Grok CLI 与账号接口）。
 - Windows Computer Use：精确窗口、可见操作状态、紧急停止和高影响操作确认。
+- Codex 风格“+”添加面板：文件、图片、文件夹、工作区文件和已启用插件 Skills；Computer Use 以单次消息能力芯片启用，发送前不提前选择窗口。
+- 经典深色、经典浅色、跟随 Windows、自定义纯色和本地背景图片；背景可只作用于对话区或整个应用内容区。
 - 首次运行向导、兼容诊断、脱敏支持包和仅提示式应用更新。
+- 自定义模型提供商：Chat Completions、Responses、Anthropic Messages、本地服务、模型拉取与连接测试；凭据只引用 Windows 当前用户环境变量。
+- 关闭主窗口后仍能触发的 Windows 持久定时任务：一次、每日、每周、固定间隔、运行记录、通知和高影响操作确认。
+- 活动回合消息队列与 `Ctrl+Enter` 插话、队列编辑/排序、会话分叉、对话/文件回退、会话归档及统一任务中心（取决于 CLI 能力探测）。
 
 ## 系统要求
 
@@ -26,7 +31,7 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 
 ## 安装
 
-从仓库的 **Releases** 页面选择：
+从[我的仓库 Releases](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases)页面选择：
 
 - `Grok-Build-Desktop-Setup-vX.Y.Z-x64.exe`：当前用户 NSIS 安装版，无需管理员权限。
 - `Grok-Build-Desktop-Portable-vX.Y.Z-x64.zip`：解压后直接运行，其中的用户数据仍写入 `%APPDATA%\Grok Build Desktop`。
@@ -34,7 +39,7 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 本项目首批 Release **没有代码签名**。Windows 可能显示 SmartScreen 提示。请从本仓库 Release 下载，并使用同一 Release 中的 `SHA256SUMS.txt` 校验：
 
 ```powershell
-Get-FileHash .\Grok-Build-Desktop-Setup-v0.4.0-x64.exe -Algorithm SHA256
+Get-FileHash .\Grok-Build-Desktop-Setup-v0.5.0-x64.exe -Algorithm SHA256
 ```
 
 应用不会静默下载或自动执行未签名安装包。
@@ -54,7 +59,7 @@ irm https://x.ai/cli/install.ps1 | iex
 需要 Node.js 24 LTS、npm 11+、PowerShell 5.1+ 和 Windows x64。仓库固定依赖版本并提交 `package-lock.json`。
 
 ```powershell
-git clone https://github.com/<owner>/grok-build-desktop.git
+git clone https://github.com/wangyingxuan383-ai/grok-build-desktop.git
 cd grok-build-desktop
 npm ci
 npm run verify
@@ -74,7 +79,9 @@ npm run package:win
 ## 代理和数据位置
 
 - 应用设置与加密账号：`%APPDATA%\Grok Build Desktop`
+- 自定义背景副本：`%APPDATA%\Grok Build Desktop\themes`（应用只保存自己的副本，不持续依赖原图片）
 - Grok CLI、插件与原始会话：`%USERPROFILE%\.grok`
+- 持久任务定义与运行记录：`%APPDATA%\Grok Build Desktop\automations`（提示词使用 Windows DPAPI 加密）
 - Codex 镜像：只读访问 Codex 本地会话；不会修改原文件。
 
 应用继承 `HTTP_PROXY` / `HTTPS_PROXY`，也可在设置页覆盖。诊断支持包只记录代理“是否配置”，不导出地址或认证。
@@ -95,11 +102,19 @@ npm run check:public # 扫描个人路径、邮箱、代理与凭据模式
 
 **Computer Use 能点 UAC 吗？** 不能。UAC、Windows 安全、验证码与安全桌面必须由用户手动完成，之后再让任务继续。
 
-**支持 macOS / Linux / 英文吗？** v0.4.x 不支持。当前目标是 Windows x64 与简体中文。
+**如何切换浅色或自定义背景？** 打开“功能 → 设置 → 外观与背景”。主题即时生效；背景图片不会进入日志或诊断支持包。
+
+**定时任务在应用关闭后会运行吗？** 会。启用的持久任务由当前用户、最低权限的 Windows Task Scheduler 唤醒无窗口 Worker；Computer Use 任务仍要求桌面已解锁，高影响操作会暂停等待确认。
+
+**自定义提供商的密钥保存在哪里？** 默认保存为 Windows 当前用户环境变量，`config.toml` 只保存变量名。相同 Windows 用户下的其他进程也可能读取用户环境变量。
+
+**支持 macOS / Linux / 英文吗？** v0.5.0 不支持。当前目标是 Windows x64 与简体中文。
 
 ## 贡献与安全
 
 请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md) 和 [隐私说明](docs/PRIVACY.md)。Bug 报告不得附带真实 Token、完整日志、工作区源码或未脱敏截图。
+
+仓库入口：[我的 GitHub 仓库](https://github.com/wangyingxuan383-ai/grok-build-desktop) · [版本发布](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases) · [问题反馈](https://github.com/wangyingxuan383-ai/grok-build-desktop/issues)
 
 ## 许可证
 

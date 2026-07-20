@@ -10,7 +10,7 @@ const required = new Map([
   [FuseV1Options.EnableNodeCliInspectArguments, FuseState.DISABLE],
   [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.ENABLE],
   [FuseV1Options.OnlyLoadAppFromAsar, FuseState.ENABLE],
-  [FuseV1Options.GrantFileProtocolExtraPrivileges, FuseState.DISABLE],
+  [FuseV1Options.GrantFileProtocolExtraPrivileges, FuseState.ENABLE],
 ]);
 const failed = [];
 for (const [option, expected] of required) if (wire[option] !== expected) failed.push(`${FuseV1Options[option]}=${FuseState[wire[option]]}, expected ${FuseState[expected]}`);

@@ -24,6 +24,7 @@ import type {
   BuildInfo,
   OnboardingState,
   AppReleaseStatus,
+  PromptQueueEntry,
 } from "../../shared/types";
 
 export type UiMessage =
@@ -59,6 +60,7 @@ export interface SessionView {
   mode: SessionMode;
   meta: PromptMeta;
   status: string;
+  queue: PromptQueueEntry[];
 }
 
 interface AppState {
@@ -102,7 +104,7 @@ interface AppState {
   handleEvents(events: ChatEvent[]): void;
 }
 
-export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle" });
+export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", queue: [] });
 
 export const useAppStore = create<AppState>((set) => ({
   loading: true,
@@ -184,6 +186,9 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       else next.messages.push({ id: event.tool.toolCallId, kind: "tool", tool: event.tool });
       break;
     }
+    case "prompt-queue":
+      next.queue = event.entries;
+      break;
     case "permission":
       next.messages.push({ id: `permission-${String(event.request.requestId)}`, kind: "permission", request: event.request });
       break;

@@ -16,6 +16,14 @@ describe("UiStateService", () => {
     expect(await service.getDraft("session-a")).toBeNull();
   });
 
+  it("persists a one-shot capability even when the prompt is still empty", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-ui-capability-"));
+    const service = new UiStateService(root);
+    const capability = { kind: "computer" as const, label: "Computer", command: "/computer" };
+    await service.setDraft("Session-C", "", capability);
+    expect(await service.getDraft("session-c")).toMatchObject({ text: "", capability });
+  });
+
   it("deduplicates prompt history and keeps the newest fifty entries", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-ui-history-"));
     const service = new UiStateService(root);

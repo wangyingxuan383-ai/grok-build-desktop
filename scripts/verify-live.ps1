@@ -32,6 +32,7 @@ if (-not $SkipLiveCli) {
         Write-Host "Official marketplace source pinned for review: $ResolvedCommit" -ForegroundColor Green
         & (Join-Path $PSScriptRoot 'probe-plugin-restore.ps1') -GrokPath $Cli
         & (Join-Path $PSScriptRoot 'probe-v020-compatibility.ps1') -CliPath $Cli -RequireQuota
+        & (Join-Path $PSScriptRoot 'probe-provider-cli.ps1') -CliPath $Cli
         if ($RequireLiveComputerAction) {
             $PreviousLiveFlag = $env:GROK_LIVE_COMPUTER_ACTION
             try {
@@ -52,6 +53,7 @@ if (-not $SkipWindowSmoke) {
     $PackagedExe = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
     if (Test-Path -LiteralPath $PackagedExe -PathType Leaf) {
         & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $PackagedExe
+        & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $PackagedExe
     } else {
         Write-Host 'Packaged executable does not exist yet; window smoke test skipped.' -ForegroundColor Yellow
     }

@@ -23,3 +23,10 @@ The application uses the Agent Client Protocol TypeScript SDK, Electron, React, 
 - **electron-builder** and NSIS: unsigned per-user Windows installer and ZIP packaging under their respective licenses.
 - **CycloneDX npm SBOM** and `license-checker-rseidelsohn`: release inventory generation. Exact production dependency licenses are emitted as `THIRD_PARTY_LICENSES.json` with each Release.
 - GitHub Actions, CodeQL, Gitleaks and artifact-attestation workflows provide public CI/release scanning and provenance; no third-party service receives application telemetry.
+
+## v0.4.2 / v0.5.0 implementation references
+
+- **fanghui-li/Grok-Desktop**: product-behavior reference for the large add palette, one-shot capability chips, folder attachments and automation discoverability. The implementation in this repository is clean-room and does not copy its source code or redistribute its assets.
+- **smol-toml** (1.7.0, BSD-3-Clause): parses and serializes only the application-owned Grok model configuration block. Surrounding user configuration and comments are retained as text.
+- **xAI Grok Build**: protocol compatibility reference commit `ba76b0a683fa52e4e60685017b85905451be17bc` for prompt queue, interjection, fork, rewind, background-task and sub-Agent extension shapes. The CLI remains separately installed and is not redistributed.
+- Windows Task Scheduler, DPAPI and user-environment storage use public Windows APIs. Scheduled task prompts and pending confirmations are encrypted for the current Windows user.

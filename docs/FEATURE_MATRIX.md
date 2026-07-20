@@ -1,5 +1,31 @@
 # Feature Matrix
 
+## v0.5.0 additions
+
+| Area | Status | Notes |
+|---|---|---|
+| Overlay root and layering | Implemented, automated | Settings, accounts/quota, extensions, diagnostics, onboarding, media, confirmations, notifications and Computer dialogs render in the dedicated overlay root; whole-window backgrounds no longer alter modal positioning |
+| Custom providers | Implemented, automated | Chat Completions, Responses, Messages, local/remote presets, model discovery/test, user-env credentials, marked TOML block, conflict detection, five backups, validation and rollback |
+| Persistent automations | Implemented, automated | Current-user least-privilege Task Scheduler registration, once/daily/weekly/interval, encrypted prompts, headless worker, locks, two-run global default, notifications, confirmation timeout and registration repair |
+| Prompt queue/interjection | Implemented, contract tested | Server `x.ai/queue/changed` is authoritative; edit/remove/reorder/clear/interject use official identifiers and versions; old CLI interjection has a compatible send-now fallback |
+| Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
+| Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
+| v0.5 local gate | Passed | 193 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
+
+## v0.4.2 local candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Packaged startup recovery | Implemented and locally accepted | Packaged `loadFile()` works with ASAR integrity/OnlyLoadAppFromAsar; a Chinese recovery surface replaces permanent black screens; temporary-profile CDP smoke requires `.app-shell`, visible core content and no Renderer startup error |
+| Composer add palette | Implemented and packaged-UI verified | Top-level Portal, large responsive scroll surface, keyboard navigation/focus return, files/images/path-only folders/workspace files, enabled Skills and extension management; verified at 1280×720 and 4K probe sizes |
+| One-shot capabilities | Implemented and packaged-UI verified | Computer/Skill is selected as a draft chip and only converted on send; selecting Computer does not enumerate a window or start control early; successful sends clear it and failed sends preserve it |
+| Chinese native menu | Implemented and tested | File/Edit/Session/View/Feature/Help menus use typed commands; repository, releases and issues are exact allow-listed links under `wangyingxuan383-ai/grok-build-desktop` |
+| Theme modes | Implemented and tested | Classic dark/light, live Windows system following, custom dark/light base and six semantic colors; applied before React mounts and synchronized with `nativeTheme` |
+| Theme backgrounds | Implemented and packaged-UI verified | Validated app-owned PNG/JPEG/WebP/GIF, exact read-only custom protocol, conversation/window scope, fit/position/opacity/blur/adaptive mask and deletion; background paths/content stay out of logs and support bundles |
+| Rendering/theme integration | Implemented | Semantic variables cover shell/chat/Markdown/tables/KaTeX/scrollbars/palettes/cards/onboarding/diagnostics/extensions; Shiki, Mermaid and Monaco switch with the effective theme |
+| Local Windows package | Passed | 167 offline tests passed with 2 opt-in live cases skipped by default; the real Grok visual-click/risk-rejection loop was then run explicitly and passed. Fuse, public-safety, content/UI smokes, portable Chinese-space-path launch, setup/ZIP/SBOM/licenses/hashes and the sole desktop shortcut cold launch also passed |
+| Scheduled tasks | Planned for v0.5.0 only | Windows Task Scheduler plus Grok headless/ACP design is documented in `docs/SCHEDULED_TASKS_ROADMAP.md`; no scheduler runtime ships in v0.4.2 |
+
 ## v0.4.0 public release and v0.4.1 convenience set
 
 | Area | Status | Notes |
@@ -12,7 +38,7 @@
 | Diagnostics/support bundle | Implemented and tested | Copyable result, preview before export, only versions/capabilities/redacted logs; no prompts/sessions/screenshots/content/full paths/proxy address |
 | Application updates | Implemented and tested | Stable configured-repository Release API, six-hour cache, no unsigned download/execution, manual SHA-256 instructions |
 | Dynamic effort flag | Implemented and tested | Detects current CLI help and chooses `--effort` or `--reasoning-effort` without rejecting unknown versions |
-| Resource/Fuse hardening | Implemented and packaged | Plugin/host SHA-256 manifest; RunAsNode/NODE_OPTIONS/inspect off, cookie/ASAR integrity/OnlyLoadAppFromAsar on; final window smoke passed |
+| Resource/Fuse hardening | Implemented and packaged | Plugin/host SHA-256 manifest; RunAsNode/NODE_OPTIONS/inspect off, cookie/ASAR integrity/OnlyLoadAppFromAsar on; file privilege retained for packaged `loadFile`; content-aware Renderer smoke required |
 | Chinese/compact-device UX | Implemented | Segoe UI/YaHei stack, IME composition guard, 820×620 minimum, responsive sidebar, 100–200% OS DPI-compatible CSS |
 | `@文件` reference | Implemented and tested | Cached async Chinese fuzzy index, `.gitignore`, hard directory/size limits and attachment-chip output |
 | Attachment privacy | Implemented and tested | One-time warning for outside-workspace, `.env`, credential, private-key/certificate names |

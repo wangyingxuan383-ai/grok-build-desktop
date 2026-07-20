@@ -13,7 +13,7 @@ export interface PublicAppConfig {
 
 const DEFAULTS: PublicAppConfig = {
   channel: "stable",
-  repository: "",
+  repository: "wangyingxuan383-ai/grok-build-desktop",
   allowPrerelease: false,
   debug: false,
   mockCliPath: "",
@@ -67,6 +67,6 @@ function readConfig(path: string, fallback: Partial<PublicAppConfig>): Partial<P
 function buildProfile(): "public" | "local" {
   return typeof __GROK_BUILD_PROFILE__ === "undefined" ? (process.env.APP_BUILD_PROFILE === "local" ? "local" : "public") : __GROK_BUILD_PROFILE__;
 }
-function embeddedRepository(): string { return typeof __GROK_BUILD_REPOSITORY__ === "undefined" ? (process.env.GROK_DESKTOP_REPOSITORY || "") : __GROK_BUILD_REPOSITORY__; }
+function embeddedRepository(): string { return typeof __GROK_BUILD_REPOSITORY__ === "undefined" ? DEFAULTS.repository : __GROK_BUILD_REPOSITORY__; }
 function buildCommit(): string { return typeof __GROK_BUILD_COMMIT__ === "undefined" ? "working-tree" : __GROK_BUILD_COMMIT__; }
 function buildTime(): string { return typeof __GROK_BUILD_TIME__ === "undefined" ? "unknown" : __GROK_BUILD_TIME__; }

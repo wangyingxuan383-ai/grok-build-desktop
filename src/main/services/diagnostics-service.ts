@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { strToU8, zipSync } from "fflate";
-import type { AppSettings, BuildInfo, ComputerCapability, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem } from "../../shared/types";
+import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem } from "../../shared/types";
 import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
 import { redactSecrets, type LogService } from "./log-service";
 
@@ -21,6 +21,7 @@ export class DiagnosticsService {
     private readonly getComputerCapability: () => Promise<ComputerCapability>,
     private readonly log: LogService,
     private readonly mockCliPath = "",
+    private readonly optional: { providers?: () => Promise<CustomProviderProfile[]>; automations?: () => Promise<AutomationTask[]> } = {},
   ) {}
 
   async run(): Promise<SystemCompatibilityReport> {
@@ -53,6 +54,17 @@ export class DiagnosticsService {
     const computer = await this.getComputerCapability().catch((error) => ({ available: false, diagnostics: [String(error)] } as ComputerCapability));
     items.push({ id: "computer", label: "Computer Use", status: computer.available ? "ok" : "warning", summary: computer.available ? `Windows Harness 可用${computer.helperVersion ? `（${computer.helperVersion}）` : ""}` : "Computer Use 不可用", details: computer.diagnostics.map(redactDiagnosticText) });
     items.push({ id: "quota", label: "额度", status: "info", summary: "OAuth 账号额度在账号面板按需查询；诊断不会访问真实账单接口" });
+    if (this.optional.providers) {
+      const providers = await this.optional.providers().catch(() => []);
+      const protocols = Array.from(new Set(providers.map((value) => value.protocol))).sort();
+      const missing = providers.filter((value) => value.owned && !value.hasCredential).length;
+      items.push({ id: "providers", label: "自定义提供商", status: missing ? "warning" : "ok", summary: `${providers.length} 个配置；协议：${protocols.join("、") || "无"}`, details: missing ? [`${missing} 个配置缺少凭据`] : undefined });
+    }
+    if (this.optional.automations) {
+      const tasks = await this.optional.automations().catch(() => []);
+      const problems = tasks.filter((value) => value.registrationStatus !== "registered").length;
+      items.push({ id: "automations", label: "持久自动化", status: problems ? "warning" : "ok", summary: `${tasks.length} 个任务；${problems} 个需要处理` });
+    }
 
     const overall = items.some((item) => item.status === "error" && ["windows", "dpapi", "cli", "acp"].includes(item.id)) ? "blocked" : items.some((item) => item.status === "warning" || item.status === "error") ? "limited" : "ready";
     return { checkedAt: new Date().toISOString(), overall, items, cliPath: cliPath ? redactDiagnosticPath(cliPath) : undefined, cliVersion, effortFlag };
@@ -65,8 +77,8 @@ export class DiagnosticsService {
         { name: "app.log", description: "经过 Token、路径、邮箱和代理脱敏的应用日志" },
         { name: "README.txt", description: "支持包范围和隐私说明" },
       ],
-      fields: ["应用版本/构建提交", "Windows 版本和架构", "CLI 版本和能力", "代理是否配置", "Computer Use 自检"],
-      excluded: ["OAuth/API Key/Token", "提示词和会话", "文件内容和截图", "完整工作区/用户目录", "代理地址和认证"],
+      fields: ["应用版本/构建提交", "Windows 版本和架构", "CLI 版本和能力", "代理是否配置", "Computer Use 自检", "提供商数量/协议/凭据状态", "定时任务数量/注册状态"],
+      excluded: ["OAuth/API Key/Token", "提供商端点和环境变量值", "任务提示词/任务工作区和会话", "文件内容、截图和主题背景图片", "主题背景原始路径或本地副本", "完整工作区/用户目录", "代理地址和认证"],
       redacted: true,
     };
   }
@@ -79,7 +91,7 @@ export class DiagnosticsService {
     const files = {
       "diagnostics.json": strToU8(`${JSON.stringify(diagnostics, null, 2)}\n`),
       "app.log": strToU8(log),
-      "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、截图、文件内容、完整用户路径或代理地址。\n"),
+      "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
     };
     await writeFile(path, zipSync(files, { level: 6 }));
   }

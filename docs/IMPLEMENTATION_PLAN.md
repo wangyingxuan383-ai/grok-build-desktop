@@ -2,6 +2,38 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
+## v0.5.0：稳定性、提供商、自动化与正式发布（2026-07-20）
+
+> 当前实施版本。以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送 `v0.5.0` 标签，GitHub Draft 产物回下载验收通过后才公开 Release。
+
+- [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
+- [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
+- [x] 实现 Grok CLI 共享配置的安全自定义提供商、环境变量凭据、原子 TOML 修改、验证与回滚；本地三协议假服务和 CLI 隔离配置探针通过。
+- [x] 实现 Windows Task Scheduler 持久自动化、无窗口 Worker、加密任务、并发锁、通知和注册修复；单元测试覆盖 XML/计划/锁/确认，发布探针验证真实计划任务唤醒。
+- [x] 实现服务端权威消息队列/插话、会话分叉、回退、应用级归档和统一任务中心；假 Grok 合同测试对齐当前官方扩展线格式。
+- [x] 完成离线测试、live 验收、公开安全扫描、安装版/Portable 打包、中文路径冷启动与桌面快捷方式验收。最终复审同时补齐提供商完整事务回滚、原子并发槽位、固定弹层焦点陷阱、通知唤醒、自动化终态收件箱去重及 DPAPI 解密失败结算；37 个测试文件 / 193 项通过，2 项显式 live 测试按设计跳过，24/24 Computer Use 确定性流程通过。
+- [ ] 推送源码和 `v0.5.0` 标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
+
+### v0.5.0 本地发布候选证据
+
+- 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
+- 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
+- 最终本地发布哈希：
+  - Setup EXE：`22ce1a48eba2c23a3fe183829e52d5e4783686bba2df862a351651b981d35694`
+  - Portable ZIP：`75544fb82a435f08cc0da026193cf017871b834daf35ee736f065a1941c798f4`
+  - CycloneDX SBOM：`88a7cf6ce2e54e553883da704bdf15aa28ac5ffbde173c7e9b81192b70778476`
+  - 第三方许可证：`d7e2b822db8393918c63b259ef91f462e8eefe7e031b9756defd7d2cdef943d7`
+
+### 固定实现约定
+
+- 提供商支持 Chat Completions、Responses、Anthropic Messages；应用只管理带标记的 `~/.grok/config.toml` 区块，外部模型只读。
+- 提供商密钥默认存入 Windows 当前用户环境变量 `GROK_DESKTOP_PROVIDER_<ID>_KEY`，也可引用已有变量；密钥不得进入 Renderer、CLI 配置、argv、日志或支持包。
+- 持久任务支持一次、每日、每周和最短一分钟固定间隔；默认 Grok 4.5、CLI 默认强度、自动批准普通动作、Computer Use 关闭。
+- 任务固定创建时的账号/提供商/模型；引用缺失时进入“需要配置”，不静默回退。高影响动作继续逐次确认。
+- `/loop` 作为会话级临时任务显示；应用关闭后执行由当前用户、最低权限的 Windows Task Scheduler 提供。
+- 活动回合中 Enter 排队、Ctrl+Enter 插话、Shift+Enter 换行；队列以 `x.ai/queue/changed` 为权威。
+- 本版不加入完整 Git/工作树、内置编辑器/终端/浏览器/SSH、Memory 管理和媒体库。
+
 ## 完成状态（2026-07-15）
 
 - [x] 1. 计划和项目基线
@@ -498,3 +530,30 @@
 - [x] 首次公开仓库标签已通过 GitHub CI、Gitleaks、CodeQL、版本一致性、公开产物扫描、干净 Windows Runner 的 NSIS 安装/覆盖升级/卸载/AppData 保留、EXE/ZIP 构建溯源，并成功创建 Draft Release。
 - [x] 发布负责人于 2026-07-20 明确要求公开可见的 EXE/ZIP，已将通过 CI、哈希、溯源、安装生命周期和回下载冒烟验证的 `v0.4.0` Draft 转为正式 Release；未完成的 Windows 10/多物理设备矩阵继续由上一项单独跟踪，不将发布动作冒充为该矩阵已通过。
 - [x] `v0.4.1` 修复源码构建者的 PowerShell 5.1 快捷方式/冒烟脚本默认路径和发布哈希稳定性，重新生成本机包与唯一桌面快捷方式，并在标签工作流全部通过后作为最新公开 Release 发布。
+- [x] `v0.4.2` 修复 Windows 包内 `loadFile` 因禁用 file-protocol privilege Fuse 返回 `ERR_FILE_NOT_FOUND` 的永久黑屏；保留 ASAR/沙箱/CSP/IPC 等边界，并将窗口冒烟升级为必须检测 `.app-shell` 和非空正文。已撤回黑屏的 `v0.4.0/v0.4.1` Release，只有内容级验证通过后才重新发布。
+# Grok Build Desktop v0.4.2：本地修复、交互重构与主题系统计划（2026-07-20）
+
+> 本节为当前获批实施计划。全部改动先在本地完成、测试和重建，不创建标签、不上传 Release、不修改现有 GitHub Draft。
+
+## 实施清单
+
+- [x] 完成打包 Renderer 黑屏修复、可见启动失败页和隔离用户目录内容冒烟测试。
+- [x] 清理旧发布产物，生成仅属于当前版本的哈希、SBOM和许可证清单，移除脚本版本硬编码。
+- [x] 将输入框“+”重构为 Codex 风格的大型 Portal 添加面板，包含文件、图片、文件夹、工作区文件、Computer Use和已启用 Skills。
+- [x] 将 Computer Use 改为单次消息能力芯片，发送前不枚举窗口或启动控制。
+- [x] 新增文件夹附件，保持路径级上下文，不递归读取目录。
+- [x] 建立全中文 Electron 原生菜单，并固定链接到 `wangyingxuan383-ai/grok-build-desktop` 仓库。
+- [x] 实现深色、浅色、跟随系统、自定义颜色和本地背景图片主题；背景范围支持仅对话区或整个窗口。
+- [x] 完成主题协议、资源隔离、全部重型渲染组件的深浅适配及支持包隐私约束。
+- [x] 将 Windows Task Scheduler + Grok 无头执行的定时任务方案记录为 v0.5.0 路线图，本版不实现。
+- [x] 通过类型检查、全部自动化测试、公开安全扫描、生产构建、win-unpacked内容冒烟和桌面快捷方式本机验收后，更新本文、功能矩阵、CLI兼容矩阵及 Changelog。2026-07-20 本地候选验收：167 项离线测试通过（2 项显式在线 Computer Use 用例在默认套件中跳过），并另行完成真实 Grok 视觉点击与高影响拒绝闭环；增强 UI/主题/CDP 冒烟、便携版中文空格路径冒烟、Fuse、安全扫描、最终打包及唯一桌面快捷方式冷启动均通过；未创建标签、未上传 Release。
+
+## 固定产品约定
+
+- 仓库、发布和问题入口分别固定为 `https://github.com/wangyingxuan383-ai/grok-build-desktop`、`/releases` 和 `/issues`，不从 Git remote 或 Fork 动态推断。
+- 主题为全局应用设置；背景图片复制到应用数据目录，仅通过固定只读自定义协议提供给 Renderer，不进入日志、支持包或公共构建。
+- 参考 `fanghui-li/Grok-Desktop` 的大尺寸添加面板、能力芯片和文件夹附件行为，采用 clean-room 实现，不复制其代码。
+- Computer Use 的应用选择由 `/computer` Skill 在实际执行时完成；仅实际控制期间显示蓝色覆盖层和动作状态。
+- 本轮版本为 `0.4.2` 本地候选版，GitHub 远端保持不变。
+
+---

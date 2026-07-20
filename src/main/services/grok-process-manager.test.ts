@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppSettings, ReasoningEffort } from "../../shared/types";
 import { GrokProcessManager, isMutatingExtensionMethod } from "./grok-process-manager";
+import { DEFAULT_THEME } from "./theme-service";
 
 const settings = {
+  theme: DEFAULT_THEME,
   cliPath: "grok",
   httpProxy: "",
   httpsProxy: "",

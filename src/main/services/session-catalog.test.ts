@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -51,5 +51,23 @@ describe("SessionCatalog", () => {
     expect(markdown).toContain("## 用户\n\n你好");
     expect(markdown).toContain("## Grok\n\n已完成");
     expect(markdown).not.toContain("隐藏说明");
+  });
+
+  it("archives and records fork relationships as UI metadata without changing source sessions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-relations-"));
+    const grokHome = join(root, ".grok");
+    const cwd = "D:\\Workspace";
+    for (const id of ["parent-session", "child-session"]) {
+      const folder = join(grokHome, "sessions", encodeURIComponent(cwd), id);
+      await mkdir(folder, { recursive: true });
+      await writeFile(join(folder, "summary.json"), JSON.stringify({ session_summary: id, created_at: "2026-01-01T00:00:00Z" }));
+    }
+    const catalog = new SessionCatalog(join(root, "app-data"), grokHome);
+    await catalog.recordFork("parent-session", "child-session");
+    await catalog.archive("parent-session", true);
+    const rows = await catalog.list(cwd);
+    expect(rows.find((row) => row.id === "parent-session")?.archived).toBe(true);
+    expect(rows.find((row) => row.id === "child-session")?.parentSessionId).toBe("parent-session");
+    expect(await readFile(join(grokHome, "sessions", encodeURIComponent(cwd), "parent-session", "summary.json"), "utf8")).toContain("parent-session");
   });
 });
