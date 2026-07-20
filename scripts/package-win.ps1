@@ -60,12 +60,20 @@ if (Test-Path -LiteralPath $GenericZip) {
     if (Test-Path -LiteralPath $PortableZip) { [IO.File]::Delete($PortableZip) }
     [IO.File]::Move($GenericZip, $PortableZip)
 }
-& (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
-& (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
-foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
+if ($env:GITHUB_ACTIONS -eq 'true') {
+    # GitHub's Windows virtual desktop becomes unreliable after several
+    # consecutive Electron/CDP processes even when every process exits cleanly.
+    # Verify the packaged shell and all heavy root panels in one fresh Renderer;
+    # local acceptance below retains the longer 4K and per-process stress flows.
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-hosted-release-ui.mjs'
+} else {
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
+    foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {
+        & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
+    }
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ApplicationArguments '--open-task-center' -ProbeArgument '.task-center'
 }
-& (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ApplicationArguments '--open-task-center' -ProbeArgument '.task-center'
 & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
 & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')

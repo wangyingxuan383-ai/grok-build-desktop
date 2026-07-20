@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.9 - 2026-07-21
+
+### Fixed
+
+- Replaced the hosted Windows package gate's chain of six short-lived Electron/CDP sessions with one fresh packaged Renderer that verifies the application shell, task center, extension center and media studio in sequence.
+- Local packaging still keeps the physical-GPU 4K long flow, every panel in an independent process, startup task-center routing, Portable launch and Task Scheduler wakeup. The cloud-only consolidation avoids a GitHub virtual-desktop resource failure without reducing product-side acceptance.
+- Added a stage-labelled hosted release probe with bounded CDP calls, fixed overlay checks, focus verification and `Esc` close behavior.
+- `v0.5.8` remained unpublished and created no Draft assets. Its third Electron instance stopped responding before the first DOM query and before the task button was clicked, proving the remaining failure was repeated hosted CDP process startup rather than task-center data or rendering.
+
+### Verification
+
+- 195 offline tests (2 opt-in live tests skipped), TypeScript, public scans, physical-GPU 4K and exact single-Renderer hosted flows, Task Scheduler, Chinese-space Portable, Electron Fuses and NSIS lifecycle all pass. Local hashes are recorded in the implementation plan; GitHub download acceptance follows before publication.
+
 ## 0.5.8 - 2026-07-21
 
 ### Fixed
