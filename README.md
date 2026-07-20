@@ -39,7 +39,7 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 本项目首批 Release **没有代码签名**。Windows 可能显示 SmartScreen 提示。请从本仓库 Release 下载，并使用同一 Release 中的 `SHA256SUMS.txt` 校验：
 
 ```powershell
-Get-FileHash .\Grok-Build-Desktop-Setup-v0.5.1-x64.exe -Algorithm SHA256
+Get-FileHash .\Grok-Build-Desktop-Setup-v0.5.2-x64.exe -Algorithm SHA256
 ```
 
 应用不会静默下载或自动执行未签名安装包。
@@ -108,7 +108,7 @@ npm run check:public # 扫描个人路径、邮箱、代理与凭据模式
 
 **自定义提供商的密钥保存在哪里？** 默认保存为 Windows 当前用户环境变量，`config.toml` 只保存变量名。相同 Windows 用户下的其他进程也可能读取用户环境变量。
 
-**支持 macOS / Linux / 英文吗？** v0.5.1 不支持。当前目标是 Windows x64 与简体中文。
+**支持 macOS / Linux / 英文吗？** v0.5.2 不支持。当前目标是 Windows x64 与简体中文。
 
 ## 贡献与安全
 
