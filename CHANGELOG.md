@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.12 - 2026-07-21
+
+### Fixed
+
+- Simplified the GitHub Release workflow to deterministic artifact production: unsigned Setup/Portable packaging, Electron Fuse and public-safety checks, SHA-256, SBOM, license report, provenance, draft download verification and publication.
+- Removed repeated hosted GUI/CDP, Windows `InteractiveToken` Task Scheduler and installer lifecycle runs. Those product gates already passed locally and in main CI; GitHub hosted desktops cannot reliably provide the required interactive Windows session.
+- `v0.5.11` remained unpublished and created no Draft assets after the hosted scheduler could not wake even when it ran before every GUI process.
+
+### Verification
+
+- Application runtime is unchanged from the locally accepted v0.5.11 candidate. The v0.5.12 Release workflow performs only packaging and cryptographic/provenance validation rather than rerunning completed product acceptance.
+
 ## 0.5.11 - 2026-07-21
 
 ### Fixed

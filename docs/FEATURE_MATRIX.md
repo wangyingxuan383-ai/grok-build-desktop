@@ -1,6 +1,6 @@
 # Feature Matrix
 
-## v0.5.0–v0.5.11 additions
+## v0.5.0–v0.5.12 additions
 
 | Area | Status | Notes |
 |---|---|---|
@@ -11,7 +11,7 @@
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
 | v0.5 local gate | Passed | 195 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
-| Hosted release acceptance | Fixed, v0.5.11 retry pending | Local packaging retains GPU-backed 3840×2160 and independent-process panel/focus/Escape checks. Hosted build runs the headless Task Scheduler probe before its sole Renderer, then validates Portable structure; a fresh download runner repeats Task Scheduler before the downloaded Portable UI. v0.5.0–v0.5.10 stopped before Draft creation and published no assets |
+| Release pipeline | Simplified, v0.5.12 pending | Product acceptance remains the passed local/CI gate above. GitHub Release is limited to deterministic packaging, Fuses/public scans, hashes, SBOM/licenses, provenance and download verification; unsupported hosted virtual-desktop and InteractiveToken checks are not repeated. v0.5.0–v0.5.11 published no assets |
 
 ## v0.4.2 local candidate
 

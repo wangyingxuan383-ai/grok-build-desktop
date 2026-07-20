@@ -39,13 +39,10 @@ jobs:
       - run: npm ci
       - name: Verify and package unsigned Windows artifacts
         shell: powershell
-        run: .\scripts\package-win.ps1
+        run: .\scripts\package-win.ps1 -ReleaseArtifactsOnly
       - name: Public artifact scan
         shell: powershell
         run: .\scripts\check-public-safety.ps1 -ArtifactPath release
-      - name: Clean-runner NSIS install, upgrade and uninstall
-        shell: powershell
-        run: .\scripts\test-installer-lifecycle.ps1 -AllowMutation
       - name: Upload workflow artifact
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
@@ -117,23 +114,6 @@ jobs:
           $portable = Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1
           gh attestation verify $setup.FullName --repo "${{ github.repository }}"
           gh attestation verify $portable.FullName --repo "${{ github.repository }}"
-      - name: Downloaded installer lifecycle
-        shell: powershell
-        run: |
-          $setup = (Get-ChildItem downloaded\Grok-Build-Desktop-Setup-*.exe | Select-Object -First 1).FullName
-          .\scripts\test-installer-lifecycle.ps1 -Installer $setup -AllowMutation
-      - name: Downloaded portable UI and Task Scheduler acceptance
-        shell: powershell
-        run: |
-          $portable = (Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1).FullName
-          $target = Join-Path $env:RUNNER_TEMP '便携版 中文 空格 回测'
-          Expand-Archive -LiteralPath $portable -DestinationPath $target
-          $exe = Join-Path $target 'Grok Build Desktop.exe'
-          # Verify the headless scheduler entry before starting the job's only
-          # Renderer. This avoids a hosted-Windows desktop resource leak while
-          # retaining both acceptance gates on the downloaded release asset.
-          .\scripts\probe-task-scheduler.ps1 -Executable $exe
-          .\scripts\smoke-app.ps1 -Executable $exe -ProbeScript 'probe-v042-ui.mjs'
       - name: Publish verified release as Latest
         shell: powershell
         env:

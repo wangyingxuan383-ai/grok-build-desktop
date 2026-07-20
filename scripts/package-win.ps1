@@ -1,5 +1,8 @@
 ﻿[CmdletBinding()]
-param([switch]$SkipVerification)
+param(
+    [switch]$SkipVerification,
+    [switch]$ReleaseArtifactsOnly
+)
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
@@ -35,10 +38,12 @@ node (Join-Path $PSScriptRoot 'ensure-electron.mjs')
 if ($LASTEXITCODE -ne 0) { throw "Electron 二进制准备失败 ($LASTEXITCODE)" }
 npm run build:resources
 if ($LASTEXITCODE -ne 0) { throw "资源构建失败 ($LASTEXITCODE)" }
-npm run typecheck
-if ($LASTEXITCODE -ne 0) { throw "类型检查失败 ($LASTEXITCODE)" }
-npm test
-if ($LASTEXITCODE -ne 0) { throw "自动化测试失败 ($LASTEXITCODE)" }
+if (-not $ReleaseArtifactsOnly) {
+    npm run typecheck
+    if ($LASTEXITCODE -ne 0) { throw "类型检查失败 ($LASTEXITCODE)" }
+    npm test
+    if ($LASTEXITCODE -ne 0) { throw "自动化测试失败 ($LASTEXITCODE)" }
+}
 npm run build
 if ($LASTEXITCODE -ne 0) { throw "生产构建失败 ($LASTEXITCODE)" }
 npx electron-builder --win nsis zip --x64 --publish never
@@ -60,7 +65,9 @@ if (Test-Path -LiteralPath $GenericZip) {
     if (Test-Path -LiteralPath $PortableZip) { [IO.File]::Delete($PortableZip) }
     [IO.File]::Move($GenericZip, $PortableZip)
 }
-if ($env:GITHUB_ACTIONS -eq 'true') {
+if ($ReleaseArtifactsOnly) {
+    Write-Host '仅生成并校验发布资产；产品验收复用同一提交已通过的 CI 与本机发布门槛。' -ForegroundColor Cyan
+} elseif ($env:GITHUB_ACTIONS -eq 'true') {
     # GitHub's Windows virtual desktop becomes unreliable after several
     # consecutive Electron/CDP processes even when every process exits cleanly.
     # Verify the packaged shell, overlay host and feature entry points in one

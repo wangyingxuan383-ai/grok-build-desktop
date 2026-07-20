@@ -2,9 +2,9 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
-## v0.5.0–v0.5.11：稳定性、提供商、自动化与正式发布（2026-07-20）
+## v0.5.0–v0.5.12：稳定性、提供商、自动化与正式发布（2026-07-20）
 
-> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；后续运行逐步隔离扩展中心、复合 Renderer、任务中心系统数据和 Hosted Windows 虚拟图形无法执行重型模态点击的边界，`v0.5.10` 又证明图形进程退出后同一 Runner 的计划任务 Electron 入口可能无法启动；当前候选为 `v0.5.11`。
+> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；后续运行逐步隔离扩展中心、复合 Renderer、任务中心系统数据和 Hosted Windows 虚拟图形无法执行重型模态点击的边界，`v0.5.10` 又证明图形进程退出后同一 Runner 的计划任务 Electron 入口可能无法启动；`v0.5.11` 进一步确认 Hosted Runner 不提供可靠的交互令牌计划任务唤醒；当前最终候选为 `v0.5.12`。
 
 - [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
 - [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
@@ -24,9 +24,10 @@
 - [x] `v0.5.8` Run `29763323880` 通过版本、测试、构建、基础内容和主 UI 流程；第三个全新 Electron 实例在任务面板尚未打开、第一次 DOM 查询前即停止响应，确认剩余问题为 Hosted Runner 连续 CDP 进程资源失效。运行在 Draft 创建前失败，无资产。
 - [x] `v0.5.9` Run `29764592507` 的唯一云端 Electron 进程成功渲染完整壳层，但点击任务入口后虚拟图形/CDP 通道停止；相同交互在本机硬件、软件渲染、4K 和独立进程全部通过。运行在 Draft 创建前失败，无资产。
 - [x] `v0.5.10` Run `29765941455` 已通过版本、195 项测试、构建、打包、Fuses 和唯一 Hosted Renderer 的壳层/入口检查；随后 Task Scheduler 探针在 60 秒内未获得无窗口 marker，运行仍在 Draft 创建前失败，无资产。
-- [ ] 推送 `v0.5.11` 源码和标签；云端构建 Runner 改为先验证无窗口 Task Scheduler，再启动唯一 Renderer，并对 Portable 做中文空格路径结构验证；下载 Release 的全新 Runner 再按相同顺序验证下载产物的真实 Task Scheduler 与 Portable UI，成功后公开 Latest。
+- [x] `v0.5.11` Run `29767638527` 在任何 GUI 启动前仍无法由 Hosted Runner 的 `InteractiveToken` 计划任务唤醒探针，证明这是云端环境边界；运行在 Draft 创建前失败，无资产。
+- [ ] 发布 `v0.5.12`：不再重复同一提交已通过的本机 4K/GUI/Task Scheduler/安装器和主分支测试；Release 工作流只负责构建公开资产、Fuses/公开扫描、哈希、SBOM、许可证、Attestation、回下载校验和公开 Latest。
 
-### v0.5.0–v0.5.11 本地发布候选证据
+### v0.5.0–v0.5.12 本地发布候选证据
 
 - 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
 - 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
