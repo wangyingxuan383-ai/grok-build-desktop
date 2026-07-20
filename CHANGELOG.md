@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.7 - 2026-07-21
+
+### Fixed
+
+- Made the packaged offline-smoke task center fully deterministic. Providers, automations, run history, global policy, background tasks and inbox now return isolated empty/default data without touching DPAPI, the user environment/registry, PowerShell, real Grok configuration or Task Scheduler state.
+- Normal installed and portable behavior is unchanged because the bypass is restricted to the private `GROK_DESKTOP_OFFLINE_SMOKE=1` child-process environment created only by the verification harness.
+- `v0.5.6` remained unpublished and created no Draft assets; its split flow proved the long UI sequence was fixed, then isolated the remaining hosted stall to task-center system-data discovery inside an otherwise fresh Renderer.
+
+### Verification
+
+- 194 offline tests (2 opt-in live tests skipped), TypeScript, public scans, physical-GPU 4K and exact hosted-runner split flows, deterministic task-center overlay, Task Scheduler, Chinese-space Portable, Electron Fuses and NSIS lifecycle all pass. Local hashes are recorded in the implementation plan.
+
 ## 0.5.6 - 2026-07-21
 
 ### Fixed

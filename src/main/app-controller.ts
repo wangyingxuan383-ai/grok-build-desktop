@@ -488,7 +488,10 @@ export class AppController {
   }
 
   getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
-  listProviders(): Promise<CustomProviderProfile[]> { return this.providers.list(); }
+  listProviders(): Promise<CustomProviderProfile[]> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
+    return this.providers.list();
+  }
   upsertProvider(input: CustomProviderInput): Promise<CustomProviderProfile[]> { return this.providers.upsert(input); }
   removeProvider(id: string): Promise<CustomProviderProfile[]> { return this.providers.remove(id); }
   testProvider(id: string): Promise<ProviderConnectivityResult> { return this.providers.test(id); }
@@ -497,6 +500,7 @@ export class AppController {
   setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]> { return this.providers.setCliDefault(modelId); }
   reloadProviders(): Promise<void> { return this.providers.reload(); }
   async listAutomations(): Promise<AutomationTask[]> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const [tasks, accounts, providers] = await Promise.all([this.automations.list(), this.vault.list(), this.providers.list()]);
     const accountIds = new Set(accounts.map((value) => value.id));
     const providerModels = new Map(providers.map((value) => [value.id, new Set(value.models.map((model) => model.id))]));
@@ -511,8 +515,20 @@ export class AppController {
   deleteAutomation(id: string): Promise<AutomationTask[]> { return this.automations.delete(id); }
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]> { return this.automations.pause(id, paused); }
   runAutomationNow(id: string): Promise<AutomationRunRecord> { return this.automations.runNow(id); }
-  listAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]> { return this.automations.listRuns(taskId); }
-  getAutomationGlobalPolicy(): Promise<AutomationGlobalPolicy> { return this.automations.getPolicy(); }
+  listAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
+    return this.automations.listRuns(taskId);
+  }
+  getAutomationGlobalPolicy(): Promise<AutomationGlobalPolicy> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve({
+      defaultProfile: { modelId: "grok-4.5", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false },
+      maxConcurrentRuns: 2,
+      confirmationTimeoutMinutes: 30,
+      notifyOnSuccess: true,
+      notifyOnFailure: true,
+    });
+    return this.automations.getPolicy();
+  }
   updateAutomationGlobalPolicy(patch: Partial<AutomationGlobalPolicy>): Promise<AutomationGlobalPolicy> { return this.automations.updatePolicy(patch); }
   applyAutomationPolicyToAll(): Promise<AutomationTask[]> { return this.automations.applyPolicyToAll(); }
   respondAutomationPending(id: string, approved: boolean): Promise<void> { return this.automations.respondPending(id.replace(/^pending:/, ""), approved); }
@@ -559,6 +575,7 @@ export class AppController {
   }
   archiveSession(sessionId: string, archived: boolean): Promise<void> { return this.catalog.archive(sessionId, archived); }
   async listBackgroundTasks(): Promise<BackgroundTaskSummary[]> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const output: BackgroundTaskSummary[] = [];
     for (const { sessionId, entries } of this.processes.promptQueues()) for (const entry of entries) output.push({ id: `queue:${sessionId}:${entry.id}`, sessionId, kind: "queue", title: entry.text || "等待消息", status: entry.state === "sending" || entry.state === "interjected" ? "running" : "queued", updatedAt: entry.createdAt, detail: `队列第 ${entry.position + 1} 项` });
     for (const { sessionId, result, subagents } of await this.processes.backgroundTaskResults()) {
@@ -575,6 +592,7 @@ export class AppController {
   }
   async killBackgroundTask(id: string): Promise<void> { const separator = id.indexOf(":"); if (separator < 1) throw new Error("后台任务标识无效"); await this.processes.killBackgroundTask(id.slice(0, separator), id.slice(separator + 1)); }
   async listInbox(): Promise<NotificationInboxItem[]> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const stored = await this.inbox.list(); const pending = await this.automations.pending();
     return [...pending.map((value): NotificationInboxItem => ({ id: `pending:${value.id}`, kind: "confirmation", title: "定时任务等待确认", detail: value.summary, taskId: value.taskId, read: false, createdAt: new Date(new Date(value.expiresAt).getTime() - 30 * 60_000).toISOString() })), ...stored].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
