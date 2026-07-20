@@ -129,8 +129,11 @@ jobs:
           $target = Join-Path $env:RUNNER_TEMP '便携版 中文 空格 回测'
           Expand-Archive -LiteralPath $portable -DestinationPath $target
           $exe = Join-Path $target 'Grok Build Desktop.exe'
-          .\scripts\smoke-app.ps1 -Executable $exe -ProbeScript 'probe-v042-ui.mjs'
+          # Verify the headless scheduler entry before starting the job's only
+          # Renderer. This avoids a hosted-Windows desktop resource leak while
+          # retaining both acceptance gates on the downloaded release asset.
           .\scripts\probe-task-scheduler.ps1 -Executable $exe
+          .\scripts\smoke-app.ps1 -Executable $exe -ProbeScript 'probe-v042-ui.mjs'
       - name: Publish verified release as Latest
         shell: powershell
         env:

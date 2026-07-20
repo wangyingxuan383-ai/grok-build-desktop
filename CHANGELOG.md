@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.11 - 2026-07-21
+
+### Fixed
+
+- Reordered hosted Windows acceptance so the Task Scheduler headless entry runs before the job's sole Renderer; this avoids the hosted desktop resource leak observed only after an Electron GUI exits.
+- The build runner now validates the Portable archive in a Chinese/space-containing path without starting a second GUI. The fresh download-verification runner independently executes Task Scheduler first and then launches the downloaded Portable UI, retaining both release gates.
+- `v0.5.10` remained unpublished and created no Draft assets: packaging, Fuses and the packaged shell/entry probe passed, while the later scheduled marker did not appear within 60 seconds.
+
+### Verification
+
+- 195 offline tests (2 opt-in live tests skipped), TypeScript, public scans, the physical-GPU 4K and independent-overlay flows, real Task Scheduler wakeup, Chinese-space Portable UI, the exact hosted execution order, Electron Fuses and NSIS install/upgrade/uninstall retention pass locally. Cloud Draft assets will still be downloaded, hash/provenance checked, installed, launched and scheduler-tested before publication.
+
 ## 0.5.10 - 2026-07-21
 
 ### Fixed

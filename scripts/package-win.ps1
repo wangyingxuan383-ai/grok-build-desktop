@@ -67,7 +67,13 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
     # fresh Renderer. Hosted virtual graphics deadlock when those heavy panels
     # are clicked through CDP; local acceptance below retains the real 4K,
     # focus, Escape and per-process overlay stress flows.
+    # Run the headless Task Scheduler process before the sole GUI process.
+    # Hosted Windows can leave Electron desktop resources unavailable after a
+    # Renderer exits even though the process tree is gone. The fresh download
+    # job independently launches the extracted Portable build.
+    & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-hosted-release-ui.mjs'
+    & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
@@ -75,9 +81,9 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
         & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
     }
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ApplicationArguments '--open-task-center' -ProbeArgument '.task-center'
+    & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
+    & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 }
-& (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
-& (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 & (Join-Path $PSScriptRoot 'generate-release-assets.ps1')
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')

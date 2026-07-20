@@ -2,9 +2,9 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
-## v0.5.0–v0.5.10：稳定性、提供商、自动化与正式发布（2026-07-20）
+## v0.5.0–v0.5.11：稳定性、提供商、自动化与正式发布（2026-07-20）
 
-> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；后续运行逐步隔离扩展中心、复合 Renderer、任务中心系统数据和 Hosted Windows 虚拟图形无法执行重型模态点击的边界，当前候选为 `v0.5.10`。
+> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；后续运行逐步隔离扩展中心、复合 Renderer、任务中心系统数据和 Hosted Windows 虚拟图形无法执行重型模态点击的边界，`v0.5.10` 又证明图形进程退出后同一 Runner 的计划任务 Electron 入口可能无法启动；当前候选为 `v0.5.11`。
 
 - [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
 - [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
@@ -23,9 +23,10 @@
 - [x] `v0.5.7` Run `29761524715` 通过版本、测试、构建、基础内容和主 UI 流程；新鲜任务面板已挂载，但六个并发 IPC 读取仍使 Hosted Runner 的 Renderer/CDP 通道停止响应。运行在 Draft 创建前失败，无资产。
 - [x] `v0.5.8` Run `29763323880` 通过版本、测试、构建、基础内容和主 UI 流程；第三个全新 Electron 实例在任务面板尚未打开、第一次 DOM 查询前即停止响应，确认剩余问题为 Hosted Runner 连续 CDP 进程资源失效。运行在 Draft 创建前失败，无资产。
 - [x] `v0.5.9` Run `29764592507` 的唯一云端 Electron 进程成功渲染完整壳层，但点击任务入口后虚拟图形/CDP 通道停止；相同交互在本机硬件、软件渲染、4K 和独立进程全部通过。运行在 Draft 创建前失败，无资产。
-- [ ] 推送 `v0.5.10` 源码和标签；GitHub 虚拟桌面只验证包内容、壳层、固定 overlay host 及任务/扩展/媒体入口，本地打包继续强制真实弹层定位、背景、焦点、Escape、4K 与独立进程验收；Actions 创建 Draft 后回下载验证并公开 Latest。
+- [x] `v0.5.10` Run `29765941455` 已通过版本、195 项测试、构建、打包、Fuses 和唯一 Hosted Renderer 的壳层/入口检查；随后 Task Scheduler 探针在 60 秒内未获得无窗口 marker，运行仍在 Draft 创建前失败，无资产。
+- [ ] 推送 `v0.5.11` 源码和标签；云端构建 Runner 改为先验证无窗口 Task Scheduler，再启动唯一 Renderer，并对 Portable 做中文空格路径结构验证；下载 Release 的全新 Runner 再按相同顺序验证下载产物的真实 Task Scheduler 与 Portable UI，成功后公开 Latest。
 
-### v0.5.0–v0.5.10 本地发布候选证据
+### v0.5.0–v0.5.11 本地发布候选证据
 
 - 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
 - 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
@@ -84,6 +85,11 @@
   - Portable ZIP：`33cfaec76a753011ac1f73f3add3a8cd0880d101535bcdd84335da893c3e1659`
   - CycloneDX SBOM：`42da3884225589fc587b51819706f18634d3a13059801764f119fa8222fbdb2a`
   - 第三方许可证：`9ecfd01636e3bba364f8e96813f984741bb6987cb290010beeedc1121f0c1f02`
+- `v0.5.11` 将云端无窗口 Task Scheduler 验收放在唯一 Renderer 之前，构建 Runner 仅对 Portable 做中文空格路径结构验证，真实下载 Portable UI 留给全新回测 Runner；195 项测试、完整本机 4K/独立进程弹层、真实 Task Scheduler、中文空格 Portable、精确 Hosted 顺序、Fuses、公开扫描和 NSIS 生命周期均通过。本机哈希：
+  - Setup EXE：`ffcd077f99c51e4cc10e2d358012cc77e44e763efe9297600ad3c51a4c9fa920`
+  - Portable ZIP：`6d10f9f4caf40ec9d0187aec36f0ea2ff826ec935cf7b30f38c11c5f857595f4`
+  - CycloneDX SBOM：`bfa5314ad6bd40af7b36729f09da30d616d013d0ad21f5d122abd9522ae2b3d1`
+  - 第三方许可证：`4724744a28e7cd0ee44a62c3871da2688579cacddb3432166cc61fd4a2a2d0e7`
 
 ### 固定实现约定
 
