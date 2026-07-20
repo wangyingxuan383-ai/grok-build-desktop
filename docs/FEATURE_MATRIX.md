@@ -1,6 +1,6 @@
 # Feature Matrix
 
-## v0.5.0 / v0.5.1 additions
+## v0.5.0 / v0.5.1 / v0.5.2 additions
 
 | Area | Status | Notes |
 |---|---|---|
@@ -11,7 +11,7 @@
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
 | v0.5 local gate | Passed | 193 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
-| Hosted Runner UI probe | Fixed, retry pending | The v0.5.0 tag produced the package and passed its first content smoke, then a CDP native keyboard request stalled until the one-hour job timeout. v0.5.1 bounds every CDP request and drives React/focus-trap keyboard paths through focused bubbling events; no v0.5.0 Draft or public assets were created |
+| Hosted Runner UI probe | Fixed, v0.5.2 retry pending | v0.5.0 exposed an unbounded CDP wait; v0.5.1 bounded it and identified the synthetic 4K virtual-GPU hang in five minutes. Local packaging retains real 3840×2160 coverage while GitHub's virtual desktop verifies 1920×1080; both failed tags stopped before Draft creation and published no assets |
 
 ## v0.4.2 local candidate
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2 - 2026-07-20
+
+### Fixed
+
+- Kept the physical 3840×2160 add-palette regression in local packaging acceptance, while using a stable 1920×1080 large-viewport check on GitHub's virtual Windows desktop. The hosted Chromium GPU stopped servicing CDP requests after a synthetic 4K override even though the same packaged UI passed on a real local desktop.
+- `v0.5.1` also remained unpublished and produced no Draft assets. Its bounded probe exposed the virtual-GPU failure in five minutes instead of timing out after an hour; the immutable release retry therefore advances to `v0.5.2`.
+
+### Verification
+
+- The hosted-runner branch of the corrected overlay/theme/add-palette probe passed locally with `GITHUB_ACTIONS=true`; normal local packaging continues to exercise the full 3840×2160 path.
+
 ## 0.5.1 - 2026-07-20
 
 ### Fixed

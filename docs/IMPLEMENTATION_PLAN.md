@@ -2,9 +2,9 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
-## v0.5.0 / v0.5.1：稳定性、提供商、自动化与正式发布（2026-07-20）
+## v0.5.0 / v0.5.1 / v0.5.2：稳定性、提供商、自动化与正式发布（2026-07-20）
 
-> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0` 标签的首次云端任务因旧 CDP 键盘探针在 Hosted Runner 上无限等待而超时，尚未创建 Draft 或公开资产；遵守标签/产物不可静默替换约定，修复版本提升为 `v0.5.1`。
+> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`/`v0.5.1` 标签的云端任务均在创建 Draft 前暴露 Hosted Runner 专属 CDP/虚拟 GPU 问题；遵守标签/产物不可静默替换约定，发布修复版本提升为 `v0.5.2`。
 
 - [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
 - [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
@@ -14,9 +14,10 @@
 - [x] 完成离线测试、live 验收、公开安全扫描、安装版/Portable 打包、中文路径冷启动与桌面快捷方式验收。最终复审同时补齐提供商完整事务回滚、原子并发槽位、固定弹层焦点陷阱、通知唤醒、自动化终态收件箱去重及 DPAPI 解密失败结算；37 个测试文件 / 193 项通过，2 项显式 live 测试按设计跳过，24/24 Computer Use 确定性流程通过。
 - [x] 推送 `v0.5.0` 源码和标签，确认 main CI、Gitleaks 与 CodeQL 全绿；首次 Release Run `29745906101` 在已完成打包和首次内容冒烟后因 CDP `Input.dispatchKeyEvent` 在 Hosted Runner 无返回而触发 60 分钟超时，未创建 Draft/资产。
 - [x] 将 CDP 请求改为 15 秒显式超时，并用当前焦点元素上的冒泡键盘事件覆盖添加面板、Escape 和焦点陷阱交互；修复后的完整 UI 探针已在本机打包程序通过。
-- [ ] 推送 `v0.5.1` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
+- [x] `v0.5.1` Run `29751461174` 在五分钟内确认第二个根因：Hosted Runner 虚拟 GPU 在模拟 3840×2160 后不再响应 CDP；仍未创建 Draft/资产。保留本机真实 4K 路径，GitHub 无物理 4K 桌面的 Runner 改测 1920×1080，分支探针已用 `GITHUB_ACTIONS=true` 本机复现通过。
+- [ ] 推送 `v0.5.2` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
 
-### v0.5.0 / v0.5.1 本地发布候选证据
+### v0.5.0 / v0.5.1 / v0.5.2 本地发布候选证据
 
 - 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
 - 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
@@ -30,6 +31,11 @@
   - Portable ZIP：`082c287e25dbb59599a31c0c6e46575fcf1c259b98c64b9c420dc9929e105af2`
   - CycloneDX SBOM：`77bc7315ef7b1547496d56eefbbba8c62e46b9155b8a23d4a41cb8b703fb3071`
   - 第三方许可证：`4d8b2c1e89264b23808fed43ac1bd11d67c65787e76d8b7510fad79ee4cb7450`
+- `v0.5.2` 本机最终重建保持完整 3840×2160 探针并通过同一套门槛；另以 Hosted Runner 分支的 1920×1080 探针复测通过。本机哈希：
+  - Setup EXE：`45a4a2159744f30c54b358e5951cdd553b775c041a8b63cb31faa4099aaa412d`
+  - Portable ZIP：`9480e0ca110e36a1d8331e716edead0ca99c15bd690aed1390f06d12aeb08321`
+  - CycloneDX SBOM：`c84e7932f67f94623529f0315c042492811e00b11a78646281c0d4d2d43547ec`
+  - 第三方许可证：`7b29d635ab5569d9e6a816f8c6eedc9383e1140e4d2247d7d48d4d9042a327f2`
 
 ### 固定实现约定
 
