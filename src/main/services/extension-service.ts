@@ -35,6 +35,11 @@ export class ExtensionService {
   ) {}
 
   async listPlugins(force = false): Promise<PluginSummary[]> {
+    // Release/UI smokes use an isolated profile on clean Windows runners where
+    // Grok CLI is intentionally absent. Do not start CLI discovery from the
+    // default Extensions tab in that mode; the panel must still render its
+    // deterministic empty state so overlay/layout verification stays offline.
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     if (!force && this.pluginsCache && Date.now() - this.pluginsCache.at < 30_000) return this.pluginsCache.value;
     let value: PluginSummary[] | undefined;
     try {

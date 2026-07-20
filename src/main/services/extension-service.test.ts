@@ -52,9 +52,13 @@ describe("ExtensionService normalization", () => {
     const previous = process.env.GROK_DESKTOP_OFFLINE_SMOKE;
     process.env.GROK_DESKTOP_OFFLINE_SMOKE = "1";
     try {
-      const service = new ExtensionService(async () => { throw new Error("CLI discovery must not run"); }, async () => undefined, { log: async () => undefined } as never);
-      service.listPlugins = async () => { throw new Error("plugin inventory must not run"); };
+      let discoveryCalls = 0;
+      let extensionCalls = 0;
+      const service = new ExtensionService(async () => { discoveryCalls += 1; throw new Error("CLI discovery must not run"); }, async () => { extensionCalls += 1; throw new Error("ACP extension request must not run"); }, { log: async () => undefined } as never);
+      await expect(service.listPlugins()).resolves.toEqual([]);
       await expect(service.listSkills()).resolves.toEqual([]);
+      expect(discoveryCalls).toBe(0);
+      expect(extensionCalls).toBe(0);
     } finally {
       if (previous === undefined) delete process.env.GROK_DESKTOP_OFFLINE_SMOKE;
       else process.env.GROK_DESKTOP_OFFLINE_SMOKE = previous;
