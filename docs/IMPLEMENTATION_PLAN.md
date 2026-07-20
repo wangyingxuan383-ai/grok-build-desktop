@@ -2,9 +2,9 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
-## v0.5.0 / v0.5.1 / v0.5.2：稳定性、提供商、自动化与正式发布（2026-07-20）
+## v0.5.0–v0.5.3：稳定性、提供商、自动化与正式发布（2026-07-20）
 
-> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`/`v0.5.1` 标签的云端任务均在创建 Draft 前暴露 Hosted Runner 专属 CDP/虚拟 GPU 问题；遵守标签/产物不可静默替换约定，发布修复版本提升为 `v0.5.2`。
+> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.2` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本提升为 `v0.5.3`。
 
 - [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
 - [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
@@ -15,9 +15,10 @@
 - [x] 推送 `v0.5.0` 源码和标签，确认 main CI、Gitleaks 与 CodeQL 全绿；首次 Release Run `29745906101` 在已完成打包和首次内容冒烟后因 CDP `Input.dispatchKeyEvent` 在 Hosted Runner 无返回而触发 60 分钟超时，未创建 Draft/资产。
 - [x] 将 CDP 请求改为 15 秒显式超时，并用当前焦点元素上的冒泡键盘事件覆盖添加面板、Escape 和焦点陷阱交互；修复后的完整 UI 探针已在本机打包程序通过。
 - [x] `v0.5.1` Run `29751461174` 在五分钟内确认第二个根因：Hosted Runner 虚拟 GPU 在模拟 3840×2160 后不再响应 CDP；仍未创建 Draft/资产。保留本机真实 4K 路径，GitHub 无物理 4K 桌面的 Runner 改测 1920×1080，分支探针已用 `GITHUB_ACTIONS=true` 本机复现通过。
-- [ ] 推送 `v0.5.2` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
+- [x] `v0.5.2` Run `29752880805` 确认第三次打开面板时仍反复向无 CLI 的隔离环境请求 Skills。修正 `GROK_DESKTOP_OFFLINE_SMOKE=1` 契约为直接返回空 Skills 并增加“不调用 CLI/插件索引”回归测试；该标签仍未创建 Draft/资产。
+- [ ] 推送 `v0.5.3` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
 
-### v0.5.0 / v0.5.1 / v0.5.2 本地发布候选证据
+### v0.5.0–v0.5.3 本地发布候选证据
 
 - 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
 - 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
@@ -36,6 +37,11 @@
   - Portable ZIP：`9480e0ca110e36a1d8331e716edead0ca99c15bd690aed1390f06d12aeb08321`
   - CycloneDX SBOM：`c84e7932f67f94623529f0315c042492811e00b11a78646281c0d4d2d43547ec`
   - 第三方许可证：`7b29d635ab5569d9e6a816f8c6eedc9383e1140e4d2247d7d48d4d9042a327f2`
+- `v0.5.3` 增加离线 Skills 契约回归后共 194 项离线测试通过，并再次通过完整 4K 本机探针、Task Scheduler、Portable、Fuses、产物扫描和 NSIS 生命周期。本机哈希：
+  - Setup EXE：`2f372f457223e8485745a85c55c7061faf4ee0909fa2588e1f97529bf466f55c`
+  - Portable ZIP：`b48e4970ee16b9ff964b8d9b8653928f45bcfcabb99a33546d0359d04760e716`
+  - CycloneDX SBOM：`76fda131c2137981744271cc860e047b32e0b3e6d9241d44a991a91913e63262`
+  - 第三方许可证：`454d8334f8d75615a25832b7767cadaf096c4383314ef2c8a275d78b679e2a62`
 
 ### 固定实现约定
 

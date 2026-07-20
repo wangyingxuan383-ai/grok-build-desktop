@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.3 - 2026-07-20
+
+### Fixed
+
+- Made the isolated packaged-release smoke profile return an empty Skills list without attempting Grok CLI discovery. Reopening the composer palette no longer injects repeated missing-CLI IPC failures into a Windows hosted Renderer that is intentionally running without user software or credentials.
+- Added a regression test proving that `GROK_DESKTOP_OFFLINE_SMOKE=1` never invokes the plugin inventory or CLI locator. Normal application and live verification behavior is unchanged.
+- `v0.5.2` remained unpublished and created no Draft assets; its run confirmed that the third offline palette load, rather than the selected large viewport alone, was the remaining hosted-only failure.
+
+### Verification
+
+- The normal local release package continues to test the real 3840×2160 path, while the GitHub branch uses 1920×1080 and a strictly offline extension inventory.
+
 ## 0.5.2 - 2026-07-20
 
 ### Fixed

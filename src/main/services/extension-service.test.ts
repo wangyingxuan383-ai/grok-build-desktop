@@ -47,4 +47,17 @@ describe("ExtensionService normalization", () => {
     ];
     expect(await service.listSkills()).toEqual([{ name: "documents", source: "Documents", command: "/documents", description: "由 Documents 插件提供" }]);
   });
+
+  it("keeps packaged offline smokes independent from a real Grok CLI", async () => {
+    const previous = process.env.GROK_DESKTOP_OFFLINE_SMOKE;
+    process.env.GROK_DESKTOP_OFFLINE_SMOKE = "1";
+    try {
+      const service = new ExtensionService(async () => { throw new Error("CLI discovery must not run"); }, async () => undefined, { log: async () => undefined } as never);
+      service.listPlugins = async () => { throw new Error("plugin inventory must not run"); };
+      await expect(service.listSkills()).resolves.toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.GROK_DESKTOP_OFFLINE_SMOKE;
+      else process.env.GROK_DESKTOP_OFFLINE_SMOKE = previous;
+    }
+  });
 });

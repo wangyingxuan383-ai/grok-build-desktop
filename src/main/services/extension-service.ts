@@ -159,6 +159,10 @@ export class ExtensionService {
   }
 
   async listSkills(): Promise<SkillSummary[]> {
+    // Packaged release smokes intentionally run in an isolated profile without
+    // a real Grok installation. Keep that contract fully offline instead of
+    // raising an IPC error every time the composer palette is reopened.
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const plugins = await this.listPlugins();
     return plugins.filter((plugin) => plugin.enabled).flatMap((plugin) => plugin.skills.map((name) => ({ name, source: plugin.name, command: `/${name}`, description: `由 ${plugin.name} 插件提供` })));
   }
