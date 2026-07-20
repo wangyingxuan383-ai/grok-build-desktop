@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.10 - 2026-07-21
+
+### Fixed
+
+- Scoped the GitHub hosted virtual-desktop gate to what that environment can verify reliably: packaged application content, the rendered shell, the fixed overlay host, and task/extension/media entry availability.
+- Heavy modal interaction is still mandatory before a tag: local packaging verifies the physical-GPU 4K flow, whole-window backgrounds, task/extensions/media layout, modal focus, `Esc`, individual Renderer processes, startup routing, Portable launch and Task Scheduler wakeup.
+- `v0.5.9` remained unpublished and created no Draft assets. Its only cloud Electron process rendered the complete shell, then the Windows hosted graphics/CDP channel stopped immediately after a task-panel click that passes in every local hardware and software-rendered acceptance path.
+
+### Verification
+
+- 195 offline tests (2 opt-in live tests skipped), TypeScript, public scans, physical-GPU 4K and exact hosted shell/entry flows, Task Scheduler, Chinese-space Portable, Electron Fuses and NSIS lifecycle all pass. Local hashes are recorded in the implementation plan; GitHub download acceptance follows before publication.
+
 ## 0.5.9 - 2026-07-21
 
 ### Fixed

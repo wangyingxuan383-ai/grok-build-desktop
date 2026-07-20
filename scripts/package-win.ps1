@@ -63,8 +63,10 @@ if (Test-Path -LiteralPath $GenericZip) {
 if ($env:GITHUB_ACTIONS -eq 'true') {
     # GitHub's Windows virtual desktop becomes unreliable after several
     # consecutive Electron/CDP processes even when every process exits cleanly.
-    # Verify the packaged shell and all heavy root panels in one fresh Renderer;
-    # local acceptance below retains the longer 4K and per-process stress flows.
+    # Verify the packaged shell, overlay host and feature entry points in one
+    # fresh Renderer. Hosted virtual graphics deadlock when those heavy panels
+    # are clicked through CDP; local acceptance below retains the real 4K,
+    # focus, Escape and per-process overlay stress flows.
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-hosted-release-ui.mjs'
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
