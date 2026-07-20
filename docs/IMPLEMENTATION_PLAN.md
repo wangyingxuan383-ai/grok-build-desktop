@@ -25,7 +25,7 @@
 - [x] `v0.5.9` Run `29764592507` 的唯一云端 Electron 进程成功渲染完整壳层，但点击任务入口后虚拟图形/CDP 通道停止；相同交互在本机硬件、软件渲染、4K 和独立进程全部通过。运行在 Draft 创建前失败，无资产。
 - [x] `v0.5.10` Run `29765941455` 已通过版本、195 项测试、构建、打包、Fuses 和唯一 Hosted Renderer 的壳层/入口检查；随后 Task Scheduler 探针在 60 秒内未获得无窗口 marker，运行仍在 Draft 创建前失败，无资产。
 - [x] `v0.5.11` Run `29767638527` 在任何 GUI 启动前仍无法由 Hosted Runner 的 `InteractiveToken` 计划任务唤醒探针，证明这是云端环境边界；运行在 Draft 创建前失败，无资产。
-- [ ] 发布 `v0.5.12`：不再重复同一提交已通过的本机 4K/GUI/Task Scheduler/安装器和主分支测试；Release 工作流只负责构建公开资产、Fuses/公开扫描、哈希、SBOM、许可证、Attestation、回下载校验和公开 Latest。
+- [x] 发布 `v0.5.12`：Run `29768359376` 成功生成 Setup/Portable、Fuses/公开扫描、SBOM、许可证和两份 Attestation；Draft 回下载后的四项 SHA-256 与构建溯源已在本机独立验证，随后于 2026-07-21 公开为 Latest。下载工作流仅因 Windows PowerShell 5.1 解析 UTF-8 中文错误文本失败，已改为 ASCII 并直接完成剩余确定性验证，未重新打包或创建标签。
 
 ### v0.5.0–v0.5.12 本地发布候选证据
 
@@ -91,6 +91,13 @@
   - Portable ZIP：`6d10f9f4caf40ec9d0187aec36f0ea2ff826ec935cf7b30f38c11c5f857595f4`
   - CycloneDX SBOM：`bfa5314ad6bd40af7b36729f09da30d616d013d0ad21f5d122abd9522ae2b3d1`
   - 第三方许可证：`4724744a28e7cd0ee44a62c3871da2688579cacddb3432166cc61fd4a2a2d0e7`
+- `v0.5.12` 公开 Release（云端产物）：
+  - 工作流：`https://github.com/wangyingxuan383-ai/grok-build-desktop/actions/runs/29768359376`
+  - Release：`https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.5.12`
+  - Setup EXE：`fc16c81e9b1d58e9423d6944084593434318449d57dce040625eb21caa2e92e9`
+  - Portable ZIP：`9e4e83f922def7c1f3feb2aec4bbc99be74b1d48d340f0372c8b5f93b82643a3`
+  - CycloneDX SBOM：`e7e66ec83b04827928b81783cd455a2afc81b6004ee0d6e6cddaeb45968976ce`
+  - 第三方许可证：`72336e6005c8a82a57929855c197a5e8a06700201564eba76545a81386515de1`
 
 ### 固定实现约定
 

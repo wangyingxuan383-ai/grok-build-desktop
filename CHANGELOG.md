@@ -10,7 +10,7 @@
 
 ### Verification
 
-- Application runtime is unchanged from the locally accepted v0.5.11 candidate. The v0.5.12 Release workflow performs only packaging and cryptographic/provenance validation rather than rerunning completed product acceptance.
+- Application runtime is unchanged from the locally accepted v0.5.11 candidate. GitHub generated all five release assets and both attestations; the downloaded Setup, Portable, SBOM and license report matched `SHA256SUMS.txt`, provenance verification passed, and v0.5.12 was published as Latest.
 
 ## 0.5.11 - 2026-07-21
 

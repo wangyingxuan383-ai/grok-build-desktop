@@ -11,7 +11,7 @@
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
 | v0.5 local gate | Passed | 195 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
-| Release pipeline | Simplified, v0.5.12 pending | Product acceptance remains the passed local/CI gate above. GitHub Release is limited to deterministic packaging, Fuses/public scans, hashes, SBOM/licenses, provenance and download verification; unsupported hosted virtual-desktop and InteractiveToken checks are not repeated. v0.5.0–v0.5.11 published no assets |
+| Release pipeline | Published v0.5.12 | Product acceptance remains the passed local/CI gate above. GitHub generated unsigned Setup/Portable, hashes, SBOM/licenses and provenance; the Draft assets were independently downloaded and verified before publication as Latest. Unsupported hosted virtual-desktop and InteractiveToken checks are not repeated |
 
 ## v0.4.2 local candidate
 
