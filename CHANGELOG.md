@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.13 - 2026-07-21
+
+### Fixed
+
+- Fixed scheduled-task workers failing to decrypt DPAPI-protected prompts. Before Electron becomes ready, the headless worker now copies the canonical Chromium `Local State` into its isolated session directory, so `safeStorage` opens the original encryption key without sharing the GUI's active browser profile.
+- Reworked the task editor's Computer Use, wake and notification checkboxes into three aligned option cards with a title and description; the cards collapse to one column on narrow windows.
+- Localized automation run states and replaced the old raw `safeStorage.decryptString` failure with an actionable Chinese message. A future decryption failure also reports a concise Chinese recovery instruction without exposing task content.
+
+### Verification
+
+- Targeted TypeScript and 14 automation/task-center tests pass. A packaged v0.5.13 renderer probe opens the task center and verifies all three checkbox cards, their labels, descriptions, alignment and viewport containment.
+- A focused live DPAPI probe decrypted the existing affected task with the canonical storage paths without printing its prompt; the task was not executed and no model usage was incurred.
+- The local `win-unpacked` build passed the public-safety scan, native-host self-test, production build and visible-window launch. The sole desktop shortcut now targets this v0.5.13 build.
+
 ## 0.5.12 - 2026-07-21
 
 ### Fixed

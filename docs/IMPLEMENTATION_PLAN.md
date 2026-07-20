@@ -2,6 +2,16 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
+## v0.5.13：持久任务 DPAPI 与任务表单修复（2026-07-21）
+
+- [x] 复核失败记录并确认任务密文未损坏：无窗口 Worker 曾把 Chromium `sessionData` 指向临时目录，因而无法打开 GUI 创建密文时使用的 `safeStorage` Local State 密钥。
+- [x] 在 Electron ready 前把规范目录的 Chromium `Local State` 复制到 Worker 的隔离 `sessionData`，复用正确的加密密钥且避免与正在运行的 GUI 共享活动 Profile；退出时清理临时目录。
+- [x] 捕获后续 DPAPI 解密异常并返回不含任务内容的中文恢复说明；旧英文失败记录在界面中转换为中文说明。
+- [x] 将三个零散复选框重构为对齐的选项卡片，加入标题、说明、悬停态和窄窗口单列布局。
+- [x] 仅执行本次改动需要的门槛：TypeScript、3 个相关测试文件 / 14 项测试、一次 `win-unpacked` 重建、一次打包任务表单 CDP 探针和一次可见窗口启动；不重复已经通过的完整 Release/安装生命周期/Computer Use 矩阵。
+- [x] 使用现有受影响任务完成只解密不执行的 DPAPI 探针，成功得到非空指令且未输出指令内容、未调用模型；原任务及历史记录均保留。
+- [x] 刷新唯一桌面快捷方式到本地 `v0.5.13`，冷启动窗口可见。本轮未创建 Git 标签或 GitHub Release。
+
 ## v0.5.0–v0.5.12：稳定性、提供商、自动化与正式发布（2026-07-20）
 
 > 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；后续运行逐步隔离扩展中心、复合 Renderer、任务中心系统数据和 Hosted Windows 虚拟图形无法执行重型模态点击的边界，`v0.5.10` 又证明图形进程退出后同一 Runner 的计划任务 Electron 入口可能无法启动；`v0.5.11` 进一步确认 Hosted Runner 不提供可靠的交互令牌计划任务唤醒；当前最终候选为 `v0.5.12`。

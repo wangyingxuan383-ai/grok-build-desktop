@@ -13,6 +13,7 @@
 | 2026-07-20 | 0.2.106 (`bde89716f6`) | Grok Build source `ba76b0a683fa52e4e60685017b85905451be17bc` | v0.5 queue/provider/task compatibility | Generated provider overrides pass isolated `inspect --json` and `models` probing. Non-billable ACP initialization/session creation publishes `/imagine` and the injected `/computer`; live effort switching succeeds. Queue changes are driven by `x.ai/queue/changed`; mutations use versioned notifications, same-turn input uses `x.ai/interject`, fork/rewind use their official request shapes, and task/sub-Agent inventory unwraps `ExtMethodResult`. Private plugin/MCP/command inventory remains optional and falls back to CLI JSON on this build. |
 
 | 2026-07-21 | 0.2.106 (`bde89716f6`) | Public app 0.5.12 release | No Grok wire or application-runtime change from the locally accepted 0.5.11 build. The release-only change removes unsupported Hosted Runner GUI/InteractiveToken repetition; provider, automation, plugin, marketplace and MCP probing is unchanged. |
+| 2026-07-21 | 0.2.106 (`bde89716f6`) | Local app 0.5.13 hotfix | No ACP or Grok CLI wire change. The fix copies Chromium Local State into the headless worker's isolated session before Electron ready and updates task-center presentation; an existing encrypted task passed a non-executing DPAPI probe. |
 
 Every accepted CLI update must pass `initialize` and `session/new`; a version banner alone is not sufficient.
 

@@ -1,5 +1,13 @@
 # Feature Matrix
 
+## v0.5.13 hotfix
+
+| Area | Status | Notes |
+|---|---|---|
+| Scheduled prompt decryption | Fixed and focused-live verified | Before Electron ready, headless workers copy the canonical Chromium `Local State` into an isolated `sessionData`, allowing `safeStorage` to reuse the GUI encryption key without sharing its active profile; the affected task decrypted without exposing or executing its prompt |
+| Automation editor options | Fixed and packaged-UI verified | Computer Use, wake and completion notification are three aligned cards with descriptions, accessible checkboxes and a narrow-window single-column layout |
+| Automation error presentation | Fixed | Run states are Chinese; legacy raw safeStorage errors and new decryption failures show concise Chinese recovery guidance without task content |
+
 ## v0.5.0–v0.5.12 additions
 
 | Area | Status | Notes |
