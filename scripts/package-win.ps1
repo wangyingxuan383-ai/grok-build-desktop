@@ -62,6 +62,9 @@ if (Test-Path -LiteralPath $GenericZip) {
 }
 & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
 & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
+foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
+}
 & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ApplicationArguments '--open-task-center' -ProbeArgument '.task-center'
 & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
 & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip

@@ -2,9 +2,9 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
-## v0.5.0–v0.5.5：稳定性、提供商、自动化与正式发布（2026-07-20）
+## v0.5.0–v0.5.6：稳定性、提供商、自动化与正式发布（2026-07-20）
 
-> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；`v0.5.4` 已进一步把问题定位到扩展中心默认插件清单，当前候选为 `v0.5.5`。
+> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；`v0.5.4` 已进一步把问题定位到扩展中心默认插件清单，`v0.5.5` 又确认 Hosted Runner 的长时复合 Renderer 流程在任务弹层处停止响应，当前候选为 `v0.5.6`。
 
 - [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
 - [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
@@ -18,9 +18,10 @@
 - [x] `v0.5.2` Run `29752880805` 确认第三次打开面板时仍反复向无 CLI 的隔离环境请求 Skills。修正 `GROK_DESKTOP_OFFLINE_SMOKE=1` 契约为直接返回空 Skills 并增加“不调用 CLI/插件索引”回归测试；该标签仍未创建 Draft/资产。
 - [x] `v0.5.3` Run `29754367995` 的离线日志已无 CLI/IPC 异常，但虚拟桌面的第二个 Electron 实例仍停止响应。GitHub Actions 冒烟实例增加 `--disable-gpu`，正常用户构建不变；探针加入逐阶段日志，Hosted Runner 分支在本机复现通过。该标签仍未创建 Draft/资产。
 - [x] `v0.5.4` Run `29755908468` 通过构建、测试、打包和基础内容冒烟，并由阶段日志把最后一个阻塞定位为扩展中心默认插件页在无 Grok CLI 的 Hosted Runner 上触发插件清单发现；仍在创建 Draft 前停止，无资产。
-- [ ] 推送 `v0.5.5` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
+- [x] `v0.5.5` Run `29757936690` 通过版本、测试、构建、打包和基础内容冒烟；长流程在任务弹层阶段停止响应，仍未创建 Draft/资产。复审发现懒加载扩展的 Suspense 占位替换后没有重新建立模态焦点，并确认 Hosted Runner 不适合把视口、主题与全部重型面板压在同一 Renderer 实例。
+- [ ] 推送 `v0.5.6` 源码和标签；Actions 以本地长流程 + Hosted Runner 新鲜进程分层验证，创建 Draft 后回下载验证哈希、溯源、安装生命周期与核心功能，最后公开并标记 Latest。
 
-### v0.5.0–v0.5.5 本地发布候选证据
+### v0.5.0–v0.5.6 本地发布候选证据
 
 - 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
 - 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
@@ -54,6 +55,11 @@
   - Portable ZIP：`2ded2468f6ead4fd3e26f9335525d51dc3e0a9649e058aa404709e4611230649`
   - CycloneDX SBOM：`5c45358ef6a12761b5b6c987543d09dac0469271e41d75f63a7250741421e8c3`
   - 第三方许可证：`a5b703ccdc91385a34bfd40e3bb61e5ae4ce2913ea6fcf7cd2efd728eb36f303`
+- `v0.5.6` 修复 Suspense 占位替换后的模态焦点，并将 Hosted Runner 的任务/扩展/媒体检查拆成三个新鲜 Renderer；194 项测试、完整本机 4K 长流程、Hosted Runner 分层流程、Task Scheduler、Portable、Fuses、扫描及 NSIS 生命周期全部通过。本机哈希：
+  - Setup EXE：`a40acbd1b2474bf8c43aab9181ae0ab040b97cf5832582db30391c8aca75c661`
+  - Portable ZIP：`b9c414725bbac4ac840a0ebca9e6b95ad8d14fb3fdc65312d04724db1e362d26`
+  - CycloneDX SBOM：`e38a4172ce7a69e542666f9ac05d1aae94e4a573ba845580a86af2ff1fc5100d`
+  - 第三方许可证：`1ef09e9eb6159ad8d95c83c7a51a01290d68c59d2b3965c8389c192cb8faa906`
 
 ### 固定实现约定
 

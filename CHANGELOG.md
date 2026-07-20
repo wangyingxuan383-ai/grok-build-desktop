@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.6 - 2026-07-21
+
+### Fixed
+
+- Re-established modal focus after a lazy `Suspense` fallback is replaced. A guarded `MutationObserver` now focuses the first control only when focus is still outside the active overlay, so async panel updates never steal the user’s current focus.
+- Kept the full viewport/theme/panel stress sequence for local physical-GPU acceptance, while clean GitHub Windows runners verify task, extension and media overlays in independent fresh Renderer processes. Each probe still checks the dedicated overlay root, fixed backdrop, viewport bounds, focus and `Esc` close behavior.
+- `v0.5.5` remained unpublished and created no Draft assets; its run passed packaging and the complete pre-panel flow, then demonstrated that the hosted virtual desktop—not the task feature contract—could not sustain every heavy transition in one Renderer instance.
+
+### Verification
+
+- 194 offline tests (2 opt-in live tests skipped), TypeScript, public scans, the physical-GPU 4K long flow, the exact hosted-runner split flow, Task Scheduler wakeup, Chinese-space Portable, Electron Fuses and NSIS install/upgrade/uninstall retention all pass. Local v0.5.6 hashes are recorded in the implementation plan.
+
 ## 0.5.5 - 2026-07-20
 
 ### Fixed
