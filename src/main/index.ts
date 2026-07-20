@@ -6,6 +6,7 @@ import { AppController } from "./app-controller";
 import { ComputerUseOverlay } from "./computer-use-overlay";
 import { registerIpc } from "./ipc";
 import { installApplicationMenu } from "./app-menu";
+import { configureAutomationWorkerStorage } from "./automation-worker-storage";
 import { isAllowedThemeBackgroundUrl } from "./services/theme-service";
 import { createRendererTrustPolicy, isAllowedExternalUrl, isTrustedRendererUrl, trustedDevelopmentUrl } from "./security-policy";
 
@@ -50,16 +51,14 @@ if (schedulerProbeIndex >= 0) {
   process.env.GROK_DESKTOP_AUTOMATION_WORKER = "1";
   const taskId = process.argv[workerIndex + 1] || "";
   const runId = process.argv[workerIndex + 2] || "scheduled";
-  const canonicalUserData = join(app.getPath("appData"), "Grok Build Desktop");
-  const workerUserData = join(app.getPath("temp"), `grok-build-desktop-worker-${process.pid}`);
-  app.setPath("userData", workerUserData);
+  const { canonicalUserData, workerSessionData } = configureAutomationWorkerStorage(app);
   app.whenReady().then(async () => {
     controller = new AppController(canonicalUserData);
     await controller.runAutomationWorker(taskId, runId);
   }).catch((error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)).finally(async () => {
     await controller?.dispose().catch(() => undefined);
     const { rm } = await import("node:fs/promises");
-    await rm(workerUserData, { recursive: true, force: true }).catch(() => undefined);
+    await rm(workerSessionData, { recursive: true, force: true }).catch(() => undefined);
     app.quit();
   });
 } else if (!app.requestSingleInstanceLock()) app.quit();
