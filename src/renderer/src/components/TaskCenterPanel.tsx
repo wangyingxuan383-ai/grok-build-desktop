@@ -1,5 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AccountProfile, AutomationGlobalPolicy, AutomationRunRecord, AutomationSchedule, AutomationTask, AutomationTaskInput, BackgroundTaskSummary, CustomProviderProfile, NotificationInboxItem, ReasoningEffort, ScheduledPermissionPolicy } from "../../../shared/types";
+import type { AccountProfile, AutomationGlobalPolicy, AutomationRunRecord, AutomationSchedule, AutomationTask, AutomationTaskInput, BackgroundTaskSummary, CustomProviderProfile, GrokDesktopApi, NotificationInboxItem, ReasoningEffort, ScheduledPermissionPolicy } from "../../../shared/types";
+
+type TaskCenterReadApi = Pick<GrokDesktopApi, "listAutomations" | "listAutomationRuns" | "getAutomationGlobalPolicy" | "listBackgroundTasks" | "listInbox" | "listProviders">;
+
+export interface TaskCenterSnapshot {
+  tasks: AutomationTask[];
+  runs: AutomationRunRecord[];
+  policy: AutomationGlobalPolicy;
+  background: BackgroundTaskSummary[];
+  inbox: NotificationInboxItem[];
+  providers: CustomProviderProfile[];
+}
+
+// Keep system-backed reads sequential. On Windows each source can cross a
+// different boundary (DPAPI, registry, PowerShell, Task Scheduler or Grok
+// configuration); starting all six together made the first task-center frame
+// contend with Electron's renderer/CDP channel on slower virtual desktops.
+export async function loadTaskCenterSnapshot(api: TaskCenterReadApi): Promise<TaskCenterSnapshot> {
+  const tasks = await api.listAutomations();
+  const runs = await api.listAutomationRuns();
+  const policy = await api.getAutomationGlobalPolicy();
+  const background = await api.listBackgroundTasks();
+  const inbox = await api.listInbox();
+  const providers = await api.listProviders();
+  return { tasks, runs, policy, background, inbox, providers };
+}
 
 export function TaskCenterPanel({ workspace, accounts, onClose, setError, confirmAction }: { workspace: string; accounts: AccountProfile[]; onClose(): void; setError(message: string): void; confirmAction(message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> }): React.JSX.Element {
   const [tab, setTab] = useState<"persistent" | "runs" | "queue">("persistent");
@@ -12,11 +37,11 @@ export function TaskCenterPanel({ workspace, accounts, onClose, setError, confir
   const [editing, setEditing] = useState<AutomationTaskInput | null>(null);
   const [busy, setBusy] = useState(false);
   const activeAccount = accounts.find((value) => value.active);
-  const refresh = async (): Promise<void> => { const [nextTasks, nextRuns, nextPolicy, nextBackground, nextInbox, nextProviders] = await Promise.all([window.grokDesktop.listAutomations(), window.grokDesktop.listAutomationRuns(), window.grokDesktop.getAutomationGlobalPolicy(), window.grokDesktop.listBackgroundTasks(), window.grokDesktop.listInbox(), window.grokDesktop.listProviders()]); setTasks(nextTasks); setRuns(nextRuns); setPolicy(nextPolicy); setBackground(nextBackground); setInbox(nextInbox); setProviders(nextProviders); };
+  const refresh = async (): Promise<void> => { const next = await loadTaskCenterSnapshot(window.grokDesktop); setTasks(next.tasks); setRuns(next.runs); setPolicy(next.policy); setBackground(next.background); setInbox(next.inbox); setProviders(next.providers); };
   useEffect(() => { void refresh().catch((error) => setError(text(error))); return window.grokDesktop.onAutomationEvent(() => void refresh().catch(() => undefined)); }, []);
   const begin = (): void => setEditing({ name: "新定时任务", workspace, prompt: "", schedule: { kind: "daily", time: "09:00" }, profile: { modelId: "grok-4.5", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false, accountId: activeAccount?.id }, enabled: true, wakeToRun: false, notify: true, missedRunPolicy: "run-once" });
   const save = async (): Promise<void> => { if (!editing) return; setBusy(true); try { const payload = { ...editing }; if (payload.id && !payload.prompt?.trim()) delete payload.prompt; setTasks(payload.id ? await window.grokDesktop.updateAutomation(payload.id, payload) : await window.grokDesktop.createAutomation(payload)); setEditing(null); setRuns(await window.grokDesktop.listAutomationRuns()); } catch (error) { setError(text(error)); } finally { setBusy(false); } };
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="control-panel task-center" role="dialog" aria-modal="true" aria-label="任务中心" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>任务中心</h2><small>持久任务、运行记录和会话后台工作</small></div><button onClick={onClose}>×</button></header><div className="task-tabs"><button className={tab === "persistent" ? "active" : ""} onClick={() => setTab("persistent")}>持久任务</button><button className={tab === "runs" ? "active" : ""} onClick={() => setTab("runs")}>运行记录</button><button className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")}>队列与后台</button></div><div className="panel-scroll">
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="control-panel task-center" role="dialog" aria-modal="true" aria-label="任务中心" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>任务中心</h2><small>持久任务、运行记录和会话后台工作</small></div><button autoFocus onClick={onClose}>×</button></header><div className="task-tabs"><button className={tab === "persistent" ? "active" : ""} onClick={() => setTab("persistent")}>持久任务</button><button className={tab === "runs" ? "active" : ""} onClick={() => setTab("runs")}>运行记录</button><button className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")}>队列与后台</button></div><div className="panel-scroll">
     {tab === "persistent" && <>{policy && <PolicyEditor value={policy} onChange={setPolicy} onSave={async () => { setBusy(true); try { setPolicy(await window.grokDesktop.updateAutomationGlobalPolicy(policy)); } catch (error) { setError(text(error)); } finally { setBusy(false); } }} onApply={async () => { if (!await confirmAction("将全局执行配置应用到全部持久任务？", { title: "批量应用", confirmLabel: "应用到全部" })) return; setTasks(await window.grokDesktop.applyAutomationPolicyToAll()); }} />}<div className="task-center-actions"><button className="primary" onClick={begin}>新建持久任务</button><button onClick={async () => setTasks(await window.grokDesktop.repairAutomationRegistrations())}>修复计划任务注册</button></div>{editing && <AutomationEditor value={editing} accounts={accounts} providers={providers} disabled={busy} onChange={setEditing} onCancel={() => setEditing(null)} onSave={() => void save()} />}{tasks.map((task) => <TaskRow key={task.id} task={task} busy={busy} onEdit={() => setEditing(toInput(task))} onRun={async () => { setBusy(true); try { await window.grokDesktop.runAutomationNow(task.id); setRuns(await window.grokDesktop.listAutomationRuns()); } catch (error) { setError(text(error)); } finally { setBusy(false); } }} onPause={async () => setTasks(await window.grokDesktop.pauseAutomation(task.id, task.enabled))} onDelete={async () => { if (await confirmAction(`删除定时任务“${task.name}”？原 Grok 会话不会删除。`, { title: "删除定时任务", confirmLabel: "删除", danger: true })) setTasks(await window.grokDesktop.deleteAutomation(task.id)); }} />)}{!tasks.length && !editing && <p className="empty-copy">尚未创建持久任务。应用关闭后仍需执行的任务应在此创建。</p>}</>}
     {tab === "runs" && <RunList runs={runs} tasks={tasks} />}
     {tab === "queue" && <div className="task-help"><h3>会话队列与后台任务</h3><p>活动回合中按 Enter 会加入队列，Ctrl+Enter 会插话。持久任务由 Windows Task Scheduler 唤醒；`/loop` 仍只在对应 Grok 会话进程存活时运行。</p>{inbox.filter((item) => item.kind === "confirmation").map((item) => <article className="pending-confirmation" key={item.id}><div><strong>{item.title}</strong><p>{item.detail}</p></div><button onClick={async () => { await window.grokDesktop.respondAutomationPending(item.id, false); await refresh(); }}>拒绝</button><button className="danger" onClick={async () => { await window.grokDesktop.respondAutomationPending(item.id, true); await refresh(); }}>允许一次</button></article>)}<div className="background-task-list">{background.map((item) => <article key={item.id}><span className={`run-status ${item.status}`}>{item.status}</span><div><strong>{item.title}</strong><small>{item.kind} · {new Date(item.updatedAt).toLocaleString()}</small>{item.detail && <p>{item.detail}</p>}</div>{item.sessionId && item.kind !== "queue" && ["running", "needs-user"].includes(item.status) && <button onClick={async () => { await window.grokDesktop.killBackgroundTask(item.id); await refresh(); }}>停止</button>}</article>)}{!background.length && <p className="empty-copy">当前没有可查询的后台任务。</p>}</div>{inbox.length > 0 && <details className="task-inbox"><summary>完成与失败收件箱（{inbox.length}）</summary>{inbox.filter((item) => item.kind !== "confirmation").map((item) => <div key={item.id}><strong>{item.title}</strong><span>{item.detail}</span><button onClick={async () => setInbox(await window.grokDesktop.markInboxRead(item.id, true))}>{item.read ? "已读" : "标为已读"}</button></div>)}<button onClick={async () => setInbox(await window.grokDesktop.clearInbox())}>清空收件箱</button></details>}</div>}

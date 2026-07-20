@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.8 - 2026-07-21
+
+### Fixed
+
+- Changed task-center discovery from six concurrent system-backed IPC reads to a deterministic sequential snapshot. This prevents DPAPI, registry, PowerShell, Task Scheduler and Grok configuration discovery from contending with the first modal frame on slower Windows virtual desktops.
+- The task-center close control now receives focus in the mount commit, before asynchronous data discovery. Keyboard focus, `Esc` handling and screen-reader dialog navigation no longer depend on a later timer.
+- Added a regression test that delays every task-center source and proves at most one system-backed read is active at a time.
+- `v0.5.7` remained unpublished and created no Draft assets; its run passed the main packaged UI flow, then reproduced the task-center renderer/CDP stall after the panel mounted.
+
+### Verification
+
+- 195 offline tests (2 opt-in live tests skipped), TypeScript, public scans, physical-GPU 4K and exact hosted-runner split flows, Task Scheduler, Chinese-space Portable, Electron Fuses and NSIS lifecycle all pass. Local hashes are recorded in the implementation plan; GitHub download acceptance follows before publication.
+
 ## 0.5.7 - 2026-07-21
 
 ### Fixed

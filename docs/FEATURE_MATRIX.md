@@ -1,6 +1,6 @@
 # Feature Matrix
 
-## v0.5.0–v0.5.7 additions
+## v0.5.0–v0.5.8 additions
 
 | Area | Status | Notes |
 |---|---|---|
@@ -10,8 +10,8 @@
 | Prompt queue/interjection | Implemented, contract tested | Server `x.ai/queue/changed` is authoritative; edit/remove/reorder/clear/interject use official identifiers and versions; old CLI interjection has a compatible send-now fallback |
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
-| v0.5 local gate | Passed | 194 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
-| Hosted Runner UI probe | Fixed, v0.5.7 retry pending | Local packaging retains one long GPU-backed 3840×2160 stress flow. GitHub uses software rendering at 1920×1080 and separate fresh Renderer processes. The explicit offline-smoke contract now returns deterministic task-center providers, automations, policy, background work and inbox data without DPAPI, registry, PowerShell or user configuration access. v0.5.0–v0.5.6 all stopped before Draft creation and published no assets |
+| v0.5 local gate | Passed | 195 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
+| Hosted Runner UI probe | Fixed, v0.5.8 retry pending | Local packaging retains one long GPU-backed 3840×2160 stress flow. GitHub uses software rendering at 1920×1080 and separate fresh Renderer processes. Task-center data discovery is sequential, the close control is focused during mount, and the explicit offline-smoke contract returns deterministic data without DPAPI, registry, PowerShell or user configuration access. v0.5.0–v0.5.7 all stopped before Draft creation and published no assets |
 
 ## v0.4.2 local candidate
 
