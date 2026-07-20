@@ -152,8 +152,14 @@ export class AccountVault {
   }
 }
 
+export function authJsonAccountId(raw: string): string | undefined {
+  try { return parseAuthIdentity(raw).id; }
+  catch { return undefined; }
+}
+
 function parseAuthIdentity(raw: string): { id: string; email?: string; name?: string } {
   const parsed = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+  if (typeof (parsed as Record<string, unknown>).__id === "string") return { id: `oauth-${String((parsed as Record<string, unknown>).__id)}` };
   const container = Object.entries(parsed)[0];
   const key = container?.[0] || crypto.randomUUID();
   const identity = container?.[1] || {};

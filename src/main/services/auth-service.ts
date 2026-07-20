@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { shell } from "electron";
 import type { AccountProfile, AppSettings, LoginState } from "../../shared/types";
 import { buildCliEnv, locateGrokCli } from "./cli-locator";
-import type { AccountVault } from "./account-vault";
+import { authJsonAccountId, type AccountVault } from "./account-vault";
 import type { LogService } from "./log-service";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
 
@@ -24,6 +24,11 @@ interface ActiveVaultAccount {
 interface AuthSnapshot {
   active?: ActiveVaultAccount;
   raw: string;
+}
+
+export interface AutomationOAuthCredential {
+  authJson: string;
+  canonicalSnapshot?: string;
 }
 
 interface SpawnLoginOptions {
@@ -130,6 +135,38 @@ export class AuthService {
 
   async activeApiKey(): Promise<string | undefined> {
     return (await this.vault.active())?.payload.apiKey;
+  }
+
+  resolveAutomationOAuth(accountId: string, fallbackAuthJson: string): Promise<AutomationOAuthCredential> {
+    return this.runExclusive(async () => {
+      await this.ensureAuthArtifactsRecovered();
+      const current = await readFile(this.authPath, "utf8").catch(() => "");
+      if (current.trim() && authJsonAccountId(current) === accountId) {
+        await this.vault.updateOAuth(accountId, current);
+        return { authJson: current, canonicalSnapshot: current };
+      }
+      return { authJson: fallbackAuthJson };
+    });
+  }
+
+  reconcileAutomationOAuth(accountId: string, credential: AutomationOAuthCredential, refreshedAuthJson: string): Promise<void> {
+    return this.runExclusive(async () => {
+      if (!refreshedAuthJson.trim()) return;
+      if (!credential.canonicalSnapshot) {
+        await this.vault.updateOAuth(accountId, refreshedAuthJson);
+        return;
+      }
+      const current = await readFile(this.authPath, "utf8").catch(() => "");
+      if (current === credential.canonicalSnapshot) {
+        await this.atomicWriteAuth(refreshedAuthJson);
+        await this.vault.updateOAuth(accountId, refreshedAuthJson);
+        return;
+      }
+      // Another Grok process refreshed the same account while this worker ran.
+      // Preserve the newer canonical file instead of overwriting a rotated token.
+      if (current.trim() && authJsonAccountId(current) === accountId) await this.vault.updateOAuth(accountId, current);
+      else await this.vault.updateOAuth(accountId, refreshedAuthJson);
+    });
   }
 
   async verifyActive(): Promise<void> {

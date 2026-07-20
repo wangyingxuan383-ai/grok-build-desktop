@@ -233,6 +233,36 @@ describe("AuthService lifecycle", () => {
 });
 
 describe("AuthService account transactions", () => {
+  it("uses a newer matching canonical OAuth credential for automation", async () => {
+    const staleRaw = authJson("old", "stale-refresh-token");
+    const currentRaw = authJson("old", "current-refresh-token");
+    const harness = await createHarness(staleRaw);
+    await writeFile(harness.authPath, currentRaw);
+
+    const credential = await harness.service.resolveAutomationOAuth("oauth-old", staleRaw);
+
+    expect(credential).toEqual({ authJson: currentRaw, canonicalSnapshot: currentRaw });
+    expect(harness.vault.entries.get("oauth-old")?.payload.authJson).toBe(currentRaw);
+  });
+
+  it("writes a worker-refreshed OAuth credential back without clobbering concurrent refreshes", async () => {
+    const sourceRaw = authJson("old", "source-refresh-token");
+    const workerRaw = authJson("old", "worker-refresh-token");
+    const concurrentRaw = authJson("old", "concurrent-refresh-token");
+    const harness = await createHarness(sourceRaw);
+    const credential = await harness.service.resolveAutomationOAuth("oauth-old", sourceRaw);
+
+    await harness.service.reconcileAutomationOAuth("oauth-old", credential, workerRaw);
+    expect(await readFile(harness.authPath, "utf8")).toBe(workerRaw);
+    expect(harness.vault.entries.get("oauth-old")?.payload.authJson).toBe(workerRaw);
+
+    const next = await harness.service.resolveAutomationOAuth("oauth-old", workerRaw);
+    await writeFile(harness.authPath, concurrentRaw);
+    await harness.service.reconcileAutomationOAuth("oauth-old", next, authJson("old", "obsolete-worker-token"));
+    expect(await readFile(harness.authPath, "utf8")).toBe(concurrentRaw);
+    expect(harness.vault.entries.get("oauth-old")?.payload.authJson).toBe(concurrentRaw);
+  });
+
   it("syncs the refreshed OAuth auth.json before adding an API key", async () => {
     const staleRaw = authJson("old", "stale-token");
     const refreshedRaw = authJson("old", "refreshed-token");

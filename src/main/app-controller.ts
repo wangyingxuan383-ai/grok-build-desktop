@@ -800,6 +800,7 @@ export class AppController {
       return { environment: { XAI_API_KEY: account.payload.apiKey }, cleanup: async () => undefined };
     }
     if (!account.payload.authJson) throw new Error("任务固定的 OAuth 凭据不可用，请重新配置");
+    const oauthCredential = await this.auth.resolveAutomationOAuth(account.profile.id, account.payload.authJson);
     const root = await mkdtemp(join(app.getPath("temp"), "grok-desktop-automation-home-"));
     const grokHome = join(root, ".grok");
     const canonicalHome = join(homedir(), ".grok");
@@ -810,7 +811,7 @@ export class AppController {
     for (const file of ["config.toml", "managed_config.toml", "requirements.toml"]) {
       await copyFile(join(canonicalHome, file), join(grokHome, file)).catch(() => undefined);
     }
-    await writeFile(join(grokHome, "auth.json"), account.payload.authJson, "utf8");
+    await writeFile(join(grokHome, "auth.json"), oauthCredential.authJson, { encoding: "utf8", mode: 0o600 });
     let sharedSessions = true;
     try { await symlink(canonicalSessions, isolatedSessions, "junction"); }
     catch { sharedSessions = false; await mkdir(isolatedSessions, { recursive: true }); }
@@ -822,7 +823,7 @@ export class AppController {
       environment: { GROK_HOME: grokHome, XAI_API_KEY: undefined },
       cleanup: async () => {
         const refreshed = await readFile(join(grokHome, "auth.json"), "utf8").catch(() => "");
-        if (refreshed.trim()) await this.vault.updateOAuth(account.profile.id, refreshed).catch((error) => this.log.log(`自动化 OAuth 刷新保存失败：${error instanceof Error ? error.message : String(error)}`));
+        if (refreshed.trim()) await this.auth.reconcileAutomationOAuth(account.profile.id, oauthCredential, refreshed).catch((error) => this.log.log(`自动化 OAuth 刷新保存失败：${error instanceof Error ? error.message : String(error)}`));
         if (!sharedSessions) await cp(isolatedSessions, canonicalSessions, { recursive: true, force: true }).catch((error) => this.log.log(`自动化会话归档失败：${error instanceof Error ? error.message : String(error)}`));
         await rm(root, { recursive: true, force: true });
       },
