@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [string]$Archive = '',
-    [string]$DestinationRoot = [IO.Path]::GetTempPath()
+    [string]$DestinationRoot = [IO.Path]::GetTempPath(),
+    [switch]$StructureOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,8 +21,15 @@ if (-not $Target.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase))
 try {
     Expand-Archive -LiteralPath $Archive -DestinationPath $Target
     $Executable = Join-Path $Target 'Grok Build Desktop.exe'
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $Executable
-    Write-Host "便携版中文/空格路径可见窗口验收通过：$Target" -ForegroundColor Green
+    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "便携版缺少主程序：$Executable" }
+    if ($StructureOnly) {
+        $Asar = Join-Path $Target 'resources\app.asar'
+        if (-not (Test-Path -LiteralPath $Asar -PathType Leaf)) { throw "便携版缺少应用 ASAR：$Asar" }
+        Write-Host "便携版中文/空格路径结构验收通过：$Target" -ForegroundColor Green
+    } else {
+        & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $Executable
+        Write-Host "便携版中文/空格路径可见窗口验收通过：$Target" -ForegroundColor Green
+    }
 } finally {
     if (Test-Path -LiteralPath $Target -PathType Container) {
         $Resolved = (Resolve-Path -LiteralPath $Target).Path
