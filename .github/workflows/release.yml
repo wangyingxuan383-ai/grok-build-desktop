@@ -35,7 +35,7 @@ jobs:
         shell: powershell
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "标签与 package.json 版本不一致：v$version != ${{ github.ref_name }}" }
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag/package version mismatch: v$version != ${{ github.ref_name }}" }
       - run: npm ci
       - name: Verify and package unsigned Windows artifacts
         shell: powershell
@@ -101,14 +101,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $lines = Get-Content downloaded\SHA256SUMS.txt | Where-Object { $_ -match '^([0-9a-fA-F]{64})\s+(.+)$' }
-          if ($lines.Count -lt 4) { throw 'SHA256SUMS.txt 缺少发布资产。' }
+          if ($lines.Count -lt 4) { throw 'SHA256SUMS.txt is missing release assets.' }
           foreach ($line in $lines) {
             $null = $line -match '^([0-9a-fA-F]{64})\s+(.+)$'
             $expected = $Matches[1].ToLowerInvariant()
             $asset = Join-Path downloaded $Matches[2].Trim()
-            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "哈希清单中的资产不存在：$asset" }
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Asset listed in SHA256SUMS.txt is missing: $asset" }
             $actual = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($asset)))).Replace('-', '').ToLowerInvariant()
-            if ($actual -ne $expected) { throw "SHA-256 不匹配：$asset" }
+            if ($actual -ne $expected) { throw "SHA-256 mismatch: $asset" }
           }
           $setup = Get-ChildItem downloaded\Grok-Build-Desktop-Setup-*.exe | Select-Object -First 1
           $portable = Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1
