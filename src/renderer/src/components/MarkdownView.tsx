@@ -26,13 +26,14 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
 
 function HighlightedCode({ language, source }: { language: string; source: string }): React.JSX.Element {
   const [html, setHtml] = useState("");
+  const light = useLightTheme();
   useEffect(() => {
     let active = true;
-    void import("./syntax-highlighter").then((module) => module.highlightCode(source, language))
+    void import("./syntax-highlighter").then((module) => module.highlightCode(source, language, light))
       .then((value) => { if (active) setHtml(value); })
       .catch(() => setHtml(""));
     return () => { active = false; };
-  }, [language, source]);
+  }, [language, light, source]);
   return <div className="code-wrap"><button onClick={() => void navigator.clipboard.writeText(source)}>复制</button>{html ? <div dangerouslySetInnerHTML={{ __html: html }} /> : <pre><code>{source}</code></pre>}</div>;
 }
 
@@ -40,18 +41,30 @@ function Mermaid({ source }: { source: string }): React.JSX.Element {
   const id = useMemo(() => `mermaid-${crypto.randomUUID()}`, []);
   const [svg, setSvg] = useState("");
   const [error, setError] = useState("");
+  const light = useLightTheme();
   useEffect(() => {
     let active = true;
     setError("");
     setSvg("");
     const timer = window.setTimeout(() => {
       void import("mermaid").then(({ default: mermaid }) => {
-        mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+        mermaid.initialize({ startOnLoad: false, theme: light ? "default" : "dark", securityLevel: "strict" });
         return mermaid.render(id, source);
       }).then((result) => { if (active) { setError(""); setSvg(result.svg); } }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
     }, 120);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [id, source]);
+  }, [id, light, source]);
   if (error) return <pre className="mermaid-error">{source}</pre>;
   return <div className="mermaid" dangerouslySetInnerHTML={{ __html: svg }} />;
+}
+
+function useLightTheme(): boolean {
+  const read = (): boolean => document.documentElement.dataset.themeResolved === "light";
+  const [light, setLight] = useState(read);
+  useEffect(() => {
+    const update = (): void => setLight(read());
+    document.documentElement.addEventListener("grok-theme-change", update);
+    return () => document.documentElement.removeEventListener("grok-theme-change", update);
+  }, []);
+  return light;
 }

@@ -14,12 +14,24 @@ describe.skipIf(process.platform !== "win32")("Grok ACP contract", () => {
     const marker = join(root, "unknown-response.json");
     const argsMarker = join(root, "args.json");
     const effortMarker = join(root, "effort-request.json");
+    const queueMarker = join(root, "queue-request.json");
+    const queueEditMarker = join(root, "queue-edit.json");
+    const queueInterjectMarker = join(root, "queue-interject.json");
+    const interjectMarker = join(root, "interject.json");
+    const forkMarker = join(root, "fork-request.json");
+    const rewindMarker = join(root, "rewind-request.json");
     await writeFile(fakeScript, `
 import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 const marker = ${JSON.stringify(marker)};
 const argsMarker = ${JSON.stringify(argsMarker)};
 const effortMarker = ${JSON.stringify(effortMarker)};
+const queueMarker = ${JSON.stringify(queueMarker)};
+const queueEditMarker = ${JSON.stringify(queueEditMarker)};
+const queueInterjectMarker = ${JSON.stringify(queueInterjectMarker)};
+const interjectMarker = ${JSON.stringify(interjectMarker)};
+const forkMarker = ${JSON.stringify(forkMarker)};
+const rewindMarker = ${JSON.stringify(rewindMarker)};
 const generatedImage = ${JSON.stringify(join(root, "images", "generated.jpg"))};
 await writeFile(argsMarker, JSON.stringify(process.argv.slice(2)));
 const rl = createInterface({ input: process.stdin });
@@ -44,6 +56,11 @@ rl.on("line", async (line) => {
     return;
   }
   if (message.method === "session/prompt") {
+    if (message.params?._meta?.promptId) {
+      await writeFile(queueMarker, JSON.stringify(message.params));
+      send({ jsonrpc: "2.0", method: "_x.ai/queue/changed", params: { sessionId: "fake-session", entries: [{ id: message.params._meta.promptId, version: 2, owner: "grok-build-desktop", kind: "prompt", text: "queued text", position: 0 }] } });
+      return send({ jsonrpc: "2.0", id: message.id, result: { queued: true } });
+    }
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "call-image", title: "image_gen", status: "in_progress" } } });
@@ -53,6 +70,15 @@ rl.on("line", async (line) => {
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "turn_completed", usage: { totalTokens: 41 } } } });
     return send({ jsonrpc: "2.0", id: message.id, result: { _meta: { totalTokens: 42, modelId: "grok-test" } } });
   }
+  if (message.method === "x.ai/interject") { await writeFile(interjectMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { result: { status: "queued" } } }); }
+  if (message.method?.startsWith("x.ai/queue/")) { await writeFile(message.method === "x.ai/queue/interject" ? queueInterjectMarker : queueEditMarker, JSON.stringify(message)); return; }
+  if (message.method === "x.ai/session/fork") { await writeFile(forkMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { newSessionId: "forked-session", parentSessionId: "fake-session", newCwd: ${JSON.stringify(root)}, chatMessagesCopied: 1, updatesCopied: 1, planStateCopied: false } }); }
+  if (message.method === "x.ai/rewind/points") return send({ jsonrpc: "2.0", id: message.id, result: { rewind_points: [{ prompt_index: 3, prompt_preview: "before change", num_file_snapshots: 2, created_at: "2026-07-20T00:00:00Z" }] } });
+  if (message.method === "x.ai/rewind/execute") { await writeFile(rewindMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: {} }); }
+  if (message.method === "x.ai/task/list") return send({ jsonrpc: "2.0", id: message.id, result: { result: { tasks: [{ taskId: "task-1", status: "running" }] } } });
+  if (message.method === "x.ai/task/kill") return send({ jsonrpc: "2.0", id: message.id, result: { result: { taskId: message.params.taskId, outcome: "killed" } } });
+  if (message.method === "x.ai/subagent/list_running") return send({ jsonrpc: "2.0", id: message.id, result: { result: { subagents: [{ subagentId: "sub-1", description: "review", status: "running" }] } } });
+  if (message.method === "x.ai/subagent/cancel") return send({ jsonrpc: "2.0", id: message.id, result: { result: { subagentId: message.params.subagentId, cancelled: true, outcome: { kind: "cancelled" } } } });
   if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, result: {} });
 });
 `, "utf8");
@@ -82,6 +108,31 @@ rl.on("line", async (line) => {
         _meta: { reasoningEffort: "low" },
       });
       await adapter.prompt("test");
+      await adapter.queuePrompt("queued text", []);
+      await waitForFile(queueMarker);
+      const queued = JSON.parse(await readFile(queueMarker, "utf8"));
+      expect(queued._meta).toMatchObject({ sendNow: false, clientIdentifier: "grok-build-desktop" });
+      expect(queued._meta.promptId).toMatch(/^[0-9a-f-]{36}$/i);
+      await adapter.editQueuedPrompt(queued._meta.promptId, "edited queue text");
+      await waitForFile(queueEditMarker);
+      expect(JSON.parse(await readFile(queueEditMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/edit", params: { sessionId: "fake-session", id: queued._meta.promptId, newText: "edited queue text" } });
+      await adapter.interjectQueuedPrompt(queued._meta.promptId);
+      await waitForFile(queueInterjectMarker);
+      expect(JSON.parse(await readFile(queueInterjectMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/interject", params: { sessionId: "fake-session", id: queued._meta.promptId, expectedVersion: 2 } });
+      await adapter.interjectPrompt("same turn");
+      await waitForFile(interjectMarker);
+      expect(JSON.parse(await readFile(interjectMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", text: "same turn", interjectionId: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
+      expect(await adapter.fork("3")).toMatchObject({ newSessionId: "forked-session" });
+      await waitForFile(forkMarker);
+      expect(JSON.parse(await readFile(forkMarker, "utf8"))).toMatchObject({ sourceSessionId: "fake-session", sourceCwd: root, newCwd: root, targetPromptIndex: 3 });
+      expect(await adapter.rewindPoints()).toEqual([{ id: "3", label: "before change", userMessage: "before change", filesChanged: 2, createdAt: "2026-07-20T00:00:00Z" }]);
+      await adapter.rewind("3", "conversation-and-files");
+      await waitForFile(rewindMarker);
+      expect(JSON.parse(await readFile(rewindMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", targetPromptIndex: 3, force: false, mode: "all" });
+      expect(await adapter.taskList()).toMatchObject({ tasks: [{ taskId: "task-1" }] });
+      await adapter.taskKill("task-1");
+      expect(await adapter.subagentListRunning()).toMatchObject({ subagents: [{ subagentId: "sub-1" }] });
+      await adapter.subagentCancel("sub-1");
       await waitForFile(marker);
       expect(JSON.parse(await readFile(marker, "utf8"))).toMatchObject({
         id: "server-unknown",
@@ -95,6 +146,7 @@ rl.on("line", async (line) => {
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: join(root, "images", "generated.jpg") }),
         expect.objectContaining({ type: "meta", sessionId: "fake-session", meta: expect.objectContaining({ totalTokens: 42 }) }),
         expect.objectContaining({ type: "session-ready", sessionId: "fake-session", effort: "low" }),
+        expect.objectContaining({ type: "prompt-queue", sessionId: "fake-session", entries: [expect.objectContaining({ text: "queued text", state: "queued", version: 2 })] }),
       ]));
       expect(events.filter((event) => event.type === "subagent")).toHaveLength(0);
       expect(events.filter((event) => event.type === "tool-call" && event.tool.toolCallId === "call-bg")).toEqual([

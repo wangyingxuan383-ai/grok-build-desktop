@@ -387,13 +387,18 @@ export async function terminateProcessTree(child: ChildProcessWithoutNullStreams
   }
   if (process.platform === "win32") {
     let taskkillError: unknown;
-    try {
-      await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 15_000, windowsHide: true });
-    } catch (error) {
-      taskkillError = error;
+    for (let attempt = 0; attempt < 3 && !hasExited(child); attempt += 1) {
+      try {
+        await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true });
+      } catch (error) {
+        taskkillError = error;
+      }
+      if (await waitForExitWithin(child, Math.min(waitMs, 1_500))) return;
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    if (!(await waitForExitWithin(child, waitMs))) throw new Error(`无法终止登录进程树：${errorMessage(taskkillError)}`);
-    return;
+    child.kill();
+    if (await waitForExitWithin(child, waitMs)) return;
+    throw new Error(`无法终止登录进程树：${errorMessage(taskkillError)}`);
   }
   child.kill("SIGTERM");
   if (await waitForExitWithin(child, waitMs)) return;

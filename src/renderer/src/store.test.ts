@@ -36,6 +36,13 @@ describe("session event reducer", () => {
     const state = apply(baseState(), { type: "subagent", sessionId: "session", update: { sessionUpdate: "subagent_spawned" } });
     expect(state.views.session.messages).toEqual([]);
   });
+
+  it("treats the server queue broadcast as the complete authoritative queue", () => {
+    let state = apply(baseState(), { type: "prompt-queue", sessionId: "session", entries: [{ id: "one", sessionId: "session", text: "first", position: 0, createdAt: "2026-01-01T00:00:00Z", state: "queued" }] });
+    expect(state.views.session.queue.map((entry: { id: string }) => entry.id)).toEqual(["one"]);
+    state = apply(state, { type: "prompt-queue", sessionId: "session", entries: [{ id: "two", sessionId: "session", text: "replacement", position: 0, createdAt: "2026-01-01T00:00:01Z", state: "interjected" }] });
+    expect(state.views.session.queue).toEqual([expect.objectContaining({ id: "two", state: "interjected" })]);
+  });
 });
 
 describe("Codex-style turn grouping", () => {

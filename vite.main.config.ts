@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { defineConfig } from "vite";
 
 const profile = process.env.APP_BUILD_PROFILE === "local" ? "local" : "public";
-const repository = process.env.GITHUB_REPOSITORY || process.env.GROK_DESKTOP_REPOSITORY || "";
+const repository = "wangyingxuan383-ai/grok-build-desktop";
 const commit = (process.env.GITHUB_SHA || process.env.GROK_DESKTOP_COMMIT || "working-tree").slice(0, 40);
 const builtAt = process.env.GROK_DESKTOP_BUILD_TIME || new Date().toISOString();
 

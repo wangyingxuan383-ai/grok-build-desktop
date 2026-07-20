@@ -6,7 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
-if (-not $Archive) { $Archive = Join-Path $Root 'release\Grok-Build-Desktop-Portable-v0.4.0-x64.zip' }
+$Version = (Get-Content (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json).version
+if (-not $Archive) { $Archive = Join-Path $Root "release\Grok-Build-Desktop-Portable-v$Version-x64.zip" }
 $Archive = [IO.Path]::GetFullPath($Archive)
 $DestinationRoot = [IO.Path]::GetFullPath($DestinationRoot)
 if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) { throw "便携版压缩包不存在：$Archive" }

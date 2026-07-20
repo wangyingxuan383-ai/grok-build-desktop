@@ -5,6 +5,30 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $Root
 $env:APP_BUILD_PROFILE = 'public'
+$Version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+$Release = [IO.Path]::GetFullPath((Join-Path $Root 'release'))
+$RootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+if (-not $Release.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'release 目录越出仓库根目录。' }
+if (Test-Path -LiteralPath $Release -PathType Container) {
+    Get-ChildItem -LiteralPath $Release -File | Where-Object { $_.Name -match '^Grok-Build-Desktop-' -or $_.Name -in @('SHA256SUMS.txt','THIRD_PARTY_LICENSES.json','builder-debug.yml','builder-effective-config.yaml','latest.yml') } | Remove-Item -Force
+    $Unpacked = [IO.Path]::GetFullPath((Join-Path $Release 'win-unpacked'))
+    if ((Test-Path -LiteralPath $Unpacked -PathType Container) -and $Unpacked.StartsWith($Release.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $Unpacked -Recurse -Force }
+}
+
+function Wait-ReleaseFile([string]$Path, [int]$TimeoutSeconds = 600) {
+    $Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $PreviousLength = -1L
+    $StableChecks = 0
+    while ([DateTime]::UtcNow -lt $Deadline) {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $Length = (Get-Item -LiteralPath $Path).Length
+            if ($Length -gt 0 -and $Length -eq $PreviousLength) { $StableChecks++ } else { $StableChecks = 0; $PreviousLength = $Length }
+            if ($StableChecks -ge 2) { return }
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "等待发布文件超时：$Path"
+}
 
 if (-not $SkipVerification) { & (Join-Path $PSScriptRoot 'check-public-safety.ps1') }
 node (Join-Path $PSScriptRoot 'ensure-electron.mjs')
@@ -19,18 +43,29 @@ npm run build
 if ($LASTEXITCODE -ne 0) { throw "生产构建失败 ($LASTEXITCODE)" }
 npx electron-builder --win nsis zip --x64 --publish never
 if ($LASTEXITCODE -ne 0) { throw "electron-builder 失败 ($LASTEXITCODE)" }
+$ExpectedExecutable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
+$ExpectedSetup = Join-Path $Root "release\Grok-Build-Desktop-Setup-v$Version-x64.exe"
+$ExpectedZip = Join-Path $Root "release\Grok-Build-Desktop-$Version-x64.zip"
+Wait-ReleaseFile $ExpectedExecutable
+Wait-ReleaseFile $ExpectedSetup
+Wait-ReleaseFile $ExpectedZip
 Remove-Item -LiteralPath (Join-Path $Root 'release\builder-debug.yml'),(Join-Path $Root 'release\builder-effective-config.yaml') -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath (Join-Path $Root 'release') -Filter '*.blockmap' -File -ErrorAction SilentlyContinue | Remove-Item -Force
-node (Join-Path $PSScriptRoot 'verify-fuses.mjs') (Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe')
+node (Join-Path $PSScriptRoot 'verify-fuses.mjs') $ExpectedExecutable
 if ($LASTEXITCODE -ne 0) { throw 'Electron Fuses 校验失败。' }
 
-$Version = (Get-Content package.json -Raw | ConvertFrom-Json).version
 $GenericZip = Join-Path $Root "release\Grok-Build-Desktop-$Version-x64.zip"
 $PortableZip = Join-Path $Root "release\Grok-Build-Desktop-Portable-v$Version-x64.zip"
 if (Test-Path -LiteralPath $GenericZip) {
     if (Test-Path -LiteralPath $PortableZip) { [IO.File]::Delete($PortableZip) }
     [IO.File]::Move($GenericZip, $PortableZip)
 }
+& (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
+& (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
+& (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ApplicationArguments '--open-task-center' -ProbeArgument '.task-center'
+& (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
+& (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 & (Join-Path $PSScriptRoot 'generate-release-assets.ps1')
+& (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 Write-Host "Windows 公开产物已生成：$PortableZip" -ForegroundColor Green

@@ -17,7 +17,6 @@ jobs:
       attestations: write
     env:
       APP_BUILD_PROFILE: public
-      GROK_DESKTOP_REPOSITORY: ${{ github.repository }}
       GITHUB_BUILD_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -77,3 +76,63 @@ jobs:
             release/SHA256SUMS.txt `
             release/*SBOM*.json `
             release/THIRD_PARTY_LICENSES.json
+
+  download-verify-and-publish:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Download assets back from the draft release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force downloaded | Out-Null
+          gh release download "${{ github.ref_name }}" --dir downloaded
+      - name: Verify SHA-256 manifest and provenance
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $lines = Get-Content downloaded\SHA256SUMS.txt | Where-Object { $_ -match '^([0-9a-fA-F]{64})\s+(.+)$' }
+          if ($lines.Count -lt 4) { throw 'SHA256SUMS.txt 缺少发布资产。' }
+          foreach ($line in $lines) {
+            $null = $line -match '^([0-9a-fA-F]{64})\s+(.+)$'
+            $expected = $Matches[1].ToLowerInvariant()
+            $asset = Join-Path downloaded $Matches[2].Trim()
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "哈希清单中的资产不存在：$asset" }
+            $actual = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($asset)))).Replace('-', '').ToLowerInvariant()
+            if ($actual -ne $expected) { throw "SHA-256 不匹配：$asset" }
+          }
+          $setup = Get-ChildItem downloaded\Grok-Build-Desktop-Setup-*.exe | Select-Object -First 1
+          $portable = Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1
+          gh attestation verify $setup.FullName --repo "${{ github.repository }}"
+          gh attestation verify $portable.FullName --repo "${{ github.repository }}"
+      - name: Downloaded installer lifecycle
+        shell: powershell
+        run: |
+          $setup = (Get-ChildItem downloaded\Grok-Build-Desktop-Setup-*.exe | Select-Object -First 1).FullName
+          .\scripts\test-installer-lifecycle.ps1 -Installer $setup -AllowMutation
+      - name: Downloaded portable UI and Task Scheduler acceptance
+        shell: powershell
+        run: |
+          $portable = (Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1).FullName
+          $target = Join-Path $env:RUNNER_TEMP '便携版 中文 空格 回测'
+          Expand-Archive -LiteralPath $portable -DestinationPath $target
+          $exe = Join-Path $target 'Grok Build Desktop.exe'
+          .\scripts\smoke-app.ps1 -Executable $exe -ProbeScript 'probe-v042-ui.mjs'
+          .\scripts\probe-task-scheduler.ps1 -Executable $exe
+      - name: Publish verified release as Latest
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --latest

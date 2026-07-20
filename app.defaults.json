@@ -1,6 +1,6 @@
 {
   "channel": "stable",
-  "repository": "",
+  "repository": "wangyingxuan383-ai/grok-build-desktop",
   "allowPrerelease": false,
   "debug": false,
   "mockCliPath": ""

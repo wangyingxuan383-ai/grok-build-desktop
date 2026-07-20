@@ -15,9 +15,18 @@ if ($LASTEXITCODE -ne 0) { throw "SBOM 生成失败：$SbomText" }
 npx license-checker-rseidelsohn --production --json --out (Join-Path $Release 'THIRD_PARTY_LICENSES.json')
 if ($LASTEXITCODE -ne 0) { throw '第三方许可证报告生成失败。' }
 
-$Artifacts = Get-ChildItem -LiteralPath $Release -File | Where-Object {
-    $_.Name -match '\.(exe|zip|json)$' -and $_.Name -ne 'builder-debug.yml'
-} | Sort-Object Name
+$ExpectedNames = @(
+    "Grok-Build-Desktop-Setup-v$Version-x64.exe",
+    "Grok-Build-Desktop-Portable-v$Version-x64.zip",
+    "Grok-Build-Desktop-$Version-SBOM.cdx.json",
+    'THIRD_PARTY_LICENSES.json'
+)
+$Artifacts = foreach ($Name in $ExpectedNames) {
+    $Path = Join-Path $Release $Name
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "当前版本发布文件缺失：$Name" }
+    Get-Item -LiteralPath $Path
+}
+$Artifacts = $Artifacts | Sort-Object Name
 $Lines = foreach ($Artifact in $Artifacts) {
     $Stream = [IO.File]::OpenRead($Artifact.FullName)
     $Sha256 = [Security.Cryptography.SHA256]::Create()

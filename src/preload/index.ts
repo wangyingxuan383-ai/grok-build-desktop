@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { AppSettings, Attachment, ChatEvent, ComputerTaskState, GrokDesktopApi, LoginState, ReasoningEffort, SessionMode } from "../shared/types";
+import type { AppMenuCommand, AppSettings, Attachment, AutomationRunRecord, AutomationTask, ChatEvent, ComputerTaskState, GrokDesktopApi, LoginState, ReasoningEffort, SessionMode } from "../shared/types";
 
 const droppedAttachmentListeners = new Set<(attachments: Attachment[]) => void>();
 const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string }) => void>();
 const computerStateListeners = new Set<(state: ComputerTaskState) => void>();
+const menuCommandListeners = new Set<(command: AppMenuCommand) => void>();
+const automationEventListeners = new Set<(event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask }) => void>();
 
 ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cwd: string }) => {
   for (const listener of navigateSessionListeners) listener(target);
@@ -11,6 +13,10 @@ ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cw
 ipcRenderer.on("grok:computer-state", (_event, state: ComputerTaskState) => {
   for (const listener of computerStateListeners) listener(state);
 });
+ipcRenderer.on("grok:menu-command", (_event, command: AppMenuCommand) => {
+  for (const listener of menuCommandListeners) listener(command);
+});
+ipcRenderer.on("grok:automation-event", (_event, value) => { for (const listener of automationEventListeners) listener(value); });
 
 window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("dragover", (event) => event.preventDefault());
@@ -51,6 +57,22 @@ const api: GrokDesktopApi = {
   exportSessionMarkdown: (cwd, id) => ipcRenderer.invoke("session:export-markdown", cwd, id),
   getMediaCapabilities: (id) => ipcRenderer.invoke("session:media-capabilities", id),
   sendPrompt: (input) => ipcRenderer.invoke("session:send", input.sessionId, input.text, input.attachments),
+  enqueuePrompt: (sessionId, text, attachments) => ipcRenderer.invoke("session:enqueue", sessionId, text, attachments),
+  interjectPrompt: (sessionId, text, attachments) => ipcRenderer.invoke("session:interject", sessionId, text, attachments),
+  editQueuedPrompt: (sessionId, id, text) => ipcRenderer.invoke("session:queue:edit", sessionId, id, text),
+  removeQueuedPrompt: (sessionId, id) => ipcRenderer.invoke("session:queue:remove", sessionId, id),
+  reorderQueuedPrompt: (sessionId, id, position) => ipcRenderer.invoke("session:queue:reorder", sessionId, id, position),
+  clearPromptQueue: (sessionId) => ipcRenderer.invoke("session:queue:clear", sessionId),
+  interjectQueuedPrompt: (sessionId, id, text) => ipcRenderer.invoke("session:queue:interject", sessionId, id, text),
+  forkSession: (sessionId, pointId) => ipcRenderer.invoke("session:fork", sessionId, pointId),
+  listRewindPoints: (sessionId) => ipcRenderer.invoke("session:rewind-points", sessionId),
+  rewindSession: (sessionId, pointId, mode) => ipcRenderer.invoke("session:rewind", sessionId, pointId, mode),
+  archiveSession: (sessionId, archived) => ipcRenderer.invoke("session:archive", sessionId, archived),
+  listBackgroundTasks: () => ipcRenderer.invoke("tasks:list"),
+  killBackgroundTask: (id) => ipcRenderer.invoke("tasks:kill", id),
+  listInbox: () => ipcRenderer.invoke("inbox:list"),
+  markInboxRead: (id, read) => ipcRenderer.invoke("inbox:mark-read", id, read),
+  clearInbox: () => ipcRenderer.invoke("inbox:clear"),
   cancelSession: (id) => ipcRenderer.invoke("session:cancel", id),
   setModel: (id, model) => ipcRenderer.invoke("session:model", id, model),
   setEffort: (id, effort: ReasoningEffort) => ipcRenderer.invoke("session:effort", id, effort),
@@ -59,11 +81,16 @@ const api: GrokDesktopApi = {
   respondQuestion: (id, requestId, answers) => ipcRenderer.invoke("question:respond", id, requestId, answers),
   respondPlan: (id, requestId, verdict, comment) => ipcRenderer.invoke("plan:respond", id, requestId, verdict, comment),
   pickAttachments: () => ipcRenderer.invoke("attachments:pick"),
+  pickAttachmentFolders: () => ipcRenderer.invoke("attachments:pick-folders"),
   attachmentsFromPaths: (paths) => ipcRenderer.invoke("attachments:paths", paths),
   openPath: (path) => ipcRenderer.invoke("system:open-path", path),
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),
+  getTheme: () => ipcRenderer.invoke("theme:get"),
+  updateTheme: (patch) => ipcRenderer.invoke("theme:update", patch),
+  pickThemeBackground: () => ipcRenderer.invoke("theme:pick-background"),
+  removeThemeBackground: () => ipcRenderer.invoke("theme:remove-background"),
   listAccounts: () => ipcRenderer.invoke("auth:list"),
   loginDevice: () => ipcRenderer.invoke("auth:login-device"),
   loginApiKey: (label, key) => ipcRenderer.invoke("auth:login-api-key", label, key),
@@ -76,8 +103,28 @@ const api: GrokDesktopApi = {
   hideCodexSession: (id, hidden) => ipcRenderer.invoke("codex:hide", id, hidden),
   continueCodexSession: (id) => ipcRenderer.invoke("codex:continue", id),
   getQuota: (force) => ipcRenderer.invoke("quota:get", force),
+  listProviders: () => ipcRenderer.invoke("providers:list"),
+  upsertProvider: (input) => ipcRenderer.invoke("providers:upsert", input),
+  removeProvider: (id) => ipcRenderer.invoke("providers:remove", id),
+  testProvider: (id) => ipcRenderer.invoke("providers:test", id),
+  pullProviderModels: (id) => ipcRenderer.invoke("providers:pull-models", id),
+  setProviderDesktopDefault: (modelId) => ipcRenderer.invoke("providers:set-desktop-default", modelId),
+  setProviderCliDefault: (modelId) => ipcRenderer.invoke("providers:set-cli-default", modelId),
+  reloadProviders: () => ipcRenderer.invoke("providers:reload"),
+  listAutomations: () => ipcRenderer.invoke("automations:list"),
+  createAutomation: (input) => ipcRenderer.invoke("automations:create", input),
+  updateAutomation: (id, patch) => ipcRenderer.invoke("automations:update", id, patch),
+  deleteAutomation: (id) => ipcRenderer.invoke("automations:delete", id),
+  pauseAutomation: (id, paused) => ipcRenderer.invoke("automations:pause", id, paused),
+  runAutomationNow: (id) => ipcRenderer.invoke("automations:run-now", id),
+  listAutomationRuns: (taskId) => ipcRenderer.invoke("automations:runs", taskId),
+  getAutomationGlobalPolicy: () => ipcRenderer.invoke("automations:policy:get"),
+  updateAutomationGlobalPolicy: (patch) => ipcRenderer.invoke("automations:policy:update", patch),
+  applyAutomationPolicyToAll: () => ipcRenderer.invoke("automations:policy:apply-all"),
+  respondAutomationPending: (id, approved) => ipcRenderer.invoke("automations:pending:respond", id, approved),
+  repairAutomationRegistrations: () => ipcRenderer.invoke("automations:repair"),
   getDraft: (key) => ipcRenderer.invoke("draft:get", key),
-  setDraft: (key, text) => ipcRenderer.invoke("draft:set", key, text),
+  setDraft: (key, text, capability) => ipcRenderer.invoke("draft:set", key, text, capability),
   clearDraft: (key) => ipcRenderer.invoke("draft:clear", key),
   listPromptHistory: (cwd) => ipcRenderer.invoke("prompt-history:list", cwd),
   appendPromptHistory: (cwd, text) => ipcRenderer.invoke("prompt-history:append", cwd, text),
@@ -133,9 +180,17 @@ const api: GrokDesktopApi = {
     navigateSessionListeners.add(listener);
     return () => navigateSessionListeners.delete(listener);
   },
+  onMenuCommand: (listener) => {
+    menuCommandListeners.add(listener);
+    return () => menuCommandListeners.delete(listener);
+  },
   onComputerStateChanged: (listener) => {
     computerStateListeners.add(listener);
     return () => computerStateListeners.delete(listener);
+  },
+  onAutomationEvent: (listener) => {
+    automationEventListeners.add(listener);
+    return () => automationEventListeners.delete(listener);
   },
 };
 

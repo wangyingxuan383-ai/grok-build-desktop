@@ -2,6 +2,48 @@ export const REASONING_EFFORTS = ["", "none", "minimal", "low", "medium", "high"
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 export type SessionMode = "agent" | "plan" | "auto";
 export type UiDensity = "compact" | "balanced" | "comfortable";
+export type ThemeMode = "dark" | "light" | "system" | "custom";
+export type ThemeBase = "dark" | "light";
+export type BackgroundScope = "conversation" | "window";
+export type BackgroundFit = "cover" | "contain";
+export type BackgroundPosition = "center" | "top" | "bottom" | "left" | "right";
+
+export interface ThemeColors {
+  background: string;
+  surface: string;
+  text: string;
+  muted: string;
+  accent: string;
+  border: string;
+}
+
+export interface ThemeSettings {
+  mode: ThemeMode;
+  customBase: ThemeBase;
+  colors: ThemeColors;
+  background: {
+    enabled: boolean;
+    scope: BackgroundScope;
+    fit: BackgroundFit;
+    position: BackgroundPosition;
+    opacity: number;
+    blur: number;
+    dim: number;
+  };
+}
+
+export interface ComposerCapabilitySelection {
+  kind: "computer" | "skill";
+  label: string;
+  command: string;
+  source?: string;
+}
+
+export type AppMenuCommand =
+  | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
+  | "search-sessions" | "search-conversation" | "focus-composer" | "stop-generation" | "copy-final-answer"
+  | "toggle-sidebar" | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
+  | "open-settings" | "open-diagnostics" | "open-onboarding" | "open-about" | "open-task-center";
 
 export interface BuildInfo {
   productName: "Grok Build Desktop";
@@ -93,6 +135,173 @@ export interface AppSettings {
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
   showArchivedCodex?: boolean;
+  theme: ThemeSettings;
+}
+
+export type ProviderProtocol = "chat_completions" | "responses" | "messages";
+export type ProviderAuthScheme = "bearer" | "x_api_key";
+
+export interface ProviderModelDefinition {
+  id: string;
+  model: string;
+  name: string;
+  description?: string;
+  contextWindow: number;
+  maxCompletionTokens?: number;
+  reasoningEfforts?: ReasoningEffort[];
+}
+
+export interface CustomProviderProfile {
+  id: string;
+  name: string;
+  baseUrl: string;
+  modelListUrl?: string;
+  protocol: ProviderProtocol;
+  authScheme: ProviderAuthScheme;
+  credentialMode: "managed" | "existing" | "none";
+  credentialEnv?: string;
+  extraHeaders: Record<string, string>;
+  models: ProviderModelDefinition[];
+  owned: boolean;
+  hasCredential: boolean;
+  insecureHttp: boolean;
+  createdAt: string;
+  updatedAt: string;
+  diagnostic?: string;
+}
+
+export interface CustomProviderInput extends Omit<CustomProviderProfile, "owned" | "hasCredential" | "insecureHttp" | "createdAt" | "updatedAt" | "diagnostic"> {
+  credentialValue?: string;
+  allowInsecureHttp?: boolean;
+}
+
+export interface ProviderConnectivityResult {
+  ok: boolean;
+  checkedAt: string;
+  latencyMs: number;
+  status?: number;
+  message: string;
+  models: Array<{ id: string; name?: string }>;
+}
+
+export type AutomationSchedule =
+  | { kind: "once"; at: string }
+  | { kind: "daily"; time: string }
+  | { kind: "weekly"; time: string; days: number[] }
+  | { kind: "interval"; minutes: number };
+
+export type ScheduledPermissionPolicy = "auto" | "agent" | "read-only";
+
+export interface AutomationExecutionProfile {
+  accountId?: string;
+  providerId?: string;
+  modelId: string;
+  effort: ReasoningEffort;
+  mode: SessionMode;
+  permissionPolicy: ScheduledPermissionPolicy;
+  computerEnabled: boolean;
+}
+
+export interface AutomationTask {
+  id: string;
+  name: string;
+  workspace: string;
+  schedule: AutomationSchedule;
+  profile: AutomationExecutionProfile;
+  enabled: boolean;
+  wakeToRun: boolean;
+  notify: boolean;
+  missedRunPolicy: "run-once" | "skip";
+  skillCommand?: string;
+  promptPresent: boolean;
+  registrationStatus: "registered" | "needs-repair" | "needs-config" | "unsupported" | "error";
+  registrationError?: string;
+  nextRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "promptPresent" | "registrationStatus" | "registrationError" | "nextRunAt" | "createdAt" | "updatedAt"> {
+  id?: string;
+  prompt?: string;
+}
+
+export interface AutomationGlobalPolicy {
+  defaultProfile: AutomationExecutionProfile;
+  maxConcurrentRuns: number;
+  confirmationTimeoutMinutes: number;
+  notifyOnSuccess: boolean;
+  notifyOnFailure: boolean;
+}
+
+export interface AutomationRunRecord {
+  id: string;
+  taskId: string;
+  status: "queued" | "running" | "awaiting-confirmation" | "completed" | "failed" | "cancelled" | "skipped";
+  scheduledAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  sessionId?: string;
+  error?: string;
+}
+
+export interface AutomationPendingConfirmation {
+  id: string;
+  taskId: string;
+  runId: string;
+  category: ComputerRiskCategory | "tool-permission";
+  summary: string;
+  expiresAt: string;
+}
+
+export interface PromptQueueEntry {
+  id: string;
+  sessionId: string;
+  text: string;
+  position: number;
+  createdAt: string;
+  state: "queued" | "interjected" | "sending";
+  /** Server-owned optimistic-concurrency version from x.ai/queue/changed. */
+  version?: number;
+  owner?: string;
+  lastEditor?: string;
+  kind?: string;
+}
+
+export interface BackgroundTaskSummary {
+  id: string;
+  sessionId?: string;
+  kind: "queue" | "command" | "monitor" | "subagent" | "loop" | "automation";
+  title: string;
+  status: "queued" | "running" | "needs-user" | "completed" | "failed" | "cancelled";
+  updatedAt: string;
+  detail?: string;
+}
+
+export interface RewindPoint {
+  id: string;
+  label: string;
+  createdAt?: string;
+  userMessage?: string;
+  filesChanged?: number;
+}
+
+export interface SessionForkResult {
+  sessionId: string;
+  parentSessionId: string;
+  cwd: string;
+}
+
+export interface NotificationInboxItem {
+  id: string;
+  kind: "completion" | "failure" | "confirmation" | "info";
+  title: string;
+  detail?: string;
+  sessionId?: string;
+  taskId?: string;
+  automationRunId?: string;
+  read: boolean;
+  createdAt: string;
 }
 
 export interface AccountProfile {
@@ -118,6 +327,8 @@ export interface SessionSummary {
   effort?: string;
   status: LiveStatus;
   pinned?: boolean;
+  archived?: boolean;
+  parentSessionId?: string;
 }
 
 export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex";
@@ -205,6 +416,7 @@ export interface GrokQuotaSnapshot {
 export interface ComposerDraftState {
   key: string;
   text: string;
+  capability?: ComposerCapabilitySelection;
   updatedAt: string;
 }
 
@@ -523,7 +735,7 @@ export interface Attachment {
   mimeType?: string;
   data?: string;
   size?: number;
-  kind: "file" | "image";
+  kind: "file" | "image" | "folder";
 }
 
 export interface ToolCallState {
@@ -584,6 +796,7 @@ export type ChatEvent =
   | { type: "computer-state"; sessionId: string; state: ComputerTaskState }
   | { type: "computer-permission"; sessionId: string; request: ComputerAppPermissionRequest }
   | { type: "computer-risk"; sessionId: string; request: ComputerRiskConfirmation }
+  | { type: "prompt-queue"; sessionId: string; entries: PromptQueueEntry[] }
   | { type: "error"; sessionId?: string; message: string };
 
 export interface CliVersionStatus {
@@ -668,11 +881,16 @@ export interface GrokDesktopApi {
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>): Promise<void>;
   respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<void>;
   pickAttachments(): Promise<Attachment[]>;
+  pickAttachmentFolders(): Promise<Attachment[]>;
   attachmentsFromPaths(paths: string[]): Promise<Attachment[]>;
   openPath(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
+  getTheme(): Promise<ThemeSettings>;
+  updateTheme(patch: Partial<ThemeSettings>): Promise<AppSettings>;
+  pickThemeBackground(): Promise<AppSettings | null>;
+  removeThemeBackground(): Promise<AppSettings>;
   listAccounts(): Promise<AccountProfile[]>;
   loginDevice(): Promise<LoginState>;
   loginApiKey(label: string, apiKey: string): Promise<AccountProfile[]>;
@@ -685,8 +903,44 @@ export interface GrokDesktopApi {
   hideCodexSession(id: string, hidden?: boolean): Promise<void>;
   continueCodexSession(id: string): Promise<{ sessionId: string; cwd: string }>;
   getQuota(force?: boolean): Promise<GrokQuotaSnapshot>;
+  listProviders(): Promise<CustomProviderProfile[]>;
+  upsertProvider(input: CustomProviderInput): Promise<CustomProviderProfile[]>;
+  removeProvider(id: string): Promise<CustomProviderProfile[]>;
+  testProvider(id: string): Promise<ProviderConnectivityResult>;
+  pullProviderModels(id: string): Promise<Array<{ id: string; name?: string }>>;
+  setProviderDesktopDefault(modelId: string): Promise<AppSettings>;
+  setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]>;
+  reloadProviders(): Promise<void>;
+  listAutomations(): Promise<AutomationTask[]>;
+  createAutomation(input: AutomationTaskInput): Promise<AutomationTask[]>;
+  updateAutomation(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]>;
+  deleteAutomation(id: string): Promise<AutomationTask[]>;
+  pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]>;
+  runAutomationNow(id: string): Promise<AutomationRunRecord>;
+  listAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]>;
+  getAutomationGlobalPolicy(): Promise<AutomationGlobalPolicy>;
+  updateAutomationGlobalPolicy(patch: Partial<AutomationGlobalPolicy>): Promise<AutomationGlobalPolicy>;
+  applyAutomationPolicyToAll(): Promise<AutomationTask[]>;
+  respondAutomationPending(id: string, approved: boolean): Promise<void>;
+  repairAutomationRegistrations(): Promise<AutomationTask[]>;
+  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void>;
+  interjectPrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void>;
+  editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void>;
+  removeQueuedPrompt(sessionId: string, id: string): Promise<void>;
+  reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<void>;
+  clearPromptQueue(sessionId: string): Promise<void>;
+  interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<void>;
+  forkSession(sessionId: string, rewindPointId?: string): Promise<SessionForkResult>;
+  listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
+  rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void>;
+  archiveSession(sessionId: string, archived: boolean): Promise<void>;
+  listBackgroundTasks(): Promise<BackgroundTaskSummary[]>;
+  killBackgroundTask(id: string): Promise<void>;
+  listInbox(): Promise<NotificationInboxItem[]>;
+  markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]>;
+  clearInbox(): Promise<NotificationInboxItem[]>;
   getDraft(key: string): Promise<ComposerDraftState | null>;
-  setDraft(key: string, text: string): Promise<void>;
+  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection): Promise<void>;
   clearDraft(key: string): Promise<void>;
   listPromptHistory(cwd: string): Promise<string[]>;
   appendPromptHistory(cwd: string, text: string): Promise<void>;
@@ -728,5 +982,7 @@ export interface GrokDesktopApi {
   onLogin(listener: (state: LoginState) => void): () => void;
   onDroppedAttachments(listener: (attachments: Attachment[]) => void): () => void;
   onNavigateSession(listener: (target: { sessionId: string; cwd: string }) => void): () => void;
+  onMenuCommand(listener: (command: AppMenuCommand) => void): () => void;
   onComputerStateChanged(listener: (state: ComputerTaskState) => void): () => void;
+  onAutomationEvent(listener: (event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask; pending?: AutomationPendingConfirmation }) => void): () => void;
 }

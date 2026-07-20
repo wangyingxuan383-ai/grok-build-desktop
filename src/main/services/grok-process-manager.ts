@@ -105,8 +105,30 @@ export class GrokProcessManager {
     return session ? { sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId } : undefined;
   }
 
+  snapshots(): LiveSessionSnapshot[] {
+    return Array.from(this.sessions, ([sessionId, session]) => ({ sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId }));
+  }
+
+  promptQueues(): Array<{ sessionId: string; entries: ReturnType<GrokAcpAdapter["queuedPrompts"]> }> {
+    return Array.from(this.sessions, ([sessionId, adapter]) => ({ sessionId, entries: adapter.queuedPrompts() }));
+  }
+
   waitForCommands(sessionId: string, timeoutMs?: number): Promise<CommandInfo[]> {
     return this.get(sessionId).waitForCommands(timeoutMs);
+  }
+
+  async backgroundTaskResults(): Promise<Array<{ sessionId: string; result: Record<string, unknown>; subagents?: Record<string, unknown> }>> {
+    const output: Array<{ sessionId: string; result: Record<string, unknown>; subagents?: Record<string, unknown> }> = [];
+    for (const [sessionId, adapter] of this.sessions) {
+      const [result, subagents] = await Promise.all([adapter.taskList().catch(() => undefined), adapter.subagentListRunning().catch(() => undefined)]);
+      if (result || subagents) output.push({ sessionId, result: result ?? { tasks: [] }, subagents });
+    }
+    return output;
+  }
+
+  async killBackgroundTask(sessionId: string, taskId: string): Promise<void> {
+    if (taskId.startsWith("subagent:")) await this.get(sessionId).subagentCancel(taskId.slice("subagent:".length));
+    else await this.get(sessionId).taskKill(taskId);
   }
 
   async create(cwd: string): Promise<{ sessionId: string }> {
@@ -124,6 +146,18 @@ export class GrokProcessManager {
     this.focusedId = result.sessionId;
     await this.enforceCap();
     return result;
+  }
+
+  async createConfigured(cwd: string, effort: ReasoningEffort, mode: SessionMode, modelId: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv): Promise<{ sessionId: string }> {
+    const adapter = await this.spawn(cwd, effort, mode, modelId, permissionDecider, environmentOverride);
+    try {
+      const result = await adapter.start();
+      this.sessions.set(result.sessionId, adapter);
+      this.onSessionStarted?.(adapter.extensionLeaseId, result.sessionId);
+      this.focusedId = result.sessionId;
+      await this.enforceCap();
+      return result;
+    } catch (error) { await adapter.dispose(); throw error; }
   }
 
   async open(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
@@ -311,14 +345,15 @@ export class GrokProcessManager {
     await this.stopAll();
   }
 
-  private async spawn(cwd: string, effort: ReasoningEffort, mode: SessionMode, modelId?: string): Promise<GrokAcpAdapter> {
+  private async spawn(cwd: string, effort: ReasoningEffort, mode: SessionMode, modelId?: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv): Promise<GrokAcpAdapter> {
     const settings = await this.getSettings();
     const cliPath = await locateGrokCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI，请在设置中指定路径");
     const apiKey = await this.getApiKey();
     const mcpSecretEnvironment = await this.getMcpSecretEnvironment();
     const extensions = await this.getSessionExtensions?.();
-    const env = { ...buildCliEnv(settings, apiKey), ...mcpSecretEnvironment };
+    const env = { ...buildCliEnv(settings, apiKey), ...mcpSecretEnvironment, ...environmentOverride };
+    for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name];
     const adapter = new GrokAcpAdapter({
       cliPath,
       cwd,
@@ -331,6 +366,7 @@ export class GrokProcessManager {
       pluginDirs: extensions?.pluginDirs,
       extensionLeaseId: extensions?.leaseId,
       effortFlag: await detectEffortFlag(cliPath, env),
+      permissionDecider,
     });
     adapter.on("event", (event: ChatEvent) => this.onEvent(event));
     adapter.on("closed", () => {

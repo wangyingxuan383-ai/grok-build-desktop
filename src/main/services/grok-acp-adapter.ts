@@ -13,6 +13,8 @@ import {
   type ModelInfo,
   type PermissionOption,
   type PromptMeta,
+  type PromptQueueEntry,
+  type RewindPoint,
   type ReasoningEffort,
   type SessionMode,
   type ToolCallState,
@@ -52,6 +54,7 @@ interface AdapterOptions {
   pluginDirs?: string[];
   extensionLeaseId?: string;
   effortFlag?: "--effort" | "--reasoning-effort";
+  permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>;
 }
 
 interface SessionResponse {
@@ -84,6 +87,8 @@ export class GrokAcpAdapter extends EventEmitter {
   private readonly terminalCommands = new Map<string, string>();
   private readonly mediaToolIds = new Set<string>();
   private readonly backgroundTasks = new Map<string, BackgroundTask>();
+  private promptQueue: PromptQueueEntry[] = [];
+  private activeQueuedPromptId?: string;
   private pendingEffortChange?: PendingEffortChange;
   private pendingPlanRequest?: JsonRpcId;
   private disposed = false;
@@ -102,6 +107,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   get cwd(): string { return this.options.cwd; }
   get effort(): ReasoningEffort { return this.currentEffort; }
+  queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
 
   async waitForCommands(timeoutMs = 2_000): Promise<CommandInfo[]> {
     if (this.commands.length) return this.commands;
@@ -223,6 +229,92 @@ export class GrokAcpAdapter extends EventEmitter {
       this.emitStatus("error", error instanceof Error ? error.message : String(error));
       throw error;
     }
+  }
+
+  async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false): Promise<void> {
+    if (!this.sessionId) throw new Error("会话尚未就绪");
+    const id = crypto.randomUUID();
+    const prompt = await buildPromptBlocks(text, attachments);
+    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: sendNow ? "interjected" : "queued" };
+    this.promptQueue = sendNow ? [entry, ...this.promptQueue] : [...this.promptQueue, entry];
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    // A queued ACP prompt request is intentionally answered only after that
+    // prompt eventually runs. Do not keep the Renderer composer blocked while
+    // it waits; x.ai/queue/changed remains the authoritative visible state.
+    void this.request(acpMethods.agent.session.prompt, {
+      sessionId: this.sessionId,
+      prompt,
+      _meta: { promptId: id, sendNow, clientIdentifier: "grok-build-desktop" },
+    }, 1_800_000).catch((error) => {
+      this.promptQueue = this.promptQueue.filter((value) => value.id !== id);
+      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      this.emitEvent({ type: "error", sessionId: this.sessionId, message: error instanceof Error ? error.message : String(error) });
+    });
+  }
+
+  async interjectPrompt(text: string, attachments: Attachment[] = []): Promise<void> {
+    if (!this.sessionId) throw new Error("会话尚未就绪");
+    const id = crypto.randomUUID();
+    const content = await buildPromptBlocks(text, attachments);
+    try {
+      unwrapExtResult(await this.extension("x.ai/interject", { text, interjectionId: id, content }));
+    } catch (error) {
+      // Older CLIs do not expose x.ai/interject. Their closest compatible
+      // behavior is the official sendNow prompt metadata path.
+      if (!isMethodNotFound(error)) throw error;
+      await this.queuePrompt(text, attachments, true);
+    }
+  }
+
+  async editQueuedPrompt(id: string, text: string): Promise<void> {
+    this.queueNotification("x.ai/queue/edit", { id, newText: text });
+  }
+  async removeQueuedPrompt(id: string): Promise<void> {
+    const entry = this.promptQueue.find((value) => value.id === id);
+    this.queueNotification("x.ai/queue/remove", { id, expectedVersion: entry?.version ?? 0 });
+  }
+  async reorderQueuedPrompt(id: string, position: number): Promise<void> {
+    const ordered = [...this.promptQueue].sort((a, b) => a.position - b.position);
+    const current = ordered.findIndex((value) => value.id === id);
+    if (current < 0) throw new Error("排队消息已不存在，请等待队列刷新");
+    const [moved] = ordered.splice(current, 1);
+    ordered.splice(Math.max(0, Math.min(position, ordered.length)), 0, moved!);
+    this.queueNotification("x.ai/queue/reorder", { orderedIds: ordered.map((value) => value.id) });
+  }
+  async clearPromptQueue(): Promise<void> { this.queueNotification("x.ai/queue/clear", {}); }
+  async interjectQueuedPrompt(id: string, text?: string): Promise<void> {
+    const entry = this.promptQueue.find((value) => value.id === id);
+    this.queueNotification("x.ai/queue/interject", { id, expectedVersion: entry?.version ?? 0, ...(text?.trim() ? { newText: text.trim() } : {}) });
+  }
+  async fork(targetPromptIndex?: string): Promise<Record<string, unknown>> {
+    const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
+    return this.extension("x.ai/session/fork", {
+      sourceSessionId: this.sessionId,
+      sourceCwd: this.cwd,
+      newCwd: this.cwd,
+      ...(Number.isInteger(parsed) && (parsed as number) >= 0 ? { targetPromptIndex: parsed } : {}),
+    });
+  }
+  async rewindPoints(): Promise<RewindPoint[]> { const result = await this.extension("x.ai/rewind/points"); return normalizeRewindPoints(result); }
+  async rewind(pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void> {
+    const targetPromptIndex = Number.parseInt(pointId, 10);
+    if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) throw new Error("CLI 返回的回退点无效");
+    const wireMode = mode === "conversation" ? "conversation_only" : mode === "files" ? "files_only" : "all";
+    await this.extension("x.ai/rewind/execute", { targetPromptIndex, force: false, mode: wireMode });
+  }
+  async taskList(): Promise<Record<string, unknown>> {
+    return unwrapExtResult(await this.extension("x.ai/task/list"));
+  }
+  async subagentListRunning(): Promise<Record<string, unknown>> {
+    return unwrapExtResult(await this.extension("x.ai/subagent/list_running"));
+  }
+  async taskKill(taskId: string): Promise<void> {
+    const response = unwrapExtResult(await this.extension("x.ai/task/kill", { taskId }));
+    if (response.success === false) throw new Error(String(response.error ?? "后台任务停止失败"));
+  }
+  async subagentCancel(subagentId: string): Promise<void> {
+    const response = unwrapExtResult(await this.extension("x.ai/subagent/cancel", { subagentId }));
+    if (response.cancelled === false && !response.outcome) throw new Error("子 Agent 已结束或不存在");
   }
 
   cancel(): void {
@@ -437,6 +529,11 @@ export class GrokAcpAdapter extends EventEmitter {
       case "turn_completed":
         if (update.usage) this.emitEvent({ type: "meta", sessionId: this.sessionId, meta: extractUsageMeta(update.usage) });
         this.emitEvent({ type: "turn-completed", sessionId: this.sessionId });
+        if (this.activeQueuedPromptId) {
+          this.activeQueuedPromptId = undefined;
+          this.working = false;
+          this.emitStatus("idle", "已完成");
+        }
         return;
       case "task_backgrounded":
         this.handleTaskBackgrounded(update);
@@ -573,7 +670,12 @@ export class GrokAcpAdapter extends EventEmitter {
         }
         case acpMethods.client.session.requestPermission: {
           const options = (params.options ?? []) as PermissionOption[];
-          if (this.autoApprove) {
+          const decided = await this.options.permissionDecider?.(params.toolCall);
+          if (decided !== undefined) {
+            const option = decided ? options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once") : options.find((value) => /reject|deny/i.test(value.kind || ""));
+            if (option && id !== undefined) this.respondPermission(id, option.optionId);
+            else this.respondError(id, -32602, decided ? "权限请求没有可用的允许选项" : "权限请求没有可用的拒绝选项");
+          } else if (this.autoApprove) {
             const option = options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once");
             const fallback = options.find((value) => /reject|deny/i.test(value.kind || ""));
             if (option && id !== undefined) this.respondPermission(id, option.optionId);
@@ -608,6 +710,24 @@ export class GrokAcpAdapter extends EventEmitter {
         case "x.ai/session_notification":
         case "_x.ai/session_notification": {
           this.handleModelChanged(params.update ?? params);
+          this.respondOk(id);
+          return;
+        }
+        case "x.ai/queue/changed":
+        case "_x.ai/queue/changed": {
+          const previous = this.promptQueue;
+          const runningPromptId = typeof params.runningPromptId === "string" ? params.runningPromptId : typeof params.running_prompt_id === "string" ? params.running_prompt_id : undefined;
+          if (runningPromptId && runningPromptId !== this.activeQueuedPromptId) {
+            const starting = previous.find((entry) => entry.id === runningPromptId);
+            if (starting) {
+              this.activeQueuedPromptId = runningPromptId;
+              this.working = true;
+              this.emitEvent({ type: "user-message", sessionId: this.sessionId, text: starting.text });
+              this.emitStatus("working", "正在处理队列消息…");
+            }
+          }
+          this.promptQueue = normalizePromptQueue(params.queue ?? params.entries ?? params.update?.queue ?? [], this.sessionId, previous);
+          this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
           this.respondOk(id);
           return;
         }
@@ -659,6 +779,15 @@ export class GrokAcpAdapter extends EventEmitter {
     } catch {
       return false;
     }
+  }
+
+  private queueNotification(method: string, params: Record<string, unknown>): void {
+    if (!this.sessionId) throw new Error("会话尚未就绪");
+    if (!this.write({
+      jsonrpc: "2.0",
+      method,
+      params: { sessionId: this.sessionId, clientIdentifier: "grok-build-desktop", ...params },
+    })) throw new Error(`Grok 进程不可用：${method}`);
   }
 
   private respondOk(id: JsonRpcId | undefined, result: unknown = {}): void {
@@ -733,7 +862,7 @@ function normalizeReasoningEffort(value: unknown): ReasoningEffort | undefined {
     : undefined;
 }
 
-function buildPromptText(text: string, attachments: Attachment[]): string {
+export function buildPromptText(text: string, attachments: Attachment[]): string {
   const paths = attachments.filter((value) => value.path).map((value) => `@${value.path}`);
   return paths.length ? `${text}\n\n上下文文件：\n${paths.join("\n")}` : text;
 }
@@ -741,6 +870,52 @@ function buildPromptText(text: string, attachments: Attachment[]): string {
 function mimeForPath(path: string): string {
   const ext = extname(path).toLowerCase();
   return ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/png";
+}
+
+async function buildPromptBlocks(text: string, attachments: Attachment[]): Promise<unknown[]> {
+  const prompt: unknown[] = [{ type: "text", text: buildPromptText(text, attachments) }];
+  for (const attachment of attachments) if (attachment.kind === "image") {
+    const data = attachment.data ?? (attachment.path ? await readFile(attachment.path).then((value) => value.toString("base64")) : undefined);
+    if (data) prompt.push({ type: "image", data, mimeType: attachment.mimeType || mimeForPath(attachment.path || attachment.name) });
+  }
+  return prompt;
+}
+
+function normalizePromptQueue(value: unknown, sessionId: string, previous: PromptQueueEntry[] = []): PromptQueueEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry, index) => {
+    const row = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    return {
+      id: String(row.id ?? row.promptId ?? row.prompt_id ?? `queue-${index}`),
+      sessionId,
+      text: String(row.text ?? row.prompt ?? row.content ?? ""),
+      position: typeof row.position === "number" ? row.position : index,
+      createdAt: typeof row.createdAt === "string" ? row.createdAt : typeof row.created_at === "string" ? row.created_at : previous.find((entry) => entry.id === String(row.id ?? row.promptId ?? row.prompt_id))?.createdAt ?? new Date().toISOString(),
+      state: row.sendNow || row.state === "interjected" ? "interjected" : row.state === "sending" ? "sending" : "queued",
+      version: typeof row.version === "number" ? row.version : 0,
+      owner: typeof row.owner === "string" ? row.owner : undefined,
+      lastEditor: typeof row.lastEditor === "string" ? row.lastEditor : typeof row.last_editor === "string" ? row.last_editor : undefined,
+      kind: typeof row.kind === "string" ? row.kind : undefined,
+    } satisfies PromptQueueEntry;
+  }).sort((a, b) => a.position - b.position);
+}
+
+function normalizeRewindPoints(value: Record<string, unknown>): RewindPoint[] {
+  const source = Array.isArray(value.points) ? value.points : Array.isArray(value.rewindPoints) ? value.rewindPoints : Array.isArray(value.rewind_points) ? value.rewind_points : [];
+  return source.map((entry, index) => { const row = entry && typeof entry === "object" ? entry as Record<string, unknown> : {}; const promptIndex = row.promptIndex ?? row.prompt_index ?? row.id ?? row.pointId ?? row.point_id ?? index; const userMessage = typeof row.promptPreview === "string" ? row.promptPreview : typeof row.prompt_preview === "string" ? row.prompt_preview : typeof row.userMessage === "string" ? row.userMessage : typeof row.user_message === "string" ? row.user_message : undefined; const snapshotCount = typeof row.numFileSnapshots === "number" ? row.numFileSnapshots : typeof row.num_file_snapshots === "number" ? row.num_file_snapshots : typeof row.filesChanged === "number" ? row.filesChanged : typeof row.files_changed === "number" ? row.files_changed : undefined; return { id: String(promptIndex), label: String(row.label ?? row.title ?? userMessage ?? `回退点 ${index + 1}`), createdAt: typeof row.createdAt === "string" ? row.createdAt : typeof row.created_at === "string" ? row.created_at : undefined, userMessage, filesChanged: snapshotCount }; });
+}
+
+function unwrapExtResult(value: Record<string, unknown>): Record<string, unknown> {
+  if (value.error !== undefined && (value.result === null || value.result === undefined)) {
+    const error = value.error && typeof value.error === "object" ? (value.error as Record<string, unknown>).message ?? JSON.stringify(value.error) : value.error;
+    throw new Error(String(error ?? "Grok 扩展请求失败"));
+  }
+  return value.result && typeof value.result === "object" ? value.result as Record<string, unknown> : value;
+}
+
+function isMethodNotFound(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /method\s+not\s+found|-32601|unsupported/i.test(message);
 }
 
 function mediaKind(path: string): "image" | "video" | undefined {
