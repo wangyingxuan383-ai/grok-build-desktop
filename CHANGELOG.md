@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.14 - 2026-07-21
+
+### Fixed
+
+- Fixed OAuth scheduled tasks failing with `Authentication required` after their stored refresh token had rotated. Before starting a worker session, the app now compares the task's fixed account with the canonical Grok `auth.json` identity and uses the newer canonical credential when they match.
+- Worker-side OAuth refreshes are reconciled back to the encrypted account vault and canonical credential file with compare-before-write behavior. A credential refreshed concurrently by another Grok process is preserved instead of being overwritten.
+- Existing English authentication failures are presented as actionable Chinese text in the task center.
+
+### Verification
+
+- TypeScript and 26 focused authentication, worker, automation and task-center tests pass, including stale-vault selection, worker refresh persistence and concurrent refresh preservation.
+- A local metadata-only probe confirmed the affected task account matches the canonical login while the vault held an older rotated refresh token. No token or prompt was printed and the task was not executed during diagnosis.
+
 ## 0.5.13 - 2026-07-21
 
 ### Fixed

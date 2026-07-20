@@ -2,6 +2,15 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
+## v0.5.14：持久任务 OAuth 同步修复（2026-07-21）
+
+- [x] 确认 DPAPI 修复后任务已成功解密并进入 Grok，会话失败点转为 `Authentication required`。
+- [x] 只比较账号 ID、过期时间和不可逆哈希，确认受影响任务固定账号与当前规范 `auth.json` 为同一账号，但保险库中的 refresh token 已被 CLI 后续刷新轮换。
+- [x] Worker 启动前按账号身份选择更新的规范 OAuth 凭据并同步加密保险库；不把 Token、任务指令或认证头写入日志和 Renderer。
+- [x] Worker 完成后的新凭据通过比较后原子回写；若其他 Grok 进程已并发刷新，则保留更晚的规范凭据，禁止旧 Worker 覆盖。
+- [x] 将历史 `Authentication required` 转换为中文恢复说明。
+- [x] 仅运行 TypeScript 和 4 个相关测试文件 / 26 项测试；完成一次本地目录版重建和可见窗口启动，不重复完整 Release 矩阵，也不自动执行用户任务。
+
 ## v0.5.13：持久任务 DPAPI 与任务表单修复（2026-07-21）
 
 - [x] 复核失败记录并确认任务密文未损坏：无窗口 Worker 曾把 Chromium `sessionData` 指向临时目录，因而无法打开 GUI 创建密文时使用的 `safeStorage` Local State 密钥。

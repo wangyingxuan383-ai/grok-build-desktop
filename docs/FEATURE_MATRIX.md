@@ -1,5 +1,13 @@
 # Feature Matrix
 
+## v0.5.14 hotfix
+
+| Area | Status | Notes |
+|---|---|---|
+| Scheduled OAuth selection | Fixed and focused-tested | A fixed OAuth task uses newer canonical credentials only when the parsed account identity matches; other stored accounts remain isolated |
+| OAuth refresh reconciliation | Fixed and focused-tested | Worker refreshes update the DPAPI vault and canonical auth atomically, while compare-before-write preserves credentials rotated concurrently by another Grok process |
+| Authentication error presentation | Fixed | Existing raw `Authentication required` history is rendered as Chinese retry/re-login guidance |
+
 ## v0.5.13 hotfix
 
 | Area | Status | Notes |
