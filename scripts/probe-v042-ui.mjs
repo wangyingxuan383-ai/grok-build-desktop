@@ -7,9 +7,34 @@ const socket = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
 let id = 0; const pending = new Map();
 socket.onmessage = ({ data }) => { const message = JSON.parse(data); const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id); message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); };
-const request = (method, params = {}) => new Promise((resolve, reject) => { const requestId = ++id; pending.set(requestId, { resolve, reject }); socket.send(JSON.stringify({ id: requestId, method, params })); });
+const request = (method, params = {}, timeout = 15_000) => new Promise((resolve, reject) => {
+  const requestId = ++id;
+  const timer = setTimeout(() => {
+    pending.delete(requestId);
+    reject(new Error(`CDP request timed out after ${timeout}ms: ${method}`));
+  }, timeout);
+  pending.set(requestId, {
+    resolve: (value) => { clearTimeout(timer); resolve(value); },
+    reject: (error) => { clearTimeout(timer); reject(error); },
+  });
+  socket.send(JSON.stringify({ id: requestId, method, params }));
+});
 const evaluate = async (expression) => { const result = await request("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(result.exceptionDetails.text); return result.result?.value; };
-const pressKey = async (key) => { if (key === "Escape") await evaluate("window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })); true"); else { await request("Input.dispatchKeyEvent", { type: "keyDown", key, code: key }); await request("Input.dispatchKeyEvent", { type: "keyUp", key, code: key }); } await sleep(100); };
+// CDP Input.dispatchKeyEvent can wait forever on a headless Windows hosted
+// runner even though the renderer remains responsive. Dispatch the same
+// bubbling keyboard event from the currently focused element so React and the
+// global focus trap receive it without relying on the runner's desktop input
+// session. Every CDP request above is also bounded, preventing release jobs
+// from consuming their full timeout without a useful failure message.
+const pressKey = async (key) => {
+  await evaluate(`(() => {
+    const target = document.activeElement || window;
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+    target.dispatchEvent(new KeyboardEvent('keyup', { key: ${JSON.stringify(key)}, code: ${JSON.stringify(key)}, bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+  await sleep(100);
+};
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell .composer, .app-shell .workspace-empty'))"), "Application content did not render");

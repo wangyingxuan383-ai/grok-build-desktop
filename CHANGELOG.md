@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.1 - 2026-07-20
+
+### Fixed
+
+- Replaced the packaged UI acceptance probe's hosted-runner-dependent CDP input injection with focused bubbling keyboard events. All CDP calls now have explicit timeouts, so a stalled Windows desktop session produces an actionable failure instead of consuming the full Release job timeout.
+- `v0.5.0` was never published: its first tag workflow built the application and passed the initial content smoke, but the legacy keyboard probe stalled before any Draft Release or public asset was created. The immutable follow-up is released as `v0.5.1` rather than moving the existing tag.
+
+### Verification
+
+- The corrected full overlay/theme/add-palette probe passed locally against the packaged application before the `v0.5.1` rebuild and GitHub retry.
+
 ## 0.5.0 - 2026-07-20
 
 ### Added
