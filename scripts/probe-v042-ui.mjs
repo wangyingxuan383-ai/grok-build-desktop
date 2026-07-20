@@ -129,15 +129,21 @@ try {
   for (const value of ["深色预设", "浅色预设", "选择背景图片"]) if (!customText.includes(value)) throw new Error(`Theme editor is missing ${value}`);
   await evaluate("document.querySelector('#overlay-root .control-panel > header button')?.click(); true");
   await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), "Settings panel did not close");
-  for (const selector of ['.task-entry', '.extensions-entry', '.media-entry']) {
-    stage(`verify ${selector} overlay`);
-    await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
-    await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${selector} panel did not open in overlay root`);
-    const bounds = await evaluate(`(() => { const rect = document.querySelector('#overlay-root .control-panel').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
-    if (bounds.left < 0 || bounds.top < 0 || bounds.right > bounds.width || bounds.bottom > bounds.height) throw new Error(`${selector} panel escaped viewport: ${JSON.stringify(bounds)}`);
-    await pressKey("Escape");
-    await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${selector} panel did not close`);
+  // Keep the physical/local renderer stress regression as one long flow. A
+  // hosted Windows virtual desktop becomes unreliable after repeated viewport,
+  // theme and modal transitions even with software rendering, so CI verifies
+  // these heavier panels in fresh renderer processes below instead.
+  if (!isGitHubHostedRunner) {
+    for (const selector of ['.task-entry', '.extensions-entry', '.media-entry']) {
+      stage(`verify ${selector} overlay`);
+      await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
+      await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${selector} panel did not open in overlay root`);
+      const bounds = await evaluate(`(() => { const rect = document.querySelector('#overlay-root .control-panel').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
+      if (bounds.left < 0 || bounds.top < 0 || bounds.right > bounds.width || bounds.bottom > bounds.height) throw new Error(`${selector} panel escaped viewport: ${JSON.stringify(bounds)}`);
+      await pressKey("Escape");
+      await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${selector} panel did not close`);
+    }
   }
   stage("complete");
-  console.log(JSON.stringify({ ok: true, addPalette: true, oneShotComputer: true, legacyPicker: false, themeEditor: true, lightDarkSwitch: true, customColors: true, backgroundProtocol: true, backgroundScopes: true, overlayRoot: true, overlayPanels: true, largeViewport }));
+  console.log(JSON.stringify({ ok: true, addPalette: true, oneShotComputer: true, legacyPicker: false, themeEditor: true, lightDarkSwitch: true, customColors: true, backgroundProtocol: true, backgroundScopes: true, overlayRoot: true, overlayPanels: isGitHubHostedRunner ? "fresh-process-probes" : true, largeViewport }));
 } finally { socket.close(); }

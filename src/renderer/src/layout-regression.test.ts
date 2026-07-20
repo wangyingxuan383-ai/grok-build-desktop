@@ -41,6 +41,8 @@ describe("renderer layout regression guards", () => {
     expect(portal).toContain("<ComputerPermissionDialog");
     expect(portal).toContain("<ActionDialog");
     expect(app).toContain("element.getClientRects().length > 0");
+    expect(app).toContain("new MutationObserver");
+    expect(app).toContain("root?.contains(document.activeElement)");
     expect(app).not.toContain("element.offsetParent !== null");
   });
 });

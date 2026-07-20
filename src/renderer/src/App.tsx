@@ -78,7 +78,17 @@ export default function App(): React.JSX.Element {
       return style.display !== "none" && style.visibility !== "hidden" && element.getClientRects().length > 0;
     };
     const topLayer = (): HTMLElement | undefined => root ? Array.from(root.children).filter((element): element is HTMLElement => element instanceof HTMLElement && isVisible(element)).at(-1) : undefined;
-    const focusFirst = window.setTimeout(() => topLayer()?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')?.focus(), 0);
+    const focusTopLayer = (): void => {
+      if (root?.contains(document.activeElement)) return;
+      topLayer()?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])')?.focus();
+    };
+    const focusFirst = window.setTimeout(focusTopLayer, 0);
+    // A lazy panel initially mounts a Suspense fallback with no focusable
+    // controls. Retry when that fallback is replaced instead of leaving focus
+    // behind the modal on the composer/body. The guard above prevents async
+    // panel content updates from stealing focus once the user is inside it.
+    const focusObserver = new MutationObserver(() => window.setTimeout(focusTopLayer, 0));
+    if (root) focusObserver.observe(root, { childList: true, subtree: true });
     const trapFocus = (event: KeyboardEvent): void => {
       const layer = topLayer();
       if (event.key !== "Tab" || !layer) return;
@@ -92,6 +102,7 @@ export default function App(): React.JSX.Element {
     window.addEventListener("keydown", trapFocus, true);
     return () => {
       window.clearTimeout(focusFirst);
+      focusObserver.disconnect();
       window.removeEventListener("keydown", trapFocus, true);
       document.body.style.overflow = previousOverflow;
       window.setTimeout(() => previousFocus?.focus(), 0);
