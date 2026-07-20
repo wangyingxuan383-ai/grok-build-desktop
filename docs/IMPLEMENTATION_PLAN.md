@@ -2,9 +2,9 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
-## v0.5.0–v0.5.4：稳定性、提供商、自动化与正式发布（2026-07-20）
+## v0.5.0–v0.5.5：稳定性、提供商、自动化与正式发布（2026-07-20）
 
-> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本提升为 `v0.5.4`。
+> 以 v0.4.2 本地候选为基线；全部本地门槛通过后才允许推送标签，GitHub Draft 产物回下载验收通过后才公开 Release。`v0.5.0`–`v0.5.3` 的云端任务均在创建 Draft 前暴露 Hosted Runner 专属的 CDP、虚拟 GPU 与离线 Skills 契约问题；遵守标签/产物不可静默替换约定，发布修复版本依次提升；`v0.5.4` 已进一步把问题定位到扩展中心默认插件清单，当前候选为 `v0.5.5`。
 
 - [x] 审查 v0.4.2 工作树并记录基线：TypeScript 通过，34 个测试文件 / 167 项测试通过，2 项 live 测试按设计跳过。
 - [x] 使用独立 Overlay Portal 修复全窗口背景下所有根级弹层的定位、层级、焦点和滚动锁定；布局回归及打包 CDP 探针覆盖整个窗口背景组合。
@@ -17,9 +17,10 @@
 - [x] `v0.5.1` Run `29751461174` 在五分钟内确认第二个根因：Hosted Runner 虚拟 GPU 在模拟 3840×2160 后不再响应 CDP；仍未创建 Draft/资产。保留本机真实 4K 路径，GitHub 无物理 4K 桌面的 Runner 改测 1920×1080，分支探针已用 `GITHUB_ACTIONS=true` 本机复现通过。
 - [x] `v0.5.2` Run `29752880805` 确认第三次打开面板时仍反复向无 CLI 的隔离环境请求 Skills。修正 `GROK_DESKTOP_OFFLINE_SMOKE=1` 契约为直接返回空 Skills 并增加“不调用 CLI/插件索引”回归测试；该标签仍未创建 Draft/资产。
 - [x] `v0.5.3` Run `29754367995` 的离线日志已无 CLI/IPC 异常，但虚拟桌面的第二个 Electron 实例仍停止响应。GitHub Actions 冒烟实例增加 `--disable-gpu`，正常用户构建不变；探针加入逐阶段日志，Hosted Runner 分支在本机复现通过。该标签仍未创建 Draft/资产。
-- [ ] 推送 `v0.5.4` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
+- [x] `v0.5.4` Run `29755908468` 通过构建、测试、打包和基础内容冒烟，并由阶段日志把最后一个阻塞定位为扩展中心默认插件页在无 Grok CLI 的 Hosted Runner 上触发插件清单发现；仍在创建 Draft 前停止，无资产。
+- [ ] 推送 `v0.5.5` 源码和标签；Actions 创建 Draft，回下载验证哈希、溯源、安装生命周期与核心功能后公开并标记 Latest。
 
-### v0.5.0–v0.5.4 本地发布候选证据
+### v0.5.0–v0.5.5 本地发布候选证据
 
 - 本机兼容探针：Grok CLI `0.2.106 (bde89716f6)`；`initialize`、`session/new`、`/imagine`、注入 `/computer`、实时 `low` 强度切换和隔离自定义模型 TOML 均通过，未发送付费提示词。
 - 打包版：内容感知冷启动、全窗口背景/弹层/焦点、`--open-task-center`、Windows Task Scheduler 无窗口唤醒、中文空格路径 Portable、Electron Fuses、NSIS 首装/覆盖升级/卸载保留 AppData 均通过。
@@ -48,6 +49,11 @@
   - Portable ZIP：`db60b4899b3d15fbaac35dc1d937b8ad6076f55393367a08d031b2de85b06aa9`
   - CycloneDX SBOM：`d69711635765874e88f69ec13900137ac35d2088146055fff0ff6958d4a42f3f`
   - 第三方许可证：`0edeb3fa72eb6a11b0ce37ca191f972438495ca23489707bee5de96f299f3cc6`
+- `v0.5.5` 将离线契约扩展到扩展中心默认插件清单，并给任务、扩展、媒体弹层分别标注探针阶段；194 项测试、类型检查、公开扫描、完整 4K/GPU 与 Hosted Runner 参数分支、真实 Task Scheduler、中文空格 Portable、Fuses 和 NSIS 首装/覆盖/卸载再次通过。本机哈希：
+  - Setup EXE：`ee0a0901063cd76d3199e6fc57d676c23588288a97c3504d646e972fb5067a6d`
+  - Portable ZIP：`2ded2468f6ead4fd3e26f9335525d51dc3e0a9649e058aa404709e4611230649`
+  - CycloneDX SBOM：`5c45358ef6a12761b5b6c987543d09dac0469271e41d75f63a7250741421e8c3`
+  - 第三方许可证：`a5b703ccdc91385a34bfd40e3bb61e5ae4ce2913ea6fcf7cd2efd728eb36f303`
 
 ### 固定实现约定
 

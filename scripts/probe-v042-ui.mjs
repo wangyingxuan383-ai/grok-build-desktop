@@ -129,8 +129,8 @@ try {
   for (const value of ["深色预设", "浅色预设", "选择背景图片"]) if (!customText.includes(value)) throw new Error(`Theme editor is missing ${value}`);
   await evaluate("document.querySelector('#overlay-root .control-panel > header button')?.click(); true");
   await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), "Settings panel did not close");
-  stage("verify task, extension and media overlays");
   for (const selector of ['.task-entry', '.extensions-entry', '.media-entry']) {
+    stage(`verify ${selector} overlay`);
     await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
     await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${selector} panel did not open in overlay root`);
     const bounds = await evaluate(`(() => { const rect = document.querySelector('#overlay-root .control-panel').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);

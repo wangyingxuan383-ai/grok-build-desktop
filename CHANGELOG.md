@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.5 - 2026-07-20
+
+### Fixed
+
+- Extended the explicit `GROK_DESKTOP_OFFLINE_SMOKE=1` contract to the default Extensions plugin inventory, so clean GitHub Windows runners render the complete extension overlay without attempting ACP or Grok CLI discovery.
+- Added a direct regression assertion that offline plugin and Skill inventory performs zero CLI/ACP calls, and gave each task, extension and media overlay its own packaged-probe progress stage.
+- `v0.5.4` remained unpublished and created no Draft assets; its stage-labelled run isolated the final hosted-only stall to the default Extensions tab after all preceding overlay, theme and focus checks had passed.
+
+### Verification
+
+- 194 offline tests (2 opt-in live tests skipped), TypeScript, public scans, 4K and hosted-runner UI paths, Task Scheduler wakeup, Chinese-space Portable, Electron Fuses and NSIS install/upgrade/uninstall retention passed. Local package hashes are recorded in the implementation plan; downloaded GitHub artifact verification follows after tag publication.
+
 ## 0.5.4 - 2026-07-20
 
 ### Fixed
