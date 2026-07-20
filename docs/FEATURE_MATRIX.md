@@ -1,6 +1,6 @@
 # Feature Matrix
 
-## v0.5.0–v0.5.3 additions
+## v0.5.0–v0.5.4 additions
 
 | Area | Status | Notes |
 |---|---|---|
@@ -11,7 +11,7 @@
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
 | v0.5 local gate | Passed | 194 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
-| Hosted Runner UI probe | Fixed, v0.5.3 retry pending | CDP is bounded; local packaging retains real 3840×2160 coverage while GitHub verifies 1920×1080. The isolated smoke environment now returns empty Skills without touching an absent CLI, with a unit-test guard. v0.5.0–v0.5.2 all stopped before Draft creation and published no assets |
+| Hosted Runner UI probe | Fixed, v0.5.4 retry pending | CDP is bounded and stage-labelled; local packaging retains GPU-backed 3840×2160 coverage while GitHub's Electron smoke uses `--disable-gpu` at 1920×1080. The isolated profile never touches an absent CLI. v0.5.0–v0.5.3 all stopped before Draft creation and published no assets |
 
 ## v0.4.2 local candidate
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.4 - 2026-07-20
+
+### Fixed
+
+- Disabled GPU acceleration only for Electron instances launched by GitHub Actions smoke tests. This avoids the hosted Windows virtual-GPU/CDP deadlock while leaving normal local, installed and portable application rendering unchanged.
+- Added named progress stages to the comprehensive packaged UI probe. Any future CDP timeout now identifies the exact palette, background, focus, theme or overlay phase instead of reporting only `Runtime.evaluate`.
+- `v0.5.3` remained unpublished and created no Draft assets; its clean offline log isolated the remaining failure to the hosted virtual desktop rather than Grok CLI integration.
+
+### Verification
+
+- The hosted-runner path, including `--disable-gpu`, 1920×1080 layout, theme/background switching and all root overlays, passed locally with `GITHUB_ACTIONS=true`. Normal packaging still runs the hardware-backed 3840×2160 path.
+
 ## 0.5.3 - 2026-07-20
 
 ### Fixed

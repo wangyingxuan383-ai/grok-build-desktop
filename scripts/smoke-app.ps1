@@ -34,7 +34,8 @@ $Info.FileName = $Executable
 $Info.WorkingDirectory = Split-Path -Parent $Executable
 $Info.UseShellExecute = $false
 $DebugPort = Get-Random -Minimum 19000 -Maximum 25000
-$Info.Arguments = ("--remote-debugging-port=$DebugPort --user-data-dir=`"$ProfileRoot`" $ApplicationArguments").Trim()
+$HostedRunnerFlags = if ($env:GITHUB_ACTIONS -eq 'true') { '--disable-gpu' } else { '' }
+$Info.Arguments = ("--remote-debugging-port=$DebugPort --user-data-dir=`"$ProfileRoot`" $HostedRunnerFlags $ApplicationArguments").Trim()
 $Info.EnvironmentVariables['GROK_DESKTOP_OFFLINE_SMOKE'] = '1'
 $Process = [System.Diagnostics.Process]::Start($Info)
 try {

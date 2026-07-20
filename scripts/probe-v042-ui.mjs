@@ -7,12 +7,14 @@ const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).t
 const socket = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
 let id = 0; const pending = new Map();
+let probeStage = "connected";
+const stage = (value) => { probeStage = value; console.log(`[probe-v042] ${value}`); };
 socket.onmessage = ({ data }) => { const message = JSON.parse(data); const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id); message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); };
 const request = (method, params = {}, timeout = 15_000) => new Promise((resolve, reject) => {
   const requestId = ++id;
   const timer = setTimeout(() => {
     pending.delete(requestId);
-    reject(new Error(`CDP request timed out after ${timeout}ms: ${method}`));
+    reject(new Error(`CDP request timed out after ${timeout}ms during ${probeStage}: ${method}`));
   }, timeout);
   pending.set(requestId, {
     resolve: (value) => { clearTimeout(timer); resolve(value); },
@@ -37,13 +39,16 @@ const pressKey = async (key) => {
   await sleep(100);
 };
 try {
+  stage("bring renderer to front");
   await request("Page.bringToFront");
+  stage("verify initial content and background protocol");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell .composer, .app-shell .workspace-empty'))"), "Application content did not render");
   await waitFor(() => evaluate("document.querySelector('.app-shell')?.classList.contains('background-conversation')"), "Conversation background scope was not restored");
   const backgroundLoaded = await evaluate(`new Promise((resolve) => { const image = new Image(); image.onload = () => resolve({ ok: true, width: image.naturalWidth, height: image.naturalHeight }); image.onerror = () => resolve({ ok: false }); image.src = 'grok-theme://background/current'; })`);
   if (!backgroundLoaded?.ok || backgroundLoaded.width !== 1 || backgroundLoaded.height !== 1) throw new Error(`Fixed theme protocol did not load the app-owned image: ${JSON.stringify(backgroundLoaded)}`);
   await request("Emulation.setDeviceMetricsOverride", { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false });
   await sleep(250);
+  stage("verify 1280x720 palette and keyboard selection");
   await evaluate("document.querySelector('.add-button')?.click(); true");
   await waitFor(() => evaluate("Boolean(document.querySelector('.add-palette'))"), "Add palette did not open");
   const paletteBounds = await evaluate(`(() => { const rect = document.querySelector('.add-palette').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
@@ -58,6 +63,7 @@ try {
   await pressKey("Enter");
   await waitFor(() => evaluate("document.querySelector('.capability-chip.computer')?.textContent.includes('@Computer')"), "One-shot Computer chip did not appear");
   if (await evaluate("Boolean(document.querySelector('.computer-picker, .computer-live-strip'))")) throw new Error("Selecting Computer opened or started the legacy window picker");
+  stage("verify palette Escape and composer focus restoration");
   await evaluate("document.querySelector('.add-button')?.click(); true");
   await waitFor(() => evaluate("Boolean(document.querySelector('.add-palette'))"), "Add palette did not reopen");
   await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('.add-palette'))"), "Reopened palette did not establish focus");
@@ -71,6 +77,7 @@ try {
   // override. Keep the real 4K regression in local/package acceptance, while
   // the hosted release gate still verifies a large 1920x1080 desktop viewport.
   const largeViewport = isGitHubHostedRunner ? { width: 1920, height: 1080 } : { width: 3840, height: 2160 };
+  stage(`verify ${largeViewport.width}x${largeViewport.height} palette bounds`);
   await request("Emulation.setDeviceMetricsOverride", { ...largeViewport, deviceScaleFactor: 1, mobile: false });
   await evaluate("document.querySelector('.add-button')?.click(); true");
   await waitFor(() => evaluate("Boolean(document.querySelector('.add-palette'))"), `Add palette did not open in ${largeViewport.width}x${largeViewport.height} viewport`);
@@ -78,6 +85,7 @@ try {
   if (largeBounds.left < 0 || largeBounds.top < 0 || largeBounds.right > largeBounds.width || largeBounds.bottom > largeBounds.height) throw new Error(`Add palette was clipped at ${largeViewport.width}x${largeViewport.height}: ${JSON.stringify(largeBounds)}`);
   await pressKey("Escape");
   await request("Emulation.clearDeviceMetricsOverride");
+  stage("verify theme editor and whole-window overlay");
   await evaluate("document.querySelector('.topbar .icon-button:last-child')?.click(); true");
   await waitFor(() => evaluate("Boolean(document.querySelector('.theme-editor'))"), "Theme editor did not open");
   const selectCount = await evaluate("document.querySelectorAll('.theme-editor select').length");
@@ -99,6 +107,7 @@ try {
     throw new Error(`Whole-window background displaced the settings overlay: ${JSON.stringify(overlayBounds)}`);
   }
   await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))"), "Settings overlay did not establish keyboard focus");
+  stage("verify overlay focus trap and theme switches");
   const focusCycle = await evaluate(`(() => {
     const panel = document.querySelector('#overlay-root .control-panel');
     const visible = (node) => { const style = getComputedStyle(node); return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0; };
@@ -120,6 +129,7 @@ try {
   for (const value of ["深色预设", "浅色预设", "选择背景图片"]) if (!customText.includes(value)) throw new Error(`Theme editor is missing ${value}`);
   await evaluate("document.querySelector('#overlay-root .control-panel > header button')?.click(); true");
   await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), "Settings panel did not close");
+  stage("verify task, extension and media overlays");
   for (const selector of ['.task-entry', '.extensions-entry', '.media-entry']) {
     await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
     await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${selector} panel did not open in overlay root`);
@@ -128,5 +138,6 @@ try {
     await pressKey("Escape");
     await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${selector} panel did not close`);
   }
+  stage("complete");
   console.log(JSON.stringify({ ok: true, addPalette: true, oneShotComputer: true, legacyPicker: false, themeEditor: true, lightDarkSwitch: true, customColors: true, backgroundProtocol: true, backgroundScopes: true, overlayRoot: true, overlayPanels: true, largeViewport }));
 } finally { socket.close(); }
