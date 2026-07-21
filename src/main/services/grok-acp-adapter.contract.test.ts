@@ -73,7 +73,9 @@ rl.on("line", async (line) => {
   if (message.method === "x.ai/interject") { await writeFile(interjectMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { result: { status: "queued" } } }); }
   if (message.method?.startsWith("x.ai/queue/")) { await writeFile(message.method === "x.ai/queue/interject" ? queueInterjectMarker : queueEditMarker, JSON.stringify(message)); return; }
   if (message.method === "x.ai/session/fork") { await writeFile(forkMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { newSessionId: "forked-session", parentSessionId: "fake-session", newCwd: ${JSON.stringify(root)}, chatMessagesCopied: 1, updatesCopied: 1, planStateCopied: false } }); }
-  if (message.method === "x.ai/rewind/points") return send({ jsonrpc: "2.0", id: message.id, result: { rewind_points: [{ prompt_index: 3, prompt_preview: "before change", num_file_snapshots: 2, created_at: "2026-07-20T00:00:00Z" }] } });
+  if (message.method === "x.ai/rewind/points") return process.env.GROK_TEST_REWIND_UNSUPPORTED === "1"
+    ? send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } })
+    : send({ jsonrpc: "2.0", id: message.id, result: { rewind_points: [{ prompt_index: 3, prompt_preview: "before change", num_file_snapshots: 2, created_at: "2026-07-20T00:00:00Z" }] } });
   if (message.method === "x.ai/rewind/execute") { await writeFile(rewindMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: {} }); }
   if (message.method === "x.ai/task/list") return send({ jsonrpc: "2.0", id: message.id, result: { result: { tasks: [{ taskId: "task-1", status: "running" }] } } });
   if (message.method === "x.ai/task/kill") return send({ jsonrpc: "2.0", id: message.id, result: { result: { taskId: message.params.taskId, outcome: "killed" } } });
@@ -126,6 +128,18 @@ rl.on("line", async (line) => {
       await waitForFile(forkMarker);
       expect(JSON.parse(await readFile(forkMarker, "utf8"))).toMatchObject({ sourceSessionId: "fake-session", sourceCwd: root, newCwd: root, targetPromptIndex: 3 });
       expect(await adapter.rewindPoints()).toEqual([{ id: "3", label: "before change", userMessage: "before change", filesChanged: 2, createdAt: "2026-07-20T00:00:00Z" }]);
+      const unsupportedRewind = new GrokAcpAdapter({
+        cliPath: fakeCommand,
+        cwd: root,
+        env: { ...process.env, GROK_TEST_REWIND_UNSUPPORTED: "1" },
+        effort: "high",
+        mode: "agent",
+        log: new LogService(join(root, "unsupported-rewind.log")),
+      });
+      try {
+        await unsupportedRewind.start();
+        expect(await unsupportedRewind.rewindPoints()).toEqual([]);
+      } finally { await unsupportedRewind.dispose(500); }
       await adapter.rewind("3", "conversation-and-files");
       await waitForFile(rewindMarker);
       expect(JSON.parse(await readFile(rewindMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", targetPromptIndex: 3, force: false, mode: "all" });

@@ -60,6 +60,9 @@ try {
     const panel = document.querySelector('.task-center');
     const group = document.querySelector('.automation-options');
     const cards = [...document.querySelectorAll('.automation-option')];
+    const labels = [...document.querySelectorAll('.automation-grid > label')];
+    const modeLabel = labels.find((item) => item.textContent.trim().startsWith('会话模式'));
+    const permissionLabel = labels.find((item) => item.textContent.trim().startsWith('权限策略'));
     const panelRect = panel.getBoundingClientRect();
     return {
       count: cards.length,
@@ -73,6 +76,12 @@ try {
         rect: (() => { const value = card.getBoundingClientRect(); return { left: value.left, top: value.top, right: value.right, bottom: value.bottom }; })(),
       })),
       panel: { left: panelRect.left, top: panelRect.top, right: panelRect.right, bottom: panelRect.bottom },
+      autoMode: {
+        mode: modeLabel?.querySelector('select')?.value,
+        permission: permissionLabel?.querySelector('select')?.value,
+        permissionDisabled: permissionLabel?.querySelector('select')?.disabled,
+        help: permissionLabel?.querySelector('small')?.textContent,
+      },
       viewport: { width: innerWidth, height: innerHeight },
     };
   })()`);
@@ -86,7 +95,11 @@ try {
       throw new Error(`Option card escaped task panel: ${JSON.stringify(item.rect)}`);
     }
   });
-  console.log(JSON.stringify({ ok: true, taskEditorOptions: expected, layout: "three aligned cards" }));
+  if (result.autoMode.mode !== 'auto' || result.autoMode.permission !== 'auto' || !result.autoMode.permissionDisabled || !result.autoMode.help?.includes('不再弹出二次确认')) {
+    throw new Error(`Auto mode did not disable the secondary permission policy: ${JSON.stringify(result.autoMode)}`);
+  }
+  console.log(JSON.stringify({ ok: true, taskEditorOptions: expected, layout: "three aligned cards", autoMode: "unrestricted-without-secondary-confirmation" }));
 } finally {
+  try { await evaluate("document.querySelector('.task-center > header button')?.click(); true"); } catch {}
   socket.close();
 }

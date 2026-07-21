@@ -202,7 +202,7 @@ export class GrokAcpAdapter extends EventEmitter {
     return this.request(method, { sessionId: this.sessionId, ...params }) as Promise<Record<string, unknown>>;
   }
 
-  async prompt(text: string, attachments: Attachment[] = []): Promise<void> {
+  async prompt(text: string, attachments: Attachment[] = [], timeoutMs = 1_800_000): Promise<void> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     this.lastTouched = Date.now();
     this.working = true;
@@ -216,7 +216,7 @@ export class GrokAcpAdapter extends EventEmitter {
           if (data) prompt.push({ type: "image", data, mimeType: attachment.mimeType || mimeForPath(attachment.path || attachment.name) });
         }
       }
-      const result = await this.request(acpMethods.agent.session.prompt, { sessionId: this.sessionId, prompt }, 1_800_000) as { _meta?: Record<string, unknown> };
+      const result = await this.request(acpMethods.agent.session.prompt, { sessionId: this.sessionId, prompt }, timeoutMs) as { _meta?: Record<string, unknown> };
       const meta = extractPromptMeta(result);
       this.emitEvent({ type: "meta", sessionId: this.sessionId, meta });
       this.emitEvent({ type: "turn-completed", sessionId: this.sessionId });
@@ -295,7 +295,18 @@ export class GrokAcpAdapter extends EventEmitter {
       ...(Number.isInteger(parsed) && (parsed as number) >= 0 ? { targetPromptIndex: parsed } : {}),
     });
   }
-  async rewindPoints(): Promise<RewindPoint[]> { const result = await this.extension("x.ai/rewind/points"); return normalizeRewindPoints(result); }
+  async rewindPoints(): Promise<RewindPoint[]> {
+    try {
+      const result = await this.extension("x.ai/rewind/points");
+      return normalizeRewindPoints(result);
+    } catch (error) {
+      // Rewind is an optional private Grok extension. Older installed CLIs
+      // answer -32601; opening the panel must degrade to an empty state rather
+      // than surface a global application error.
+      if (isMethodNotFound(error)) return [];
+      throw error;
+    }
+  }
   async rewind(pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void> {
     const targetPromptIndex = Number.parseInt(pointId, 10);
     if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) throw new Error("CLI 返回的回退点无效");

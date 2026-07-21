@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState } from "./computer-use-service";
+import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState, shouldConfirmComputerRisk, shouldRequestComputerAppPermission } from "./computer-use-service";
 
 describe("Computer Use safety policy", () => {
   it("is accepted and available-by-default while preserving the user's enable toggle", async () => {
@@ -64,6 +64,13 @@ describe("Computer Use safety policy", () => {
   ] as const)("classifies high-impact context %s", (context, action, risk) => expect(inferComputerRisk(context, action)).toBe(risk));
 
   it("does not over-classify read-only observations", () => expect(inferComputerRisk("Delete button", "get_window_state")).toBeUndefined());
+
+  it("does not layer application or risk confirmations on auto mode", () => {
+    expect(shouldRequestComputerAppPermission("auto", true, false)).toBe(false);
+    expect(shouldConfirmComputerRisk("auto", "delete")).toBe(false);
+    expect(shouldRequestComputerAppPermission("agent", true, false)).toBe(true);
+    expect(shouldConfirmComputerRisk("agent", "delete")).toBe(true);
+  });
 
   it("maps scaled screenshot coordinates back to physical window coordinates", () => {
     const state = { window: { bounds: { x: 100, y: 50, width: 1920, height: 1080 } }, screenshotSize: { width: 1600, height: 900 } } as never;
