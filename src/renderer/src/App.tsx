@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, GrokQuotaSnapshot, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaVideoDuration, MediaVideoResolution, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionMode, SessionSummary, SkillSummary, ThemeSettings, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
+import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, GrokQuotaSnapshot, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaVideoDuration, MediaVideoResolution, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
 import { buildMediaSlashCommand, detectMediaCapabilities } from "../../shared/media";
 import { resolveComputerMention } from "../../shared/computer-mentions";
 import { buildComposerCommand, normalizeSkillCommand } from "../../shared/composer-capability";
@@ -13,6 +13,7 @@ import { ProviderPanel } from "./components/ProviderPanel";
 import { TaskCenterPanel } from "./components/TaskCenterPanel";
 import { buildChatTurns, useAppStore } from "./store";
 import { applyThemeToDocument, cacheThemeForEarlyStartup, contrastRatio, DARK_COLORS, LIGHT_COLORS, themeBackgroundClass } from "./theme";
+import { groupSessionsByOrigin, sessionSourceLabel } from "./session-groups";
 
 const LazyExtensionsPanel = lazy(() => import("./components/ExtensionsPanel").then((module) => ({ default: module.ExtensionsPanel })));
 
@@ -201,6 +202,11 @@ export default function App(): React.JSX.Element {
       setComputerTask(state);
       if (["stopped", "completed", "error"].includes(state.status)) { setComputerPermission(null); setComputerRisk(null); }
     });
+    const removeAutomation = window.grokDesktop.onAutomationEvent(() => {
+      const state = useAppStore.getState();
+      const cwd = state.settings?.activeWorkspace;
+      if (cwd) void window.grokDesktop.listSessions(cwd).then(state.setSessions).catch(() => undefined);
+    });
     void window.grokDesktop.bootstrap().then((data) => {
       useAppStore.getState().bootstrap(data);
       if (!data.onboarding.completed && !data.onboarding.skipped) setPanel("onboarding");
@@ -212,7 +218,7 @@ export default function App(): React.JSX.Element {
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
       flush();
-      removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeComputer();
+      removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeComputer(); removeAutomation();
     };
   }, []);
 
@@ -258,6 +264,9 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     const onFocus = (): void => {
+      const state = useAppStore.getState();
+      const cwd = state.settings?.activeWorkspace;
+      if (cwd) void window.grokDesktop.listSessions(cwd).then(state.setSessions).catch(() => undefined);
       if (panel || dialog) return;
       const active = document.activeElement;
       if (!active || active === document.body || active === document.documentElement) focusComposer();
@@ -592,6 +601,7 @@ export default function App(): React.JSX.Element {
         onExport={async (session) => { await window.grokDesktop.exportSessionMarkdown(session.cwd, session.id); }}
         onHideCodex={async (session) => { await window.grokDesktop.hideCodexSession(session.id, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(session.cwd, store.settings?.showArchivedCodex, true)); if (activeCodexId === session.id) { setActiveCodexId(""); setCodexDetail(null); } }}
         onToggleCodex={async (collapsed) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ codexGroupCollapsed: collapsed })); }}
+        onToggleSessionGroup={async (kind, collapsed) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ sessionGroupCollapsed: { ...store.settings.sessionGroupCollapsed, [kind]: collapsed } })); }}
         onToggleArchived={async (value) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ showArchivedCodex: value })); }}
         onPinWorkspace={async (workspace) => store.setWorkspaces(await window.grokDesktop.pinWorkspace(workspace.cwd, !workspace.pinned))}
         onClear={async () => {
@@ -649,7 +659,7 @@ export default function App(): React.JSX.Element {
         {panel === "extensions" && <Suspense fallback={<div className="modal-backdrop"><section className="control-panel"><div className="panel-body">正在加载扩展中心…</div></section></div>}><LazyExtensionsPanel confirmAction={askConfirm} setError={store.setError} onUseSkill={(command) => { setComposer(command); focusComposer(); }} onClose={() => { setPanel(null); focusComposer(); }} /></Suspense>}
         {panel === "diagnostics" && <DiagnosticsPanel onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "onboarding" && store.onboarding && <OnboardingPanel state={store.onboarding} onState={store.setOnboarding} onClose={() => { setReturnToOnboarding(false); setPanel(null); focusComposer(); }} onAccounts={() => { setReturnToOnboarding(true); setPanel("accounts"); }} onWorkspace={() => void window.grokDesktop.chooseWorkspace().then(async (cwd) => { if (cwd) { store.setSettings(await window.grokDesktop.getSettings()); store.setSessions(await window.grokDesktop.listSessions(cwd)); } })} />}
-        {panel === "tasks" && <TaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onClose={() => { setPanel(null); focusComposer(); }} />}
+        {panel === "tasks" && <TaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task) => { if (!task.sessionId) return; void (async () => { setPanel(null); if (store.settings?.activeWorkspace !== task.workspace) { store.setSessions(await window.grokDesktop.setWorkspace(task.workspace)); store.setSettings(await window.grokDesktop.getSettings()); } await window.grokDesktop.openSession(task.workspace, task.sessionId!); store.setSessions(await window.grokDesktop.listSessions(task.workspace)); store.setActiveSession(task.sessionId!); setActiveCodexId(""); setCodexDetail(null); settleConversationBottom(task.sessionId!); })().catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "history" && store.activeSessionId && <SessionHistoryPanel sessionId={store.activeSessionId} confirmAction={askConfirm} onForked={async (result) => { setPanel(null); await window.grokDesktop.openSession(result.cwd, result.sessionId); store.setSessions(await window.grokDesktop.listSessions(result.cwd)); store.setActiveSession(result.sessionId); settleConversationBottom(result.sessionId); }} onRewound={() => { setPanel(null); settleConversationBottom(store.activeSessionId); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
         {computerPermission && <ComputerPermissionDialog request={computerPermission} onRespond={async (decision) => { try { await window.grokDesktop.respondComputerAppPermission(computerPermission.requestId, decision); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerPermission(null); focusComposer(); } }} />}
@@ -682,6 +692,7 @@ function Sidebar(props: {
   onExport(session: SessionSummary): void;
   onHideCodex(session: CodexSessionSummary): void;
   onToggleCodex(collapsed: boolean): void;
+  onToggleSessionGroup(kind: SessionOriginKind, collapsed: boolean): void;
   onToggleArchived(value: boolean): void;
   onPinWorkspace(workspace: WorkspaceSummary): void;
   onClear(): void;
@@ -689,14 +700,18 @@ function Sidebar(props: {
 }): React.JSX.Element {
   const [showRecent, setShowRecent] = useState(false);
   const activeAccount = useAppStore((state) => state.accounts.find((value) => value.active));
+  const sessionGroups = groupSessionsByOrigin(props.sessions);
+  const renderSession = (session: SessionSummary): React.JSX.Element => {
+    const sourceLabel = sessionSourceLabel(session);
+    return <div key={session.id} className={`session-row ${session.archived ? "archived" : ""} ${props.activeSessionId === session.id ? "active" : ""}`} onClick={() => props.onOpen(session)}><span className={`status-dot ${session.status}`} />{session.pinned && <span className="pin-mark">◆</span>}<div className="session-copy"><strong>{session.title}{sourceLabel && <em className={`session-source-badge ${session.originKind}`}>{sourceLabel}</em>}</strong><span>{relativeTime(session.updatedAt)} · {session.messageCount} 条消息{session.archived ? " · 已归档" : ""}</span></div><div className="session-actions"><button title={session.pinned ? "取消置顶" : "置顶"} onClick={(event) => { event.stopPropagation(); props.onPin(session); }}>◆</button><button title={session.archived ? "取消归档" : "归档"} onClick={(event) => { event.stopPropagation(); props.onArchive(session); }}>▣</button><button title="导出 Markdown" onClick={(event) => { event.stopPropagation(); props.onExport(session); }}>⇩</button><button title="重命名" onClick={(event) => { event.stopPropagation(); props.onRename(session); }}>✎</button><button title="删除" onClick={(event) => { event.stopPropagation(); props.onDelete(session); }}>×</button></div></div>;
+  };
   return <aside className="sidebar">
     <div className="brand"><div className="brand-icon">G</div><strong>Grok Build</strong><button className="icon-button" title="新建会话" disabled={props.busy} onClick={props.onNew}>＋</button></div>
     <button className="workspace-button" onClick={() => setShowRecent(!showRecent)}><span>⌘</span><span className="workspace-name">{shortPath(props.settings?.activeWorkspace || "选择工作区")}</span><span>⌄</span></button>
     {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onClear={props.onClear} />}
     <div className="search"><span>⌕</span><input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="搜索会话" /></div>
     <div className="session-list">
-      <div className="session-group-heading"><strong>Grok 会话</strong><span>{props.sessions.length}</span></div>
-      {props.sessions.map((session) => <div key={session.id} className={`session-row ${session.archived ? "archived" : ""} ${props.activeSessionId === session.id ? "active" : ""}`} onClick={() => props.onOpen(session)}><span className={`status-dot ${session.status}`} />{session.pinned && <span className="pin-mark">◆</span>}<div className="session-copy"><strong>{session.title}</strong><span>{relativeTime(session.updatedAt)} · {session.messageCount} 条消息{session.archived ? " · 已归档" : ""}{session.parentSessionId ? " · 分叉" : ""}</span></div><div className="session-actions"><button title={session.pinned ? "取消置顶" : "置顶"} onClick={(event) => { event.stopPropagation(); props.onPin(session); }}>◆</button><button title={session.archived ? "取消归档" : "归档"} onClick={(event) => { event.stopPropagation(); props.onArchive(session); }}>▣</button><button title="导出 Markdown" onClick={(event) => { event.stopPropagation(); props.onExport(session); }}>⇩</button><button title="重命名" onClick={(event) => { event.stopPropagation(); props.onRename(session); }}>✎</button><button title="删除" onClick={(event) => { event.stopPropagation(); props.onDelete(session); }}>×</button></div></div>)}
+      {sessionGroups.filter((group) => group.kind === "normal" || group.sessions.length > 0).map((group) => { const collapsed = props.settings?.sessionGroupCollapsed?.[group.kind] ?? group.kind !== "normal"; return <div className={`session-origin-group ${group.kind}`} key={group.kind}><button className="session-group-heading" onClick={() => props.onToggleSessionGroup(group.kind, !collapsed)}><strong>{collapsed ? "›" : "⌄"} {group.label}</strong><span>{group.sessions.length}</span></button>{!collapsed && group.sessions.map(renderSession)}</div>; })}
       <button className="session-group-heading codex-toggle" onClick={() => props.onToggleCodex(!props.settings?.codexGroupCollapsed)}><strong>{props.settings?.codexGroupCollapsed ? "›" : "⌄"} Codex 会话</strong><span>{props.codexSessions.length}</span></button>
       {!props.settings?.codexGroupCollapsed && <><label className="archived-toggle"><input type="checkbox" checked={props.settings?.showArchivedCodex ?? false} onChange={(event) => props.onToggleArchived(event.target.checked)} />显示归档</label>{props.codexSessions.map((session) => <div key={session.id} className={`session-row codex ${props.activeCodexId === session.id ? "active" : ""}`} onClick={() => props.onOpenCodex(session)}><span className="codex-mark">C</span><div className="session-copy"><strong>{session.title}</strong><span>{relativeTime(session.updatedAt)}{session.archived ? " · 已归档" : ""}</span></div><div className="session-actions"><button title="从镜像列表隐藏" onClick={(event) => { event.stopPropagation(); props.onHideCodex(session); }}>×</button></div></div>)}</>}
     </div>
@@ -706,7 +721,8 @@ function Sidebar(props: {
 
 function TopBar({ session, codex, workspace, view, busy, onPanel, onToggleSidebar }: { session?: SessionSummary; codex?: CodexSessionSummary; workspace: string; view: ReturnType<typeof useAppStore.getState>["views"][string] | undefined; busy: boolean; onPanel(panel: Panel): void; onToggleSidebar(): void }): React.JSX.Element {
   const activeAccount = useAppStore((state) => state.accounts.find((value) => value.active));
-  return <header className="topbar"><button className="icon-button sidebar-toggle" title="显示或隐藏侧栏" onClick={onToggleSidebar}>☰</button><div><strong>{codex?.title || session?.title || "新会话"}</strong><span>{codex?.cwd || session?.cwd || workspace || "请选择工作区"}{codex ? " · Codex 只读镜像" : ""}</span></div><div className="top-actions">{session && <button className="history-entry" onClick={() => onPanel("history")}>↶ 历史</button>}<button className="task-entry" onClick={() => onPanel("tasks")}>◷ 任务</button><button className="extensions-entry" onClick={() => onPanel("extensions")}>▦ 扩展</button><button className="media-entry" onClick={() => onPanel("media")}>✦ 创作</button><span className={`connection ${busy ? "working" : ""}`} />{activeAccount && <button className="account-pill" onClick={() => onPanel("accounts")}>{activeAccount.label}</button>}<button className="icon-button" onClick={() => onPanel("settings")}>⚙</button></div></header>;
+  const source = session?.originKind === "automation" ? " · 定时任务" : session?.originKind === "codex-continuation" ? " · Codex 接力" : session?.originKind === "fork" ? " · 分叉会话" : "";
+  return <header className="topbar"><button className="icon-button sidebar-toggle" title="显示或隐藏侧栏" onClick={onToggleSidebar}>☰</button><div><strong>{codex?.title || session?.title || "新会话"}</strong><span>{codex?.cwd || session?.cwd || workspace || "请选择工作区"}{codex ? " · Codex 只读镜像" : source}</span></div><div className="top-actions">{session && <button className="history-entry" onClick={() => onPanel("history")}>↶ 历史</button>}<button className="task-entry" onClick={() => onPanel("tasks")}>◷ 任务</button><button className="extensions-entry" onClick={() => onPanel("extensions")}>▦ 扩展</button><button className="media-entry" onClick={() => onPanel("media")}>✦ 创作</button><span className={`connection ${busy ? "working" : ""}`} />{activeAccount && <button className="account-pill" onClick={() => onPanel("accounts")}>{activeAccount.label}</button>}<button className="icon-button" onClick={() => onPanel("settings")}>⚙</button></div></header>;
 }
 
 function Composer(props: {

@@ -41,7 +41,6 @@ const evaluate = async (expression, timeout = 30_000) => {
 
 let taskId;
 let sessionId;
-let runId;
 try {
   const bootstrap = await evaluate("window.grokDesktop.bootstrap()", 60_000);
   const account = bootstrap.accounts.find((item) => item.active && item.kind === "oauth") || bootstrap.accounts.find((item) => item.active);
@@ -57,20 +56,28 @@ try {
     wakeToRun: false,
     notify: false,
     missedRunPolicy: "skip",
+    contextPolicy: "reuse",
   };
   const tasks = await evaluate(`window.grokDesktop.createAutomation(${JSON.stringify(taskInput)})`, 60_000);
   const task = tasks.find((item) => item.name === marker);
   if (!task) throw new Error("Live automation task was not created");
   taskId = task.id;
-  const queued = await evaluate(`window.grokDesktop.runAutomationNow(${JSON.stringify(taskId)})`, 60_000);
-  runId = queued.id;
-  const terminal = await waitFor(async () => {
-    const runs = await evaluate(`window.grokDesktop.listAutomationRuns(${JSON.stringify(taskId)})`, 60_000);
-    const run = runs.find((item) => item.id === runId);
-    return run && ["completed", "failed", "cancelled", "skipped"].includes(run.status) ? run : undefined;
-  }, "Live automation did not reach a terminal state", 10 * 60_000);
-  if (terminal.status !== "completed" || !terminal.sessionId) throw new Error(`Live automation failed: ${terminal.status}: ${terminal.error || "missing session"}`);
-  sessionId = terminal.sessionId;
+  const runOnce = async () => {
+    const queued = await evaluate(`window.grokDesktop.runAutomationNow(${JSON.stringify(taskId)})`, 60_000);
+    const terminal = await waitFor(async () => {
+      const runs = await evaluate(`window.grokDesktop.listAutomationRuns(${JSON.stringify(taskId)})`, 60_000);
+      const run = runs.find((item) => item.id === queued.id);
+      return run && ["completed", "failed", "cancelled", "skipped"].includes(run.status) ? run : undefined;
+    }, "Live automation did not reach a terminal state", 10 * 60_000);
+    if (terminal.status !== "completed" || !terminal.sessionId) throw new Error(`Live automation failed: ${terminal.status}: ${terminal.error || "missing session"}`);
+    return terminal;
+  };
+  const first = await runOnce();
+  const second = await runOnce();
+  if (first.sessionId !== second.sessionId) throw new Error(`Task did not reuse its session: ${first.sessionId} != ${second.sessionId}`);
+  sessionId = second.sessionId;
+  const storedTask = (await evaluate("window.grokDesktop.listAutomations()", 60_000)).find((item) => item.id === taskId);
+  if (storedTask?.sessionId !== sessionId || storedTask?.contextPolicy !== "reuse") throw new Error("Task did not persist the reusable session mapping");
 
   // Open the real generated session and probe the installed CLI's optional
   // rewind extension. Unsupported versions must return an empty list, not a
@@ -81,7 +88,11 @@ try {
   const visibleGlobalError = await evaluate("Boolean(document.querySelector('.error-toast'))");
   if (visibleGlobalError) throw new Error("Optional rewind probe surfaced a global error toast");
 
-  console.log(JSON.stringify({ ok: true, marker, runStatus: terminal.status, sessionCreated: true, rewindProbe: "no-global-error", rewindPoints: rewindPoints.length }));
+  await evaluate(`window.grokDesktop.clearAutomationContext(${JSON.stringify(taskId)})`, 60_000);
+  const clearedTask = (await evaluate("window.grokDesktop.listAutomations()", 60_000)).find((item) => item.id === taskId);
+  if (clearedTask?.sessionId) throw new Error("Manual task-context cleanup retained the session mapping");
+  sessionId = undefined;
+  console.log(JSON.stringify({ ok: true, marker, runsCompleted: 2, sessionReused: true, contextCleared: true, rewindProbe: "no-global-error", rewindPoints: rewindPoints.length }));
 } finally {
   try { if (sessionId) await evaluate(`window.grokDesktop.deleteSession(${JSON.stringify(workspace)}, ${JSON.stringify(sessionId)})`, 60_000); } catch {}
   try { if (taskId) await evaluate(`window.grokDesktop.deleteAutomation(${JSON.stringify(taskId)})`, 60_000); } catch {}

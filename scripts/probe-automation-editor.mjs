@@ -63,6 +63,7 @@ try {
     const labels = [...document.querySelectorAll('.automation-grid > label')];
     const modeLabel = labels.find((item) => item.textContent.trim().startsWith('会话模式'));
     const permissionLabel = labels.find((item) => item.textContent.trim().startsWith('权限策略'));
+    const contextLabel = labels.find((item) => item.textContent.trim().startsWith('会话上下文'));
     const panelRect = panel.getBoundingClientRect();
     return {
       count: cards.length,
@@ -82,6 +83,7 @@ try {
         permissionDisabled: permissionLabel?.querySelector('select')?.disabled,
         help: permissionLabel?.querySelector('small')?.textContent,
       },
+      context: { value: contextLabel?.querySelector('select')?.value, text: contextLabel?.textContent },
       viewport: { width: innerWidth, height: innerHeight },
     };
   })()`);
@@ -98,7 +100,8 @@ try {
   if (result.autoMode.mode !== 'auto' || result.autoMode.permission !== 'auto' || !result.autoMode.permissionDisabled || !result.autoMode.help?.includes('不再弹出二次确认')) {
     throw new Error(`Auto mode did not disable the secondary permission policy: ${JSON.stringify(result.autoMode)}`);
   }
-  console.log(JSON.stringify({ ok: true, taskEditorOptions: expected, layout: "three aligned cards", autoMode: "unrestricted-without-secondary-confirmation" }));
+  if (result.context.value !== 'reuse' || !result.context.text?.includes('继续同一会话')) throw new Error(`Reusable task context is not the default: ${JSON.stringify(result.context)}`);
+  console.log(JSON.stringify({ ok: true, taskEditorOptions: expected, layout: "three aligned cards", autoMode: "unrestricted-without-secondary-confirmation", taskContext: "reuse-by-default" }));
 } finally {
   try { await evaluate("document.querySelector('.task-center > header button')?.click(); true"); } catch {}
   socket.close();

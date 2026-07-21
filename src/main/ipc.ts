@@ -103,6 +103,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:policy:apply-all", () => controller.applyAutomationPolicyToAll());
   handle("automations:pending:respond", (id: string, approved: boolean) => controller.respondAutomationPending(id, approved));
   handle("automations:repair", () => controller.repairAutomationRegistrations());
+  handle("automations:clear-context", (id: string) => controller.clearAutomationContext(id));
   handle("draft:get", (key: string) => controller.getDraft(key));
   handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection) => controller.setDraft(key, text, capability));
   handle("draft:clear", (key: string) => controller.clearDraft(key));

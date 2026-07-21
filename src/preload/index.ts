@@ -123,6 +123,7 @@ const api: GrokDesktopApi = {
   applyAutomationPolicyToAll: () => ipcRenderer.invoke("automations:policy:apply-all"),
   respondAutomationPending: (id, approved) => ipcRenderer.invoke("automations:pending:respond", id, approved),
   repairAutomationRegistrations: () => ipcRenderer.invoke("automations:repair"),
+  clearAutomationContext: (id) => ipcRenderer.invoke("automations:clear-context", id),
   getDraft: (key) => ipcRenderer.invoke("draft:get", key),
   setDraft: (key, text, capability) => ipcRenderer.invoke("draft:set", key, text, capability),
   clearDraft: (key) => ipcRenderer.invoke("draft:clear", key),

@@ -11,7 +11,14 @@ import type { LogService } from "./log-service";
 
 interface CodexMetadata {
   hidden: Record<string, boolean>;
-  continuations: Record<string, string>;
+  continuations: Record<string, string | string[]>;
+}
+
+export interface CodexContinuationMapping {
+  codexId: string;
+  sessionId: string;
+  cwd: string;
+  title: string;
 }
 
 interface RawSessionMeta {
@@ -93,8 +100,25 @@ export class CodexSessionCatalog {
 
   async recordContinuation(id: string, grokSessionId: string): Promise<void> {
     const data = await this.metadata.get();
-    data.continuations[id] = grokSessionId;
+    const current = data.continuations[id];
+    const values = Array.isArray(current) ? current : current ? [current] : [];
+    if (!values.includes(grokSessionId)) values.push(grokSessionId);
+    data.continuations[id] = values;
     await this.metadata.set(data);
+  }
+
+  async listContinuations(cwd = ""): Promise<CodexContinuationMapping[]> {
+    const [rows, data] = await Promise.all([this.scan(false), this.metadata.get()]);
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    const output: CodexContinuationMapping[] = [];
+    for (const [codexId, stored] of Object.entries(data.continuations)) {
+      const row = byId.get(codexId);
+      if (!row || (cwd && !pathWithin(row.cwd, cwd))) continue;
+      for (const sessionId of Array.isArray(stored) ? stored : [stored]) {
+        if (sessionId) output.push({ codexId, sessionId, cwd: row.cwd, title: row.title });
+      }
+    }
+    return output;
   }
 
   async contentHash(id: string): Promise<string> {

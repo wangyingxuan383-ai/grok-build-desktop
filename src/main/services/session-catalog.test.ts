@@ -70,4 +70,23 @@ describe("SessionCatalog", () => {
     expect(rows.find((row) => row.id === "child-session")?.parentSessionId).toBe("parent-session");
     expect(await readFile(join(grokHome, "sessions", encodeURIComponent(cwd), "parent-session", "summary.json"), "utf8")).toContain("parent-session");
   });
+
+  it("records source metadata, applies a suggested title once and removes the dedicated session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-origin-"));
+    const grokHome = join(root, ".grok");
+    const cwd = "D:\\Workspace";
+    const sessionId = "task-session";
+    const folder = join(grokHome, "sessions", encodeURIComponent(cwd), sessionId);
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, "summary.json"), JSON.stringify({ session_summary: "CLI title", created_at: "2026-01-01T00:00:00Z" }));
+    const catalog = new SessionCatalog(join(root, "app-data"), grokHome);
+    await catalog.recordOrigins([{ sessionId, kind: "automation", id: "task-id", title: "每日检查", suggestedTitle: "每日检查" }]);
+    expect(await catalog.has(cwd, sessionId)).toBe(true);
+    expect((await catalog.list(cwd))[0]).toMatchObject({ title: "每日检查", originKind: "automation", originId: "task-id", originTitle: "每日检查" });
+    await catalog.rename(sessionId, "用户自定义名称");
+    await catalog.recordOrigins([{ sessionId, kind: "automation", id: "task-id", title: "任务新名称", suggestedTitle: "任务新名称" }]);
+    expect((await catalog.list(cwd))[0]?.title).toBe("用户自定义名称");
+    await catalog.delete(cwd, sessionId);
+    expect(await catalog.has(cwd, sessionId)).toBe(false);
+  });
 });
