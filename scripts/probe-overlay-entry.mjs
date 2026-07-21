@@ -41,6 +41,10 @@ const evaluate = async (expression) => {
 
 try {
   await request("Page.bringToFront");
+  if (entrySelector === ".history-entry" && !await evaluate("Boolean(document.querySelector('.history-entry'))")) {
+    await waitFor(() => evaluate("Boolean(document.querySelector('.session-row:not(.codex)'))"), "No Grok session is available for the history probe");
+    await evaluate("document.querySelector('.session-row:not(.codex)')?.click(); true");
+  }
   await waitFor(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(entrySelector)}))`), `${entrySelector} entry did not render`);
   await evaluate(`document.querySelector(${JSON.stringify(entrySelector)})?.click(); true`);
   await waitFor(() => evaluate(`Boolean(document.querySelector('#overlay-root ${panelSelector}'))`), `${entrySelector} panel did not open in overlay root`);

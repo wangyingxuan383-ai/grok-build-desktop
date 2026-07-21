@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.15 - 2026-07-21
+
+### Fixed
+
+- Opening “分叉与回退” on CLI versions without `x.ai/rewind/points` now degrades to the panel's empty state. Optional private-method absence no longer creates a bottom-right global error toast; action failures remain visible inside the panel.
+- “自动批准” is now authoritative. Scheduled workers approve ordinary ACP tool requests without applying a second scheduled permission policy, and Computer Use skips optional per-application and inferred-risk confirmation prompts in this mode. Plan/Agent restrictions, protected applications, password/OTP/CAPTCHA rules and Windows secure-desktop boundaries remain intact.
+- Persistent worker prompts may run for up to 23 hours, aligned with the Task Scheduler execution limit, instead of failing healthy long tasks after the interactive 30-minute turn timeout.
+- The task editor labels auto mode as “自动批准（无限制）”, disables the redundant permission selector and explains that no secondary confirmation is applied. Existing tasks with stale secondary-policy values are normalized at execution time.
+- Added an opt-in packaged live-automation probe that creates, runs and cleans a real scheduled task, verifies a resumable Grok session, and checks optional rewind degradation without exposing credentials or prompts.
+
+### Verification
+
+- TypeScript, production build and 34 focused ACP, automation-policy, Computer Use and task-center tests pass.
+- A packaged v0.5.15 worker used the current OAuth account and `grok-4.5` to read this workspace's `package.json` through an auto-mode task. It reached `completed` in about 40 seconds, returned a real resumable session, produced no permission wait, released both task/global locks, and cleaned its temporary task/session.
+- The same packaged acceptance opened the generated session against CLI 0.2.106, received an empty optional rewind result, and observed no global error toast. The task editor packaged probe confirmed the secondary permission selector is disabled in auto mode.
+
 ## 0.5.14 - 2026-07-21
 
 ### Fixed

@@ -53,6 +53,7 @@ import type {
   BackgroundTaskSummary,
   NotificationInboxItem,
 } from "../shared/types";
+import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
 import { REASONING_EFFORTS } from "../shared/types";
 import { AccountVault } from "./services/account-vault";
@@ -538,13 +539,20 @@ export class AppController {
   async runAutomationWorker(taskId: string, runId?: string): Promise<AutomationRunRecord> {
     return this.automations.execute(taskId, runId, async ({ task, prompt, confirm }) => {
       const accountContext = await this.prepareAutomationAccount(task);
-      const mode: SessionMode = task.profile.permissionPolicy === "read-only" ? "plan" : task.profile.mode;
-      const decision = task.profile.permissionPolicy === "read-only" ? async () => false : (toolCall: unknown) => confirm(toolCall, task.profile.permissionPolicy === "agent");
+      const execution = resolveAutomationExecutionPolicy(task.profile);
+      const decision = execution.permission === "allow"
+        ? async () => true
+        : execution.permission === "deny"
+          ? async () => false
+          : (toolCall: unknown) => confirm(toolCall, execution.permission === "confirm-all");
       try {
-        const result = await this.processes.createConfigured(task.workspace, task.profile.effort, mode, task.profile.modelId, decision, accountContext.environment);
+        const result = await this.processes.createConfigured(task.workspace, task.profile.effort, execution.mode, task.profile.modelId, decision, accountContext.environment);
         const text = task.profile.computerEnabled ? `/computer ${prompt}` : task.skillCommand ? `${task.skillCommand} ${prompt}` : prompt;
         try {
-          await this.processes.get(result.sessionId).prompt(text, []);
+          // A persisted Windows task may legitimately run much longer than an
+          // interactive turn. Keep the worker just below Task Scheduler's 24h
+          // execution limit instead of failing a healthy run after 30 minutes.
+          await this.processes.get(result.sessionId).prompt(text, [], 23 * 60 * 60_000);
           return { sessionId: result.sessionId };
         } finally { await this.processes.close(result.sessionId); }
       } finally { await accountContext.cleanup(); }

@@ -131,7 +131,7 @@ export class ComputerUseService {
     const now = new Date().toISOString();
     const task: ComputerTaskState = { sessionId: input.sessionId, appId: app.id, windowId: window.id, appName: app.name, status: "idle", stepCount: 0, updatedAt: now };
     this.tasks.set(input.sessionId, task);
-    if (config.confirmNewApps && !await this.isAllowed(input.sessionId, app.id)) {
+    if (shouldRequestComputerAppPermission(this.getMode(input.sessionId), config.confirmNewApps, await this.isAllowed(input.sessionId, app.id))) {
       task.status = "awaiting-app-permission"; this.publish(task);
       const request: ComputerAppPermissionRequest = { requestId: randomUUID(), sessionId: input.sessionId, app, window };
       this.pendingPermissions.set(request.requestId, { request, onDecision: async (approved) => { if (approved) await this.activateTask(task, window); else this.stopWith(task, "应用控制已拒绝"); } });
@@ -262,7 +262,7 @@ export class ComputerUseService {
       const actionDescription = describeComputerAction(action, element?.name, string(input.key));
       this.announce(task, actionDescription, action, computerPointerForAction(task, request, element));
       const inferredRisk = request.risk || inferComputerRisk(actionContext, action);
-      if (inferredRisk) await this.confirmRisk(task, inferredRisk, request.riskSummary || element?.name || "检测到高影响操作", action);
+      if (shouldConfirmComputerRisk(this.getMode(sessionId), inferredRisk)) await this.confirmRisk(task, inferredRisk!, request.riskSummary || element?.name || "检测到高影响操作", action);
       const maxEdge = (await this.settings.get()).maxScreenshotEdge;
       const raw = await this.getHost().call(action, { ...mapScreenshotCoordinates(request, task.lastState), maxEdge });
       const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), sessionId); task.lastState = state; task.stepCount += 1; task.lastAction = action; task.message = `${actionDescription.replace(/^正在/, "已").replace(/…$/, "")}，正在分析新画面`; task.updatedAt = new Date().toISOString(); this.publish(task);
@@ -353,6 +353,14 @@ export class ComputerUseService {
     });
     await new Promise<void>((resolve, reject) => { this.http!.once("error", reject); this.http!.listen(0, "127.0.0.1", () => { const address = this.http!.address(); this.port = typeof address === "object" && address ? address.port : 0; resolve(); }); });
   }
+}
+
+export function shouldRequestComputerAppPermission(mode: SessionMode | undefined, confirmNewApps: boolean, alreadyAllowed: boolean): boolean {
+  return mode !== "auto" && confirmNewApps && !alreadyAllowed;
+}
+
+export function shouldConfirmComputerRisk(mode: SessionMode | undefined, risk: ComputerRiskCategory | undefined): boolean {
+  return mode !== "auto" && risk !== undefined;
 }
 
 class ComputerHostClient {

@@ -1,5 +1,15 @@
 # Feature Matrix
 
+## v0.5.15 hotfix
+
+| Area | Status | Notes |
+|---|---|---|
+| Optional fork/rewind compatibility | Fixed and packaged-live verified | Installed CLI 0.2.106 lacks rewind points; the panel now shows its empty state without a global toast, while action errors stay inline |
+| Auto-mode permissions | Fixed and focused-tested | Auto mode overrides obsolete secondary task policies, approves ACP tool requests, and suppresses optional Computer Use app/risk confirmations; protected targets and Windows/manual-secret boundaries remain enforced |
+| Persistent prompt duration | Fixed | Scheduled turns use a 23-hour ceiling below Task Scheduler's 24-hour limit; interactive turns retain their existing timeout |
+| Persistent automation | Packaged-live verified | A real packaged OAuth worker read `package.json`, completed in about 40 seconds, created a resumable session, released locks and cleaned the temporary task/session without a permission wait |
+| Task editor policy clarity | Fixed and packaged-UI verified | Auto mode is labelled unrestricted, forces the effective policy to auto and disables the redundant permission selector with explanatory text |
+
 ## v0.5.14 hotfix
 
 | Area | Status | Notes |
