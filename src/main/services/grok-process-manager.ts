@@ -160,6 +160,24 @@ export class GrokProcessManager {
     } catch (error) { await adapter.dispose(); throw error; }
   }
 
+  async openConfigured(cwd: string, sessionId: string, effort: ReasoningEffort, mode: SessionMode, modelId: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv): Promise<{ sessionId: string }> {
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      existing.lastTouched = Date.now();
+      this.focusedId = sessionId;
+      return { sessionId };
+    }
+    const adapter = await this.spawn(cwd, effort, mode, modelId, permissionDecider, environmentOverride);
+    try {
+      await adapter.start(sessionId);
+      this.sessions.set(sessionId, adapter);
+      this.onSessionStarted?.(adapter.extensionLeaseId, sessionId);
+      this.focusedId = sessionId;
+      await this.enforceCap();
+      return { sessionId };
+    } catch (error) { await adapter.dispose(); throw error; }
+  }
+
   async open(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
     const existing = this.sessions.get(sessionId);
     if (existing) {

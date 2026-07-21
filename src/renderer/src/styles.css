@@ -115,6 +115,9 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .session-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
 .session-copy strong { font-size: .8125em; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-copy span { color: var(--muted); font-size: .6875em; }
+.session-source-badge { display: inline-block; margin-left: 6px; padding: 1px 5px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); font-size: .72em; font-style: normal; font-weight: 500; vertical-align: 1px; }
+.session-source-badge.automation { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 45%, var(--border)); }
+.session-source-badge.codex-continuation { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .session-actions { display: none; }
 .session-row:hover .session-actions { display: flex; }
 .session-actions button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }

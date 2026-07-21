@@ -3,7 +3,7 @@ param([string]$ArtifactPath = '')
 
 $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$Excluded = @('node_modules', '.git', 'out', 'release', 'coverage', 'test-results', 'playwright-report')
+$Excluded = @('node_modules', '.git', 'out', 'release', 'local', 'coverage', 'test-results', 'playwright-report')
 $TextExtensions = @('.ts','.tsx','.js','.mjs','.cjs','.json','.md','.yml','.yaml','.ps1','.cs','.html','.css','.toml','.txt','.svg')
 $Failures = New-Object 'Collections.Generic.List[string]'
 

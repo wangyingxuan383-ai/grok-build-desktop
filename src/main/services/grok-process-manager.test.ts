@@ -92,3 +92,17 @@ describe("extension mutation scheduling", () => {
     } finally { await manager.dispose(); }
   });
 });
+
+describe("configured session restoration", () => {
+  it("loads an existing scheduled-task session with its fixed execution profile", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapter = { start: vi.fn().mockResolvedValue({ sessionId: "task-session" }), dispose: vi.fn(), extensionLeaseId: undefined };
+    const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
+    try {
+      await expect(manager.openConfigured("D:\\Workspace", "task-session", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" })).resolves.toEqual({ sessionId: "task-session" });
+      expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" });
+      expect(adapter.start).toHaveBeenCalledWith("task-session");
+    } finally { await manager.dispose(); }
+  });
+});

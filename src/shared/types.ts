@@ -134,6 +134,7 @@ export interface AppSettings {
   recentWorkspaces: string[];
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
+  sessionGroupCollapsed?: Partial<Record<SessionOriginKind, boolean>>;
   showArchivedCodex?: boolean;
   theme: ThemeSettings;
 }
@@ -191,6 +192,7 @@ export type AutomationSchedule =
   | { kind: "interval"; minutes: number };
 
 export type ScheduledPermissionPolicy = "auto" | "agent" | "read-only";
+export type AutomationContextPolicy = "reuse" | "fresh";
 
 export interface AutomationExecutionProfile {
   accountId?: string;
@@ -213,6 +215,8 @@ export interface AutomationTask {
   notify: boolean;
   missedRunPolicy: "run-once" | "skip";
   skillCommand?: string;
+  contextPolicy: AutomationContextPolicy;
+  sessionId?: string;
   promptPresent: boolean;
   registrationStatus: "registered" | "needs-repair" | "needs-config" | "unsupported" | "error";
   registrationError?: string;
@@ -221,7 +225,7 @@ export interface AutomationTask {
   updatedAt: string;
 }
 
-export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "promptPresent" | "registrationStatus" | "registrationError" | "nextRunAt" | "createdAt" | "updatedAt"> {
+export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "sessionId" | "promptPresent" | "registrationStatus" | "registrationError" | "nextRunAt" | "createdAt" | "updatedAt"> {
   id?: string;
   prompt?: string;
 }
@@ -315,6 +319,7 @@ export interface AccountProfile {
 }
 
 export type LiveStatus = "idle" | "working" | "needs-user" | "unread" | "error" | "cold";
+export type SessionOriginKind = "normal" | "fork" | "codex-continuation" | "automation" | "other";
 
 export interface SessionSummary {
   id: string;
@@ -329,6 +334,9 @@ export interface SessionSummary {
   pinned?: boolean;
   archived?: boolean;
   parentSessionId?: string;
+  originKind?: SessionOriginKind;
+  originId?: string;
+  originTitle?: string;
 }
 
 export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex";
@@ -923,6 +931,7 @@ export interface GrokDesktopApi {
   applyAutomationPolicyToAll(): Promise<AutomationTask[]>;
   respondAutomationPending(id: string, approved: boolean): Promise<void>;
   repairAutomationRegistrations(): Promise<AutomationTask[]>;
+  clearAutomationContext(id: string): Promise<AutomationTask[]>;
   enqueuePrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void>;
   interjectPrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void>;
   editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void>;

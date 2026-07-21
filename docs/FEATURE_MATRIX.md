@@ -1,5 +1,14 @@
 # Feature Matrix
 
+## v0.5.16 session lifecycle
+
+| Area | Status | Notes |
+|---|---|---|
+| Session origin groups | Implemented and packaged-UI verified | Ordinary, task, Codex-continuation and future other sources use durable metadata, visible badges and independently persisted collapse state |
+| Codex continuation identity | Implemented and focused-tested | New Grok continuations preserve the exact original Codex title; multiple continuation mappings migrate without modifying source JSONL |
+| Reusable task sessions | Packaged-live verified | Reuse is the default; two consecutive real OAuth task runs completed against the same resumable Grok session instead of creating two sessions |
+| Task context lifecycle | Implemented and tested | Per-task retain/fresh policy, direct open, manual permanent cleanup, stale/history migration and task-lock protection; packaged live cleanup removed the dedicated session and mapping |
+
 ## v0.5.15 hotfix
 
 | Area | Status | Notes |

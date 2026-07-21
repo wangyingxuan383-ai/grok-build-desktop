@@ -83,6 +83,7 @@ import { backupUiMetadataForVersion } from "./services/metadata-migration";
 import { DEFAULT_THEME, mergeThemeSettings, ThemeService } from "./services/theme-service";
 import { ProviderService, validateGrokConfig } from "./services/provider-service";
 import { AutomationService } from "./services/automation-service";
+import { resolveAutomationSessionAction } from "./services/automation-session-lifecycle";
 import { NotificationInboxService } from "./services/notification-inbox";
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -99,6 +100,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentWorkspaces: [],
   activeWorkspace: "",
   codexGroupCollapsed: true,
+  sessionGroupCollapsed: { normal: false, fork: false, automation: true, "codex-continuation": true, other: true },
   showArchivedCodex: false,
   theme: structuredClone(DEFAULT_THEME),
 };
@@ -216,6 +218,10 @@ export class AppController {
       workerBaseArgs,
       launchWorker: async (taskId, runId) => {
         const child = spawn(process.execPath, [...workerBaseArgs, "--scheduler-worker", taskId, runId], { detached: true, windowsHide: true, stdio: "ignore", env: { ...process.env, GROK_DESKTOP_AUTOMATION_WORKER: "1" } });
+        child.once("exit", () => void this.automations.listRuns(taskId).then((runs) => {
+          const run = runs.find((value) => value.id === runId);
+          if (run) this.window?.webContents.send("grok:automation-event", { taskId, run });
+        }).catch(() => undefined));
         child.unref();
       },
       onChanged: (event) => {
@@ -278,7 +284,7 @@ export class AppController {
     return {
       settings,
       accounts: await this.vault.list(),
-      sessions: await this.catalog.list(settings.activeWorkspace, "", this.processes.liveStatuses()),
+      sessions: await this.listSessions(settings.activeWorkspace),
       cli,
       login: this.auth.getLoginState(),
       updateHistory: await this.updater.history(),
@@ -318,12 +324,38 @@ export class AppController {
     const recent = [cwd, ...settings.recentWorkspaces.filter((value) => value.toLowerCase() !== cwd.toLowerCase())].slice(0, 12);
     await this.settingsStore.patch({ activeWorkspace: cwd, recentWorkspaces: recent });
     this.workspaceFiles.invalidate(cwd);
-    return this.catalog.list(cwd, "", this.processes.liveStatuses());
+    return this.listSessions(cwd);
   }
 
   async listSessions(cwd?: string, query = ""): Promise<SessionSummary[]> {
     const workspace = cwd || (await this.settingsStore.get()).activeWorkspace;
+    await this.syncSessionOrigins(workspace);
     return this.catalog.list(workspace, query, this.processes.liveStatuses());
+  }
+
+  private async syncSessionOrigins(cwd: string): Promise<void> {
+    const [continuations, tasks, runs] = await Promise.all([
+      this.codex.listContinuations(cwd).catch(() => []),
+      this.automations.list().catch(() => []),
+      this.automations.listRuns().catch(() => []),
+    ]);
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const values: Parameters<SessionCatalog["recordOrigins"]>[0] = continuations.map((value) => ({
+      sessionId: value.sessionId,
+      kind: "codex-continuation",
+      id: value.codexId,
+      title: "Codex 接力",
+      suggestedTitle: value.title,
+    }));
+    for (const task of tasks) {
+      if (task.sessionId) values.push({ sessionId: task.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name });
+    }
+    for (const run of runs) {
+      if (!run.sessionId) continue;
+      const task = taskById.get(run.taskId);
+      if (task) values.push({ sessionId: run.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name });
+    }
+    await this.catalog.recordOrigins(values);
   }
 
   async discoverWorkspaces(force = false): Promise<WorkspaceSummary[]> {
@@ -471,6 +503,8 @@ export class AppController {
     const result = await this.processes.create(detail.cwd);
     this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
+    await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "codex-continuation", id, title: "Codex 接力", suggestedTitle: detail.title }]);
+    await this.catalog.rename(result.sessionId, detail.title);
     await this.codex.recordContinuation(id, result.sessionId);
     void (async () => {
       try {
@@ -534,6 +568,13 @@ export class AppController {
   applyAutomationPolicyToAll(): Promise<AutomationTask[]> { return this.automations.applyPolicyToAll(); }
   respondAutomationPending(id: string, approved: boolean): Promise<void> { return this.automations.respondPending(id.replace(/^pending:/, ""), approved); }
   repairAutomationRegistrations(): Promise<AutomationTask[]> { return this.automations.repairRegistrations(); }
+  clearAutomationContext(id: string): Promise<AutomationTask[]> {
+    return this.automations.clearSession(id, async (task) => {
+      if (!task.sessionId) return;
+      await this.processes.close(task.sessionId);
+      if (await this.catalog.has(task.workspace, task.sessionId)) await this.catalog.delete(task.workspace, task.sessionId);
+    });
+  }
   unregisterAllAutomations(): Promise<void> { return this.automations.unregisterAll(); }
 
   async runAutomationWorker(taskId: string, runId?: string): Promise<AutomationRunRecord> {
@@ -546,7 +587,21 @@ export class AppController {
           ? async () => false
           : (toolCall: unknown) => confirm(toolCall, execution.permission === "confirm-all");
       try {
-        const result = await this.processes.createConfigured(task.workspace, task.profile.effort, execution.mode, task.profile.modelId, decision, accountContext.environment);
+        let sessionId = task.sessionId;
+        const mappedSessionExists = Boolean(sessionId && await this.catalog.has(task.workspace, sessionId));
+        const sessionAction = resolveAutomationSessionAction(task.contextPolicy, Boolean(sessionId), mappedSessionExists);
+        if (sessionId && sessionAction === "replace") {
+          await this.processes.close(sessionId);
+          await this.catalog.delete(task.workspace, sessionId);
+          await this.automations.setExecutionSession(task.id, undefined);
+          sessionId = undefined;
+        }
+        const result = sessionAction === "reuse"
+          ? await this.processes.openConfigured(task.workspace, sessionId!, task.profile.effort, execution.mode, task.profile.modelId, decision, accountContext.environment)
+          : await this.processes.createConfigured(task.workspace, task.profile.effort, execution.mode, task.profile.modelId, decision, accountContext.environment);
+        await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name }]);
+        if (sessionAction !== "reuse") await this.catalog.rename(result.sessionId, task.name);
+        await this.automations.setExecutionSession(task.id, result.sessionId);
         const text = task.profile.computerEnabled ? `/computer ${prompt}` : task.skillCommand ? `${task.skillCommand} ${prompt}` : prompt;
         try {
           // A persisted Windows task may legitimately run much longer than an

@@ -16,6 +16,7 @@
 | 2026-07-21 | 0.2.106 (`bde89716f6`) | Local app 0.5.13 hotfix | No ACP or Grok CLI wire change. The fix copies Chromium Local State into the headless worker's isolated session before Electron ready and updates task-center presentation; an existing encrypted task passed a non-executing DPAPI probe. |
 | 2026-07-21 | 0.2.106 (`bde89716f6`) | Local app 0.5.14 hotfix | No ACP wire change. The worker now synchronizes rotated OAuth credentials by matching the canonical `auth.json` identity to the task's fixed account and preserves concurrent CLI refreshes. |
 | 2026-07-21 | 0.2.106 (`bde89716f6`) | Local app 0.5.15 hotfix | Packaged OAuth automation completed a real file-read turn and returned a resumable session. This CLI returns `Method not found` for `x.ai/rewind/points`; the adapter now treats that private method as optional and returns an empty capability result instead of failing the UI. Auto-mode ACP permission requests are answered directly. |
+| 2026-07-21 | 0.2.106 (`bde89716f6`) | Local app 0.5.16 session lifecycle | `session/load` reopened a packaged scheduled task's fixed OAuth/model session for a second real run. Both runs completed with the same session ID; manual context cleanup then deleted the dedicated Grok session. No ACP wire extension was added. |
 
 Every accepted CLI update must pass `initialize` and `session/new`; a version banner alone is not sufficient.
 

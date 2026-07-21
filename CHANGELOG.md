@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.16 - 2026-07-21
+
+### Added
+
+- Grok sessions now carry a durable origin classification. The sidebar separates ordinary sessions, scheduled-task sessions and Codex continuations into independent collapsible groups, with visible source badges and source text in the title bar.
+- Persistent tasks now own one reusable Grok session by default. Each task can instead replace that session before every run, and its current context can be permanently cleared from the task center.
+- The task editor shows the context policy and current dedicated session, and can open that session directly.
+
+### Fixed
+
+- “在 Grok 中继续” now names the newly created Grok session exactly after the original Codex task and marks it as a Codex continuation. Multiple continuations of the same Codex task are retained instead of overwriting one mapping.
+- Existing task run records and older Codex continuation metadata are migrated into source groups without changing Codex source files. Manually renamed Grok sessions remain user-owned.
+- A scheduled task reopens its fixed account/provider/model session on later runs instead of creating unbounded sidebar entries. Fresh-context mode deletes the prior dedicated session before creating its replacement.
+- Public-source scanning now skips the intentionally Git-ignored `local/` research cache while continuing to scan every tracked source/document and packaged artifact.
+
+### Verification
+
+- TypeScript, production build and 30 focused catalog, lifecycle, process-manager and grouping tests pass.
+- An isolated packaged UI fixture verified the two source groups, persistent collapse UI and Codex title/source badge. The packaged task editor verified reuse is the default.
+- A packaged OAuth task completed two consecutive real Grok runs using the same task ID and the same resumable session ID. Manual cleanup then removed the mapping and session directory; the temporary task was deleted.
+
 ## 0.5.15 - 2026-07-21
 
 ### Fixed

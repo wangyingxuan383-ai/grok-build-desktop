@@ -33,4 +33,21 @@ describe("Codex session catalog", () => {
     expect(pathWithin("E:\\Work\\Repo\\child", "e:\\work\\repo")).toBe(true);
     expect(pathWithin("E:\\Work\\Other", "e:\\work\\repo")).toBe(false);
   });
+
+  it("keeps every Grok continuation mapping and exposes the original Codex title", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-codex-continuations-")); roots.push(root);
+    const codexHome = join(root, ".codex");
+    const sessions = join(codexHome, "sessions", "2026", "07", "21");
+    await mkdir(sessions, { recursive: true });
+    await writeFile(join(sessions, "rollout-main.jsonl"), `${JSON.stringify({ type: "session_meta", payload: { id: "main", cwd: "E:\\Work\\Repo", timestamp: "2026-07-21T00:00:00Z" } })}\n`);
+    await writeFile(join(codexHome, "session_index.jsonl"), `${JSON.stringify({ id: "main", thread_name: "原 Codex 标题", updated_at: "2026-07-21T01:00:00Z" })}\n`);
+    const catalog = new CodexSessionCatalog(join(root, "app-data"), new LogService(join(root, "app.log")), codexHome, join(root, ".grok"));
+    await catalog.list("", false, true);
+    await catalog.recordContinuation("main", "grok-one");
+    await catalog.recordContinuation("main", "grok-two");
+    expect(await catalog.listContinuations("e:\\work")).toEqual([
+      { codexId: "main", sessionId: "grok-one", cwd: "E:\\Work\\Repo", title: "原 Codex 标题" },
+      { codexId: "main", sessionId: "grok-two", cwd: "E:\\Work\\Repo", title: "原 Codex 标题" },
+    ]);
+  });
 });
