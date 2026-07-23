@@ -20,6 +20,6 @@ export default defineConfig({
     sourcemap: profile === "local",
     target: "node24",
     lib: { entry: resolve("src/main/index.ts"), formats: ["es"], fileName: () => "index.js" },
-    rollupOptions: { external: ["electron", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
+    rollupOptions: { external: ["electron", "iconv-lite", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
   },
 });

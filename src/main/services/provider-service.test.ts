@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "smol-toml";
-import type { CustomProviderInput } from "../../shared/types";
+import type { CustomProviderInput, ProviderConnectionDraft } from "../../shared/types";
 import { LogService } from "./log-service";
-import { ProviderService, type ProviderEnvironment } from "./provider-service";
+import { ProviderService, providerModelLocalId, type ProviderEnvironment } from "./provider-service";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -25,6 +25,7 @@ async function fixture(config = "# 用户注释\n[ui]\nsimple_mode = true\n") {
 }
 
 function input(patch: Partial<CustomProviderInput> = {}): CustomProviderInput { return { id: "sample", name: "示例提供商", baseUrl: "https://api.example.test/v1", protocol: "responses", authScheme: "bearer", credentialMode: "managed", credentialValue: "test-secret-value", extraHeaders: {}, models: [{ id: "sample-model", model: "upstream/model", name: "示例模型", contextWindow: 128_000, maxCompletionTokens: 8192 }], ...patch }; }
+function draft(baseUrl: string, patch: Partial<ProviderConnectionDraft> = {}): ProviderConnectionDraft { return { id: "draft", name: "草稿提供商", baseUrl, protocol: "chat_completions", authScheme: "bearer", credentialMode: "none", headers: [], models: [], ...patch }; }
 
 describe("ProviderService", () => {
   it("preserves unrelated TOML and stores credentials only in the user environment abstraction", async () => {
@@ -138,5 +139,54 @@ describe("ProviderService", () => {
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
+  });
+
+  it("probes unsaved drafts across OpenAI, Ollama and Anthropic model-list shapes", async () => {
+    const server = createServer((request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/openai") response.end(JSON.stringify({ data: [{ id: "gpt-test", name: "GPT Test", owned_by: "test" }] }));
+      else if (request.url === "/ollama") response.end(JSON.stringify({ models: [{ name: "qwen:test", model: "qwen:test" }] }));
+      else response.end(JSON.stringify([{ id: "claude-test", display_name: "Claude Test", context_window: 200_000 }]));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === "string") throw new Error("fake provider did not bind");
+      const { root, grokHome, environment } = await fixture();
+      const service = new ProviderService(join(root, "draft-data"), new LogService(join(root, "draft.log")), { grokHome, environment });
+      const base = `http://127.0.0.1:${address.port}`;
+      const openai = await service.probeDraft(draft(base, { modelListUrl: `${base}/openai` }));
+      const ollama = await service.discoverDraftModels(draft(base, { id: "ollama", modelListUrl: `${base}/ollama` }));
+      const anthropic = await service.probeDraft(draft(base, { id: "anthropic", protocol: "messages", modelListUrl: `${base}/anthropic` }));
+      expect(openai).toMatchObject({ ok: true, candidates: [{ remoteId: "gpt-test", name: "GPT Test", ownedBy: "test", alreadyConfigured: false }] });
+      expect(ollama[0]).toMatchObject({ remoteId: "qwen:test", name: "qwen:test" });
+      expect(anthropic.candidates[0]).toMatchObject({ remoteId: "claude-test", name: "Claude Test", contextWindow: 200_000 });
+    } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+  });
+
+  it("reports authentication, timeout and oversized-list failures without inference calls", async () => {
+    const server = createServer((request, response) => {
+      if (request.url === "/auth") { response.writeHead(401); response.end("{}"); return; }
+      if (request.url === "/large") { response.setHeader("content-length", "2048"); response.end(JSON.stringify({ data: [] })); return; }
+      setTimeout(() => { response.end(JSON.stringify({ data: [] })); }, 120);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === "string") throw new Error("fake provider did not bind");
+      const { root, grokHome, environment } = await fixture();
+      const service = new ProviderService(join(root, "failure-data"), new LogService(join(root, "failure.log")), { grokHome, environment, probeTimeoutMs: 30, maxProbeResponseBytes: 1024 });
+      const base = `http://127.0.0.1:${address.port}`;
+      await expect(service.probeDraft(draft(base, { modelListUrl: `${base}/auth` }))).resolves.toMatchObject({ ok: false, status: 401, message: "认证失败（HTTP 401）" });
+      await expect(service.probeDraft(draft(base, { modelListUrl: `${base}/large` }))).resolves.toMatchObject({ ok: false, message: "模型列表响应过大，已停止读取" });
+      expect((await service.probeDraft(draft(base, { modelListUrl: `${base}/slow` }))).ok).toBe(false);
+    } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+  });
+
+  it("creates stable safe local model ids and adds a hash on collisions", () => {
+    const occupied = new Set<string>();
+    const first = providerModelLocalId("网关", "org/model:latest", occupied);
+    const second = providerModelLocalId("网关", "org/model:latest", occupied);
+    expect(first).toMatch(/^[a-z0-9][a-z0-9._-]{0,63}$/);
+    expect(second).toMatch(/-[0-9a-f]{8}$/);
+    expect(second).not.toBe(first);
   });
 });

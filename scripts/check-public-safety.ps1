@@ -15,6 +15,28 @@ $Files = Get-ChildItem -LiteralPath $Root -Recurse -File -Force | Where-Object {
 
 $CurrentHome = [Environment]::GetFolderPath('UserProfile')
 $CurrentUser = [Environment]::UserName
+
+function Test-EncodedArtifact([string]$Path, [Text.Encoding]$Encoding, [string[]]$Needles) {
+    if (-not $Needles.Count) { return $false }
+    $Stream = [IO.File]::OpenRead($Path)
+    $Decoder = $Encoding.GetDecoder()
+    $Bytes = [byte[]]::new(1024 * 1024)
+    $Chars = [char[]]::new($Encoding.GetMaxCharCount($Bytes.Length))
+    $Carry = ''
+    $CarryLength = [Math]::Max(0, (($Needles | ForEach-Object Length | Measure-Object -Maximum).Maximum - 1))
+    try {
+        while (($Read = $Stream.Read($Bytes, 0, $Bytes.Length)) -gt 0) {
+            $CharCount = $Decoder.GetChars($Bytes, 0, $Read, $Chars, 0, $false)
+            $Content = ($Carry + [string]::new($Chars, 0, $CharCount)).ToLowerInvariant()
+            foreach ($Needle in $Needles) { if ($Content.Contains($Needle)) { return $true } }
+            $Carry = if ($CarryLength -and $Content.Length -gt $CarryLength) { $Content.Substring($Content.Length - $CarryLength) } else { $Content }
+        }
+        return $false
+    } finally {
+        $Stream.Dispose()
+    }
+}
+
 $Patterns = @(
     @{ Name = '当前用户主目录'; Regex = [regex]::Escape($CurrentHome) },
     @{ Name = '非占位 Windows 用户路径'; Regex = '(?i)[A-Z]:\\Users\\(?!TestUser(?:\\|$)|Public(?:\\|$)|Default(?:\\|$))[^\\/\r\n]+' },
@@ -46,11 +68,10 @@ if ($ArtifactPath) {
     $ArtifactCandidate = if ([IO.Path]::IsPathRooted($ArtifactPath)) { $ArtifactPath } else { Join-Path $Root $ArtifactPath }
     $ResolvedArtifacts = [IO.Path]::GetFullPath($ArtifactCandidate)
     if (-not $ResolvedArtifacts.StartsWith($Root, [StringComparison]::OrdinalIgnoreCase)) { throw '构建产物路径必须位于仓库内。' }
+    $ArtifactNeedles = @($CurrentHome, $(if ($CurrentUser) { "\Users\$CurrentUser" } else { '' })) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }
     foreach ($Artifact in Get-ChildItem -LiteralPath $ResolvedArtifacts -Recurse -File -ErrorAction SilentlyContinue) {
         if ($Artifact.Name -in @('builder-debug.yml','builder-effective-config.yaml')) { continue }
-        $Bytes = [IO.File]::ReadAllBytes($Artifact.FullName)
-        $Content = [Text.Encoding]::UTF8.GetString($Bytes) + [Text.Encoding]::Unicode.GetString($Bytes)
-        if (($CurrentHome -and $Content.Contains($CurrentHome)) -or ($CurrentUser -and $Content -match "(?i)\\Users\\$([regex]::Escape($CurrentUser))")) {
+        if ((Test-EncodedArtifact $Artifact.FullName ([Text.Encoding]::UTF8) $ArtifactNeedles) -or (Test-EncodedArtifact $Artifact.FullName ([Text.Encoding]::Unicode) $ArtifactNeedles)) {
             $Failures.Add("构建产物包含本机构建路径：$($Artifact.Name)")
         }
     }

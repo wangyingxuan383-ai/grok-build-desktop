@@ -147,9 +147,15 @@ export interface ProviderModelDefinition {
   model: string;
   name: string;
   description?: string;
-  contextWindow: number;
+  contextWindow?: number;
   maxCompletionTokens?: number;
   reasoningEfforts?: ReasoningEffort[];
+}
+
+export interface ProviderHeaderInput {
+  name: string;
+  source: "environment";
+  value: string;
 }
 
 export interface CustomProviderProfile {
@@ -174,6 +180,27 @@ export interface CustomProviderProfile {
 export interface CustomProviderInput extends Omit<CustomProviderProfile, "owned" | "hasCredential" | "insecureHttp" | "createdAt" | "updatedAt" | "diagnostic"> {
   credentialValue?: string;
   allowInsecureHttp?: boolean;
+}
+
+export interface ProviderConnectionDraft extends Omit<CustomProviderInput, "models" | "extraHeaders"> {
+  models?: ProviderModelDefinition[];
+  headers: ProviderHeaderInput[];
+}
+
+export interface ProviderModelCandidate {
+  remoteId: string;
+  localId: string;
+  name: string;
+  description?: string;
+  ownedBy?: string;
+  contextWindow?: number;
+  alreadyConfigured: boolean;
+}
+
+export interface ProviderDraftProbeResult extends ProviderConnectivityResult {
+  endpoint: string;
+  warnings: string[];
+  candidates: ProviderModelCandidate[];
 }
 
 export interface ProviderConnectivityResult {
@@ -210,6 +237,7 @@ export interface AutomationTask {
   workspace: string;
   schedule: AutomationSchedule;
   profile: AutomationExecutionProfile;
+  executionProfileId?: string;
   enabled: boolean;
   wakeToRun: boolean;
   notify: boolean;
@@ -220,12 +248,21 @@ export interface AutomationTask {
   promptPresent: boolean;
   registrationStatus: "registered" | "needs-repair" | "needs-config" | "unsupported" | "error";
   registrationError?: string;
+  registrationDiagnostic?: AutomationRegistrationDiagnostic;
   nextRunAt?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "sessionId" | "promptPresent" | "registrationStatus" | "registrationError" | "nextRunAt" | "createdAt" | "updatedAt"> {
+export interface AutomationRegistrationDiagnostic {
+  operation: "register" | "unregister";
+  exitCode?: number;
+  code: "scheduler-command-failed" | "scheduler-unavailable" | "historical-encoding-damaged";
+  message: string;
+  repairable: boolean;
+}
+
+export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "sessionId" | "promptPresent" | "registrationStatus" | "registrationError" | "registrationDiagnostic" | "nextRunAt" | "createdAt" | "updatedAt"> {
   id?: string;
   prompt?: string;
 }
@@ -270,6 +307,8 @@ export interface PromptQueueEntry {
   owner?: string;
   lastEditor?: string;
   kind?: string;
+  clientMessageId?: string;
+  attachmentPreviews?: UserMessageAttachmentPreview[];
 }
 
 export interface BackgroundTaskSummary {
@@ -294,6 +333,8 @@ export interface SessionForkResult {
   sessionId: string;
   parentSessionId: string;
   cwd: string;
+  profileId?: string;
+  worktreeId?: string;
 }
 
 export interface NotificationInboxItem {
@@ -319,7 +360,7 @@ export interface AccountProfile {
 }
 
 export type LiveStatus = "idle" | "working" | "needs-user" | "unread" | "error" | "cold";
-export type SessionOriginKind = "normal" | "fork" | "codex-continuation" | "automation" | "other";
+export type SessionOriginKind = "normal" | "fork" | "worktree" | "codex-continuation" | "automation" | "other";
 
 export interface SessionSummary {
   id: string;
@@ -337,6 +378,8 @@ export interface SessionSummary {
   originKind?: SessionOriginKind;
   originId?: string;
   originTitle?: string;
+  executionProfileId?: string;
+  worktreeId?: string;
 }
 
 export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex";
@@ -746,6 +789,26 @@ export interface Attachment {
   kind: "file" | "image" | "folder";
 }
 
+export type UserMessageDeliveryState = "sending" | "queued" | "sent" | "failed";
+
+export interface UserMessageAttachmentPreview {
+  id: string;
+  name: string;
+  kind: Attachment["kind"];
+  mimeType?: string;
+  size?: number;
+  source?: string;
+  isData?: boolean;
+  availability: "ready" | "missing";
+}
+
+export interface UserMessageAttachmentRestore {
+  clientMessageId: string;
+  text: string;
+  attachments: UserMessageAttachmentPreview[];
+  delivery: UserMessageDeliveryState;
+}
+
 export interface ToolCallState {
   toolCallId: string;
   title: string;
@@ -761,6 +824,18 @@ export interface ToolCallState {
   oldText?: string;
   newText?: string;
   error?: string;
+}
+
+export type TurnOutcome = "completed" | "failed" | "cancelled";
+
+export interface TurnPresentation {
+  turnId: string;
+  ordinal: number;
+  clientMessageId?: string;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  outcome?: TurnOutcome;
 }
 
 export interface PermissionOption {
@@ -786,7 +861,9 @@ export interface QuestionItem {
 export type ChatEvent =
   | { type: "session-reset"; sessionId: string }
   | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[] }
-  | { type: "user-message"; sessionId: string; text: string; id?: string }
+  | { type: "user-message"; sessionId: string; text: string; id?: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
+  | { type: "user-message-status"; sessionId: string; clientMessageId: string; delivery: UserMessageDeliveryState }
+  | { type: "user-attachments-restore"; sessionId: string; entries: UserMessageAttachmentRestore[] }
   | { type: "message-chunk"; sessionId: string; text: string }
   | { type: "thought-chunk"; sessionId: string; text: string }
   | { type: "tool-call"; sessionId: string; tool: ToolCallState }
@@ -799,7 +876,9 @@ export type ChatEvent =
   | { type: "meta"; sessionId: string; meta: PromptMeta }
   | { type: "status"; sessionId: string; status: LiveStatus; text?: string }
   | { type: "command-output"; sessionId: string; command: string; output: string; exitCode: number | null; truncated: boolean }
-  | { type: "turn-completed"; sessionId: string }
+  | { type: "turn-started"; sessionId: string; presentation: TurnPresentation }
+  | { type: "turn-completed"; sessionId: string; presentation?: TurnPresentation }
+  | { type: "turn-presentations-restore"; sessionId: string; presentations: TurnPresentation[] }
   | { type: "subagent"; sessionId: string; update: { sessionUpdate?: string; subagent_id?: string; duration_ms?: number; output?: string; [key: string]: unknown } }
   | { type: "computer-state"; sessionId: string; state: ComputerTaskState }
   | { type: "computer-permission"; sessionId: string; request: ComputerAppPermissionRequest }
@@ -852,6 +931,12 @@ export interface SendPromptInput {
   sessionId: string;
   text: string;
   attachments: Attachment[];
+  clientMessageId?: string;
+}
+
+export interface OfflineUiFixture {
+  session: SessionSummary;
+  events: ChatEvent[];
 }
 
 export interface GrokDesktopApi {
@@ -861,6 +946,7 @@ export interface GrokDesktopApi {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState>;
   resetOnboarding(): Promise<OnboardingState>;
   runDiagnostics(): Promise<SystemCompatibilityReport>;
+  getCliCapabilities(force?: boolean): Promise<import("./workbench-types").CliCapabilitySnapshot>;
   previewSupportBundle(): Promise<SupportBundlePreview>;
   exportSupportBundle(): Promise<string | null>;
   checkAppUpdate(force?: boolean): Promise<AppReleaseStatus>;
@@ -870,9 +956,80 @@ export interface GrokDesktopApi {
   discoverWorkspaces(force?: boolean): Promise<WorkspaceSummary[]>;
   pinWorkspace(cwd: string, pinned: boolean): Promise<WorkspaceSummary[]>;
   searchWorkspaceFiles(cwd: string, query: string, limit?: number): Promise<WorkspaceFileCandidate[]>;
+  listWorkspaceTree(cwd: string, directoryPath?: string, options?: import("./workbench-types").WorkspaceTreeOptions): Promise<import("./workbench-types").WorkspaceTreeNode[]>;
+  openEditorDocument(cwd: string, path: string): Promise<import("./workbench-types").EditorOpenResult>;
+  saveEditorDocument(input: import("./workbench-types").EditorSaveInput): Promise<import("./workbench-types").EditorSaveResult>;
+  createEditorFile(cwd: string, path: string, content?: string): Promise<import("./workbench-types").EditorDocument>;
+  createEditorDirectory(cwd: string, path: string): Promise<void>;
+  renameEditorPath(cwd: string, path: string, targetPath: string): Promise<string>;
+  deleteEditorPath(cwd: string, path: string, confirmed: boolean): Promise<void>;
+  revealEditorPath(cwd: string, path: string): Promise<void>;
+  getGitRepositoryTrust(cwd: string): Promise<import("./workbench-types").GitRepositoryTrust>;
+  getGitWorkspaceCapability(cwd: string): Promise<import("./workbench-types").GitWorkspaceCapability>;
+  setGitRepositoryTrust(cwd: string, repositoryRoot: string, trusted: boolean): Promise<import("./workbench-types").GitRepositoryTrust>;
+  getGitStatus(cwd: string): Promise<import("./workbench-types").GitRepositoryStatus>;
+  getGitDiff(cwd: string, staged: boolean, path?: string): Promise<import("./workbench-types").GitDiffResult>;
+  getGitReview(cwd: string, scope: import("./workbench-types").GitReviewScope): Promise<import("./workbench-types").GitReviewSnapshot>;
+  getGitReviewIndex(cwd: string, scope: import("./workbench-types").GitReviewScope): Promise<import("./workbench-types").GitReviewIndex>;
+  getGitReviewFileDetail(cwd: string, scope: import("./workbench-types").GitReviewScope, snapshotId: string, fileId: string): Promise<import("./workbench-types").GitReviewFileDetail>;
+  applyGitReviewHunk(cwd: string, input: import("./workbench-types").GitHunkActionInput): Promise<import("./workbench-types").GitReviewSnapshot>;
+  stageGitChanges(cwd: string, paths?: string[]): Promise<import("./workbench-types").GitRepositoryStatus>;
+  unstageGitChanges(cwd: string, paths?: string[]): Promise<import("./workbench-types").GitRepositoryStatus>;
+  commitGitChanges(cwd: string, message: string): Promise<import("./workbench-types").GitCommitSummary>;
+  listGitBranches(cwd: string): Promise<import("./workbench-types").GitBranchSummary[]>;
+  createGitBranch(cwd: string, name: string, startPoint?: string): Promise<import("./workbench-types").GitRepositoryStatus>;
+  switchGitBranch(cwd: string, name: string): Promise<import("./workbench-types").GitRepositoryStatus>;
+  listGitHistory(cwd: string, limit?: number): Promise<import("./workbench-types").GitCommitSummary[]>;
+  getGitCommitDetails(cwd: string, hash: string): Promise<import("./workbench-types").GitCommitDetails>;
+  discardGitChanges(cwd: string, input: import("./workbench-types").GitDiscardInput): Promise<import("./workbench-types").GitRepositoryStatus>;
+  pullGitRepository(cwd: string, operationId: string): Promise<import("./workbench-types").GitOperationResult>;
+  pushGitRepository(cwd: string, operationId: string): Promise<import("./workbench-types").GitOperationResult>;
+  cancelGitOperation(operationId: string): Promise<boolean>;
+  listWorktrees(cwd: string): Promise<import("./workbench-types").GrokWorktreeSummary[]>;
+  createWorktree(input: import("./workbench-types").WorktreeCreateInput): Promise<import("./workbench-types").GrokWorktreeSummary>;
+  previewWorktreeApply(cwd: string, worktreeId: string): Promise<import("./workbench-types").WorktreeApplyPreview>;
+  applyWorktree(cwd: string, worktreeId: string, confirmationToken: string, confirmed: boolean, cleanup?: boolean): Promise<import("./workbench-types").WorktreeApplyResult>;
+  removeWorktree(cwd: string, worktreeId: string, confirmed: boolean): Promise<void>;
+  previewWorktreeGc(cwd: string): Promise<import("./workbench-types").WorktreeGcPreview>;
+  gcWorktrees(cwd: string, confirmationToken: string, confirmed: boolean): Promise<import("./workbench-types").WorktreeGcPreview>;
+  resolveMemoryLayout(cwd: string): Promise<import("./workbench-types").MemoryLayout>;
+  getMemorySettings(cwd: string): Promise<import("./workbench-types").MemorySettings>;
+  updateMemorySettings(cwd: string, patch: Partial<Pick<import("./workbench-types").MemorySettings, "enabled" | "saveOnSessionEnd" | "autoDream">>, sessionId?: string): Promise<import("./workbench-types").MemorySettings>;
+  listMemory(cwd: string, query?: string): Promise<import("./workbench-types").MemoryEntry[]>;
+  saveMemory(input: import("./workbench-types").MemorySaveInput): Promise<import("./workbench-types").MemorySaveResult>;
+  previewRemember(cwd: string, scope: "global" | "workspace", text: string): Promise<import("./workbench-types").MemoryRememberPreview>;
+  rememberMemory(preview: import("./workbench-types").MemoryRememberPreview, confirmationToken: string, confirmed: boolean, sessionId?: string): Promise<import("./workbench-types").MemoryEntry>;
+  listMemoryStructuredEntries(cwd: string, scope?: "global" | "workspace"): Promise<import("./workbench-types").MemoryStructuredEntry[]>;
+  previewDeleteMemoryEntry(cwd: string, entryId: string): Promise<import("./workbench-types").MemoryDeletePreview>;
+  deleteMemoryEntry(preview: import("./workbench-types").MemoryDeletePreview, confirmationToken: string, confirmed: boolean): Promise<import("./workbench-types").MemoryEntry>;
+  deleteSessionMemory(cwd: string, entryId: string, confirmed: boolean): Promise<void>;
+  clearMemory(cwd: string, scope: "workspace" | "global" | "all", confirmed: boolean): Promise<import("./workbench-types").MemoryEntry[]>;
+  runMemoryCommand(sessionId: string, command: "flush" | "dream"): Promise<import("./workbench-types").MemorySettings>;
+  listAgentDefinitions(cwd: string): Promise<import("./workbench-types").AgentDefinition[]>;
+  validateAgentDefinition(rawMarkdown: string, expectedName?: string): Promise<import("./workbench-types").DefinitionValidation>;
+  saveAgentDefinition(input: import("./workbench-types").AgentDefinitionSaveInput): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").AgentDefinition>>;
+  copyAgentDefinition(cwd: string, sourcePath: string, targetSource: "user" | "project", newName: string): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").AgentDefinition>>;
+  renameAgentDefinition(cwd: string, sourcePath: string, newName: string): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").AgentDefinition>>;
+  setAgentDefinitionEnabled(cwd: string, sourcePath: string, enabled: boolean): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").AgentDefinition>>;
+  deleteAgentDefinition(cwd: string, sourcePath: string, confirmed: boolean): Promise<import("./workbench-types").DefinitionActionResult>;
+  listPersonaDefinitions(cwd: string): Promise<import("./workbench-types").PersonaDefinition[]>;
+  validatePersonaDefinition(rawToml: string): Promise<import("./workbench-types").DefinitionValidation>;
+  savePersonaDefinition(input: import("./workbench-types").PersonaDefinitionSaveInput): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").PersonaDefinition>>;
+  copyPersonaDefinition(cwd: string, sourcePath: string, targetSource: "user" | "project", newName: string): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").PersonaDefinition>>;
+  renamePersonaDefinition(cwd: string, sourcePath: string, newName: string): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").PersonaDefinition>>;
+  setPersonaDefinitionEnabled(cwd: string, sourcePath: string, enabled: boolean): Promise<import("./workbench-types").DefinitionMutationResult<import("./workbench-types").PersonaDefinition>>;
+  deletePersonaDefinition(cwd: string, sourcePath: string, confirmed: boolean): Promise<import("./workbench-types").DefinitionActionResult>;
+  listExecutionProfiles(cwd: string): Promise<import("./workbench-types").SessionExecutionProfile[]>;
+  validateExecutionProfile(profile: import("./workbench-types").SessionExecutionProfile): Promise<import("./workbench-types").ExecutionProfileValidation>;
+  saveExecutionProfile(input: import("./workbench-types").ExecutionProfileSaveInput): Promise<import("./workbench-types").SessionExecutionProfile[]>;
+  deleteExecutionProfile(cwd: string, profileId: string, confirmed: boolean): Promise<import("./workbench-types").SessionExecutionProfile[]>;
+  getSessionExecutionAssignment(sessionId: string): Promise<import("./workbench-types").SessionExecutionAssignment | undefined>;
+  getAgentDashboard(query: import("./workbench-types").AgentDashboardQuery): Promise<import("./workbench-types").AgentDashboardSnapshot>;
+  stopAgentDashboardNode(nodeId: string): Promise<void>;
+  clearAgentDashboardRecord(nodeId?: string): Promise<void>;
   inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]>;
   listSessions(cwd?: string, query?: string): Promise<SessionSummary[]>;
-  createSession(cwd: string): Promise<{ sessionId: string }>;
+  createSession(input: string | import("./workbench-types").ExecutionProfileLaunchInput): Promise<import("./workbench-types").SessionLaunchResult>;
   openSession(cwd: string, sessionId: string): Promise<{ sessionId: string }>;
   renameSession(sessionId: string, title: string): Promise<void>;
   deleteSession(cwd: string, sessionId: string): Promise<void>;
@@ -881,6 +1038,7 @@ export interface GrokDesktopApi {
   exportSessionMarkdown(cwd: string, sessionId: string): Promise<string | null>;
   getMediaCapabilities(sessionId: string): Promise<MediaCapabilities>;
   sendPrompt(input: SendPromptInput): Promise<void>;
+  getOfflineUiFixture(): Promise<OfflineUiFixture | null>;
   cancelSession(sessionId: string): Promise<void>;
   setModel(sessionId: string, modelId: string): Promise<void>;
   setEffort(sessionId: string, effort: ReasoningEffort): Promise<void>;
@@ -916,6 +1074,8 @@ export interface GrokDesktopApi {
   removeProvider(id: string): Promise<CustomProviderProfile[]>;
   testProvider(id: string): Promise<ProviderConnectivityResult>;
   pullProviderModels(id: string): Promise<Array<{ id: string; name?: string }>>;
+  probeProviderDraft(input: ProviderConnectionDraft): Promise<ProviderDraftProbeResult>;
+  discoverProviderModels(input: ProviderConnectionDraft): Promise<ProviderModelCandidate[]>;
   setProviderDesktopDefault(modelId: string): Promise<AppSettings>;
   setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]>;
   reloadProviders(): Promise<void>;
@@ -931,15 +1091,16 @@ export interface GrokDesktopApi {
   applyAutomationPolicyToAll(): Promise<AutomationTask[]>;
   respondAutomationPending(id: string, approved: boolean): Promise<void>;
   repairAutomationRegistrations(): Promise<AutomationTask[]>;
+  checkAutomationHealth(repair?: boolean): Promise<import("./workbench-types").AutomationHealthReport>;
   clearAutomationContext(id: string): Promise<AutomationTask[]>;
-  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void>;
-  interjectPrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void>;
+  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
+  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
   editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void>;
   removeQueuedPrompt(sessionId: string, id: string): Promise<void>;
   reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<void>;
   clearPromptQueue(sessionId: string): Promise<void>;
   interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<void>;
-  forkSession(sessionId: string, rewindPointId?: string): Promise<SessionForkResult>;
+  forkSession(sessionId: string, rewindPointId?: string, launch?: import("./workbench-types").ExecutionProfileLaunchInput): Promise<SessionForkResult>;
   listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
   rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void>;
   archiveSession(sessionId: string, archived: boolean): Promise<void>;
@@ -995,3 +1156,84 @@ export interface GrokDesktopApi {
   onComputerStateChanged(listener: (state: ComputerTaskState) => void): () => void;
   onAutomationEvent(listener: (event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask; pending?: AutomationPendingConfirmation }) => void): () => void;
 }
+
+export type {
+  AgentDashboardNode,
+  AgentDashboardQuery,
+  AgentDashboardSnapshot,
+  AgentDashboardStatus,
+  AgentDefinition,
+  AgentDefinitionSaveInput,
+  AutomationHealthReport,
+  CliCapabilityName,
+  CliCapabilitySnapshot,
+  CliCapabilitySource,
+  CliCapabilityState,
+  CliCapabilitySupport,
+  DefinitionActionResult,
+  DefinitionMutationResult,
+  DefinitionReloadResult,
+  DefinitionSaveConflict,
+  DefinitionSource,
+  DefinitionValidation,
+  EditorDocument,
+  EditorEncoding,
+  EditorLineEnding,
+  EditorOpenResult,
+  EditorSaveInput,
+  EditorSaveResult,
+  EditorSaveConflict,
+  ExecutionProfileField,
+  ExecutionProfileFieldSupport,
+  ExecutionProfileForkInput,
+  ExecutionProfileLaunchInput,
+  ExecutionProfileSaveInput,
+  ExecutionProfileValidation,
+  GitBranchSummary,
+  GitCommitDetails,
+  GitCommitSummary,
+  GitDiscardInput,
+  GitDiffResult,
+  GitFileChange,
+  GitFileChangeKind,
+  GitOperationResult,
+  GitReviewFile,
+  GitReviewFileDetail,
+  GitReviewFileSummary,
+  GitReviewHunk,
+  GitReviewIndex,
+  GitReviewLine,
+  GitReviewScope,
+  GitReviewSnapshot,
+  GitHunkActionInput,
+  GitRepositoryStatus,
+  GitRepositoryTrust,
+  GitWorkspaceCapability,
+  GrokWorktreeState,
+  GrokWorktreeSummary,
+  MemoryEntry,
+  MemoryLayout,
+  MemoryRememberPreview,
+  MemoryDeletePreview,
+  MemoryStructuredEntry,
+  MemorySaveInput,
+  MemorySaveResult,
+  MemoryScope,
+  MemorySettings,
+  NavigationIntent,
+  NavigationSurface,
+  PersonaContractField,
+  PersonaDefinition,
+  PersonaDefinitionSaveInput,
+  SessionExecutionProfile,
+  SessionExecutionAssignment,
+  SessionExecutionProfileScope,
+  SessionLaunchResult,
+  WorktreeApplyPreview,
+  WorktreeApplyResult,
+  WorktreeCreateInput,
+  WorktreeGcPreview,
+  WorkspaceTreeNode,
+  WorkspaceTreeNodeKind,
+  WorkspaceTreeOptions,
+} from "./workbench-types";

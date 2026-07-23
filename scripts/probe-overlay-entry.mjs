@@ -2,6 +2,20 @@ const endpoint = process.argv[2];
 const entrySelector = process.argv[3];
 if (!endpoint || !entrySelector) throw new Error("CDP endpoint and overlay entry selector are required");
 const panelSelector = ({ ".task-entry": ".task-center", ".extensions-entry": ".extensions-panel", ".media-entry": ".media-studio" })[entrySelector] || ".control-panel";
+const mappedEntries = {
+  ".task-entry": {
+    exists: `Boolean([...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '任务'))`,
+    click: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()`,
+  },
+  ".extensions-entry": {
+    exists: `Boolean([...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '扩展'))`,
+    click: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()`,
+  },
+  ".media-entry": {
+    exists: `Boolean([...document.querySelectorAll('.topbar-more button')].find(node => node.textContent?.trim() === '创作'))`,
+    click: `(() => { const menu = document.querySelector('.topbar-more'); if (menu) menu.open = true; [...(menu?.querySelectorAll('button') ?? [])].find(node => node.textContent?.trim() === '创作')?.click(); return true; })()`,
+  },
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 20_000) {
@@ -45,8 +59,9 @@ try {
     await waitFor(() => evaluate("Boolean(document.querySelector('.session-row:not(.codex)'))"), "No Grok session is available for the history probe");
     await evaluate("document.querySelector('.session-row:not(.codex)')?.click(); true");
   }
-  await waitFor(() => evaluate(`Boolean(document.querySelector(${JSON.stringify(entrySelector)}))`), `${entrySelector} entry did not render`);
-  await evaluate(`document.querySelector(${JSON.stringify(entrySelector)})?.click(); true`);
+  const mapped = mappedEntries[entrySelector];
+  await waitFor(() => evaluate(mapped?.exists ?? `Boolean(document.querySelector(${JSON.stringify(entrySelector)}))`), `${entrySelector} entry did not render`);
+  await evaluate(mapped?.click ?? `document.querySelector(${JSON.stringify(entrySelector)})?.click(); true`);
   await waitFor(() => evaluate(`Boolean(document.querySelector('#overlay-root ${panelSelector}'))`), `${entrySelector} panel did not open in overlay root`);
   await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))"), `${entrySelector} panel did not establish focus`);
   const state = await evaluate(`(() => {
