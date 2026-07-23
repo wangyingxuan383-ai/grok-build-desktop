@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutomationTask, AutomationTaskInput } from "../../shared/types";
-import { AutomationService, buildTaskXml, calculateNextRun, classifyScheduledRisk, type AutomationCipher, type TaskSchedulerAdapter } from "./automation-service";
+import iconv from "iconv-lite";
+import { AutomationService, buildTaskXml, calculateNextRun, classifyScheduledRisk, decodeWindowsCommandOutput, normalizeRegistrationError, type AutomationCipher, type TaskSchedulerAdapter } from "./automation-service";
 import { LogService } from "./log-service";
 
 const roots: string[] = [];
@@ -14,6 +15,15 @@ function input(patch: Partial<AutomationTaskInput> = {}): AutomationTaskInput { 
 async function fixture(options: Partial<ConstructorParameters<typeof AutomationService>[2]> = {}) { const root = await mkdtemp(join(tmpdir(), "grok-automation-")); roots.push(root); const scheduler = new FakeScheduler(); const launched = vi.fn(async () => undefined); const service = new AutomationService(root, new LogService(join(root, "app.log")), { executable: "D:\\应用 目录\\Grok Build Desktop.exe", cipher: new FakeCipher(), scheduler, launchWorker: launched, ...options }); return { root, scheduler, launched, service }; }
 
 describe("AutomationService", () => {
+  it("decodes UTF-8, UTF-16 and CP936/GB18030 scheduler output", () => {
+    const message = "错误: 系统找不到指定的文件。";
+    expect(decodeWindowsCommandOutput(Buffer.from(message, "utf8"))).toBe(message);
+    expect(decodeWindowsCommandOutput(Buffer.concat([Buffer.from([0xff, 0xfe]), iconv.encode(message, "utf16-le")]))).toBe(message);
+    expect(decodeWindowsCommandOutput(iconv.encode(message, "gb18030"))).toBe(message);
+  });
+  it("replaces irreversibly damaged historical scheduler output with a repair instruction", () => {
+    expect(normalizeRegistrationError("����: ϵͳ�Ҳ���ָ�����ļ���")).toBe("历史任务注册错误文本编码损坏，请重新健康检查");
+  });
   it("stores one encrypted task file and registers a least-privilege task", async () => { const { root, scheduler, service } = await fixture(); const tasks = await service.create(input()); expect(tasks).toHaveLength(1); expect(scheduler.registrations).toHaveLength(1); const raw = await readFile(join(root, "automations", "tasks", `${tasks[0]!.id}.json`), "utf8"); expect(raw).not.toContain("检查项目并汇报"); expect(raw).toContain("encryptedPrompt"); });
   it("launches a namespaced worker for Run now", async () => { const { service, launched } = await fixture(); const [task] = await service.create(input()); const run = await service.runNow(task!.id); expect(run.status).toBe("queued"); expect(launched).toHaveBeenCalledWith(task!.id, run.id); });
   it("executes once, records the resumable session and releases the lock", async () => { const { service } = await fixture(); const [task] = await service.create(input()); const run = await service.execute(task!.id, "scheduled", async ({ prompt }) => { expect(prompt).toBe("检查项目并汇报"); return { sessionId: "session-test" }; }); expect(run.status).toBe("completed"); expect(run.sessionId).toBe("session-test"); });

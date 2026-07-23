@@ -37,6 +37,30 @@ $DebugPort = Get-Random -Minimum 19000 -Maximum 25000
 $HostedRunnerFlags = if ($env:GITHUB_ACTIONS -eq 'true') { '--disable-gpu' } else { '' }
 $Info.Arguments = ("--remote-debugging-port=$DebugPort --user-data-dir=`"$ProfileRoot`" $HostedRunnerFlags $ApplicationArguments").Trim()
 $Info.EnvironmentVariables['GROK_DESKTOP_OFFLINE_SMOKE'] = '1'
+if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs')) {
+    $Info.EnvironmentVariables['GROK_DESKTOP_UI_FIXTURE'] = '1'
+    $ThemeDirectory = Join-Path $ProfileRoot 'themes'
+    [IO.Directory]::CreateDirectory($ThemeDirectory) | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $ThemeDirectory 'background.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='))
+    if ($ProbeScript -in @('probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs')) {
+        $FixtureWorkspace = if ($ProbeScript -eq 'probe-v064-ui.mjs') { $ProfileRoot } else { (Split-Path -Parent $PSScriptRoot) }
+        if ($ProbeScript -eq 'probe-v064-ui.mjs') {
+            $FixtureSource = Join-Path $FixtureWorkspace 'src\renderer\src'
+            [IO.Directory]::CreateDirectory($FixtureSource) | Out-Null
+            [IO.File]::WriteAllText((Join-Path $FixtureSource 'App.tsx'), "export const fixture = 'app';`n", [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $FixtureSource 'styles.css'), ".fixture { display: grid; }`n", [Text.UTF8Encoding]::new($false))
+        }
+        $ThemeSettings = @{
+            activeWorkspace = $FixtureWorkspace
+            theme = @{
+                mode = 'dark'; customBase = 'dark'
+                colors = @{ background = '#0d0f12'; surface = '#171a1f'; text = '#e7e9ec'; muted = '#9299a3'; accent = '#45a9df'; border = '#292e35' }
+                background = @{ enabled = $true; scope = 'conversation'; fit = 'cover'; position = 'center'; opacity = 1; blur = 0; dim = 0 }
+            }
+        } | ConvertTo-Json -Depth 6
+        [IO.File]::WriteAllText((Join-Path $ProfileRoot 'settings.json'), $ThemeSettings, [Text.UTF8Encoding]::new($false))
+    }
+}
 $Process = [System.Diagnostics.Process]::Start($Info)
 try {
     $Ready = $false

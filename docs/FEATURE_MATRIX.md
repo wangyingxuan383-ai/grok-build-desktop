@@ -1,5 +1,56 @@
 # Feature Matrix
 
+## v0.6.3 installed hotfix / v0.6.4 installed local candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Scheduler diagnostics | 0.6.3 installed/verified | UTF-8/UTF-16/GB18030-compatible Buffer decoding, structured stable diagnostics and damaged-history replacement remove task-center mojibake; focused encoding/health tests pass. |
+| Conversation navigation/layout | 0.6.3 installed + 0.6.4 source UI verified | Unified target opening and fixed conversation grid preserve the Virtuoso viewport, composer and focus. The 0.6.4 fixture passes Dashboard→chat→file preview→explicit editor→chat→task center→chat. |
+| Multi-tool right pane | Source UI verified | On-demand launcher exposes only Review, plan/result, recent files and side tasks. Width is 420–760 px per tool; 1100 px uses a visible overlay drawer instead of CSS-hiding the panel. |
+| Scalable Review | Focused/source UI verified | Lightweight index plus one selected `GitReviewFileDetail`; search/status/stats and lazy hunks handle the 850-file fixture. Five scopes, stale-snapshot protection, hunk actions and comments remain main-process-backed. Non-Git is an ordinary empty state. |
+| Provider manager | Focused/source UI verified | Independent searchable manager with five presets, unsaved-draft probe/discovery, structured environment headers, candidate multi-select/import, editable collision-safe local IDs, manual fallback and unknown context windows. |
+| Provider probe security | Focused-tested | Main process performs bounded model-list GET only, rejects redirects, limits timeout/2 MiB response, supports OpenAI/Anthropic/Ollama list shapes and keeps credentials out of logs/diagnostics. |
+| Windows path aliases | Focused/Hosted regression verified | Existing absolute paths are canonicalized before workspace comparison, so 8.3 `%TEMP%` aliases and long `realpath` results refer to the same Editor/Memory/Agent/Git boundary. Symlink and junction escapes remain rejected. |
+| 0.6.4 delivery | Installed and verified | Source/lockfile/display/File/Product/Main/About are 0.6.4. TypeScript, production build, 7 focused files / 55 tests, expanded source/packaged/installed UI fixtures, one final offline suite (291 pass/2 opt-in skip), Fuses, the final 243-file source scan and artifact scans pass. Per-user install, diagnostics ready, attachment privacy and both shortcut targets pass; final hashes are in `release/SHA256SUMS.txt` and the Changelog. |
+
+## v0.6.2 local candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Codex Review workflow | Focused/UI verified | On-demand resizable ReviewPane replaces the generic summary rail. Unstaged/Staged/Commit/Branch/Last turn scopes, parsed unified hunks, file/hunk stage/unstage/revert, stale snapshot rejection and visible line-comment drafts map to real Git/main-process operations. |
+| Reliable navigation/editor | Focused/Computer Use verified | `NavigationIntent` carries session, real execution root, path, line/column and target surface. Review and tool locations share the same path; live Review→AGENTS.md opened the correct read-only Monaco surface with an explicit “编辑文件” action. |
+| Turn lifecycle/history | Focused/UI verified | New turns persist monotonic duration and outcome in AppData; duplicate completion is idempotent. The 30-segment fixture renders one historical record, and a timed turn renders “已处理 1分23秒”. |
+| Shell/settings/background | Automated/Computer Use verified | 272 px task-first sidebar, default-collapsed development tools, searchable/closable focus-contained workspace popover, task menu, Review toggle, 920×680 categorized settings and exact 100% opacity/0 blur/0 dim background mapping pass source UI acceptance. |
+| 0.6.1 image regression | Source UI verified | Durable attachment cache, send/reopen preview, failed restore, missing-source fallback and support-bundle exclusions pass the 0.6.2 fixture, including pasted image visibility after failed send and Renderer reload. |
+| Local 0.6.2 delivery | Installed and verified | TypeScript, production build, 9 focused files / 48 tests, final 238-file public scan, isolated Computer Use and the one final suite (284 pass/2 opt-in skip) pass. One formal package produced Setup/Portable/SBOM/licenses and hashes; Fuses/artifact scans, per-user install, Main/About/diagnostics, shortcut targets and installed 0.6.2 UI/image-reopen fixture pass. |
+
+## v0.6.1 local candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Codex UI parity | Source-live verified | Sanitized read-only audit drives direct left navigation, collapsible project tools, task header controls, 760 px conversation, 320 px summary rail, bottom changes panel and real Git/branch/Worktree/Commit/Push environment entry points. Unsupported Codex controls are intentionally absent. |
+| Conversation and composer | Focused/UI verified | User copy, attachment gallery/lightbox, delivery state and failure restore; collapsible process/file groups; final-answer copy; real permission/question/plan/computer cards; floating idle/running/queue/interjection/stop composer; custom background retains stable readability layers. |
+| Durable pasted-image messages | Focused/UI verified | Main-process session cache, `clientMessageId` merge, PNG/JPEG/WebP/GIF content validation, 20 MiB main-process limit, text+image/pure-image/multi-image/queue/interjection/failure contracts, missing-source fallback, reopen restore and session/orphan/capacity cleanup. Image paths are not duplicated into prompts. |
+| Attachment privacy | Implemented and tested | Attachment bodies, Base64, cache files and complete paths are excluded from logs, notifications and support bundles. Renderer receives only typed preview metadata through the sandboxed Preload bridge. |
+| Responsive/offline fixture | Automated and Computer Use verified | Opt-in no-model fixture covers left/right/bottom shell, message/process/file/plan/final cards, image before/after send, failure recovery, lightbox, 1100×720/1440×810 transitions and renderer reopen. Widths below 1200 px remove the summary rail while preserving its header button. |
+| Local 0.6.1 delivery | Installed and verified | Final suite: 270 pass/2 opt-in skip. Setup/Portable/SBOM/licenses, Fuses, source/artifact scans, 4K and responsive UI, overlays, Task Scheduler and Chinese/space Portable pass. The per-user executable, About and main process report 0.6.1; diagnostics reports ready; desktop/Start Menu shortcuts target the install directory; installed fixture preserves the pasted image after send and Renderer reopen. Hashes are in `release/SHA256SUMS.txt` and the Changelog. |
+
+## v0.6.0 local candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Codex-aligned desktop shell | Implemented and source-live verified | Read-only Computer Use comparison informed a quieter single sidebar, labelled workbench menu, compact context header, centered task surface, floating composer, restrained empty state, consistent SVG controls and a labelled session overflow menu with outside-click close. Custom conversation backgrounds now retain a minimum readability scrim. The existing packaged candidate predates this shell revision. |
+| Lightweight editor | Implemented and focused-tested | Bundled offline Monaco, lazy file tree, tabs/edit/atomic save, UTF-8/BOM/GB18030 and line-ending preservation, size/path boundaries, disk Diff conflict flow, chat references and tested tool-card file/line navigation; no LSP/debugger/terminal |
+| Git workbench | Implemented and focused/live-tested | Main-process fixed-argument Git service, porcelain-v2 status, sanitized remote, worktree/index Diff, stage/unstage/commit, history/details, branches, bounded cancellable pull/push, exact-list discard and subdirectory-repository trust; no force push or history rewriting |
+| Grok Worktrees | Implemented and focused/live-tested | Official `x.ai/git/worktree/*` route with controlled Git fallback, inventory/recovery, new-session/fork/profile selectors, Worktree source group, preview-token safe apply, conflict preservation, optional cleanup, previewed GC and exact native shared-Memory identity across clones/Worktrees |
+| Workspace Memory | Implemented and focused/UI-tested | Exact native `org/repo` + BLAKE3 layout, default-off AppData setting, per-process `GROK_MEMORY`, global/project/session browser/search, Monaco atomic/conflict editing, previewed native `/remember`, exact structured-entry deletion, session deletion, fixed-argument clear, Flush/Dream controls/status, session-end Flush/auto-Dream and `GROK_HOME/memory` confinement; the paid native rewrite was not repeated during offline candidate work |
+| Agent/Persona center | Implemented and focused/live-tested | Built-in/plugin read-only discovery, project/user priority, Agent Markdown and Persona TOML structured/raw editing, contracts, exact comment/unknown-field preservation, copy/toggle/rename/delete, external hash conflicts, persistent backup, atomic `grok inspect --json` validation/rollback and idle-session-only reload fallback |
+| Agent Dashboard | Implemented and focused/UI-tested | Desktop-native parent/child tree from ACP/task events and session history, status/model/effort/tools/context/Worktree metadata, stop/open/jump/filter/UI-clear actions and clearly labelled non-running history fallback; never starts the TUI Dashboard |
+| Session execution profiles | Implemented and focused/UI-tested | Five presets plus global/project AppData precedence; Agent/model/effort/mode/tools/sandbox/web/subagents/Memory/Worktree/rules drive new sessions, forks and persistent tasks; unsupported max-turn mapping is visibly disabled and rejected |
+| Persistent-task health | Implemented and focused/UI-tested | Read-only check plus repair for registration/current executable mapping/stale session metadata; missing account/provider/model/workspace/profile requires explicit configuration and prompt content is never read or sent |
+| v0.6 typed foundation | Implemented and focused-tested | Shared workbench contracts, documented main-process module boundaries and a version-cached three-state CLI capability snapshot exposed through trusted IPC; private ACP methods remain unknown until runtime evidence exists |
+| v0.6 verification | Source newer than packaged candidate | Every workbench slice passed focused automation, TypeScript and production build; isolated Electron/CDP acceptance covers Editor, Git, Worktree, Memory, Agent/Persona, Profiles, Dashboard, launch selector and task-health UI. The single full offline run recorded 262 pass/2 opt-in skip plus one original 5-second test-harness timeout; after changing only that timeout, the focused Memory file passed 7/7 and the Worktree→Editor/Git→Dashboard→Memory→Apply→conflict→cleanup integration passed 1/1. Exactly one pre-redesign candidate package passed Fuses, artifact scanning, packaged UI and Chinese/space-path Portable launch. The newer shell separately passed affected TypeScript/build/Renderer tests and live Computer Use source acceptance; it has not been repackaged. External Windows version/DPI/dual-display and v0.5.16 upgrade preservation remain separate release gates. |
+
 ## v0.5.16 session lifecycle
 
 | Area | Status | Notes |
@@ -8,6 +59,7 @@
 | Codex continuation identity | Implemented and focused-tested | New Grok continuations preserve the exact original Codex title; multiple continuation mappings migrate without modifying source JSONL |
 | Reusable task sessions | Packaged-live verified | Reuse is the default; two consecutive real OAuth task runs completed against the same resumable Grok session instead of creating two sessions |
 | Task context lifecycle | Implemented and tested | Per-task retain/fresh policy, direct open, manual permanent cleanup, stale/history migration and task-lock protection; packaged live cleanup removed the dedicated session and mapping |
+| Public release evidence | Published and externally verified | `v0.5.16` is the Latest public Release at commit `e4dfb62`; workflow `29846404781` succeeded and published Setup/Portable, SHA-256, SBOM, licenses and provenance |
 
 ## v0.5.15 hotfix
 
@@ -46,7 +98,7 @@
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
 | v0.5 local gate | Passed | 195 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |
-| Release pipeline | Published v0.5.12 | Product acceptance remains the passed local/CI gate above. GitHub generated unsigned Setup/Portable, hashes, SBOM/licenses and provenance; the Draft assets were independently downloaded and verified before publication as Latest. Unsupported hosted virtual-desktop and InteractiveToken checks are not repeated |
+| v0.5.12 release pipeline | Superseded by v0.5.16 | Product acceptance remains the passed local/CI gate above. GitHub generated unsigned Setup/Portable, hashes, SBOM/licenses and provenance; unsupported hosted virtual-desktop and InteractiveToken checks are not repeated. `v0.5.16` is now Latest and is recorded in the session-lifecycle section above |
 
 ## v0.4.2 local candidate
 

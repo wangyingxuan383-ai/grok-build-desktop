@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppSettings, ReasoningEffort } from "../../shared/types";
-import { GrokProcessManager, isMutatingExtensionMethod } from "./grok-process-manager";
+import { enforceProtectedWorkspaceEnvironment, GrokProcessManager, isMutatingExtensionMethod, mergeProcessEnvironment } from "./grok-process-manager";
 import { DEFAULT_THEME } from "./theme-service";
 
 const settings = {
@@ -101,8 +101,64 @@ describe("configured session restoration", () => {
     const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
     try {
       await expect(manager.openConfigured("D:\\Workspace", "task-session", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" })).resolves.toEqual({ sessionId: "task-session" });
-      expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" });
+      expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" }, undefined);
       expect(adapter.start).toHaveBeenCalledWith("task-session");
     } finally { await manager.dispose(); }
+  });
+});
+
+describe("workspace process environment", () => {
+  it("injects per-workspace memory by default while preserving explicit execution-profile overrides", () => {
+    expect(mergeProcessEnvironment({ PATH: "base", GROK_MEMORY: undefined }, { GROK_MEMORY: "1" }, { MCP_TOKEN: "secret" })).toEqual({ PATH: "base", GROK_MEMORY: "1", MCP_TOKEN: "secret" });
+    expect(mergeProcessEnvironment({ GROK_MEMORY: "0" }, { GROK_MEMORY: "1" }, undefined, { GROK_MEMORY: "0" })).toEqual({ GROK_MEMORY: "0" });
+    expect(enforceProtectedWorkspaceEnvironment({ GROK_MEMORY_LOG: "C:\\leak.log" }, { GROK_MEMORY_LOG: "0" })).toEqual({ GROK_MEMORY_LOG: "0" });
+  });
+
+  it("performs a controlled idle-session restart so updated workspace settings take effect", async () => {
+    const { manager, adapter } = fixture("high");
+    Object.assign(adapter, { cwd: "C:\\workspace", mode: "agent", currentModelId: "grok-4.5" });
+    const replacement = { start: vi.fn().mockResolvedValue({ sessionId: "session" }), dispose: vi.fn(), extensionLeaseId: undefined };
+    vi.spyOn(manager as any, "spawn").mockResolvedValue(replacement);
+    try {
+      await manager.restartSession("session", "Memory setting changed");
+      expect(adapter.dispose).toHaveBeenCalled();
+      expect(replacement.start).toHaveBeenCalledWith("session");
+      expect(manager.get("session")).toBe(replacement);
+    } finally { await manager.dispose(); }
+  });
+
+  it("restarts only idle sessions after Agent/Persona definition changes", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    (manager as any).sessions.set("idle", { working: false, needsUser: false });
+    (manager as any).sessions.set("working", { working: true, needsUser: false });
+    (manager as any).sessions.set("waiting", { working: false, needsUser: true });
+    const restart = vi.spyOn(manager, "restartSession").mockResolvedValue(undefined);
+    try {
+      await expect(manager.restartIdleSessions()).resolves.toBe(1);
+      expect(restart).toHaveBeenCalledTimes(1);
+      expect(restart).toHaveBeenCalledWith("idle", expect.stringContaining("Agent/Persona"));
+    } finally {
+      restart.mockRestore();
+      (manager as any).sessions.clear();
+      await manager.dispose();
+    }
+  });
+});
+
+describe("session finalization", () => {
+  it("runs the finalization hook for a real close but not for a controlled suspend", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, async () => ({}), async () => ({}), finalize);
+    const first = { working: false, needsUser: false, dispose: vi.fn().mockResolvedValue(undefined) };
+    (manager as any).sessions.set("close-me", first);
+    await manager.close("close-me");
+    expect(finalize).toHaveBeenCalledWith("close-me", first, "close");
+    const second = { sessionId: "suspend-me", cwd: "C:\\repo", effort: "", mode: "agent", currentModelId: "grok", processOptions: undefined, working: false, needsUser: false, dispose: vi.fn().mockResolvedValue(undefined) };
+    (manager as any).sessions.set("suspend-me", second);
+    await manager.suspendAll();
+    expect(finalize).toHaveBeenCalledTimes(1);
+    await manager.dispose();
   });
 });

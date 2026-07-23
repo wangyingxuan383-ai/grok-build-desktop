@@ -89,6 +89,17 @@ export class SessionCatalog {
       .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(Boolean(a.archived)) - Number(Boolean(b.archived)) || b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  async allSessionIds(): Promise<Set<string>> {
+    const output = new Set<string>();
+    const roots = await readdir(join(this.grokHome, "sessions"), { withFileTypes: true }).catch(() => []);
+    for (const root of roots) {
+      if (!root.isDirectory()) continue;
+      const entries = await readdir(join(this.grokHome, "sessions", root.name), { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) if (entry.isDirectory()) output.add(entry.name);
+    }
+    return output;
+  }
+
   async rename(sessionId: string, title: string): Promise<void> {
     const metadata = await this.meta.get();
     metadata.renames[sessionId] = title.trim() || "新会话";

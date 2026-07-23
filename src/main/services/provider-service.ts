@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse, stringify, type TomlTable } from "smol-toml";
-import type { CustomProviderInput, CustomProviderProfile, ProviderConnectivityResult, ProviderModelDefinition } from "../../shared/types";
+import type { CustomProviderInput, CustomProviderProfile, ProviderConnectionDraft, ProviderConnectivityResult, ProviderDraftProbeResult, ProviderModelCandidate, ProviderModelDefinition } from "../../shared/types";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
 
@@ -26,6 +26,8 @@ export interface ProviderServiceOptions {
   validateConfig?: () => Promise<void>;
   reloadModels?: () => Promise<void>;
   references?: (providerId: string) => Promise<string[]>;
+  probeTimeoutMs?: number;
+  maxProbeResponseBytes?: number;
 }
 
 export class ProviderService {
@@ -147,21 +149,81 @@ export class ProviderService {
   async test(id: string): Promise<ProviderConnectivityResult> {
     const provider = (await this.store.get()).providers.find((value) => value.id === id);
     if (!provider) throw new Error("提供商不存在或为只读外部配置");
-    const started = Date.now();
-    try {
-      const response = await this.fetcher(modelListUrl(provider), { method: "GET", headers: await this.headers(provider), signal: AbortSignal.timeout(15_000) });
-      const body = await response.text();
-      const models = response.ok ? parseModelList(body) : [];
-      return { ok: response.ok, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started, status: response.status, message: response.ok ? `连接成功，发现 ${models.length} 个模型` : `服务返回 HTTP ${response.status}`, models };
-    } catch (error) {
-      return { ok: false, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started, message: error instanceof Error ? error.message : String(error), models: [] };
-    }
+    const result = await this.probeDraft({
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      modelListUrl: provider.modelListUrl,
+      protocol: provider.protocol,
+      authScheme: provider.authScheme,
+      credentialMode: provider.credentialMode,
+      credentialEnv: provider.credentialEnv,
+      allowInsecureHttp: provider.insecureHttp,
+      headers: Object.entries(provider.extraHeaders).map(([name, value]) => ({ name, source: "environment", value })),
+      models: provider.models,
+    });
+    return { ok: result.ok, checkedAt: result.checkedAt, latencyMs: result.latencyMs, status: result.status, message: result.message, models: result.models };
   }
 
   async pullModels(id: string): Promise<Array<{ id: string; name?: string }>> {
     const result = await this.test(id);
     if (!result.ok) throw new Error(result.message);
     return result.models;
+  }
+
+  async probeDraft(input: ProviderConnectionDraft): Promise<ProviderDraftProbeResult> {
+    validateDraft(input);
+    const endpoint = draftModelListUrl(input);
+    const warnings: string[] = [];
+    if (input.protocol === "messages" && !input.modelListUrl?.trim()) warnings.push("Anthropic Messages 服务不一定提供标准模型列表端点；失败时可手工添加模型。 ");
+    const started = Date.now();
+    try {
+      const response = await this.fetcher(endpoint, {
+        method: "GET",
+        headers: await this.draftHeaders(input),
+        redirect: "manual",
+        signal: AbortSignal.timeout(this.options.probeTimeoutMs ?? 15_000),
+      });
+      if (response.status >= 300 && response.status < 400) {
+        return { ok: false, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started, status: response.status, message: "模型列表端点返回重定向，已拒绝跨源跟随", models: [], endpoint, warnings, candidates: [] };
+      }
+      const body = await readLimitedResponse(response, this.options.maxProbeResponseBytes ?? 2 * 1024 * 1024);
+      const models = response.ok ? parseModelList(body) : [];
+      const existing = (await this.list()).flatMap((provider) => provider.models.map((model) => ({ providerId: provider.id, localId: model.id, remoteId: model.model })));
+      const occupied = new Set(existing.map((value) => value.localId));
+      const candidates = models.map((model) => {
+        const configured = existing.find((value) => value.providerId === input.id && value.remoteId === model.id);
+        return {
+          remoteId: model.id,
+          localId: configured?.localId ?? providerModelLocalId(input.id, model.id, occupied),
+          name: model.name || model.id,
+          description: model.description,
+          ownedBy: model.ownedBy,
+          contextWindow: model.contextWindow,
+          alreadyConfigured: Boolean(configured),
+        } satisfies ProviderModelCandidate;
+      });
+      if (response.ok && !candidates.length) warnings.push("服务连接成功，但模型列表中没有可识别的模型；可手工补充。 ");
+      return {
+        ok: response.ok,
+        checkedAt: new Date().toISOString(),
+        latencyMs: Date.now() - started,
+        status: response.status,
+        message: response.ok ? `连接成功，发现 ${candidates.length} 个模型` : response.status === 401 || response.status === 403 ? `认证失败（HTTP ${response.status}）` : `服务返回 HTTP ${response.status}`,
+        models: models.map(({ id, name }) => ({ id, name })),
+        endpoint,
+        warnings,
+        candidates,
+      };
+    } catch (error) {
+      return { ok: false, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started, message: error instanceof Error ? error.message : String(error), models: [], endpoint, warnings, candidates: [] };
+    }
+  }
+
+  async discoverDraftModels(input: ProviderConnectionDraft): Promise<ProviderModelCandidate[]> {
+    const result = await this.probeDraft(input);
+    if (!result.ok) throw new Error(result.message);
+    return result.candidates;
   }
 
   async setCliDefault(modelId: string): Promise<CustomProviderProfile[]> {
@@ -182,13 +244,15 @@ export class ProviderService {
 
   reload(): Promise<void> { return this.options.reloadModels?.() ?? Promise.resolve(); }
 
-  private async headers(provider: CustomProviderProfile): Promise<Record<string, string>> {
+  private async draftHeaders(input: ProviderConnectionDraft): Promise<Record<string, string>> {
     const result: Record<string, string> = { Accept: "application/json" };
-    const secret = provider.credentialEnv ? await this.environment.read(provider.credentialEnv) : undefined;
-    if (secret) result[provider.authScheme === "x_api_key" ? "x-api-key" : "Authorization"] = provider.authScheme === "x_api_key" ? secret : `Bearer ${secret}`;
-    for (const [header, envName] of Object.entries(provider.extraHeaders)) {
-      const value = await this.environment.read(envName);
-      if (value) result[header] = value;
+    const secret = input.credentialMode === "managed"
+      ? input.credentialValue || await this.environment.read(managedEnvironmentName(input.id))
+      : input.credentialMode === "existing" && input.credentialEnv ? await this.environment.read(normalizeEnvironmentName(input.credentialEnv)) : undefined;
+    if (secret) result[input.authScheme === "x_api_key" ? "x-api-key" : "Authorization"] = input.authScheme === "x_api_key" ? secret : `Bearer ${secret}`;
+    for (const header of input.headers) {
+      const value = await this.environment.read(normalizeEnvironmentName(header.value));
+      if (value) result[header.name.trim()] = value;
     }
     return result;
   }
@@ -280,7 +344,7 @@ export class ProviderService {
         credentialMode: envKey ? "existing" : "none",
         credentialEnv: envKey,
         extraHeaders: {},
-        models: [{ id, model: typeof item.model === "string" ? item.model : id, name: typeof item.name === "string" ? item.name : id, contextWindow: typeof item.context_window === "number" ? item.context_window : 200_000 }],
+        models: [{ id, model: typeof item.model === "string" ? item.model : id, name: typeof item.name === "string" ? item.name : id, contextWindow: typeof item.context_window === "number" ? item.context_window : undefined }],
         owned: false,
         hasCredential: false,
         insecureHttp: baseUrl ? isInsecureRemote(baseUrl) : false,
@@ -326,6 +390,34 @@ function exec(file: string, args: string[], cwd: string): Promise<void> {
 }
 
 function validateInput(input: CustomProviderInput): void {
+  validateConnection(input);
+  if (!input.models.length) throw new Error("至少配置一个模型");
+  const seen = new Set<string>();
+  for (const model of input.models) {
+    if (!ID_PATTERN.test(model.id)) throw new Error(`无效模型 ID：${model.id}`);
+    if (seen.has(model.id)) throw new Error(`模型 ID 重复：${model.id}`); seen.add(model.id);
+    if (!model.model.trim() || !model.name.trim()) throw new Error("模型路由 ID 和显示名称不能为空");
+    if (model.contextWindow !== undefined && (!Number.isInteger(model.contextWindow) || model.contextWindow < 1024)) throw new Error("上下文窗口必须是不小于 1024 的整数");
+    if (model.maxCompletionTokens !== undefined && (!Number.isInteger(model.maxCompletionTokens) || model.maxCompletionTokens < 1)) throw new Error("最大输出必须是正整数");
+    if (model.reasoningEfforts?.some((value) => !["none", "minimal", "low", "medium", "high", "xhigh"].includes(value))) throw new Error("推理强度包含不支持的值");
+  }
+  if (input.credentialMode === "existing") normalizeEnvironmentName(input.credentialEnv || "");
+  for (const [header, env] of Object.entries(input.extraHeaders)) { if (!header.trim()) throw new Error("请求头名称不能为空"); normalizeEnvironmentName(env); }
+}
+
+function validateDraft(input: ProviderConnectionDraft): void {
+  validateConnection(input);
+  const seen = new Set<string>();
+  for (const header of input.headers) {
+    const name = header.name.trim().toLocaleLowerCase();
+    if (!name || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) throw new Error("请求头名称格式无效");
+    if (seen.has(name)) throw new Error(`请求头重复：${header.name}`);
+    seen.add(name);
+    normalizeEnvironmentName(header.value);
+  }
+}
+
+function validateConnection(input: Pick<CustomProviderInput, "id" | "name" | "baseUrl" | "modelListUrl" | "credentialMode" | "credentialEnv" | "allowInsecureHttp">): void {
   if (!ID_PATTERN.test(input.id)) throw new Error("提供商 ID 只能包含字母、数字、点、下划线和连字符");
   if (!input.name.trim()) throw new Error("请输入提供商名称");
   const url = new URL(input.baseUrl);
@@ -336,18 +428,7 @@ function validateInput(input: CustomProviderInput): void {
     if (!/^https?:$/.test(modelUrl.protocol)) throw new Error("模型列表地址只支持 HTTP 或 HTTPS");
     if (isInsecureRemote(input.modelListUrl) && !input.allowInsecureHttp) throw new Error("非本机 HTTP 模型列表地址需要明确确认不安全连接");
   }
-  if (!input.models.length) throw new Error("至少配置一个模型");
-  const seen = new Set<string>();
-  for (const model of input.models) {
-    if (!ID_PATTERN.test(model.id)) throw new Error(`无效模型 ID：${model.id}`);
-    if (seen.has(model.id)) throw new Error(`模型 ID 重复：${model.id}`); seen.add(model.id);
-    if (!model.model.trim() || !model.name.trim()) throw new Error("模型路由 ID 和显示名称不能为空");
-    if (!Number.isInteger(model.contextWindow) || model.contextWindow < 1024) throw new Error("上下文窗口必须是不小于 1024 的整数");
-    if (model.maxCompletionTokens !== undefined && (!Number.isInteger(model.maxCompletionTokens) || model.maxCompletionTokens < 1)) throw new Error("最大输出必须是正整数");
-    if (model.reasoningEfforts?.some((value) => !["none", "minimal", "low", "medium", "high", "xhigh"].includes(value))) throw new Error("推理强度包含不支持的值");
-  }
   if (input.credentialMode === "existing") normalizeEnvironmentName(input.credentialEnv || "");
-  for (const [header, env] of Object.entries(input.extraHeaders)) { if (!header.trim()) throw new Error("请求头名称不能为空"); normalizeEnvironmentName(env); }
 }
 
 function normalizeModel(value: ProviderModelDefinition): ProviderModelDefinition { return { ...value, id: value.id.trim(), model: value.model.trim(), name: value.name.trim(), description: value.description?.trim() || undefined, reasoningEfforts: value.reasoningEfforts?.filter(Boolean) }; }
@@ -356,12 +437,42 @@ function normalizeEnvironmentName(value: string): string { const normalized = va
 function managedEnvironmentName(id: string): string { return `GROK_DESKTOP_PROVIDER_${id}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_") + "_KEY"; }
 function normalizeBaseUrl(value: string): string { return value.trim().replace(/\/+$/, ""); }
 function isInsecureRemote(value: string): boolean { const url = new URL(value); return url.protocol === "http:" && !["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname.toLowerCase()); }
-function modelListUrl(provider: CustomProviderProfile): string { return provider.modelListUrl || `${provider.baseUrl.replace(/\/+$/, "")}/models`; }
+function draftModelListUrl(provider: ProviderConnectionDraft): string { return provider.modelListUrl?.trim() || `${provider.baseUrl.trim().replace(/\/+$/, "")}/models`; }
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 function stripManagedBlock(value: string): string { return value.replace(new RegExp(`${escapeRegex(START)}[\\s\\S]*?${escapeRegex(END)}\\s*`, "g"), ""); }
 function escapeRegex(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function asRecord(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
-function parseModelList(raw: string): Array<{ id: string; name?: string }> { const parsed = JSON.parse(raw) as any; const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : []; return values.map((value: any) => typeof value === "string" ? { id: value } : { id: String(value.id || value.model || value.name || ""), name: typeof value.name === "string" ? value.name : undefined }).filter((value: { id: string }) => value.id); }
+function parseModelList(raw: string): Array<{ id: string; name?: string; description?: string; ownedBy?: string; contextWindow?: number }> {
+  const parsed = JSON.parse(raw) as any;
+  const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : [];
+  const seen = new Set<string>();
+  return values.map((value: any) => typeof value === "string" ? { id: value } : {
+    id: String(value.id || value.model || value.name || ""),
+    name: typeof value.name === "string" ? value.name : typeof value.display_name === "string" ? value.display_name : undefined,
+    description: typeof value.description === "string" ? value.description : undefined,
+    ownedBy: typeof value.owned_by === "string" ? value.owned_by : typeof value.ownedBy === "string" ? value.ownedBy : undefined,
+    contextWindow: Number.isInteger(value.context_window) ? value.context_window : Number.isInteger(value.contextWindow) ? value.contextWindow : undefined,
+  }).filter((value: { id: string }) => Boolean(value.id) && !seen.has(value.id) && Boolean(seen.add(value.id)));
+}
+
+async function readLimitedResponse(response: Response, limit: number): Promise<string> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) throw new Error("模型列表响应过大，已停止读取");
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > limit) throw new Error("模型列表响应过大，已停止读取");
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+export function providerModelLocalId(providerId: string, remoteId: string, occupied: Set<string> = new Set()): string {
+  const prefix = providerId.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "provider";
+  const remote = remoteId.toLocaleLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "model";
+  const base = `${prefix}-${remote}`.slice(0, 64).replace(/[-._]+$/, "") || "provider-model";
+  if (!occupied.has(base)) { occupied.add(base); return base; }
+  const suffix = hash(`${providerId}\0${remoteId}`).slice(0, 8);
+  const candidate = `${base.slice(0, Math.max(1, 63 - suffix.length)).replace(/[-._]+$/, "")}-${suffix}`;
+  occupied.add(candidate);
+  return candidate;
+}
 function setModelsDefault(config: string, modelId: string): string {
   const escaped = JSON.stringify(modelId);
   const lines = config.split(/\r?\n/);

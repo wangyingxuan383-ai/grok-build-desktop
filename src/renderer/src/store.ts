@@ -25,10 +25,13 @@ import type {
   OnboardingState,
   AppReleaseStatus,
   PromptQueueEntry,
+  UserMessageAttachmentPreview,
+  UserMessageDeliveryState,
+  TurnPresentation,
 } from "../../shared/types";
 
 export type UiMessage =
-  | { id: string; kind: "user"; text: string }
+  | { id: string; kind: "user"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thought"; text: string }
   | { id: string; kind: "error"; text: string }
@@ -49,6 +52,8 @@ export interface UiChatTurn extends ChatTurnState {
   final?: Extract<UiMessage, { kind: "assistant" }>;
   pending: UiMessage[];
   trailing: UiMessage[];
+  presentation?: TurnPresentation;
+  legacySegments?: number;
 }
 
 export interface SessionView {
@@ -61,6 +66,7 @@ export interface SessionView {
   meta: PromptMeta;
   status: string;
   queue: PromptQueueEntry[];
+  turnPresentations: TurnPresentation[];
 }
 
 interface AppState {
@@ -104,7 +110,7 @@ interface AppState {
   handleEvents(events: ChatEvent[]): void;
 }
 
-export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", queue: [] });
+export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", queue: [], turnPresentations: [] });
 
 export const useAppStore = create<AppState>((set) => ({
   loading: true,
@@ -169,9 +175,52 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       next.effort = event.effort ?? next.effort;
       break;
     case "user-message": {
-      const last = next.messages.at(-1);
-      if (last?.kind === "user" && last.text === event.text) break;
-      next.messages.push({ id: event.id || crypto.randomUUID(), kind: "user", text: event.text });
+      const key = event.clientMessageId || event.id;
+      let index = key ? next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === key || message.id === key)) : -1;
+      if (index < 0 && !key) {
+        for (let candidate = next.messages.length - 1; candidate >= 0; candidate--) {
+          const message = next.messages[candidate];
+          if (message?.kind !== "user") continue;
+          if ((event.text && message.text === event.text) || (!event.text && event.attachments?.length)) index = candidate;
+          break;
+        }
+      }
+      if (index >= 0) {
+        const current = next.messages[index] as Extract<UiMessage, { kind: "user" }>;
+        const attachmentEcho = !key && !event.text && Boolean(current.attachments?.length);
+        next.messages[index] = {
+          ...current,
+          text: event.text || current.text,
+          clientMessageId: event.clientMessageId || current.clientMessageId,
+          attachments: attachmentEcho ? current.attachments : mergeAttachmentPreviews(current.attachments, event.attachments),
+          delivery: event.delivery || current.delivery,
+        };
+      } else if (event.text || event.attachments?.length) {
+        next.messages.push({ id: event.id || event.clientMessageId || crypto.randomUUID(), kind: "user", clientMessageId: event.clientMessageId, text: event.text, attachments: event.attachments, delivery: event.delivery });
+      }
+      break;
+    }
+    case "user-message-status": {
+      const index = next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === event.clientMessageId || message.id === event.clientMessageId));
+      if (index >= 0) next.messages[index] = { ...(next.messages[index] as Extract<UiMessage, { kind: "user" }>), delivery: event.delivery };
+      break;
+    }
+    case "user-attachments-restore": {
+      for (const entry of event.entries) {
+        let index = next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === entry.clientMessageId || message.id === entry.clientMessageId));
+        if (index < 0) {
+          for (let candidate = next.messages.length - 1; candidate >= 0; candidate--) {
+            const message = next.messages[candidate];
+            if (message?.kind === "user" && message.text === entry.text && !(message.attachments?.length)) { index = candidate; break; }
+          }
+        }
+        if (index >= 0) {
+          const current = next.messages[index] as Extract<UiMessage, { kind: "user" }>;
+          next.messages[index] = { ...current, clientMessageId: entry.clientMessageId, attachments: mergeAttachmentPreviews(current.attachments, entry.attachments), delivery: entry.delivery };
+        } else if (entry.text || !next.messages.some((message) => message.kind === "user")) {
+          next.messages.push({ id: entry.clientMessageId, kind: "user", clientMessageId: entry.clientMessageId, text: entry.text, attachments: entry.attachments, delivery: entry.delivery });
+        }
+      }
       break;
     }
     case "message-chunk":
@@ -241,6 +290,13 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         return message;
       });
       if (next.messages.at(-1)?.kind !== "turn-end") next.messages.push({ id: `turn-end-${crypto.randomUUID()}`, kind: "turn-end" });
+      if (event.presentation) next.turnPresentations = mergeTurnPresentation(next.turnPresentations, event.presentation);
+      break;
+    case "turn-started":
+      next.turnPresentations = mergeTurnPresentation(next.turnPresentations, event.presentation);
+      break;
+    case "turn-presentations-restore":
+      next.turnPresentations = [...event.presentations].sort((a, b) => a.ordinal - b.ordinal);
       break;
     case "subagent": {
       if (event.update.sessionUpdate !== "subagent_spawned" && event.update.sessionUpdate !== "subagent_finished") break;
@@ -304,8 +360,8 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   return { views: { ...state.views, [sessionId]: next }, sessions };
 }
 
-export function buildChatTurns(messages: UiMessage[], status = "idle"): UiChatTurn[] {
-  const raw: Array<{ id: string; messages: UiMessage[]; completed: boolean }> = [];
+export function buildChatTurns(messages: UiMessage[], status = "idle", presentations: TurnPresentation[] = []): UiChatTurn[] {
+  const raw: Array<{ id: string; messages: UiMessage[]; completed: boolean; legacySegments?: number }> = [];
   let current: { id: string; messages: UiMessage[]; completed: boolean } | undefined;
   const push = (): void => { if (current?.messages.length) raw.push(current); current = undefined; };
   for (const message of messages) {
@@ -322,10 +378,26 @@ export function buildChatTurns(messages: UiMessage[], status = "idle"): UiChatTu
     }
   }
   push();
-  return raw.map((turn, index) => buildTurn(turn.id, turn.messages, turn.completed, !turn.completed && index === raw.length - 1 && (status === "working" || status === "needs-user")));
+  const compact: typeof raw = [];
+  for (const turn of raw) {
+    const orphanProcess = turn.messages.length > 0 && turn.messages.every((message) => message.kind === "thought" || message.kind === "tool");
+    const previous = compact.at(-1);
+    if (orphanProcess && previous?.legacySegments) {
+      previous.messages.push(...turn.messages);
+      previous.completed = previous.completed || turn.completed;
+      previous.legacySegments += 1;
+    } else compact.push({ ...turn, ...(orphanProcess ? { legacySegments: 1 } : {}) });
+  }
+  let userOrdinal = 0;
+  return compact.map((turn, index) => {
+    const user = turn.messages.find((message): message is Extract<UiMessage, { kind: "user" }> => message.kind === "user");
+    const ordinal = user ? userOrdinal++ : -1;
+    const presentation = user ? presentations.find((value) => value.clientMessageId && value.clientMessageId === user.clientMessageId) ?? presentations.find((value) => value.ordinal === ordinal) : undefined;
+    return buildTurn(turn.id, turn.messages, turn.completed, !turn.completed && index === compact.length - 1 && (status === "working" || status === "needs-user"), presentation, turn.legacySegments);
+  });
 }
 
-function buildTurn(id: string, messages: UiMessage[], completed: boolean, running: boolean): UiChatTurn {
+function buildTurn(id: string, messages: UiMessage[], completed: boolean, running: boolean, presentation?: TurnPresentation, legacySegments?: number): UiChatTurn {
   const user = messages.find((message): message is Extract<UiMessage, { kind: "user" }> => message.kind === "user");
   const assistants = messages.filter((message): message is Extract<UiMessage, { kind: "assistant" }> => message.kind === "assistant");
   const final = assistants.at(-1);
@@ -351,7 +423,7 @@ function buildTurn(id: string, messages: UiMessage[], completed: boolean, runnin
   const commands = tools.filter((message) => classifyActivity(message) === "commands").length;
   const subagents = tools.filter((message) => classifyActivity(message) === "subagents").length;
   const failed = tools.filter(isFailed).length;
-  return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, summary: { files, commands, tools: tools.length, subagents, failed } };
+  return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, presentation, legacySegments, summary: { files, commands, tools: tools.length, subagents, failed } };
 }
 
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
@@ -375,4 +447,23 @@ function appendText(messages: UiMessage[], kind: "assistant" | "thought", text: 
     messages[messages.length - 1] = { ...last, text: last.text + text };
   } else messages.push({ id: crypto.randomUUID(), kind, text });
   return messages;
+}
+
+function mergeAttachmentPreviews(current: UserMessageAttachmentPreview[] | undefined, incoming: UserMessageAttachmentPreview[] | undefined): UserMessageAttachmentPreview[] | undefined {
+  if (!incoming?.length) return current;
+  const merged = [...(current ?? [])];
+  for (const attachment of incoming) {
+    const index = merged.findIndex((value) => value.id === attachment.id || (value.name === attachment.name && value.source === attachment.source));
+    if (index >= 0) merged[index] = { ...merged[index], ...attachment };
+    else merged.push(attachment);
+  }
+  return merged;
+}
+
+function mergeTurnPresentation(current: TurnPresentation[], incoming: TurnPresentation): TurnPresentation[] {
+  const next = [...current];
+  const index = next.findIndex((value) => value.turnId === incoming.turnId);
+  if (index >= 0) next[index] = { ...next[index], ...incoming };
+  else next.push(incoming);
+  return next.sort((a, b) => a.ordinal - b.ordinal);
 }
