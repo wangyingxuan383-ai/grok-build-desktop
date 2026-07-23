@@ -36,6 +36,7 @@
 - [x] 唯一一次正式 0.6.4 打包通过 Electron Fuses、源码/产物扫描并生成 Setup、Portable、SHA-256、SBOM 和许可证报告；0.6.0–0.6.3 命名资产全部保留。
 - [x] `win-unpacked` 夹具通过后完成 per-user 安装；文件/Product/Main/About 为 0.6.4，诊断为“可以使用”，桌面/开始菜单快捷方式指向安装目录，安装版 0.6.4 UI 夹具通过。
 - [x] 正式发布 PR 的 Hosted Windows `%TEMP%` 8.3 路径暴露长短路径比较问题；统一 canonical path 边界后，Editor、Memory、Agent/Persona、Git 四组 27 项测试在普通与显式短路径临时目录下均通过，符号链接/目录联接逃逸继续拒绝。
+- [x] 正式发布安全门禁发现新公布的 `@hono/node-server` 路径穿越与 `fast-uri` 主机混淆公告；固定到已修复版本后 `npm audit` 为 0，TypeScript 与完整 291 项离线测试继续通过，等待 Hosted Windows 复核后合并发布。
 
 ### v0.6.4 最终候选说明
 
