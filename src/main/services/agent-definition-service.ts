@@ -350,12 +350,14 @@ export class AgentDefinitionService {
     };
   }
 
-  private async definitionRoots(workspacePath: string): Promise<{ projectRoot: string; userAgents: string; userPersonas: string; projectAgents: string; projectPersonas: string }> {
+  private async definitionRoots(workspacePath: string): Promise<{ projectRoot: string; grokHome: string; userAgents: string; userPersonas: string; projectAgents: string; projectPersonas: string }> {
     const projectRoot = await realpath(await this.resolveProjectRoot(workspacePath));
+    const grokHome = await realpath(this.grokHome).catch(() => resolve(this.grokHome));
     return {
       projectRoot,
-      userAgents: join(this.grokHome, "agents"),
-      userPersonas: join(this.grokHome, "personas"),
+      grokHome,
+      userAgents: join(grokHome, "agents"),
+      userPersonas: join(grokHome, "personas"),
       projectAgents: join(projectRoot, ".grok", "agents"),
       projectPersonas: join(projectRoot, ".grok", "personas"),
     };
@@ -374,13 +376,13 @@ export class AgentDefinitionService {
     const roots = await this.definitionRoots(workspacePath);
     const report = await this.inspect(workspacePath).catch(() => undefined);
     const candidates: Array<{ root: string; source: DefinitionSource; readOnly: boolean; pluginName?: string }> = [
-      { root: join(this.grokHome, "bundled", kind === "agent" ? "agents" : "personas"), source: "builtin", readOnly: true },
+      { root: join(roots.grokHome, "bundled", kind === "agent" ? "agents" : "personas"), source: "builtin", readOnly: true },
       { root: kind === "agent" ? roots.userAgents : roots.userPersonas, source: "user", readOnly: false },
       { root: kind === "agent" ? roots.projectAgents : roots.projectPersonas, source: "project", readOnly: false },
     ];
     if (kind === "agent") for (const plugin of report?.plugins ?? []) if (plugin.path && plugin.name) candidates.push({ root: join(plugin.path, "agents"), source: "plugin", readOnly: true, pluginName: plugin.name });
     for (const candidate of candidates) {
-      if (!pathInside(candidate.root, requestedPath)) continue;
+      if (!await pathInsideExisting(candidate.root, requestedPath)) continue;
       const path = await assertDefinitionFile(candidate.root, requestedPath, kind);
       return { path, source: candidate.source, readOnly: candidate.readOnly, pluginName: candidate.pluginName, enabled: isEnabledDefinitionPath(path, kind) };
     }
@@ -604,11 +606,10 @@ async function scanDefinitionDirectory(root: string, kind: "agent" | "persona", 
 async function assertDefinitionFile(root: string, requestedPath: string, kind: "agent" | "persona"): Promise<string> {
   const rootReal = await realpath(root);
   const requested = resolve(requestedPath);
-  if (!pathInside(rootReal, requested)) throw new Error("定义路径越界");
   const info = await lstat(requested);
   if (info.isSymbolicLink() || !info.isFile()) throw new Error("拒绝符号链接或非文件定义");
   const resolved = await realpath(requested);
-  if (!pathInside(rootReal, resolved)) throw new Error("定义 realpath 越界");
+  if (!pathInside(rootReal, resolved)) throw new Error("定义路径越界");
   const suffix = kind === "agent" ? ".md" : ".toml";
   if (!resolved.endsWith(suffix) && !resolved.endsWith(`${suffix}.disabled`)) throw new Error("定义扩展名无效");
   return resolved;
@@ -616,9 +617,17 @@ async function assertDefinitionFile(root: string, requestedPath: string, kind: "
 
 async function ensureMutableDirectory(target: string, boundary: string): Promise<void> {
   const boundaryReal = await realpath(boundary).catch(async () => { await mkdir(boundary, { recursive: true }); return realpath(boundary); });
-  if (!pathInside(boundaryReal, target)) throw new Error("目标定义目录越界");
+  const targetInfo = await lstat(target).catch(() => undefined);
+  if (targetInfo?.isSymbolicLink()) throw new Error("定义目录包含符号链接或非目录节点");
+  const targetReal = await realpath(target).catch(() => undefined);
+  let canonicalTarget: string;
+  if (targetReal) canonicalTarget = targetReal;
+  else if (pathInside(boundaryReal, target)) canonicalTarget = resolve(target);
+  else if (pathInside(boundary, target)) canonicalTarget = resolve(boundaryReal, relative(resolve(boundary), resolve(target)));
+  else throw new Error("目标定义目录越界");
+  if (!pathInside(boundaryReal, canonicalTarget)) throw new Error("目标定义目录越界");
   let cursor = boundaryReal;
-  const parts = relative(boundaryReal, target).split(/[\\/]+/).filter(Boolean);
+  const parts = relative(boundaryReal, canonicalTarget).split(/[\\/]+/).filter(Boolean);
   for (const part of parts) {
     cursor = join(cursor, part);
     if (await exists(cursor)) {
@@ -716,6 +725,10 @@ function stringValue(value: unknown): string | undefined { return typeof value =
 function booleanValue(value: unknown): boolean | undefined { return typeof value === "boolean" ? value : undefined; }
 function stringArray(value: unknown): string[] | undefined { return Array.isArray(value) && value.every((item) => typeof item === "string") ? value as string[] : value === undefined ? undefined : typeof value === "string" ? [value] : undefined; }
 function exists(path: string): Promise<boolean> { return lstat(path).then(() => true).catch(() => false); }
+async function pathInsideExisting(root: string, candidate: string): Promise<boolean> {
+  const [rootReal, candidateReal] = await Promise.all([realpath(root).catch(() => undefined), realpath(candidate).catch(() => undefined)]);
+  return Boolean(rootReal && candidateReal && pathInside(rootReal, candidateReal));
+}
 function samePath(left: string, right: string): boolean { return process.platform === "win32" ? resolve(left).toLocaleLowerCase() === resolve(right).toLocaleLowerCase() : resolve(left) === resolve(right); }
 function pathInside(root: string, candidate: string): boolean { const value = relative(resolve(root), resolve(candidate)); return value === "" || (!value.startsWith("..") && !isAbsolute(value)); }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }

@@ -1,5 +1,5 @@
 import { lstat, realpath, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 export interface ResolvedWorkspacePath {
   root: string;
@@ -17,24 +17,26 @@ export async function resolveWorkspaceRoot(workspacePath: string): Promise<strin
 
 export async function resolveExistingWorkspacePath(workspacePath: string, requestedPath: string, allowRoot = true): Promise<ResolvedWorkspacePath> {
   const root = await resolveWorkspaceRoot(workspacePath);
-  const lexical = lexicalWorkspacePath(root, requestedPath, allowRoot);
-  const canonical = await realpath(lexical.path).catch(() => undefined);
+  if (requestedPath.includes("\0")) throw new Error("路径包含无效字符");
+  const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : lexicalWorkspacePath(root, requestedPath, allowRoot).path;
+  const canonical = await realpath(candidate).catch(() => undefined);
   if (!canonical) throw new Error("文件或目录不存在");
   assertInside(root, canonical, allowRoot);
-  return { root, path: canonical, relativePath: toRelative(root, lexical.path) };
+  return { root, path: canonical, relativePath: toRelative(root, canonical) };
 }
 
 export async function resolveNewWorkspacePath(workspacePath: string, requestedPath: string): Promise<ResolvedWorkspacePath> {
   const root = await resolveWorkspaceRoot(workspacePath);
-  const lexical = lexicalWorkspacePath(root, requestedPath, false);
-  const parent = resolve(lexical.path, "..");
+  if (requestedPath.includes("\0")) throw new Error("路径包含无效字符");
+  const candidate = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(root, requestedPath);
+  const parent = dirname(candidate);
   const canonicalParent = await realpath(parent).catch(() => undefined);
   if (!canonicalParent) throw new Error("目标父目录不存在");
   assertInside(root, canonicalParent, true);
   if (!(await stat(canonicalParent).then((value) => value.isDirectory()).catch(() => false))) throw new Error("目标父路径不是目录");
-  const candidate = resolve(canonicalParent, lexical.path.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
-  assertInside(root, candidate, false);
-  return { root, path: candidate, relativePath: toRelative(root, candidate) };
+  const canonicalCandidate = resolve(canonicalParent, basename(candidate));
+  assertInside(root, canonicalCandidate, false);
+  return { root, path: canonicalCandidate, relativePath: toRelative(root, canonicalCandidate) };
 }
 
 export async function rejectSymbolicLink(path: string): Promise<void> {
