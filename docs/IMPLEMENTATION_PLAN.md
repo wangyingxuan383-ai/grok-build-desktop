@@ -36,13 +36,15 @@
 - [x] 唯一一次正式 0.6.4 打包通过 Electron Fuses、源码/产物扫描并生成 Setup、Portable、SHA-256、SBOM 和许可证报告；0.6.0–0.6.3 命名资产全部保留。
 - [x] `win-unpacked` 夹具通过后完成 per-user 安装；文件/Product/Main/About 为 0.6.4，诊断为“可以使用”，桌面/开始菜单快捷方式指向安装目录，安装版 0.6.4 UI 夹具通过。
 - [x] 正式发布 PR 的 Hosted Windows `%TEMP%` 8.3 路径暴露长短路径比较问题；统一 canonical path 边界后，Editor、Memory、Agent/Persona、Git 四组 27 项测试在普通与显式短路径临时目录下均通过，符号链接/目录联接逃逸继续拒绝。
-- [x] 正式发布安全门禁发现新公布的 `@hono/node-server` 路径穿越与 `fast-uri` 主机混淆公告；固定到已修复版本后 `npm audit` 为 0，TypeScript 与完整 291 项离线测试继续通过，等待 Hosted Windows 复核后合并发布。
-- [x] PR 代码扫描策略进一步识别 4 个高危与 7 个中危问题；将 Diff 头解析改为线性扫描、修复 TOML 空白匹配，并把六个 CDP 探针的动态值改为 `Runtime.callFunctionOn` 参数。脚本语法、TypeScript、6 项聚焦测试、243 文件公开扫描与零漏洞审计本地通过，等待 Hosted CodeQL 复核。
+- [x] 正式发布安全门禁发现新公布的 `@hono/node-server` 路径穿越与 `fast-uri` 主机混淆公告；固定到已修复版本后 `npm audit` 为 0，TypeScript 与完整 291 项离线测试继续通过，Hosted Windows 复核通过。
+- [x] PR 代码扫描策略进一步识别 4 个高危与 7 个中危问题；将 Diff 头解析改为线性扫描、修复 TOML 空白匹配，并把六个 CDP 探针的动态值改为 `Runtime.callFunctionOn` 参数。脚本语法、TypeScript、6 项聚焦测试、243 文件公开扫描与零漏洞审计本地通过；Hosted CodeQL 分析和代码扫描策略复核为成功且 PR 无开放新警报。
+- [x] PR #13 的 Windows、gitleaks、CodeQL 与代码扫描策略全部通过并合并到 `main` 提交 `df5db6b`；`v0.6.4` 标签触发 workflow `29993675891`，云端重新打包、扫描、attest、Draft 回下载、哈希/provenance 验证通过后公开为 Latest。
 
-### v0.6.4 最终候选说明
+### v0.6.4 最终发布说明
 
 - 未发送付费提示词；提供商 UI 验收没有点击真实网络探测，服务测试只访问本地回环假端点。
-- 最终哈希：Setup `be0080e4ce0d44528840fa6923e469b26407327d246bbf140e6f761bd76a8ca5`；Portable `1d6104e3ffdad4ae1cc5ca7c80f5352a3e8c63d7e72cb69df55bbc16837480c6`；SBOM `feb7207c0ed97e931fa31a54090658a5ba3aea701fb9af41add6f12817532b67`；许可证 `fb8469bdbecff72100bd94c44b2f67f1b596ade9854d95ce862a7559d3b1d82e`。
+- 本地安装候选哈希：Setup `be0080e4ce0d44528840fa6923e469b26407327d246bbf140e6f761bd76a8ca5`；Portable `1d6104e3ffdad4ae1cc5ca7c80f5352a3e8c63d7e72cb69df55bbc16837480c6`；SBOM `feb7207c0ed97e931fa31a54090658a5ba3aea701fb9af41add6f12817532b67`；许可证 `fb8469bdbecff72100bd94c44b2f67f1b596ade9854d95ce862a7559d3b1d82e`。
+- GitHub 公开资产哈希：Setup `ab4d037a8398ec8c12fc2365efba5ea8c4fae582486dd95f5cd27f8fc8eea1ab`；Portable `635147fafa85b9a0bd4c7d61c9a36a9bb50e4c83410c225ddddccee769945b71`；SBOM `5b789491ac459a0119fcf9f3b62e7140c35ef601d271e65fc6dd57b726b6dae0`；许可证 `e86a7b4249bd018f743e8c347e7b555cda81c3208c508e32810a91075d49942b`。
 
 ## v0.6.2：Codex 深度对齐与审核工作流重构（2026-07-22）
 

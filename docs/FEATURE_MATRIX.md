@@ -1,17 +1,17 @@
 # Feature Matrix
 
-## v0.6.3 installed hotfix / v0.6.4 installed local candidate
+## v0.6.4 public stable release / installed local build
 
 | Area | Status | Notes |
 |---|---|---|
 | Scheduler diagnostics | 0.6.3 installed/verified | UTF-8/UTF-16/GB18030-compatible Buffer decoding, structured stable diagnostics and damaged-history replacement remove task-center mojibake; focused encoding/health tests pass. |
-| Conversation navigation/layout | 0.6.3 installed + 0.6.4 source UI verified | Unified target opening and fixed conversation grid preserve the Virtuoso viewport, composer and focus. The 0.6.4 fixture passes Dashboard→chat→file preview→explicit editor→chat→task center→chat. |
-| Multi-tool right pane | Source UI verified | On-demand launcher exposes only Review, plan/result, recent files and side tasks. Width is 420–760 px per tool; 1100 px uses a visible overlay drawer instead of CSS-hiding the panel. |
-| Scalable Review | Focused/source UI verified | Lightweight index plus one selected `GitReviewFileDetail`; search/status/stats and lazy hunks handle the 850-file fixture. Five scopes, stale-snapshot protection, hunk actions and comments remain main-process-backed. Non-Git is an ordinary empty state. |
-| Provider manager | Focused/source UI verified | Independent searchable manager with five presets, unsaved-draft probe/discovery, structured environment headers, candidate multi-select/import, editable collision-safe local IDs, manual fallback and unknown context windows. |
+| Conversation navigation/layout | Public source + installed UI verified | Unified target opening and fixed conversation grid preserve the Virtuoso viewport, composer and focus. The 0.6.4 fixture passes Dashboard→chat→file preview→explicit editor→chat→task center→chat. |
+| Multi-tool right pane | Public source + installed UI verified | On-demand launcher exposes only Review, plan/result, recent files and side tasks. Width is 420–760 px per tool; 1100 px uses a visible overlay drawer instead of CSS-hiding the panel. |
+| Scalable Review | Public/focused/UI verified | Lightweight index plus one selected `GitReviewFileDetail`; search/status/stats and lazy hunks handle the 850-file fixture. Five scopes, stale-snapshot protection, hunk actions and comments remain main-process-backed. Non-Git is an ordinary empty state. |
+| Provider manager | Public/focused/UI verified | Independent searchable manager with five presets, unsaved-draft probe/discovery, structured environment headers, candidate multi-select/import, editable collision-safe local IDs, manual fallback and unknown context windows. |
 | Provider probe security | Focused-tested | Main process performs bounded model-list GET only, rejects redirects, limits timeout/2 MiB response, supports OpenAI/Anthropic/Ollama list shapes and keeps credentials out of logs/diagnostics. |
 | Windows path aliases | Focused/Hosted regression verified | Existing absolute paths are canonicalized before workspace comparison, so 8.3 `%TEMP%` aliases and long `realpath` results refer to the same Editor/Memory/Agent/Git boundary. Symlink and junction escapes remain rejected. |
-| 0.6.4 delivery | Installed and verified | Source/lockfile/display/File/Product/Main/About are 0.6.4. TypeScript, production build, 7 focused files / 55 tests, expanded source/packaged/installed UI fixtures, one final offline suite (291 pass/2 opt-in skip), Fuses, the final 243-file source scan and artifact scans pass. Per-user install, diagnostics ready, attachment privacy and both shortcut targets pass; final hashes are in `release/SHA256SUMS.txt` and the Changelog. |
+| 0.6.4 delivery | Published Latest + installed and verified | PR #13 merged at `df5db6b` after Windows, gitleaks, CodeQL and code-scanning gates. Release workflow `29993675891` rebuilt, scanned, attested, draft-downloaded and hash/provenance-verified all five assets before publishing `v0.6.4` as Latest. Public Setup SHA-256 is `ab4d037a8398ec8c12fc2365efba5ea8c4fae582486dd95f5cd27f8fc8eea1ab`; Portable is `635147fafa85b9a0bd4c7d61c9a36a9bb50e4c83410c225ddddccee769945b71`. |
 
 ## v0.6.2 local candidate
 
@@ -59,7 +59,7 @@
 | Codex continuation identity | Implemented and focused-tested | New Grok continuations preserve the exact original Codex title; multiple continuation mappings migrate without modifying source JSONL |
 | Reusable task sessions | Packaged-live verified | Reuse is the default; two consecutive real OAuth task runs completed against the same resumable Grok session instead of creating two sessions |
 | Task context lifecycle | Implemented and tested | Per-task retain/fresh policy, direct open, manual permanent cleanup, stale/history migration and task-lock protection; packaged live cleanup removed the dedicated session and mapping |
-| Public release evidence | Published and externally verified | `v0.5.16` is the Latest public Release at commit `e4dfb62`; workflow `29846404781` succeeded and published Setup/Portable, SHA-256, SBOM, licenses and provenance |
+| Historical public release evidence | Published and externally verified | `v0.5.16` was published at commit `e4dfb62` by workflow `29846404781` with Setup/Portable, SHA-256, SBOM, licenses and provenance; it was superseded as Latest by `v0.6.4` on 2026-07-23. |
 
 ## v0.5.15 hotfix
 

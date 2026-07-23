@@ -1,6 +1,6 @@
 # Grok Build Desktop 下一会话交接（2026-07-23）
 
-> 当前目标已完成到本地安装版 0.6.4。后续会话不要重复本轮完整离线套件、正式打包或付费模型验收；先复用本文证据，只验证后续实际改动。本文不含账号、Token、提示词正文、Codex 会话内容或本机绝对附件路径。
+> 当前目标已完成到本地安装版和公开 Latest `v0.6.4`。后续会话不要重复本轮完整离线套件、正式打包或付费模型验收；先复用本文证据，只验证后续实际改动。本文不含账号、Token、提示词正文、Codex 会话内容或本机绝对附件路径。
 
 ## 1. 必读与工作树纪律
 
@@ -12,7 +12,7 @@
 6. `docs/CLI_COMPATIBILITY.md`
 7. `CHANGELOG.md`
 
-开始前检查 `git status`。0.6.0–0.6.4 的完整功能工作树仍未提交；不得重置、覆盖或与旧基线混合。本轮没有创建提交、标签、PR、推送或 GitHub Release，公开 Latest 仍是 `v0.5.16`。
+开始前检查 `git status`。0.6.0–0.6.4 功能已通过 PR #13 合并到 `main`，`v0.6.4` 标签位于提交 `df5db6b`；GitHub Release 已公开并标记为 Latest。不要移动或替换已发布标签/资产。
 
 ## 2. 当前版本与本机交付
 
@@ -63,15 +63,27 @@
 
 0.6.0–0.6.3 Setup、Portable 与 SBOM 命名资产仍在 `release`。通用许可证报告和 `SHA256SUMS.txt` 按当前候选更新，这是发布目录的既有约定。
 
-## 7. 仍未完成的外部门槛
+## 7. 公开发布证据
+
+- Release：`https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.6.4`
+- PR #13 合并提交：`df5db6bed55ba317f24cb235aacd342bea7a563d`。
+- Release workflow `29993675891` 成功；云端重新打包、公开产物扫描、Setup/Portable attest、Draft 回下载、`SHA256SUMS.txt` 和 provenance 验证均通过，之后才发布为 Latest。
+- Setup：`ab4d037a8398ec8c12fc2365efba5ea8c4fae582486dd95f5cd27f8fc8eea1ab`
+- Portable：`635147fafa85b9a0bd4c7d61c9a36a9bb50e4c83410c225ddddccee769945b71`
+- CycloneDX SBOM：`5b789491ac459a0119fcf9f3b62e7140c35ef601d271e65fc6dd57b726b6dae0`
+- 第三方许可证：`e86a7b4249bd018f743e8c347e7b555cda81c3208c508e32810a91075d49942b`
+
+本地产物和 GitHub Hosted Runner 产物来自不同构建环境，哈希不同是预期行为；公开分发以 GitHub Release 的清单为准。
+
+## 8. 仍未完成的外部门槛
 
 - Windows 10 22H2、Windows 11 23H2/24H2、中文用户名、标准权限、物理 125–200% DPI 与双屏矩阵。
-- 从公开 `v0.5.16` 到 0.6.4 的正式覆盖升级及真实 DPAPI 账号、持久任务、专属会话、Codex 接力和 AppData 保留矩阵。
-- Git 提交/标签、GitHub Release、云端构建溯源、回下载和外部签名；必须等待用户明确发布指令。
-- 不要把本地 0.6.4 候选描述成公开 Release，不要重复付费 `/remember`、私有 Worktree ACP 或真实提供商推理。
+- 从公开 `v0.5.16` 安装包到公开 `v0.6.4` 安装包的真实覆盖升级，以及 DPAPI 账号、持久任务、专属会话、Codex 接力和 AppData 保留矩阵。
+- Windows Authenticode 外部签名尚未配置；公开资产为工作流明确标注的 unsigned 构建，并有 GitHub artifact attestations。
+- 不要重复付费 `/remember`、私有 Worktree ACP 或真实提供商推理。
 
-## 8. 后续会话开场指令
+## 9. 后续会话开场指令
 
 ```text
-先读取 AGENTS.md、docs/NEXT_SESSION_HANDOFF.md、docs/IMPLEMENTATION_PLAN.md 的 v0.6.3→v0.6.4 章节、docs/FEATURE_MATRIX.md、docs/CODEX_UI_PARITY.md、docs/CLI_COMPATIBILITY.md 和 CHANGELOG.md，并检查 git status。0.6.4 已完成本地安装和最终验证，不要重复完整套件、正式打包或付费验收；只处理我明确要求的后续改动、外部矩阵或发布工作，并运行直接受影响的聚焦验证。
+先读取 AGENTS.md、docs/NEXT_SESSION_HANDOFF.md、docs/IMPLEMENTATION_PLAN.md 的 v0.6.3→v0.6.4 章节、docs/FEATURE_MATRIX.md、docs/CODEX_UI_PARITY.md、docs/CLI_COMPATIBILITY.md 和 CHANGELOG.md，并检查 git status。v0.6.4 已完成本地安装、GitHub 公开 Latest 发布和验证，不要重复完整套件、正式打包或付费验收；只处理我明确要求的后续改动或外部矩阵，并运行直接受影响的聚焦验证。
 ```

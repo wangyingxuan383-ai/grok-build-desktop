@@ -20,11 +20,11 @@
 | 2026-07-22 | 0.2.106 (`bde89716f6`) | Local app 0.6.1 candidate | No new required CLI method. Pasted images still reach ACP as standard image content blocks; `clientMessageId`, durable previews, queue/interjection presentation and cache cleanup are desktop contracts. ACP image replay is merged client-side and cache paths are excluded from prompt text. Final package/installed acceptance is offline and sends no model prompt. |
 | 2026-07-22 | 0.2.106 (`bde89716f6`) | Local app 0.6.2 development candidate | No new paid/private ACP requirement. Turn duration/outcome is Desktop presentation metadata. Review uses local Git through fixed main-process argument arrays and stdin; Renderer sends only typed scope/file/hunk IDs. Last turn intersects current Git changes with actual ACP write locations. |
 | 2026-07-23 | 0.2.106 (`bde89716f6`) | Local app 0.6.3 installed hotfix | No ACP wire change. Scheduler decoding/diagnostics and unified Renderer navigation are Desktop/Windows fixes; non-Git Review capability checks use local Git only. |
-| 2026-07-23 | 0.2.106 (`bde89716f6`) | Local app 0.6.4 candidate | No new ACP/private-method requirement. Lazy Review index/detail remains local fixed-argument Git. Provider draft testing/discovery is a bounded main-process GET to the configured model-list endpoint and never sends inference content; Renderer receives typed candidates without credentials. |
+| 2026-07-23 | 0.2.106 (`bde89716f6`) | Public app 0.6.4 release | No new ACP/private-method requirement. Lazy Review index/detail remains local fixed-argument Git. Provider draft testing/discovery is a bounded main-process GET to the configured model-list endpoint and never sends inference content; Renderer receives typed candidates without credentials. PR #13 and Release workflow `29993675891` passed; `v0.6.4` is the public Latest release at `df5db6b`. |
 
 Every accepted CLI update must pass `initialize` and `session/new`; a version banner alone is not sufficient.
 
-## v0.6 local-candidate capability snapshot (2026-07-22)
+## v0.6 accepted capability snapshot (2026-07-23)
 
 Installed CLI `0.2.106 (bde89716f6)` advertises Worktree creation/resume flags, `grok worktree list/show/rm/gc`, experimental cross-session Memory, Agent definitions, Personas and the Agent Dashboard. Its bundled official ACP guide lists `x.ai/git/*` and `x.ai/git/worktree/create|remove|apply|list|gc`, while `grok inspect --json` reports agents, skills, plugins, MCP/LSP servers, configuration sources and project trust. The v0.6 client capability-probes private methods and provides the controlled Git/read-only-history fallbacks defined below; it never launches `grok dashboard`.
 
