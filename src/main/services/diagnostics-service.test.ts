@@ -19,5 +19,8 @@ describe("diagnostic redaction", () => {
     expect(excluded).toContain("主题背景原始路径");
     expect(excluded).toContain("提供商端点");
     expect(excluded).toContain("任务提示词");
+    expect(excluded).toContain("会话附件正文");
+    expect(excluded).toContain("Base64");
+    expect(excluded).toContain("Memory 内容、文件路径和索引");
   });
 });

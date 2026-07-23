@@ -78,7 +78,7 @@ export class DiagnosticsService {
         { name: "README.txt", description: "支持包范围和隐私说明" },
       ],
       fields: ["应用版本/构建提交", "Windows 版本和架构", "CLI 版本和能力", "代理是否配置", "Computer Use 自检", "提供商数量/协议/凭据状态", "定时任务数量/注册状态"],
-      excluded: ["OAuth/API Key/Token", "提供商端点和环境变量值", "任务提示词/任务工作区和会话", "文件内容、截图和主题背景图片", "主题背景原始路径或本地副本", "完整工作区/用户目录", "代理地址和认证"],
+      excluded: ["OAuth/API Key/Token", "提供商端点和环境变量值", "任务提示词/任务工作区和会话", "会话附件正文、Base64、缓存文件和完整路径", "Memory 内容、文件路径和索引", "文件内容、截图和主题背景图片", "主题背景原始路径或本地副本", "完整工作区/用户目录", "代理地址和认证"],
       redacted: true,
     };
   }
@@ -91,7 +91,7 @@ export class DiagnosticsService {
     const files = {
       "diagnostics.json": strToU8(`${JSON.stringify(diagnostics, null, 2)}\n`),
       "app.log": strToU8(log),
-      "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
+      "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、Memory 内容或路径、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
     };
     await writeFile(path, zipSync(files, { level: 6 }));
   }

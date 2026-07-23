@@ -2,6 +2,96 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
+## v0.6.3 稳定热修 → v0.6.4 UI/提供商重构（2026-07-23）
+
+### A. 隔离复现
+
+- [x] 建立任务乱码、非 Git Review、长会话、Dashboard/文件/任务中心往返和 850 文件变更夹具；全部使用隔离 AppData，不发送模型请求。
+
+### B. v0.6.3 稳定热修
+
+- [x] Scheduler 输出改为 Buffer 解码并新增结构化注册诊断；识别历史替换字符，健康检查可覆盖损坏旧文本。
+- [x] 引入统一会话目标打开流程、固定会话网格、ResizeObserver/导航完成刷新和所有工作台“返回会话”；删除重复底部环境栏。
+- [x] 非 Git Review 改为普通能力空状态；修复窄窗可点击但不可见；聚焦测试、TypeScript、构建和公开扫描通过。
+- [x] 拒绝首个暴露 720 px 输入框越界的候选；修复后正式生成并 per-user 安装 0.6.3，冷启动/版本/快捷方式和安装版导航夹具通过。
+
+### C. v0.6.4 右栏与审核
+
+- [x] 右栏统一为按需工具容器，提供真实 Review、计划/结果、最近文件和侧边任务；宽度按工具持久化，窄窗为覆盖抽屉。
+- [x] Review 拆分为轻量 `GitReviewIndex` 和按选中文件加载的 `GitReviewFileDetail`；保留五类范围、快照校验、文件/区块操作与行级批注。
+- [x] 左栏移除常驻文件/Review；最近文件先只读预览，只有显式“编辑文件”才进入 Monaco。
+- [x] 离线 UI 夹具通过 Dashboard→会话→最近文件→编辑器→会话→任务中心→会话、非 Git Review、850 文件索引及多尺寸/缩放验收。
+
+### D. v0.6.4 提供商中心
+
+- [x] 设置和账号页统一进入独立提供商管理弹窗；列表/搜索/详情、五类预设、健康/默认状态和删除/编辑流程已实现。
+- [x] 新增草稿探测与模型发现 IPC；保存前可测试、获取/刷新/搜索/多选导入或手工补充模型，本地 ID 可编辑且冲突使用稳定哈希。
+- [x] 模型列表探测只执行主进程 GET；限制超时、2 MiB 响应和重定向，支持 OpenAI/Responses、Anthropic、Ollama 与兼容网关，凭据不写日志。
+- [x] 本地回环测试覆盖三种列表结构、401、超时、超量响应、重复模型和未知上下文；Provider UI 离线夹具通过。
+
+### E. 最终交付
+
+- [x] 源码、lockfile 和显示版本提升为 0.6.4；Changelog、实施计划、功能矩阵、Codex 对照矩阵和 CLI 兼容说明已进入候选状态。
+- [x] 唯一一次完整离线套件通过：60 个文件通过、1 个按设计跳过，291 项通过、2 项显式 opt-in/live 跳过；加入安装版版本探针后的最终公开源码扫描通过 243 个文本文件。
+- [x] 唯一一次正式 0.6.4 打包通过 Electron Fuses、源码/产物扫描并生成 Setup、Portable、SHA-256、SBOM 和许可证报告；0.6.0–0.6.3 命名资产全部保留。
+- [x] `win-unpacked` 夹具通过后完成 per-user 安装；文件/Product/Main/About 为 0.6.4，诊断为“可以使用”，桌面/开始菜单快捷方式指向安装目录，安装版 0.6.4 UI 夹具通过。
+
+### v0.6.4 最终候选说明
+
+- 未发送付费提示词；提供商 UI 验收没有点击真实网络探测，服务测试只访问本地回环假端点。
+- 最终哈希：Setup `be0080e4ce0d44528840fa6923e469b26407327d246bbf140e6f761bd76a8ca5`；Portable `1d6104e3ffdad4ae1cc5ca7c80f5352a3e8c63d7e72cb69df55bbc16837480c6`；SBOM `feb7207c0ed97e931fa31a54090658a5ba3aea701fb9af41add6f12817532b67`；许可证 `fb8469bdbecff72100bd94c44b2f67f1b596ade9854d95ce862a7559d3b1d82e`。
+
+## v0.6.2：Codex 深度对齐与审核工作流重构（2026-07-22）
+
+- [x] 将对齐基准修正为 Codex 的按需 Review 工作流；Review 支持 Unstaged、Staged、Commit、Branch、Last turn 五类范围，不再把 0.6.1 自造通用摘要栏视为 Codex 对齐。
+- [x] 新增主进程 `GitReviewScope`、快照、文件、区块、行与区块操作契约；Patch 在主进程解析，区块操作重新校验快照并通过固定 Git 参数与 stdin 执行，恢复要求明确确认。
+- [x] Renderer 新增 380–620 px 可调 ReviewPane：文件状态/统计、紧凑 unified diff、文件/区块暂存与取消暂存、恢复、完整 Diff、显式编辑入口和行级批注草稿。
+- [x] 引入 `NavigationIntent`，工具卡、Review 文件/行和编辑器统一使用会话/Worktree 实际执行根目录；主进程继续执行路径边界校验，Monaco 挂载后同步定位行。
+- [x] 新回合发出并持久化真实开始、完成、单调时钟耗时和完成/失败/取消状态；重复完成合并，旧会话无可靠时间时仅显示“已处理”。连续孤立过程合并成一个“历史执行记录（N 段）”。
+- [x] 文件写入按回合聚合并可打开 Last turn Review；最终回答保留复制与真实分叉入口，生成媒体移到结果区并支持大图。
+- [x] 左栏删除常驻的文件/Git/Worktree 列表，统一放入默认折叠的“开发工具”；当前项目任务展开，其他项目只显示折叠头并在选择后按需加载。
+- [x] 工作区选择器增加标题、搜索、显式关闭、Escape、外部点击关闭、焦点返回与受限滚动区；标题栏改为任务菜单、打开位置和 Review 开关，并移除重复底部面板开关。
+- [x] 设置改为约 920×680 的分类对话框，覆盖常规、外观、模型与会话、项目与 Git、Worktree 与 Memory、Agent、账号与提供商、Computer Use、更新与诊断及已归档会话；背景参数实时预览。
+- [x] 删除与设置遮罩无关的固定 72% 主色覆盖；背景 opacity、blur、dim 一一映射，dim=0 时不再额外压暗，只由消息、过程、Review 和输入框局部表面保证可读性。
+- [x] 0.6.2 离线夹具扩展到 30 段旧过程、真实耗时、文件修改、生成图片、多图消息、失败恢复和 Review 入口。
+- [x] 运行受影响测试、生产构建、公开源码扫描和 Grok 应用 Computer Use 多尺寸/键盘/背景/Review 验收：9 个受影响文件 / 48 项测试、TypeScript、生产构建和最终 238 文件源码扫描通过；隔离离线窗口实测 Review Diff、文件跳转、设置 Escape、背景 100%/0 遮罩、历史 30 段折叠和图片重开。
+- [x] 最终完整离线套件一次通过（60 个文件通过、1 个按设计跳过；284 项通过、2 项跳过）；唯一一次正式打包生成并核验 0.6.2 Setup、Portable、SHA-256、SBOM和许可证报告，Fuses及两次产物扫描通过，0.6.1 命名资产保留。
+- [x] 完成 per-user 安装和冷启动；文件/Main/About 为 0.6.2、诊断为“可以使用”，桌面/开始菜单快捷方式指向安装目录；安装版图片消息发送失败保留/重开、Review、背景、设置和响应式夹具通过。
+
+### v0.6.2 最终候选说明
+
+- 正式打包只执行一次，并在同一构建的 `win-unpacked` 与安装版上运行 0.6.2 离线夹具。未调用付费模型；夹具中的发送失败是刻意验证图片失败保留链路。
+- 最终 0.6.2 哈希：Setup `8a2d7508296ee5846bb589c01ce4fa64a2194cd40a1ae5ba6d96a733432ca8d7`；Portable `9aa7251857c2c33044354ee8c51ade36f9d18409946a16f47d8d1a11d7532f83`；SBOM `e00f6eb90a5fd33ac0aebb953283fb59d924c339d4bede8467305deddfe4d714`；许可证 `e5e4edd9035f514d7b111bd3417db46ce86f3f51396b11b05fb8db1d677ecdff`。
+
+## v0.6.1：Codex UI 深度对齐与图片消息修复（2026-07-22）
+
+- [x] 以只读 Computer Use 和可访问树采样完成 Codex 桌面基准审计；将脱敏结构、交互、响应式断点和 Grok 功能映射记录到 `docs/CODEX_UI_PARITY.md`，不提交 Codex 截图、账号、任务标题、绝对路径或会话正文。
+- [x] 左侧栏改为产品/搜索/新任务、直接导航、可折叠项目工具、项目会话和固定账号/版本/设置；会话悬停将置顶、归档与必要更多菜单分层。
+- [x] 标题栏增加左侧栏、任务历史、打开位置、右侧摘要和底部面板开关；新增约 320 px 摘要栏、真实 Git/Worktree 底部环境栏和变更面板，小于 1200 px 自动收起摘要。
+- [x] 会话正文收敛为约 760 px；用户消息增加复制、图片网格/文件卡/大图、发送状态与失败恢复，处理过程和文件修改保持折叠，最终回答仅提供真实支持的操作。
+- [x] 输入框统一粘贴缩略图、附件、上下文、模型、强度、模式、排队、插话、停止与发送状态；继续支持自定义会话背景，并以稳定遮罩和独立消息/输入底色保证可读性。
+- [x] 新增 `clientMessageId`、`UserMessageAttachmentPreview`、发送状态、队列附件和恢复事件；Renderer 按客户端消息合并 ACP 回显，不再随输入框清空图片。
+- [x] 主进程将内嵌图片写入按会话哈希隔离的缓存，验证 PNG/JPEG/WebP/GIF 内容、MIME 和 20 MiB 上限；图片不重复写入提示文字，缺失源显示降级卡，删除会话和孤立/超量扫描会清理缓存。
+- [x] 支持包明确排除附件正文、Base64、缓存文件和完整路径；Renderer 继续使用 `nodeIntegration: false`、`contextIsolation: true`、`sandbox: true`。
+- [x] 单元/集成测试已覆盖附件持久化、MIME/大小/路径边界、ACP 重复回显、纯图片、失败状态、恢复与支持包排除；离线 0.6.1 UI 夹具覆盖导航、摘要、环境栏、消息卡、粘贴前预览、发送失败后消息可见、大图、重载和窄窗口。
+- [x] TypeScript、受影响的 5 个测试文件 / 28 项测试、生产构建、228 文件公开扫描和一次 Computer Use 主界面/摘要/底部面板/大图验收通过，未发送付费模型提示词。
+- [x] 最终完整离线套件通过 270 项、2 项显式在线用例跳过；Windows 集成测试限制为 4 个 Worker、20 秒用例超时以避免 Git/ACP 子进程争用。生成 Setup、Portable、SHA-256、SBOM 和许可证报告，Electron Fuses、4K/覆盖层、Task Scheduler、中文空格 Portable 与两次流式产物公开扫描通过；0.6.0 命名资产及原哈希保持不变。
+- [x] 已执行 per-user 安装并从 `%LOCALAPPDATA%\Programs\Grok Build Desktop` 冷启动；主进程、About 和诊断均报告 0.6.1，诊断结果为“可以使用”。安装版离线夹具通过粘贴图片→发送失败仍在消息中可见→Renderer 重开仍可见；桌面和开始菜单快捷方式均指向安装目录。最终哈希见 Changelog 与 `release\SHA256SUMS.txt`。
+
+### v0.6.1 最终候选说明
+
+- 首次完整套件预检暴露 5 秒 Memory 测试框架超时；第二次在本会话异常 `TEMP` 与高并发下出现临时 Git/ACP 子进程失败。修正测试运行器资源上限并使用规范用户临时目录后，最终成功套件为 57 个文件通过、1 个文件按设计跳过，270 项通过、2 项跳过。
+- 第一个打包输出在 0.6.1 UI 重载探针中发现启动时孤立缓存扫描与夹具图片写入存在竞态；该输出未交付。将扫描改为在 `bootstrap` 返回前完成后，TypeScript 与 3 个相关文件/23 项测试通过，随后重新生成并只保留当前最终 0.6.1 资产。
+- 发布资产扫描由整文件双编码解码改为分块 UTF-8/UTF-16 扫描，规则不变；在低提交内存环境中仍完成最终 229 个源码文本文件及整个 `release` 目录检查。
+- 最终 0.6.1 哈希：Setup `dfc9d2a3feb62a4ac49d7fe76bf9bd07e3cf8289f2966a0fd85837a06a4043ba`；Portable `553bc500f3f8da69406fea56798c3c2b5b6317db272a0e154d192a8332982316`；SBOM `fafef7cc7197b6f0dc4a7de4c6260725487c825623f94ba67e32ffdf9f45dbbb`；许可证 `5a82814c8a9a7147c245f09b3d992e7923fd5550d1fe3617df8f969a82acacc2`。
+
+## v0.5.16：公开发布证据回写（2026-07-22）
+
+- [x] 确认 `main`、`origin/main` 与 `v0.5.16` 均指向提交 `e4dfb62d38de2505c8c8920d4e9f0ae70577f2b6`；当前源码版本为 `0.5.16`。
+- [x] 确认 GitHub Release `v0.5.16` 已于 2026-07-21 公开并标记为 Latest，Release Workflow `29846404781` 在同一提交上成功完成。
+- [x] 确认公开资产包含 Setup、Portable、SHA-256、CycloneDX SBOM 和第三方许可证；GitHub 资产摘要记录 Setup 为 `8f7ec0af2d6dda7cb75878f5e544d538eed394ef49b6920f901b1d4afede539f`，Portable 为 `a94cf86c973688f47d6565fd66590f3d8250b4b7c997ed5b379b5a505360fcf1`。
+- [x] 将功能矩阵、CLI 兼容矩阵和 Changelog 从“本地 v0.5.16 / Latest v0.5.12”的历史状态统一到公开稳定版 `v0.5.16`；未重复完整测试、打包或真实模型验收。
+
 ## v0.5.14：持久任务 OAuth 同步修复（2026-07-21）
 
 - [x] 确认 DPAPI 修复后任务已成功解密并进入 Grok，会话失败点转为 `Authentication required`。
@@ -297,6 +387,125 @@
 - Grok 数据继续使用 `%USERPROFILE%\.grok`，不迁移原有会话。
 - 应用元数据保存在 `%APPDATA%\Grok Build Desktop`。
 - 每个阶段完成后更新本文件的勾选状态和根目录 `CHANGELOG.md`；不得只改代码而不记录更新内容。
+
+---
+
+# Grok Build Desktop v0.6.0：Git、编辑器与 Grok 原生生产力工作台（2026-07-22）
+
+> 本节是下一会话的当前获批实施计划，完整替换此前提出的 v0.5.17 收口方案与早期 v0.6.0 草案。实施前先读 `docs/NEXT_SESSION_HANDOFF.md`，再按本节分阶段执行。不得在本地候选验收前创建标签或发布 GitHub Release。
+
+## 一、目标与固定决策
+
+- [x] 增加轻量 Monaco 编辑器和常用完整 Git 面板。
+- [x] 增加 Grok 原生 Worktree 隔离工作区、跨会话 Memory 中心、Agent/Persona 管理、Agent Dashboard 以及会话执行配置档。
+- [x] Memory 默认关闭，由每个工作区单独启用；Worktree 支持预览后的“一键安全合并”；执行配置档支持全局和项目两级，项目配置保存在 AppData，不自动写入仓库。
+- [x] “自动批准”继续自动批准普通工具；账号、提供商、模型或工作区失效时严格暂停，不静默替换。健康检查不发送任务提示词；提示词已被 CLI 接收后不自动重跑整轮。
+- [x] 本版不实现语言服务器、调试器、内置终端、SSH、Force Push、Rebase、Cherry-pick、Stash、Tag、GitHub PR/Issue、`--check`、best-of-n 或 JSON Schema 自动化。
+
+## 二、工作台、编辑器与 Git
+
+### 1. 工作台结构
+
+- [x] 新增“对话、文件、源代码管理、Worktree、Agent Dashboard、任务、扩展”活动栏；中央区域在聊天、多标签编辑器、Diff、Dashboard 和 Memory 编辑之间切换。
+- [x] 使用 Computer Use 只读观察当前 Codex 桌面的信息架构后，完成可用性重构：单列项目/任务侧栏、带文字的工作台切换菜单、紧凑上下文标题栏、居中内容区、悬浮输入框、克制空状态和单一会话溢出菜单；保留全部 v0.6 工作台入口而不复制 Codex 资产。
+- [x] 切换对话/文件视图时保留编辑器标签、光标、未保存缓冲区、会话草稿和聊天滚动状态；窄窗口继续自动隐藏辅助侧栏，编辑与保存保留在中央区域。Dashboard/Memory 视图随对应模块实现。
+- [x] 将新增工作台按 Editor、Git、Worktree、Memory、Agents、Dashboard、Profiles 拆为独立主进程服务与 Renderer 组件，保持现有 IPC 和磁盘格式兼容；聊天编排仍由既有 App/Controller/ACP 核心负责。
+  - [x] 已固定 `docs/V060_ARCHITECTURE.md` 模块所有权、IPC 命名、能力三态语义和分阶段拆分顺序；首个 `CliCapabilityService` 已从主控制器独立实现。
+
+### 2. 轻量编辑器
+
+- [x] 实现懒加载文件树、多标签、编辑/原子保存、新建文件或目录、重命名、删除、资源管理器定位、Monaco 内置查找替换/跳转行、语法高亮、脏状态和关闭确认。
+- [x] 支持 UTF-8、UTF-8 BOM、GB18030 及 CRLF/LF 保持；5 MiB 以内可编辑，5–20 MiB 只读，更大文件转外部打开。
+- [x] 所有路径在主进程规范化并通过 `realpath` 验证；拒绝目录穿越和符号链接越界。默认隐藏 `.git`、`node_modules`、构建目录和忽略文件，并提供显示开关。
+- [x] 保存前比较哈希与修改时间；外部修改或 Grok 写入与未保存缓冲区冲突时提供磁盘 Diff、重新加载、覆盖和另存副本，不允许静默覆盖。
+- [x] 支持“添加文件到对话、添加选中代码到对话、让 Grok 解释、让 Grok 修改”；引用包含工作区相对路径和行号，文件内容仍由 Grok 在发送后按路径读取。
+- [x] 工具卡路径与 Diff 可打开编辑器并定位；没有脏缓冲区时自动刷新 Grok 写入，有脏缓冲区时显示冲突。
+
+### 3. Git 面板
+
+- [x] 主进程只用固定参数数组调用系统 `git.exe`，不经过 Shell；支持仓库根目录、分支、上游、领先/落后状态和凭据已脱敏的远程信息。
+- [x] 显示未跟踪、已修改、已删除、冲突和已暂存分组；支持工作区/暂存区 Diff，单文件、批量和全部暂存/取消暂存。
+- [x] 支持提交、最近提交历史、提交详情、创建/切换分支、Pull、Push、刷新和取消最长五分钟的网络操作；认证继续交给 Git Credential Manager。
+- [x] 支持经文件清单确认后丢弃已跟踪修改或删除未跟踪文件；冲突文件在编辑器中解决，暂存后标记已解决。
+- [x] 工作区位于仓库子目录时，只读状态可直接查看；首次修改整个仓库前显示真实仓库范围并保存一次性信任决定。
+- [x] 切换分支前处理未保存编辑器内容；支持包、日志和通知不得包含源码、Diff、提交信息、完整路径或含凭据远程地址。
+
+## 三、Grok 原生能力
+
+### 1. Worktree
+
+- [x] 优先调用 `x.ai/git/worktree/create|list|apply|remove|gc` 与状态通知，缺失时使用受控 Git 兼容层；能力缺失仅禁用相关入口。
+- [x] 新建会话和会话分叉可选择普通工作区或 Worktree，并指定名称与基础分支/提交；Worktree 会话使用独立来源分组。
+- [x] Worktree 面板显示路径、分支、基础 Ref、来源会话、变更数量、关联 Agent 和状态；支持在文件、Git或会话视图打开。
+- [x] 安全应用流程固定为：检查目标工作区干净 → 预览提交/文件/增删行 → 用户确认 → 官方 apply 或普通 merge → 验证结果。发生冲突立即停止，不删除 Worktree、不丢弃目标修改，并进入编辑器解决。
+- [x] 成功后提供“合并后清理 Worktree”复选框，默认不勾选；清理前再次确认无未应用修改。支持只读 GC 预览后清理孤儿/过期 Worktree。
+- [x] 同一远程仓库的主工作区和 Worktree 使用 Grok 原生仓库身份共享项目 Memory。
+
+### 2. 跨会话 Memory 中心
+
+- [x] 使用 Grok 原生 Memory 布局及 `/remember`、`/memory`、`/flush`、`/dream`、`grok memory clear`；Memory 默认关闭，工作区启用状态进入应用元数据，不自动改用户全局 `config.toml`。
+  - [x] `MemoryService` 已精确复现 `org/repo` 归一化、ASCII slug 与 BLAKE3 `hash8` 布局；默认关闭和工作区设置只写 AppData，清理使用固定参数 `grok memory clear --workspace|--global|--all --yes`。确认后的“记住”通过当前活动 ACP 会话发送原生 `/remember`；离线候选未重复付费模型改写。
+- [x] 新会话通过 `--experimental-memory` 或 `GROK_MEMORY=1` 启用；现有会话优先使用原生热切换，旧 CLI 回退为受控重启/恢复。
+  - [x] 新建/恢复进程按规范仓库身份注入 `GROK_MEMORY=1|0` 并关闭 Memory 调试日志；启用中的会话走受控重启恢复，禁用优先使用已发布的 `/memory off`，缺失命令时同样受控恢复。进程环境合并和恢复状态机已有聚焦测试；真实付费会话热切换尚未重复执行。
+- [x] 分组显示全局 Memory、当前仓库 Memory 和会话摘要；支持浏览、搜索、筛选、Monaco 编辑全局/项目 `MEMORY.md`、原子保存、外部冲突检查及单个会话摘要删除。
+- [x] 提供保存前预览的原生 `/remember`、精确删除条目、清空工作区/全局/全部、当前会话 Flush、手动 Dream，以及会话结束 Flush 和自动 Dream 配置。
+  - [x] 已实现确认令牌“记住”、原生 ACP `/remember`、结构化条目精确删除及哈希冲突保护、单个会话摘要删除、CLI 清空、当前会话 `/flush`/`/dream` 与设置元数据；正常会话结束按配置执行 Flush/自动 Dream，受控重启和 CLI 更新暂停不触发结束策略。
+- [x] 显示启用状态、索引状态、最近 Flush/Dream 时间；Dream 的运行状态必须可见。Memory 内容与路径不得进入日志、通知、支持包或公共构建。
+- [x] 所有 Memory 读写必须被限制在解析后的 `GROK_HOME/memory`；CLI 布局无法识别时只禁用管理面板，不影响聊天。
+
+### 3. Agent 与 Persona 中心
+
+- [x] Agent 来源包含内置、用户级、项目级和插件；内置/插件只读，用户/项目 Agent 可创建、复制、编辑、启停、重命名、删除和校验。
+- [x] Agent 编辑器支持 `.grok/agents/*.md` 与用户目录同格式，覆盖名称、说明、模型、推理强度、提示模式、权限模式、工具、Skills、`agents_md` 与正文指令，并提供原始 Markdown 预览。
+- [x] Persona 来源包含内置、用户级和项目级；支持说明、指令、指令文件、模型、强度、默认能力、默认隔离、输入/输出契约和原始 TOML 编辑。
+- [x] 内置 Agent/Persona 可复制为用户或项目副本；应用创建的 Persona 使用独立 TOML 文件，不修改用户现有 `config.toml`。外部文件编辑必须保留注释和未知字段。
+- [x] 保存使用临时文件、原子替换和持久备份，并运行 `grok inspect --json` 验证；失败恢复原文件。服务保留可选热重载入口；当前 CLI `0.2.106` 未公布定义热重载能力时只重启空闲会话，运行中/等待操作的会话保持不动并延后加载。
+
+### 4. Agent Dashboard
+
+- [x] 不启动 Grok TUI Dashboard；复用 ACP 任务扩展、会话目录和子 Agent 事件构建桌面原生层级视图。
+- [x] 显示主会话、子 Agent、父子关系、Agent/Persona、模型、强度、状态、运行时间、工具数、上下文、普通/Worktree隔离、最近动作、等待/失败原因和完成摘要。
+- [x] 支持打开父/子会话、展开执行过程、停止运行 Agent、跳转 Worktree、打开定义、按工作区/状态/Agent/时间筛选，以及清理仅 UI 记录。
+- [x] CLI 缺少实时扩展时降级为标明更新时间的只读历史，不伪造“运行中”。
+
+### 5. 会话执行配置档
+
+- [x] 配置档包含名称、说明、Agent、模型、强度、模式、工具允许/禁止、Sandbox、网页搜索、子 Agent、Memory、Worktree与基础 Ref、最大轮次、追加规则、可用 Persona 和子 Agent 默认隔离。
+- [x] 全局配置保存在 AppData；项目配置同样保存在 AppData 并绑定规范仓库身份，同名项目配置覆盖全局，不自动修改仓库。
+- [x] 内置“普通开发、只读审查、自动修改、Worktree隔离开发、研究与探索”预设；新会话、分叉和持久任务均可选择配置档。
+- [x] 配置档必须解析为 Grok 原生进程参数、运行 Agent 定义和 `session/new._meta`；当前 ACP 未公布的 `maxTurns` 明确禁用并拒绝启动，Persona 白名单/子 Agent 隔离显示降级映射，不静默忽略。
+
+## 四、接口与安全边界
+
+- [x] 新增 `WorkspaceTreeNode`、`EditorDocument`、`EditorSaveConflict`、`GitRepositoryStatus`、`GitFileChange`、`GitBranchSummary`、`GrokWorktreeSummary`、`WorktreeApplyPreview`、`MemoryScope`、`MemoryEntry`、`MemorySettings`、`AgentDefinition`、`PersonaDefinition`、`AgentDashboardNode`、`SessionExecutionProfile`、`CliCapabilitySnapshot`、`AutomationHealthReport`。
+- [x] 新增类型化 IPC：`editor.*`、`workspace.tree.*`、`git.*`、`worktree.*`、`memory.*`、`agents.*`、`personas.*`、`dashboard.*`、`profiles.*`、`automations.checkHealth/repair`、`diagnostics.getCliCapabilities`。
+  - [x] 首批 `diagnostics.getCliCapabilities` 已通过现有受信任 Frame 校验链和最小 Preload API 接入；其他命名空间随对应服务实现。
+  - [x] `workspace.tree.*` 与 `editor.*` 已接入同一受信任 IPC/Preload 边界；所有实际路径与写操作仍由主进程服务复核。
+  - [x] `git.*`、`worktree.*` 与 `memory.*` 已接入同一发送者验证链；Renderer 只持有展示/编辑状态，文件、Git、进程和 Memory 操作均留在主进程。
+  - [x] `agents.*` 与 `personas.*` 已接入同一发送者验证链；路径归属、只读来源、名称、语法、哈希冲突、临时文件、备份、inspect 与回滚均由主进程复核。
+- [x] 文件、Git、Memory、Agent/Persona 配置、进程和凭据全部保留在主进程；Renderer 继续 `nodeIntegration: false`、`contextIsolation: true`、sandbox、发送者验证和最小化 Preload API。
+  - [x] Agent/Persona 文件发现、解析、写入、启停、重命名、删除、备份、CLI 校验和会话恢复均已留在主进程；Renderer 只持有目录展示与未保存文本。
+- [ ] CLI 初始化后按版本缓存 ACP核心、队列/插话、分叉/回退、Git/Worktree、Memory、Agent、插件/MCP、媒体、Codex读取器、额度和Computer能力；缺失功能提前禁用，核心 `initialize/session/new` 失败才触发CLI回滚。
+  - [x] 首阶段能力快照已按 CLI 版本缓存 `--help`、Worktree/Memory 子命令帮助和 `inspect --json` 的非付费证据，私有 ACP 方法保持 `unknown`；成功创建/打开会话会叠加 ACP 核心运行时证据。
+- [x] 任务健康检查可自动修复计划任务注册、当前可执行路径和已不存在的会话映射；固定账号、提供商、模型、工作区与已删除配置档失效时进入“需要配置”，且检查不解密或发送提示词。
+
+## 五、测试与发布门槛
+
+- [x] 编辑器测试覆盖编码/换行、原子保存、外部冲突、路径越界、大文件、标签/光标恢复、脏状态和等价的外部/Grok并发写入冲突。
+- [x] Git 使用临时仓库和本地 bare remote 覆盖状态、Diff、暂存、提交、分支、Pull/Push、取消、冲突、丢弃确认及脱敏；6 项聚焦测试未触碰用户真实仓库或真实 GitHub。
+- [x] Worktree覆盖创建、恢复、来源映射、Diff、Apply、冲突、保留、删除、GC和共享Memory；失败时目标与Worktree均不得丢失。
+  - [x] 4 项临时仓库聚焦测试已覆盖 Git 兼容层的创建/恢复/来源元数据、预览 Diff、Apply、冲突停止与双端保留、脏状态拒绝、删除、官方清单优先和 GC；Memory 测试另验证同一远程的主目录、子目录、独立克隆和 Worktree 使用完全相同的原生身份与目录键。
+- [x] Memory覆盖默认关闭、工作区启停、浏览/编辑/清空、Flush、Dream、路径约束、冲突和支持包排除。
+  - [x] 7 项隔离 `GROK_HOME` 测试覆盖原生身份/BLAKE3、默认关闭、设置/进程环境、分组浏览搜索、原子编辑/冲突、原生记住预览、结构化精确删除、会话删除、符号链接越界、固定清空参数和 Flush/Dream 状态；进程/ACP测试覆盖原生会话命令和结束策略，诊断测试验证支持包显式排除 Memory。付费模型改写未重复执行。
+- [x] Agent/Persona覆盖来源优先级、内置只读、Markdown/TOML往返、未知字段保持、契约、`grok inspect`回滚和热重载降级。
+  - [x] 6 项主进程服务测试、2 项 Renderer 原文补丁测试和 1 项进程管理增量测试覆盖来源/遮蔽、插件只读、结构字段、CRLF/YAML 列表、TOML 契约、外部哈希冲突、复制/启停/重命名/删除、持久备份、inspect 失败回滚、目录链接越界、可选热重载及仅空闲会话重启；隔离 Electron/CDP 探针验证 typed IPC、Agent/Persona 切换、结构化字段、Monaco 原文和未知字段保持。
+- [x] Dashboard/配置档覆盖父子生命周期、Worktree跳转、停止、全局/项目覆盖、能力降级及参数/ACP元数据转换。
+- [x] 集成流程固定为：创建Worktree配置档 → 启动会话映射 → 文件修改同步编辑器/Git → 查看Dashboard → 保存并恢复项目Memory → 预览并Apply → 人工制造冲突验证停止 → 解决并清理 → 验证自动批准参数只出现一次。临时仓库集成测试通过且不发送付费提示词。
+- [ ] 验证 `v0.5.16 → v0.6.0` 覆盖升级，保留DPAPI账号、任务、专属会话、Codex接力、计划任务注册和AppData；覆盖Windows 10 22H2、Windows 11 23H2/24H2、中文用户名、标准权限、安装/Portable、100–200%DPI及双屏。
+- [x] 遵循“开发只跑受影响测试、候选只跑一次完整离线套件、只生成一次正式候选包、未改Computer执行层不重复24项或付费验收”的测试纪律。完整套件一次执行得到262项通过、2项显式跳过和1项测试框架超时；仅调整该用例超时后聚焦Memory文件7/7通过，未重复完整套件；正式候选包只生成一次。
+- [x] 候选后界面重构只运行受影响门槛：TypeScript、生产构建、4个Renderer文件/8项聚焦测试及 Computer Use 本地源码版验收；已检查空状态、工作台菜单、文件工具栏、会话操作菜单/点击外部关闭和自定义背景可读性，未发送提示词、未重复完整套件、未重新打包。
+- [x] 本地版本已提升至`0.6.0`，矩阵/兼容文档/Changelog已更新；唯一候选打包生成无签名Setup、Portable、SHA-256、SBOM和许可证报告，并通过Fuses、产物公开扫描、打包壳层、Profiles/Dashboard/启动选择器/任务健康UI及中文空格路径Portable验收。
+- [ ] 仅在上项Windows外部设备/覆盖升级矩阵完成并获得明确发布指令后创建标签、上传GitHub Release和构建溯源；失败不得覆盖已有标签或资产。
 
 ---
 
