@@ -36,7 +36,7 @@
     "@noble/hashes": "2.2.0",
     "fflate": "0.8.3",
     "iconv-lite": "0.7.3",
-    "katex": "0.17.0",
+    "katex": "0.18.1",
     "mermaid": "11.16.0",
     "monaco-editor": "0.56.0",
     "react": "19.2.7",
