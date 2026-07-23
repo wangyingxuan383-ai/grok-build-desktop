@@ -10,11 +10,17 @@ let id = 0; const pending = new Map();
 socket.onmessage = ({ data }) => { const message = JSON.parse(data); const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id); message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); };
 const request = (method, params = {}) => new Promise((resolve, reject) => { const requestId = ++id; const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`${method} timed out`)); }, 15_000); pending.set(requestId, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject: (error) => { clearTimeout(timer); reject(error); } }); socket.send(JSON.stringify({ id: requestId, method, params })); });
 const evaluate = async (expression) => { const result = await request("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(result.exceptionDetails.text); return result.result?.value; };
-const chooseWorkbench = async (label) => evaluate(`(() => { const button = Array.from(document.querySelectorAll('.sidebar-primary-nav button, .project-tools nav button')).find((value) => value.textContent.includes(${JSON.stringify(label)})); button?.click(); return Boolean(button && !button.disabled); })()`);
+const runtimeGlobal = await request("Runtime.evaluate", { expression: "globalThis", returnByValue: false });
+const callFunction = async (functionDeclaration, ...values) => {
+  const result = await request("Runtime.callFunctionOn", { objectId: runtimeGlobal.result?.objectId, functionDeclaration, arguments: values.map((value) => ({ value })), awaitPromise: true, returnByValue: true });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  return result.result?.value;
+};
+const chooseWorkbench = (label) => callFunction("function (label) { const button = Array.from(document.querySelectorAll('.sidebar-primary-nav button, .project-tools nav button')).find((value) => value.textContent.includes(label)); button?.click(); return Boolean(button && !button.disabled); }", label);
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(window.grokDesktop && document.querySelector('.app-shell'))"), "Application shell did not render");
-  await evaluate(`window.grokDesktop.setWorkspace(${JSON.stringify(workspace)}).then(() => true)`);
+  await callFunction("async function (workspace) { await window.grokDesktop.setWorkspace(workspace); return true; }", workspace);
   await request("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate("Boolean(document.querySelector('.sidebar-primary-nav'))"), "Workbench navigation did not render");
   await chooseWorkbench("Worktree");

@@ -36,14 +36,18 @@ const evaluate = async (expression) => {
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
   return result.result?.value;
 };
-const chooseWorkbench = async (label) => {
-  return evaluate(`(() => { const button = Array.from(document.querySelectorAll('.sidebar-primary-nav button, .project-tools nav button')).find((value) => value.textContent.includes(${JSON.stringify(label)})); button?.click(); return Boolean(button && !button.disabled); })()`);
+const runtimeGlobal = await request("Runtime.evaluate", { expression: "globalThis", returnByValue: false });
+const callFunction = async (functionDeclaration, ...values) => {
+  const result = await request("Runtime.callFunctionOn", { objectId: runtimeGlobal.result?.objectId, functionDeclaration, arguments: values.map((value) => ({ value })), awaitPromise: true, returnByValue: true });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  return result.result?.value;
 };
+const chooseWorkbench = (label) => callFunction("function (label) { const button = Array.from(document.querySelectorAll('.sidebar-primary-nav button, .project-tools nav button')).find((value) => value.textContent.includes(label)); button?.click(); return Boolean(button && !button.disabled); }", label);
 
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(window.grokDesktop && document.querySelector('.app-shell'))"), "Application shell did not render");
-  await evaluate(`window.grokDesktop.setWorkspace(${JSON.stringify(workspace)}).then(() => true)`);
+  await callFunction("async function (workspace) { await window.grokDesktop.setWorkspace(workspace); return true; }", workspace);
   await request("Page.reload", { ignoreCache: true });
   await waitFor(() => evaluate("Boolean(document.querySelector('.sidebar-primary-nav'))"), "Workbench navigation did not render");
   await chooseWorkbench("源代码管理");

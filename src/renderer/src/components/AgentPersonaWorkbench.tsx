@@ -224,7 +224,7 @@ export function patchTomlScalar(raw: string, key: string, value: string | boolea
   const lines = raw.replace(/\r\n/g, "\n").split("\n");
   const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
   const limit = firstTable < 0 ? lines.length : firstTable;
-  const index = lines.slice(0, limit).findIndex((line) => new RegExp(`^\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\s*=`).test(line));
+  const index = lines.slice(0, limit).findIndex((line) => new RegExp(`^\\s*${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*=`).test(line));
   const serialized = value === undefined ? undefined : `${key} = ${typeof value === "boolean" ? value : JSON.stringify(value)}`;
   if (index < 0) { if (serialized) lines.splice(limit, 0, serialized); }
   else {

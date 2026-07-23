@@ -9,7 +9,13 @@ let id = 0; const pending = new Map();
 socket.onmessage = ({ data }) => { const message = JSON.parse(data); const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id); message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); };
 const request = (method, params = {}) => new Promise((resolve, reject) => { const requestId = ++id; const timer = setTimeout(() => reject(new Error(`${method} timed out`)), 20_000); pending.set(requestId, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject }); socket.send(JSON.stringify({ id: requestId, method, params })); });
 const evaluate = async (expression) => { const result = await request("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(result.exceptionDetails.text); return result.result?.value; };
-const clickText = (selector, text) => evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).find((node) => node.textContent.trim().includes(${JSON.stringify(text)}))?.click()`);
+const runtimeGlobal = await request("Runtime.evaluate", { expression: "globalThis", returnByValue: false });
+const callFunction = async (functionDeclaration, ...values) => {
+  const result = await request("Runtime.callFunctionOn", { objectId: runtimeGlobal.result?.objectId, functionDeclaration, arguments: values.map((value) => ({ value })), awaitPromise: true, returnByValue: true });
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  return result.result?.value;
+};
+const clickText = (selector, text) => callFunction("function (selector, text) { const node = Array.from(document.querySelectorAll(selector)).find((candidate) => candidate.textContent.trim().includes(text)); node?.click(); return Boolean(node); }", selector, text);
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))"), "Application shell did not render");
