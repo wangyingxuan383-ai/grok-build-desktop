@@ -86,7 +86,7 @@ try {
   await pressKey("Escape");
   await request("Emulation.clearDeviceMetricsOverride");
   stage("verify theme editor and whole-window overlay");
-  await evaluate("document.querySelector('.topbar .icon-button:last-child')?.click(); true");
+  await evaluate("document.querySelector('.sidebar-footer button[title=\"设置\"]')?.click(); true");
   await waitFor(() => evaluate("Boolean(document.querySelector('.theme-editor'))"), "Theme editor did not open");
   const selectCount = await evaluate("document.querySelectorAll('.theme-editor select').length");
   if (selectCount < 1) throw new Error("Theme mode selector is missing");
@@ -134,14 +134,19 @@ try {
   // theme and modal transitions even with software rendering, so CI verifies
   // these heavier panels in fresh renderer processes below instead.
   if (!isGitHubHostedRunner) {
-    for (const selector of ['.task-entry', '.extensions-entry', '.media-entry']) {
-      stage(`verify ${selector} overlay`);
-      await evaluate(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
-      await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${selector} panel did not open in overlay root`);
+    const overlayEntries = [
+      { label: "任务", open: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()` },
+      { label: "扩展", open: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()` },
+      { label: "创作", open: `(() => { const menu = document.querySelector('.topbar-more'); if (menu) menu.open = true; [...(menu?.querySelectorAll('button') ?? [])].find(node => node.textContent?.trim() === '创作')?.click(); return true; })()` },
+    ];
+    for (const entry of overlayEntries) {
+      stage(`verify ${entry.label} overlay`);
+      await evaluate(entry.open);
+      await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${entry.label} panel did not open in overlay root`);
       const bounds = await evaluate(`(() => { const rect = document.querySelector('#overlay-root .control-panel').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);
-      if (bounds.left < 0 || bounds.top < 0 || bounds.right > bounds.width || bounds.bottom > bounds.height) throw new Error(`${selector} panel escaped viewport: ${JSON.stringify(bounds)}`);
+      if (bounds.left < 0 || bounds.top < 0 || bounds.right > bounds.width || bounds.bottom > bounds.height) throw new Error(`${entry.label} panel escaped viewport: ${JSON.stringify(bounds)}`);
       await pressKey("Escape");
-      await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${selector} panel did not close`);
+      await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${entry.label} panel did not close`);
     }
   }
   stage("complete");

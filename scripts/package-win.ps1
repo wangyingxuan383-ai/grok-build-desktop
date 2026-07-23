@@ -13,7 +13,8 @@ $Release = [IO.Path]::GetFullPath((Join-Path $Root 'release'))
 $RootPrefix = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
 if (-not $Release.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'release 目录越出仓库根目录。' }
 if (Test-Path -LiteralPath $Release -PathType Container) {
-    Get-ChildItem -LiteralPath $Release -File | Where-Object { $_.Name -match '^Grok-Build-Desktop-' -or $_.Name -in @('SHA256SUMS.txt','THIRD_PARTY_LICENSES.json','builder-debug.yml','builder-effective-config.yaml','latest.yml') } | Remove-Item -Force
+    $EscapedVersion = [Regex]::Escape($Version)
+    Get-ChildItem -LiteralPath $Release -File | Where-Object { $_.Name -match "^Grok-Build-Desktop-(?:Setup-v|Portable-v)?$EscapedVersion(?:-|\.)" -or $_.Name -in @('SHA256SUMS.txt','THIRD_PARTY_LICENSES.json','builder-debug.yml','builder-effective-config.yaml','latest.yml') } | Remove-Item -Force
     $Unpacked = [IO.Path]::GetFullPath((Join-Path $Release 'win-unpacked'))
     if ((Test-Path -LiteralPath $Unpacked -PathType Container) -and $Unpacked.StartsWith($Release.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $Unpacked -Recurse -Force }
 }
@@ -84,6 +85,7 @@ if ($ReleaseArtifactsOnly) {
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v062-ui.mjs'
     foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {
         & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
     }

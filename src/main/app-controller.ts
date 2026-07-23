@@ -44,6 +44,9 @@ import type {
   CustomProviderInput,
   CustomProviderProfile,
   ProviderConnectivityResult,
+  ProviderConnectionDraft,
+  ProviderDraftProbeResult,
+  ProviderModelCandidate,
   AutomationTask,
   AutomationTaskInput,
   AutomationRunRecord,
@@ -52,6 +55,58 @@ import type {
   SessionForkResult,
   BackgroundTaskSummary,
   NotificationInboxItem,
+  OfflineUiFixture,
+  CliCapabilitySnapshot,
+  WorkspaceTreeNode,
+  WorkspaceTreeOptions,
+  EditorDocument,
+  EditorOpenResult,
+  EditorSaveInput,
+  EditorSaveResult,
+  GitBranchSummary,
+  GitCommitDetails,
+  GitCommitSummary,
+  GitDiffResult,
+  GitDiscardInput,
+  GitOperationResult,
+  GitRepositoryStatus,
+  GitRepositoryTrust,
+  GitWorkspaceCapability,
+  GitReviewScope,
+  GitReviewSnapshot,
+  GitReviewIndex,
+  GitReviewFileDetail,
+  GitHunkActionInput,
+  GrokWorktreeSummary,
+  WorktreeApplyPreview,
+  WorktreeApplyResult,
+  WorktreeCreateInput,
+  WorktreeGcPreview,
+  MemoryEntry,
+  MemoryDeletePreview,
+  MemoryLayout,
+  MemoryRememberPreview,
+  MemorySaveInput,
+  MemorySaveResult,
+  MemorySettings,
+  MemoryStructuredEntry,
+  AgentDefinition,
+  AgentDefinitionSaveInput,
+  DefinitionActionResult,
+  DefinitionMutationResult,
+  DefinitionValidation,
+  PersonaDefinition,
+  PersonaDefinitionSaveInput,
+  ExecutionProfileForkInput,
+  ExecutionProfileLaunchInput,
+  ExecutionProfileSaveInput,
+  ExecutionProfileValidation,
+  SessionExecutionAssignment,
+  SessionExecutionProfile,
+  SessionLaunchResult,
+  AgentDashboardQuery,
+  AgentDashboardSnapshot,
+  AutomationHealthReport,
 } from "../shared/types";
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
@@ -85,6 +140,19 @@ import { ProviderService, validateGrokConfig } from "./services/provider-service
 import { AutomationService } from "./services/automation-service";
 import { resolveAutomationSessionAction } from "./services/automation-session-lifecycle";
 import { NotificationInboxService } from "./services/notification-inbox";
+import { CliCapabilityService } from "./services/cli-capability-service";
+import { WorkspaceTreeService } from "./services/workspace-tree-service";
+import { EditorService } from "./services/editor-service";
+import { GitService } from "./services/git-service";
+import { WorktreeService } from "./services/worktree-service";
+import { MemoryService } from "./services/memory-service";
+import { AgentDefinitionService } from "./services/agent-definition-service";
+import { ExecutionProfileService, type CompiledExecutionProfile } from "./services/execution-profile-service";
+import { AgentDashboardService } from "./services/agent-dashboard-service";
+import { checkAutomationHealth } from "./services/automation-health-service";
+import { resolveExistingWorkspacePath } from "./services/workspace-path-policy";
+import { AttachmentCacheService } from "./services/attachment-cache-service";
+import { TurnPresentationService } from "./services/turn-presentation-service";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   cliPath: "",
@@ -100,7 +168,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentWorkspaces: [],
   activeWorkspace: "",
   codexGroupCollapsed: true,
-  sessionGroupCollapsed: { normal: false, fork: false, automation: true, "codex-continuation": true, other: true },
+  sessionGroupCollapsed: { normal: false, fork: false, worktree: false, automation: true, "codex-continuation": true, other: true },
   showArchivedCodex: false,
   theme: structuredClone(DEFAULT_THEME),
 };
@@ -131,6 +199,17 @@ export class AppController {
   private readonly providers: ProviderService;
   private readonly automations: AutomationService;
   private readonly inbox: NotificationInboxService;
+  private readonly cliCapabilities: CliCapabilityService;
+  private readonly workspaceTree = new WorkspaceTreeService();
+  private readonly editor = new EditorService();
+  private readonly git: GitService;
+  private readonly worktrees: WorktreeService;
+  private readonly memory: MemoryService;
+  private readonly definitions: AgentDefinitionService;
+  private readonly profiles: ExecutionProfileService;
+  private readonly dashboard: AgentDashboardService;
+  private readonly attachmentCache: AttachmentCacheService;
+  private readonly turnPresentations: TurnPresentationService;
   private window?: BrowserWindow;
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
@@ -140,10 +219,14 @@ export class AppController {
     this.appConfig = loadAppConfig();
     this.buildInfo = createBuildInfo(this.appConfig);
     this.settingsStore = new JsonStore(join(userDataPath, "settings.json"), { ...DEFAULT_SETTINGS, cliPath: this.appConfig.mockCliPath });
+    this.git = new GitService(userDataPath);
+    this.memory = new MemoryService(userDataPath, () => this.settingsStore.get());
     this.themeService = new ThemeService(userDataPath, (path) => !nativeImage.createFromPath(path).isEmpty());
     this.log = new LogService(join(userDataPath, "logs", "app.log"));
     this.vault = new AccountVault(userDataPath);
     this.catalog = new SessionCatalog(userDataPath);
+    this.attachmentCache = new AttachmentCacheService(userDataPath);
+    this.turnPresentations = new TurnPresentationService(userDataPath);
     this.codex = new CodexSessionCatalog(userDataPath, this.log);
     this.workspaces = new WorkspaceCatalog(userDataPath, this.codex);
     this.uiState = new UiStateService(userDataPath);
@@ -187,7 +270,18 @@ export class AppController {
       (leaseId, sessionId) => this.computer.bindLease(leaseId, sessionId),
       (leaseId) => void this.computer.releaseLease(leaseId),
       () => this.vault.mcpSecretEnvironment(),
+      (cwd) => this.memory.sessionEnvironment(cwd),
+      (sessionId, session) => this.finalizeMemorySession(sessionId, session),
     );
+    this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
+      reload: {
+        restartIdleSessions: () => this.processes.restartIdleSessions(),
+        hasLiveSessions: () => this.processes.snapshots().length > 0,
+      },
+    });
+    this.profiles = new ExecutionProfileService(userDataPath, { resolveWorkspaceIdentity: async (cwd) => (await this.memory.resolveLayout(cwd)).workspaceIdentity });
+    this.dashboard = new AgentDashboardService(userDataPath);
+    this.worktrees = new WorktreeService(userDataPath, this.git, { requestExtension: (method, params) => this.processes.extensionRequest(method, params) });
     this.auth = new AuthService(
       this.vault,
       () => this.settingsStore.get(),
@@ -195,6 +289,7 @@ export class AppController {
       this.log,
       (state) => this.window?.webContents.send("grok:login", state),
     );
+    this.cliCapabilities = new CliCapabilityService(() => this.settingsStore.get(), () => this.auth.activeApiKey());
     this.updater = new CliUpdateService(
       userDataPath,
       () => this.settingsStore.get(),
@@ -268,6 +363,10 @@ export class AppController {
 
   async bootstrap(): Promise<BootstrapData> {
     await backupUiMetadataForVersion(this.userDataPath, app.getVersion()).catch((error) => this.log.log(error));
+    // Finish orphan cleanup before the renderer can restore or materialize
+    // attachments. Running this in the background allowed sweep() to remove a
+    // freshly-created session directory during a fast renderer reload.
+    await this.catalog.allSessionIds().then((ids) => this.attachmentCache.sweep(ids)).catch(() => this.log.log("附件缓存清理失败"));
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1") await this.auth.importCurrentIfNeeded().catch((error) => this.log.log(error));
     let settings = await this.settingsStore.get();
     if (settings.fontScale < 85) {
@@ -302,6 +401,7 @@ export class AppController {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState> { return this.onboarding.update(patch); }
   resetOnboarding(): Promise<OnboardingState> { return this.onboarding.reset(); }
   runDiagnostics(): Promise<SystemCompatibilityReport> { return this.diagnostics.run(); }
+  getCliCapabilities(force = false): Promise<CliCapabilitySnapshot> { return this.cliCapabilities.get(force); }
   async previewSupportBundle(): Promise<SupportBundlePreview> { return this.diagnostics.preview(); }
   async exportSupportBundle(): Promise<string | null> {
     const target = await dialog.showSaveDialog(this.window!, { title: "导出脱敏支持包", defaultPath: `grok-build-desktop-support-${new Date().toISOString().slice(0, 10)}.zip`, filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }] });
@@ -330,7 +430,14 @@ export class AppController {
   async listSessions(cwd?: string, query = ""): Promise<SessionSummary[]> {
     const workspace = cwd || (await this.settingsStore.get()).activeWorkspace;
     await this.syncSessionOrigins(workspace);
-    return this.catalog.list(workspace, query, this.processes.liveStatuses());
+    const assignments = (await this.profiles.listAssignments()).filter((value) => samePath(value.sourceWorkspacePath, workspace));
+    const roots = [...new Set([workspace, ...assignments.map((value) => value.cwd)])];
+    const rows = (await Promise.all(roots.map((root) => this.catalog.list(root, query, this.processes.liveStatuses())))).flat();
+    const assignmentBySession = new Map(assignments.map((value) => [value.sessionId, value]));
+    return rows.map((row) => {
+      const assignment = assignmentBySession.get(row.id);
+      return assignment ? { ...row, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : row;
+    }).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index).sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.updatedAt.localeCompare(left.updatedAt));
   }
 
   private async syncSessionOrigins(cwd: string): Promise<void> {
@@ -367,19 +474,194 @@ export class AppController {
   }
 
   searchWorkspaceFiles(cwd: string, query: string, limit = 12): Promise<WorkspaceFileCandidate[]> { return this.workspaceFiles.search(cwd, query, limit); }
+  listWorkspaceTree(cwd: string, directoryPath = "", options: WorkspaceTreeOptions = {}): Promise<WorkspaceTreeNode[]> { return this.workspaceTree.list(cwd, directoryPath, options); }
+  openEditorDocument(cwd: string, path: string): Promise<EditorOpenResult> { return this.editor.open(cwd, path); }
+  saveEditorDocument(input: EditorSaveInput): Promise<EditorSaveResult> { return this.editor.save(input).then((result) => { if (result.saved) this.workspaceFiles.invalidate(input.workspacePath); return result; }); }
+  createEditorFile(cwd: string, path: string, content = ""): Promise<EditorDocument> { return this.editor.createFile(cwd, path, content).then((result) => { this.workspaceFiles.invalidate(cwd); return result; }); }
+  createEditorDirectory(cwd: string, path: string): Promise<void> { return this.editor.createDirectory(cwd, path).then(() => { this.workspaceFiles.invalidate(cwd); }); }
+  renameEditorPath(cwd: string, path: string, targetPath: string): Promise<string> { return this.editor.rename(cwd, path, targetPath).then((result) => { this.workspaceFiles.invalidate(cwd); return result; }); }
+  deleteEditorPath(cwd: string, path: string, confirmed: boolean): Promise<void> { return this.editor.delete(cwd, path, confirmed).then(() => { this.workspaceFiles.invalidate(cwd); }); }
+  async revealEditorPath(cwd: string, path: string): Promise<void> { const target = await resolveExistingWorkspacePath(cwd, path, false); shell.showItemInFolder(target.path); }
+  getGitRepositoryTrust(cwd: string): Promise<GitRepositoryTrust> { return this.git.getRepositoryTrust(cwd); }
+  getGitWorkspaceCapability(cwd: string): Promise<GitWorkspaceCapability> { return this.git.capability(cwd); }
+  setGitRepositoryTrust(cwd: string, repositoryRoot: string, trusted: boolean): Promise<GitRepositoryTrust> { return this.git.setRepositoryTrust(cwd, repositoryRoot, trusted); }
+  getGitStatus(cwd: string): Promise<GitRepositoryStatus> { return this.git.status(cwd); }
+  getGitDiff(cwd: string, staged: boolean, path?: string): Promise<GitDiffResult> { return this.git.diff(cwd, staged, path); }
+  getGitReview(cwd: string, scope: GitReviewScope): Promise<GitReviewSnapshot> { return this.git.review(cwd, scope); }
+  getGitReviewIndex(cwd: string, scope: GitReviewScope): Promise<GitReviewIndex> { return this.git.reviewIndex(cwd, scope); }
+  getGitReviewFileDetail(cwd: string, scope: GitReviewScope, snapshotId: string, fileId: string): Promise<GitReviewFileDetail> { return this.git.reviewFileDetail(cwd, scope, snapshotId, fileId); }
+  applyGitReviewHunk(cwd: string, input: GitHunkActionInput): Promise<GitReviewSnapshot> { return this.git.applyReviewHunk(cwd, input); }
+  stageGitChanges(cwd: string, paths?: string[]): Promise<GitRepositoryStatus> { return this.git.stage(cwd, paths); }
+  unstageGitChanges(cwd: string, paths?: string[]): Promise<GitRepositoryStatus> { return this.git.unstage(cwd, paths); }
+  commitGitChanges(cwd: string, message: string): Promise<GitCommitSummary> { return this.git.commit(cwd, message); }
+  listGitBranches(cwd: string): Promise<GitBranchSummary[]> { return this.git.listBranches(cwd); }
+  createGitBranch(cwd: string, name: string, startPoint?: string): Promise<GitRepositoryStatus> { return this.git.createBranch(cwd, name, startPoint); }
+  switchGitBranch(cwd: string, name: string): Promise<GitRepositoryStatus> { return this.git.switchBranch(cwd, name); }
+  listGitHistory(cwd: string, limit?: number): Promise<GitCommitSummary[]> { return this.git.history(cwd, limit); }
+  getGitCommitDetails(cwd: string, hash: string): Promise<GitCommitDetails> { return this.git.commitDetails(cwd, hash); }
+  discardGitChanges(cwd: string, input: GitDiscardInput): Promise<GitRepositoryStatus> { return this.git.discard(cwd, input); }
+  pullGitRepository(cwd: string, operationId: string): Promise<GitOperationResult> { return this.git.pull(cwd, operationId); }
+  pushGitRepository(cwd: string, operationId: string): Promise<GitOperationResult> { return this.git.push(cwd, operationId); }
+  cancelGitOperation(operationId: string): boolean { return this.git.cancelOperation(operationId); }
+  listWorktrees(cwd: string): Promise<GrokWorktreeSummary[]> { return this.worktrees.list(cwd); }
+  createWorktree(input: WorktreeCreateInput): Promise<GrokWorktreeSummary> { return this.worktrees.create(input); }
+  previewWorktreeApply(cwd: string, worktreeId: string): Promise<WorktreeApplyPreview> { return this.worktrees.previewApply(cwd, worktreeId); }
+  applyWorktree(cwd: string, worktreeId: string, confirmationToken: string, confirmed: boolean, cleanup = false): Promise<WorktreeApplyResult> { return this.worktrees.apply(cwd, worktreeId, confirmationToken, confirmed, cleanup); }
+  removeWorktree(cwd: string, worktreeId: string, confirmed: boolean): Promise<void> { return this.worktrees.remove(cwd, worktreeId, confirmed); }
+  previewWorktreeGc(cwd: string): Promise<WorktreeGcPreview> { return this.worktrees.previewGc(cwd); }
+  gcWorktrees(cwd: string, confirmationToken: string, confirmed: boolean): Promise<WorktreeGcPreview> { return this.worktrees.gc(cwd, confirmationToken, confirmed); }
+  resolveMemoryLayout(cwd: string): Promise<MemoryLayout> { return this.memory.resolveLayout(cwd); }
+  getMemorySettings(cwd: string): Promise<MemorySettings> { return this.memory.getSettingsForWorkspace(cwd); }
+  async updateMemorySettings(cwd: string, patch: Partial<Pick<MemorySettings, "enabled" | "saveOnSessionEnd" | "autoDream">>, sessionId?: string): Promise<MemorySettings> {
+    const previous = await this.memory.getSettingsForWorkspace(cwd);
+    const enabledChanged = patch.enabled !== undefined && patch.enabled !== previous.enabled;
+    const snapshot = enabledChanged && sessionId ? this.processes.snapshot(sessionId) : undefined;
+    let affectsLiveSession = false;
+    if (snapshot) {
+      const [requestedLayout, sessionLayout] = await Promise.all([this.memory.resolveLayout(cwd), this.memory.resolveLayout(snapshot.cwd)]);
+      affectsLiveSession = requestedLayout.workspaceIdentity === sessionLayout.workspaceIdentity;
+      if (affectsLiveSession) {
+        const adapter = this.processes.get(sessionId!);
+        if (adapter.working || adapter.needsUser) throw new Error("当前会话正在运行或等待操作，完成后再切换 Memory");
+      }
+    }
+    const updated = await this.memory.updateSettings(cwd, patch);
+    if (!affectsLiveSession || !snapshot || !sessionId) return updated;
+    try {
+      const adapter = this.processes.get(sessionId);
+      const hasNativeToggle = adapter.commands.some((command) => command.name.replace(/^\//, "") === "memory");
+      if (!patch.enabled && hasNativeToggle) await adapter.prompt("/memory off");
+      else await this.processes.restartSession(sessionId, patch.enabled ? "正在启用 Memory 并恢复会话…" : "正在关闭 Memory 并恢复会话…");
+      return await this.memory.getSettingsForWorkspace(cwd);
+    } catch (error) {
+      await this.memory.updateSettings(cwd, { enabled: previous.enabled, saveOnSessionEnd: previous.saveOnSessionEnd, autoDream: previous.autoDream });
+      try {
+        if (this.processes.snapshot(sessionId)) await this.processes.restartSession(sessionId, "Memory 切换失败，正在恢复原设置…");
+        else await this.processes.openConfigured(snapshot.cwd, snapshot.sessionId, snapshot.effort, snapshot.mode, snapshot.modelId ?? "");
+      } catch (rollbackError) {
+        throw new Error(`Memory 切换失败，且原会话恢复失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+      }
+      throw new Error(`Memory 切换失败，已恢复原设置：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  listMemory(cwd: string, query?: string): Promise<MemoryEntry[]> { return this.memory.list(cwd, query); }
+  saveMemory(input: MemorySaveInput): Promise<MemorySaveResult> { return this.memory.save(input); }
+  previewRemember(cwd: string, scope: "global" | "workspace", text: string): Promise<MemoryRememberPreview> { return this.memory.previewRemember(cwd, scope, text); }
+  async rememberMemory(preview: MemoryRememberPreview, confirmationToken: string, confirmed: boolean, sessionId?: string): Promise<MemoryEntry> {
+    if (!sessionId) return this.memory.remember(preview, confirmationToken, confirmed);
+    await this.memory.confirmRememberPreview(preview, confirmationToken, confirmed);
+    const session = this.processes.get(sessionId);
+    if (session.working || session.needsUser) throw new Error("当前会话正在运行或等待操作");
+    const [targetLayout, sessionLayout, before] = await Promise.all([this.memory.resolveLayout(preview.workspacePath), this.memory.resolveLayout(session.cwd), this.memory.list(preview.workspacePath)]);
+    if (targetLayout.workspaceIdentity !== sessionLayout.workspaceIdentity) throw new Error("当前会话不属于所选 Memory 工作区");
+    const settings = await this.memory.getSettingsForWorkspace(preview.workspacePath);
+    if (!settings.enabled) throw new Error("请先为当前工作区启用 Memory");
+    const previous = before.find((value) => value.id === preview.scope);
+    const target = preview.scope === "global" ? "全局 Memory" : "当前工作区 Memory（不要写入全局 Memory）";
+    await session.prompt(`/remember 请将下面的长期记忆整理并保存到${target}：\n\n${preview.text}`);
+    const entry = (await this.memory.list(preview.workspacePath)).find((value) => value.id === preview.scope)!;
+    if (entry.hash === previous?.hash) throw new Error("原生 /remember 未更新所选范围，请检查会话结果后重试");
+    return entry;
+  }
+  listMemoryStructuredEntries(cwd: string, scope?: "global" | "workspace"): Promise<MemoryStructuredEntry[]> { return this.memory.listStructured(cwd, scope); }
+  previewDeleteMemoryEntry(cwd: string, entryId: string): Promise<MemoryDeletePreview> { return this.memory.previewDelete(cwd, entryId); }
+  deleteMemoryEntry(preview: MemoryDeletePreview, confirmationToken: string, confirmed: boolean): Promise<MemoryEntry> { return this.memory.deleteStructured(preview, confirmationToken, confirmed); }
+  deleteSessionMemory(cwd: string, entryId: string, confirmed: boolean): Promise<void> { return this.memory.deleteSession(cwd, entryId, confirmed); }
+  clearMemory(cwd: string, scope: "workspace" | "global" | "all", confirmed: boolean): Promise<MemoryEntry[]> { return this.memory.clear(cwd, scope, confirmed); }
+  async runMemoryCommand(sessionId: string, command: "flush" | "dream"): Promise<MemorySettings> {
+    const session = this.processes.get(sessionId);
+    if (session.working || session.needsUser) throw new Error("当前会话正在运行或等待操作");
+    await this.memory.markCommand(session.cwd, command, "running");
+    try {
+      await session.prompt(`/${command}`);
+      return await this.memory.markCommand(session.cwd, command, "completed");
+    } catch (error) {
+      await this.memory.markCommand(session.cwd, command, "failed");
+      throw error;
+    }
+  }
+  listAgentDefinitions(cwd: string): Promise<AgentDefinition[]> { return this.definitions.listAgents(cwd); }
+  validateAgentDefinition(rawMarkdown: string, expectedName?: string): DefinitionValidation { return this.definitions.validateAgent(rawMarkdown, expectedName); }
+  saveAgentDefinition(input: AgentDefinitionSaveInput): Promise<DefinitionMutationResult<AgentDefinition>> { return this.definitions.saveAgent(input); }
+  copyAgentDefinition(cwd: string, sourcePath: string, targetSource: "user" | "project", newName: string): Promise<DefinitionMutationResult<AgentDefinition>> { return this.definitions.copyAgent(cwd, sourcePath, targetSource, newName); }
+  renameAgentDefinition(cwd: string, sourcePath: string, newName: string): Promise<DefinitionMutationResult<AgentDefinition>> { return this.definitions.renameAgent(cwd, sourcePath, newName); }
+  setAgentDefinitionEnabled(cwd: string, sourcePath: string, enabled: boolean): Promise<DefinitionMutationResult<AgentDefinition>> { return this.definitions.setAgentEnabled(cwd, sourcePath, enabled); }
+  deleteAgentDefinition(cwd: string, sourcePath: string, confirmed: boolean): Promise<DefinitionActionResult> { return this.definitions.deleteAgent(cwd, sourcePath, confirmed); }
+  listPersonaDefinitions(cwd: string): Promise<PersonaDefinition[]> { return this.definitions.listPersonas(cwd); }
+  validatePersonaDefinition(rawToml: string): DefinitionValidation { return this.definitions.validatePersona(rawToml); }
+  savePersonaDefinition(input: PersonaDefinitionSaveInput): Promise<DefinitionMutationResult<PersonaDefinition>> { return this.definitions.savePersona(input); }
+  copyPersonaDefinition(cwd: string, sourcePath: string, targetSource: "user" | "project", newName: string): Promise<DefinitionMutationResult<PersonaDefinition>> { return this.definitions.copyPersona(cwd, sourcePath, targetSource, newName); }
+  renamePersonaDefinition(cwd: string, sourcePath: string, newName: string): Promise<DefinitionMutationResult<PersonaDefinition>> { return this.definitions.renamePersona(cwd, sourcePath, newName); }
+  setPersonaDefinitionEnabled(cwd: string, sourcePath: string, enabled: boolean): Promise<DefinitionMutationResult<PersonaDefinition>> { return this.definitions.setPersonaEnabled(cwd, sourcePath, enabled); }
+  deletePersonaDefinition(cwd: string, sourcePath: string, confirmed: boolean): Promise<DefinitionActionResult> { return this.definitions.deletePersona(cwd, sourcePath, confirmed); }
+  listExecutionProfiles(cwd: string): Promise<SessionExecutionProfile[]> { return this.profiles.list(cwd); }
+  validateExecutionProfile(profile: SessionExecutionProfile): ExecutionProfileValidation { return this.profiles.validate(profile); }
+  saveExecutionProfile(input: ExecutionProfileSaveInput): Promise<SessionExecutionProfile[]> { return this.profiles.save(input); }
+  deleteExecutionProfile(cwd: string, profileId: string, confirmed: boolean): Promise<SessionExecutionProfile[]> { return this.profiles.remove(cwd, profileId, confirmed); }
+  getSessionExecutionAssignment(sessionId: string): Promise<SessionExecutionAssignment | undefined> { return this.profiles.assignment(sessionId); }
+  async getAgentDashboard(query: AgentDashboardQuery): Promise<AgentDashboardSnapshot> {
+    const [sessions, assignments, tasks] = await Promise.all([
+      this.listSessions(query.workspacePath),
+      this.profiles.listAssignments().then((values) => values.filter((value) => samePath(value.sourceWorkspacePath, query.workspacePath))),
+      this.listBackgroundTasks(),
+    ]);
+    const liveSessions = this.processes.snapshots().filter((value) => assignments.some((assignment) => assignment.sessionId === value.sessionId) || samePath(value.cwd, query.workspacePath));
+    const liveCapability = tasks.some((value) => value.kind === "subagent") ? "supported" as const : "unknown" as const;
+    return this.dashboard.snapshot({ query, sessions, liveSessions, tasks, assignments, liveCapability });
+  }
+  async stopAgentDashboardNode(nodeId: string): Promise<void> {
+    if (nodeId.startsWith("task:")) return this.killBackgroundTask(nodeId.slice("task:".length));
+    const marker = ":subagent:";
+    const at = nodeId.indexOf(marker);
+    if (at >= 0) return this.processes.killBackgroundTask(nodeId.slice("session:".length, at), `subagent:${nodeId.slice(at + marker.length)}`);
+    if (nodeId.startsWith("session:")) return this.cancelSession(nodeId.slice("session:".length));
+    throw new Error("Agent Dashboard 节点标识无效");
+  }
+  clearAgentDashboardRecord(nodeId?: string): Promise<void> { return this.dashboard.clear(nodeId); }
   async inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]> { return inspectAttachmentPrivacy(cwd, attachments); }
 
-  async createSession(cwd: string): Promise<{ sessionId: string }> {
-    const result = await this.processes.create(cwd);
+  async createSession(input: string | ExecutionProfileLaunchInput): Promise<SessionLaunchResult> {
+    const launch = typeof input === "string" ? { workspacePath: input } : input;
+    const workspace = (await resolveExistingWorkspacePath(launch.workspacePath, ".", true)).path;
+    const compiled = await this.compileExecutionProfile(workspace, launch.profileId);
+    let targetCwd = workspace;
+    let worktree: GrokWorktreeSummary | undefined;
+    if (compiled.profile.worktree) {
+      worktree = await this.worktrees.create({ workspacePath: workspace, name: launch.worktreeName?.trim() || `${profileSlug(compiled.profile.name)}-${new Date().toISOString().slice(0, 10)}`, baseRef: launch.worktreeRef?.trim() || compiled.profile.worktreeRef, agentId: compiled.profile.agentId });
+      targetCwd = worktree.path;
+    }
+    const settings = await this.settingsStore.get();
+    let result: { sessionId: string };
+    try {
+      result = await this.processes.createConfigured(targetCwd, compiled.effort || settings.defaultEffort, compiled.mode, compiled.modelId || settings.defaultModel, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+    } catch (error) {
+      if (worktree) await this.worktrees.remove(workspace, worktree.id, true).catch(() => undefined);
+      throw error;
+    }
+    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew"]).catch((error) => this.log.log(error));
     this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
-    return result;
+    const assignment: SessionExecutionAssignment = { sessionId: result.sessionId, sourceWorkspacePath: workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
+    await this.profiles.assign(assignment);
+    if (worktree) await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "worktree", id: worktree.id, title: compiled.profile.name, suggestedTitle: worktree.name }]);
+    return { sessionId: result.sessionId, cwd: targetCwd, profileId: compiled.profile.id, worktreeId: worktree?.id };
   }
 
   async openSession(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
     this.focusedSessionId = sessionId;
     await this.catalog.markRead(sessionId);
-    return this.processes.open(cwd, sessionId);
+    const assignment = await this.profiles.assignment(sessionId);
+    const targetCwd = assignment?.cwd ?? cwd;
+    const result = assignment
+      ? await this.openAssignedSession(assignment)
+      : await this.processes.open(cwd, sessionId);
+    const attachmentEntries = await this.attachmentCache.restore(sessionId);
+    if (attachmentEntries.length) await this.handleEvent({ type: "user-attachments-restore", sessionId, entries: attachmentEntries });
+    const presentations = await this.turnPresentations.list(sessionId);
+    this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
+    await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
+    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize"]).catch((error) => this.log.log(error));
+    return result;
   }
 
   async renameSession(sessionId: string, title: string): Promise<void> {
@@ -387,14 +669,25 @@ export class AppController {
   }
 
   async deleteSession(cwd: string, sessionId: string): Promise<void> {
+    const assignment = await this.profiles.assignment(sessionId);
     await this.processes.close(sessionId);
-    await this.catalog.delete(cwd, sessionId);
+    await this.catalog.delete(assignment?.cwd ?? cwd, sessionId);
+    await this.profiles.removeAssignment(sessionId);
+    await this.dashboard.clear(`session:${sessionId}`);
+    await this.attachmentCache.cleanupSession(sessionId);
+    await this.turnPresentations.delete(sessionId);
     if (this.focusedSessionId === sessionId) this.focusedSessionId = "";
   }
 
   async clearSessions(cwd: string, keepSessionId?: string): Promise<void> {
+    const removedSessionIds = (await this.catalog.list(cwd)).map((session) => session.id).filter((id) => id !== keepSessionId);
     await this.processes.stopAll();
     await this.catalog.clear(cwd, keepSessionId);
+    for (const assignment of (await this.profiles.listAssignments()).filter((value) => samePath(value.sourceWorkspacePath, cwd) && value.sessionId !== keepSessionId)) {
+      await this.catalog.delete(assignment.cwd, assignment.sessionId).catch(() => undefined);
+      await this.profiles.removeAssignment(assignment.sessionId);
+    }
+    await Promise.all(removedSessionIds.flatMap((sessionId) => [this.attachmentCache.cleanupSession(sessionId), this.turnPresentations.delete(sessionId)]));
   }
 
   pinSession(sessionId: string, pinned: boolean): Promise<void> { return this.catalog.pin(sessionId, pinned); }
@@ -411,8 +704,55 @@ export class AppController {
     return detectMediaCapabilities(await this.processes.waitForCommands(sessionId));
   }
 
-  async sendPrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void> {
-    await this.processes.get(sessionId).prompt(text, attachments);
+  async sendPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
+    clientMessageId ??= crypto.randomUUID();
+    const prepared = await this.attachmentCache.prepare(sessionId, attachments);
+    await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
+    try {
+      await this.processes.get(sessionId).prompt(text, prepared.attachments, 1_800_000, { clientMessageId, attachments: prepared.previews });
+      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent");
+    } catch (error) {
+      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed");
+      await this.handleEvent({ type: "user-message", sessionId, id: clientMessageId, clientMessageId, text, attachments: prepared.previews, delivery: "failed" });
+      throw error;
+    }
+  }
+
+  async getOfflineUiFixture(): Promise<OfflineUiFixture | null> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1" || process.env.GROK_DESKTOP_UI_FIXTURE !== "1") return null;
+    const sessionId = "offline-ui-fixture-v062";
+    const workspace = (await this.settingsStore.get()).activeWorkspace || process.cwd();
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlWQAAAAASUVORK5CYII=";
+    const imageAttachments: Attachment[] = ["architecture.png", "result.png", "detail.png"].map((name, index) => ({ id: `fixture-image-${index + 1}`, name, kind: "image", mimeType: "image/png", size: 68, data: png }));
+    const prepared = await this.attachmentCache.prepare(sessionId, imageAttachments);
+    await this.attachmentCache.record(sessionId, "fixture-client-images", "请检查这些界面截图。", prepared.previews, "sent");
+    const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
+    await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
+    const now = new Date().toISOString();
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.2 Review 与会话验收", createdAt: now, updatedAt: now, messageCount: 34, status: "cold", pinned: true, originKind: "normal" };
+    const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
+      { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
+      { type: "turn-completed", sessionId },
+    ]).flat();
+    const events: ChatEvent[] = [
+      { type: "session-ready", sessionId, models: [{ modelId: "fixture-model", name: "Offline Fixture", totalContextTokens: 512_000 }], currentModelId: "fixture-model", effort: "high" },
+      ...legacyEvents,
+      { type: "turn-presentations-restore", sessionId, presentations: [{ turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed" }] },
+      { type: "user-message", sessionId, id: "fixture-client-images", clientMessageId: "fixture-client-images", text: "请检查这些界面截图。", attachments: prepared.previews, delivery: "sent" },
+      { type: "thought-chunk", sessionId, text: "正在核对布局、交互状态和附件可见性。" },
+      { type: "tool-call", sessionId, tool: { toolCallId: "fixture-read", title: "读取界面结构", kind: "read_file", status: "completed", output: "已读取会话壳层。", locations: [{ path: "src/renderer/src/App.tsx", line: 1 }] } },
+      { type: "tool-call", sessionId, tool: { toolCallId: "fixture-edit", title: "修改会话样式", kind: "edit_file", status: "completed", output: "已更新消息与附件布局。", oldText: ".message { width: 100%; }", newText: ".message { width: min(760px, 100%); }", locations: [{ path: "src/renderer/src/styles.css", line: 1 }] } },
+      { type: "message-chunk", sessionId, text: "界面结构已按任务流收敛，图片在发送后保留于用户消息中。" },
+      { type: "media", sessionId, media: "image", source: png, isData: true, mimeType: "image/png" },
+      { type: "turn-completed", sessionId, presentation: { turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed" } },
+      { type: "user-message", sessionId, id: "fixture-plan", clientMessageId: "fixture-plan", text: "列出后续步骤。", delivery: "sent" },
+      { type: "plan", sessionId, text: "1. 验证左右侧栏。\n2. 验证消息与文件卡。\n3. 验证输入框和底部环境栏。" },
+      { type: "message-chunk", sessionId, text: "计划已完成，所有入口均映射到真实功能。" },
+      { type: "turn-completed", sessionId },
+      { type: "user-message", sessionId, id: "fixture-client-failed", clientMessageId: "fixture-client-failed", text: "这条消息用于测试失败恢复。", attachments: failed.previews, delivery: "failed" },
+      { type: "status", sessionId, status: "idle", text: "离线夹具" },
+    ];
+    return { session, events };
   }
 
   async cancelSession(sessionId: string): Promise<void> {
@@ -501,6 +841,7 @@ export class AppController {
     const detail = await this.codex.open(id, true);
     const before = detail.contentHash;
     const result = await this.processes.create(detail.cwd);
+    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew", "codexReader"]).catch((error) => this.log.log(error));
     this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
     await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "codex-continuation", id, title: "Codex 接力", suggestedTitle: detail.title }]);
@@ -531,6 +872,8 @@ export class AppController {
   removeProvider(id: string): Promise<CustomProviderProfile[]> { return this.providers.remove(id); }
   testProvider(id: string): Promise<ProviderConnectivityResult> { return this.providers.test(id); }
   pullProviderModels(id: string): Promise<Array<{ id: string; name?: string }>> { return this.providers.pullModels(id); }
+  probeProviderDraft(input: ProviderConnectionDraft): Promise<ProviderDraftProbeResult> { return this.providers.probeDraft(input); }
+  discoverProviderModels(input: ProviderConnectionDraft): Promise<ProviderModelCandidate[]> { return this.providers.discoverDraftModels(input); }
   async setProviderDesktopDefault(modelId: string): Promise<AppSettings> { return this.settingsStore.patch({ defaultModel: modelId }); }
   setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]> { return this.providers.setCliDefault(modelId); }
   reloadProviders(): Promise<void> { return this.providers.reload(); }
@@ -545,8 +888,15 @@ export class AppController {
       return accountMissing || providerMissing ? { ...task, registrationStatus: "needs-config" as const, registrationError: accountMissing ? "固定账号已不存在，需要重新配置" : "固定提供商或模型已不存在，需要重新配置" } : task;
     });
   }
-  createAutomation(input: AutomationTaskInput): Promise<AutomationTask[]> { return this.automations.create(input); }
-  updateAutomation(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> { return this.automations.update(id, patch); }
+  async createAutomation(input: AutomationTaskInput): Promise<AutomationTask[]> { return this.automations.create(await this.applyExecutionProfileToAutomation(input)); }
+  async updateAutomation(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> {
+    if (!patch.executionProfileId && !patch.workspace) return this.automations.update(id, patch);
+    const current = (await this.automations.list()).find((value) => value.id === id);
+    if (!current) throw new Error("持久任务不存在");
+    const merged = { ...current, ...patch, profile: { ...current.profile, ...patch.profile }, schedule: patch.schedule ?? current.schedule, prompt: patch.prompt } as AutomationTaskInput;
+    const profiled = await this.applyExecutionProfileToAutomation(merged);
+    return this.automations.update(id, { ...patch, executionProfileId: profiled.executionProfileId, profile: profiled.profile });
+  }
   deleteAutomation(id: string): Promise<AutomationTask[]> { return this.automations.delete(id); }
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]> { return this.automations.pause(id, paused); }
   runAutomationNow(id: string): Promise<AutomationRunRecord> { return this.automations.runNow(id); }
@@ -568,11 +918,33 @@ export class AppController {
   applyAutomationPolicyToAll(): Promise<AutomationTask[]> { return this.automations.applyPolicyToAll(); }
   respondAutomationPending(id: string, approved: boolean): Promise<void> { return this.automations.respondPending(id.replace(/^pending:/, ""), approved); }
   repairAutomationRegistrations(): Promise<AutomationTask[]> { return this.automations.repairRegistrations(); }
+  async checkAutomationHealth(repair = false): Promise<AutomationHealthReport> {
+    const [tasks, accounts, providers] = await Promise.all([this.automations.list(), this.vault.list(), this.providers.list()]);
+    return checkAutomationHealth({
+      tasks, accounts, providers,
+      workspaceExists: (path) => stat(path).then((value) => value.isDirectory()).catch(() => false),
+      executableExists: () => stat(process.execPath).then((value) => value.isFile()).catch(() => false),
+      sessionExists: async (task) => {
+        if (!task.sessionId) return true;
+        const assignment = await this.profiles.assignment(task.sessionId);
+        return this.catalog.has(assignment?.cwd ?? task.workspace, task.sessionId);
+      },
+      executionProfileExists: async (task) => !task.executionProfileId || (await this.profiles.list(task.workspace)).some((value) => value.id === task.executionProfileId && value.effective),
+      clearSessionMapping: async (taskId) => {
+        const task = tasks.find((value) => value.id === taskId);
+        if (task?.sessionId) await this.profiles.removeAssignment(task.sessionId);
+        await this.automations.setExecutionSession(taskId, undefined);
+      },
+      repairRegistrations: () => this.automations.repairRegistrations(),
+    }, repair);
+  }
   clearAutomationContext(id: string): Promise<AutomationTask[]> {
     return this.automations.clearSession(id, async (task) => {
       if (!task.sessionId) return;
+      const assignment = await this.profiles.assignment(task.sessionId);
       await this.processes.close(task.sessionId);
-      if (await this.catalog.has(task.workspace, task.sessionId)) await this.catalog.delete(task.workspace, task.sessionId);
+      if (await this.catalog.has(assignment?.cwd ?? task.workspace, task.sessionId)) await this.catalog.delete(assignment?.cwd ?? task.workspace, task.sessionId);
+      await this.profiles.removeAssignment(task.sessionId);
     });
   }
   unregisterAllAutomations(): Promise<void> { return this.automations.unregisterAll(); }
@@ -588,17 +960,36 @@ export class AppController {
           : (toolCall: unknown) => confirm(toolCall, execution.permission === "confirm-all");
       try {
         let sessionId = task.sessionId;
-        const mappedSessionExists = Boolean(sessionId && await this.catalog.has(task.workspace, sessionId));
+        let assignment = sessionId ? await this.profiles.assignment(sessionId) : undefined;
+        const mappedSessionExists = Boolean(sessionId && await this.catalog.has(assignment?.cwd ?? task.workspace, sessionId));
         const sessionAction = resolveAutomationSessionAction(task.contextPolicy, Boolean(sessionId), mappedSessionExists);
         if (sessionId && sessionAction === "replace") {
           await this.processes.close(sessionId);
-          await this.catalog.delete(task.workspace, sessionId);
+          await this.catalog.delete(assignment?.cwd ?? task.workspace, sessionId);
+          await this.profiles.removeAssignment(sessionId);
           await this.automations.setExecutionSession(task.id, undefined);
           sessionId = undefined;
+          assignment = undefined;
         }
+        const agents = await this.definitions.listAgents(assignment?.cwd ?? task.workspace);
+        const compiled = assignment
+          ? await this.profiles.compileProfile(assignment.profile, agents)
+          : await this.profiles.compile(task.workspace, task.executionProfileId, agents);
+        let targetCwd = assignment?.cwd ?? task.workspace;
+        let worktree: GrokWorktreeSummary | undefined;
+        if (sessionAction !== "reuse" && compiled.profile.worktree) {
+          worktree = await this.worktrees.create({ workspacePath: task.workspace, name: `${profileSlug(task.name)}-${new Date().toISOString().slice(0, 10)}`, baseRef: compiled.profile.worktreeRef, agentId: compiled.profile.agentId });
+          targetCwd = worktree.path;
+        }
+        const environment = { ...compiled.environment, ...accountContext.environment };
+        const modelId = compiled.modelId || task.profile.modelId;
         const result = sessionAction === "reuse"
-          ? await this.processes.openConfigured(task.workspace, sessionId!, task.profile.effort, execution.mode, task.profile.modelId, decision, accountContext.environment)
-          : await this.processes.createConfigured(task.workspace, task.profile.effort, execution.mode, task.profile.modelId, decision, accountContext.environment);
+          ? await this.processes.openConfigured(targetCwd, sessionId!, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" })
+          : await this.processes.createConfigured(targetCwd, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+        if (sessionAction !== "reuse") {
+          assignment = { sessionId: result.sessionId, sourceWorkspacePath: task.workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
+          await this.profiles.assign(assignment);
+        }
         await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name }]);
         if (sessionAction !== "reuse") await this.catalog.rename(result.sessionId, task.name);
         await this.automations.setExecutionSession(task.id, result.sessionId);
@@ -613,26 +1004,63 @@ export class AppController {
       } finally { await accountContext.cleanup(); }
     });
   }
-  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void> { return this.processes.get(sessionId).queuePrompt(text, attachments, false); }
-  interjectPrompt(sessionId: string, text: string, attachments: Attachment[]): Promise<void> { return this.processes.get(sessionId).interjectPrompt(text, attachments); }
+  async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
+    clientMessageId ??= crypto.randomUUID();
+    const prepared = await this.attachmentCache.prepare(sessionId, attachments);
+    await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "queued");
+    await this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
+  }
+  async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
+    clientMessageId ??= crypto.randomUUID();
+    const prepared = await this.attachmentCache.prepare(sessionId, attachments);
+    await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
+    try {
+      await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
+      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent");
+    } catch (error) {
+      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed");
+      throw error;
+    }
+  }
   editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void> { return this.processes.get(sessionId).editQueuedPrompt(id, text); }
   removeQueuedPrompt(sessionId: string, id: string): Promise<void> { return this.processes.get(sessionId).removeQueuedPrompt(id); }
   reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<void> { return this.processes.get(sessionId).reorderQueuedPrompt(id, position); }
   clearPromptQueue(sessionId: string): Promise<void> { return this.processes.get(sessionId).clearPromptQueue(); }
   interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<void> { return this.processes.get(sessionId).interjectQueuedPrompt(id, text); }
-  async forkSession(sessionId: string, rewindPointId?: string): Promise<SessionForkResult> {
+  async forkSession(sessionId: string, rewindPointId?: string, launch?: ExecutionProfileLaunchInput): Promise<SessionForkResult> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
-    const result = await this.processes.get(sessionId).fork(rewindPointId);
+    const parentAssignment = await this.profiles.assignment(sessionId);
+    const sourceWorkspace = parentAssignment?.sourceWorkspacePath ?? snapshot.cwd;
+    let compiled = launch
+      ? await this.compileExecutionProfile(sourceWorkspace, launch.profileId)
+      : parentAssignment
+        ? await this.profiles.compileProfile(parentAssignment.profile, await this.definitions.listAgents(snapshot.cwd))
+        : await this.compileExecutionProfile(sourceWorkspace);
+    let cwd = launch && !compiled.profile.worktree ? sourceWorkspace : snapshot.cwd;
+    let worktree: GrokWorktreeSummary | undefined;
+    if (launch && compiled.profile.worktree) {
+      worktree = await this.worktrees.create({ workspacePath: sourceWorkspace, name: launch.worktreeName?.trim() || `${profileSlug(compiled.profile.name)}-fork-${new Date().toISOString().slice(0, 10)}`, baseRef: launch.worktreeRef?.trim() || compiled.profile.worktreeRef, sourceSessionId: sessionId, agentId: compiled.profile.agentId });
+      cwd = worktree.path;
+    }
+    const result = await this.processes.get(sessionId).fork(rewindPointId, cwd);
     const childId = String(result.newSessionId ?? result.new_session_id ?? result.sessionId ?? result.forkedSessionId ?? result.session_id ?? "");
-    if (!childId) throw new Error("CLI 未返回分叉会话 ID");
+    if (!childId) {
+      if (worktree) await this.worktrees.remove(sourceWorkspace, worktree.id, true).catch(() => undefined);
+      throw new Error("CLI 未返回分叉会话 ID");
+    }
+    void this.cliCapabilities.recordRuntimeSupport(["fork"]).catch((error) => this.log.log(error));
     await this.catalog.recordFork(sessionId, childId);
-    return { sessionId: childId, parentSessionId: sessionId, cwd: snapshot.cwd };
+    const inheritedWorktreeId = worktree?.id ?? (!launch ? parentAssignment?.worktreeId : undefined);
+    const assignment: SessionExecutionAssignment = { sessionId: childId, sourceWorkspacePath: sourceWorkspace, cwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: inheritedWorktreeId, createdAt: new Date().toISOString() };
+    await this.profiles.assign(assignment);
+    if (inheritedWorktreeId) await this.catalog.recordOrigins([{ sessionId: childId, kind: "worktree", id: inheritedWorktreeId, title: compiled.profile.name, suggestedTitle: worktree?.name || "Worktree 分叉" }]);
+    return { sessionId: childId, parentSessionId: sessionId, cwd, profileId: compiled.profile.id, worktreeId: inheritedWorktreeId };
   }
   listRewindPoints(sessionId: string): Promise<RewindPoint[]> { return this.processes.get(sessionId).rewindPoints(); }
   async rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
     await this.processes.get(sessionId).rewind(pointId, mode);
-    await this.processes.close(sessionId);
+    await this.processes.close(sessionId, false);
     await this.handleEvent({ type: "session-reset", sessionId });
     await this.processes.open(snapshot.cwd, sessionId);
   }
@@ -744,6 +1172,32 @@ export class AppController {
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>) { this.processes.get(sessionId).respondQuestion(requestId, answers); }
   respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment = "") { return this.processes.get(sessionId).respondPlan(requestId, verdict, comment); }
 
+  private async compileExecutionProfile(workspacePath: string, profileId?: string): Promise<CompiledExecutionProfile> {
+    return this.profiles.compile(workspacePath, profileId, await this.definitions.listAgents(workspacePath));
+  }
+
+  private async applyExecutionProfileToAutomation(input: AutomationTaskInput): Promise<AutomationTaskInput> {
+    if (!input.executionProfileId) return input;
+    const compiled = await this.compileExecutionProfile(input.workspace, input.executionProfileId);
+    return {
+      ...input,
+      executionProfileId: compiled.profile.id,
+      profile: {
+        ...input.profile,
+        modelId: compiled.modelId || input.profile.modelId,
+        effort: compiled.effort || input.profile.effort,
+        mode: compiled.mode,
+        permissionPolicy: compiled.mode === "auto" ? "auto" : input.profile.permissionPolicy,
+      },
+    };
+  }
+
+  private async openAssignedSession(assignment: SessionExecutionAssignment): Promise<{ sessionId: string }> {
+    const compiled = await this.profiles.compileProfile(assignment.profile, await this.definitions.listAgents(assignment.cwd));
+    const settings = await this.settingsStore.get();
+    return this.processes.openConfigured(assignment.cwd, assignment.sessionId, compiled.effort || settings.defaultEffort, compiled.mode, compiled.modelId || settings.defaultModel, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+  }
+
   async dispose(): Promise<void> {
     await this.auth.dispose();
     await this.processes.dispose();
@@ -751,6 +1205,11 @@ export class AppController {
   }
 
   private async handleEvent(event: ChatEvent): Promise<void> {
+    await this.dashboard.record(event);
+    if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
+      await this.turnPresentations.recordForSession(event.sessionId, event.presentation);
+    }
+    if (event.type === "user-message-status") await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery);
     if (event.type === "turn-completed") await this.computer.settleSession(event.sessionId, "completed", "Computer Use 回合已完成");
     if (event.type === "error" && event.sessionId) await this.computer.settleSession(event.sessionId, "error", event.message);
     if (event.type === "status" && event.status === "error") await this.computer.settleSession(event.sessionId, "error", event.text || "Grok 进程异常，Computer Use 已清理");
@@ -760,6 +1219,21 @@ export class AppController {
       await this.catalog.markUnread(event.sessionId, event.status === "error");
       if (this.runningSessions.has(event.sessionId)) await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "后台会话失败" : "后台会话已完成", detail: event.text, sessionId: event.sessionId });
       if (this.runningSessions.delete(event.sessionId)) this.showSessionNotification(event.sessionId, event.status === "error");
+    }
+  }
+
+  private async finalizeMemorySession(_sessionId: string, session: import("./services/grok-acp-adapter").GrokAcpAdapter): Promise<void> {
+    const settings = await this.memory.getSettingsForWorkspace(session.cwd);
+    if (!settings.enabled || session.working || session.needsUser) return;
+    if (settings.saveOnSessionEnd) {
+      await this.memory.markCommand(session.cwd, "flush", "running");
+      try { await session.prompt("/flush", [], 120_000); await this.memory.markCommand(session.cwd, "flush", "completed"); }
+      catch (error) { await this.memory.markCommand(session.cwd, "flush", "failed"); throw error; }
+    }
+    if (settings.autoDream) {
+      await this.memory.markCommand(session.cwd, "dream", "running");
+      try { await session.prompt("/dream", [], 120_000); await this.memory.markCommand(session.cwd, "dream", "completed"); }
+      catch (error) { await this.memory.markCommand(session.cwd, "dream", "failed"); throw error; }
     }
   }
 
@@ -895,6 +1369,9 @@ export class AppController {
 }
 
 function normalizeBackgroundStatus(value: unknown): BackgroundTaskSummary["status"] { const text = String(value ?? "running").toLowerCase(); return /fail|error/.test(text) ? "failed" : /complete|success|done/.test(text) ? "completed" : /cancel|kill|stop/.test(text) ? "cancelled" : /wait|permission/.test(text) ? "needs-user" : /queue|pending/.test(text) ? "queued" : "running"; }
+
+function samePath(left: string, right: string): boolean { return left.replace(/[\\/]+$/, "").toLocaleLowerCase() === right.replace(/[\\/]+$/, "").toLocaleLowerCase(); }
+function profileSlug(value: string): string { return value.normalize("NFKC").toLocaleLowerCase().replace(/[^a-z0-9\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 32) || "session"; }
 
 function mimeForExtension(extension: string): string | undefined {
   return extension === ".png" ? "image/png" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : extension === ".gif" ? "image/gif" : extension === ".webp" ? "image/webp" : undefined;

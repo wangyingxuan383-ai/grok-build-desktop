@@ -18,6 +18,9 @@ import {
   type ReasoningEffort,
   type SessionMode,
   type ToolCallState,
+  type TurnOutcome,
+  type TurnPresentation,
+  type UserMessageAttachmentPreview,
 } from "../../shared/types";
 import { shouldBlockCommand, shouldBlockWrite } from "./plan-gate";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
@@ -42,7 +45,13 @@ interface BackgroundTask {
   command?: string;
 }
 
-interface AdapterOptions {
+export interface SessionProcessOptions {
+  agentProfilePath?: string;
+  sessionMeta?: Record<string, unknown>;
+  alwaysApprove?: boolean;
+}
+
+interface AdapterOptions extends SessionProcessOptions {
   cliPath: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -55,6 +64,11 @@ interface AdapterOptions {
   extensionLeaseId?: string;
   effortFlag?: "--effort" | "--reasoning-effort";
   permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>;
+}
+
+export interface UserPromptPresentation {
+  clientMessageId?: string;
+  attachments?: UserMessageAttachmentPreview[];
 }
 
 interface SessionResponse {
@@ -74,8 +88,16 @@ export class LiveEffortUnsupportedError extends Error {
   override readonly name = "LiveEffortUnsupportedError";
 }
 
-export function buildGrokAgentArgs(effort: ReasoningEffort, pluginDirs: string[] = [], effortFlag: "--effort" | "--reasoning-effort" = "--reasoning-effort"): string[] {
-  return ["agent", ...(effort ? [effortFlag, effort] : []), ...pluginDirs.flatMap((path) => ["--plugin-dir", path]), "stdio"];
+export function buildGrokAgentArgs(effort: ReasoningEffort, pluginDirs: string[] = [], effortFlag: "--effort" | "--reasoning-effort" = "--reasoning-effort", options: SessionProcessOptions & { modelId?: string } = {}): string[] {
+  return [
+    "agent",
+    ...(options.modelId ? ["--model", options.modelId] : []),
+    ...(effort ? [effortFlag, effort] : []),
+    ...(options.alwaysApprove ? ["--always-approve"] : []),
+    ...(options.agentProfilePath ? ["--agent-profile", options.agentProfilePath] : []),
+    ...pluginDirs.flatMap((path) => ["--plugin-dir", path]),
+    "stdio",
+  ];
 }
 
 export class GrokAcpAdapter extends EventEmitter {
@@ -91,6 +113,9 @@ export class GrokAcpAdapter extends EventEmitter {
   private activeQueuedPromptId?: string;
   private pendingEffortChange?: PendingEffortChange;
   private pendingPlanRequest?: JsonRpcId;
+  private activeTurn?: TurnPresentation & { monotonicStartedAt: number };
+  private nextTurnOrdinal = 0;
+  private cancelRequested = false;
   private disposed = false;
   private currentEffort: ReasoningEffort;
   sessionId = "";
@@ -107,7 +132,9 @@ export class GrokAcpAdapter extends EventEmitter {
 
   get cwd(): string { return this.options.cwd; }
   get effort(): ReasoningEffort { return this.currentEffort; }
+  get processOptions(): SessionProcessOptions { return { agentProfilePath: this.options.agentProfilePath, sessionMeta: this.options.sessionMeta ? structuredClone(this.options.sessionMeta) : undefined, alwaysApprove: this.options.alwaysApprove }; }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
+  setNextTurnOrdinal(value: number): void { this.nextTurnOrdinal = Math.max(this.nextTurnOrdinal, Math.max(0, Math.floor(value))); }
 
   async waitForCommands(timeoutMs = 2_000): Promise<CommandInfo[]> {
     if (this.commands.length) return this.commands;
@@ -133,7 +160,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
-    const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag);
+    const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag, { modelId: this.options.modelId, agentProfilePath: this.options.agentProfilePath, alwaysApprove: this.options.alwaysApprove });
     await this.options.log.log(`spawn ${this.options.cliPath} ${args.join(" ")} cwd=${this.options.cwd}`);
     const shell = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
     this.process = spawn(this.options.cliPath, args, {
@@ -150,6 +177,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.process.on("exit", (code) => {
       this.working = false;
       this.needsUser = false;
+      this.finishTurn(this.cancelRequested ? "cancelled" : "failed");
       if (!this.disposed) this.emitEvent({ type: "error", sessionId: this.sessionId || undefined, message: `Grok 进程已退出（代码 ${String(code)}）` });
       this.failAll(new Error(`Grok process exited (${String(code)})`));
       this.emit("closed");
@@ -164,7 +192,7 @@ export class GrokAcpAdapter extends EventEmitter {
       ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
       cwd: this.options.cwd,
       mcpServers: this.options.sessionMcpServers ?? [],
-      ...(this.options.pluginDirs?.length ? { _meta: { pluginDirs: this.options.pluginDirs } } : {}),
+      ...((this.options.pluginDirs?.length || this.options.sessionMeta) ? { _meta: { ...(this.options.sessionMeta ?? {}), ...(this.options.pluginDirs?.length ? { pluginDirs: this.options.pluginDirs } : {}) } } : {}),
     }, 120_000) as SessionResponse;
     this.sessionId = response.sessionId || resumeSessionId || "";
     this.models = (response.models?.availableModels ?? []).map((model) => ({
@@ -202,11 +230,13 @@ export class GrokAcpAdapter extends EventEmitter {
     return this.request(method, { sessionId: this.sessionId, ...params }) as Promise<Record<string, unknown>>;
   }
 
-  async prompt(text: string, attachments: Attachment[] = [], timeoutMs = 1_800_000): Promise<void> {
+  async prompt(text: string, attachments: Attachment[] = [], timeoutMs = 1_800_000, presentation: UserPromptPresentation = {}): Promise<void> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
+    const clientMessageId = presentation.clientMessageId || crypto.randomUUID();
     this.lastTouched = Date.now();
     this.working = true;
-    this.emitEvent({ type: "user-message", sessionId: this.sessionId, text });
+    this.beginTurn(clientMessageId);
+    this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "sending" });
     this.emitStatus("working", "Grok 正在处理…");
     try {
       const prompt: unknown[] = [{ type: "text", text: buildPromptText(text, attachments) }];
@@ -219,23 +249,27 @@ export class GrokAcpAdapter extends EventEmitter {
       const result = await this.request(acpMethods.agent.session.prompt, { sessionId: this.sessionId, prompt }, timeoutMs) as { _meta?: Record<string, unknown> };
       const meta = extractPromptMeta(result);
       this.emitEvent({ type: "meta", sessionId: this.sessionId, meta });
-      this.emitEvent({ type: "turn-completed", sessionId: this.sessionId });
+      this.finishTurn("completed");
+      this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "sent" });
       this.working = false;
       this.needsUser = false;
       this.emitStatus("idle", "已完成");
     } catch (error) {
       this.working = false;
       this.needsUser = false;
+      this.finishTurn(this.cancelRequested ? "cancelled" : "failed");
+      this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
       this.emitStatus("error", error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
 
-  async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false): Promise<void> {
+  async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false, presentation: UserPromptPresentation = {}): Promise<void> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
+    const clientMessageId = presentation.clientMessageId || id;
     const prompt = await buildPromptBlocks(text, attachments);
-    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: sendNow ? "interjected" : "queued" };
+    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, clientMessageId, attachmentPreviews: presentation.attachments, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: sendNow ? "interjected" : "queued" };
     this.promptQueue = sendNow ? [entry, ...this.promptQueue] : [...this.promptQueue, entry];
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
     // A queued ACP prompt request is intentionally answered only after that
@@ -248,21 +282,29 @@ export class GrokAcpAdapter extends EventEmitter {
     }, 1_800_000).catch((error) => {
       this.promptQueue = this.promptQueue.filter((value) => value.id !== id);
       this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "failed" });
+      this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
       this.emitEvent({ type: "error", sessionId: this.sessionId, message: error instanceof Error ? error.message : String(error) });
     });
   }
 
-  async interjectPrompt(text: string, attachments: Attachment[] = []): Promise<void> {
+  async interjectPrompt(text: string, attachments: Attachment[] = [], presentation: UserPromptPresentation = {}): Promise<void> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
+    const clientMessageId = presentation.clientMessageId || id;
     const content = await buildPromptBlocks(text, attachments);
     try {
+      this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "sending" });
       unwrapExtResult(await this.extension("x.ai/interject", { text, interjectionId: id, content }));
+      this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "sent" });
     } catch (error) {
       // Older CLIs do not expose x.ai/interject. Their closest compatible
       // behavior is the official sendNow prompt metadata path.
-      if (!isMethodNotFound(error)) throw error;
-      await this.queuePrompt(text, attachments, true);
+      if (!isMethodNotFound(error)) {
+        this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
+        throw error;
+      }
+      await this.queuePrompt(text, attachments, true, { ...presentation, clientMessageId });
     }
   }
 
@@ -286,12 +328,12 @@ export class GrokAcpAdapter extends EventEmitter {
     const entry = this.promptQueue.find((value) => value.id === id);
     this.queueNotification("x.ai/queue/interject", { id, expectedVersion: entry?.version ?? 0, ...(text?.trim() ? { newText: text.trim() } : {}) });
   }
-  async fork(targetPromptIndex?: string): Promise<Record<string, unknown>> {
+  async fork(targetPromptIndex?: string, newCwd = this.cwd): Promise<Record<string, unknown>> {
     const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
     return this.extension("x.ai/session/fork", {
       sourceSessionId: this.sessionId,
       sourceCwd: this.cwd,
-      newCwd: this.cwd,
+      newCwd,
       ...(Number.isInteger(parsed) && (parsed as number) >= 0 ? { targetPromptIndex: parsed } : {}),
     });
   }
@@ -330,6 +372,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   cancel(): void {
     if (!this.sessionId) return;
+    this.cancelRequested = true;
     this.write({ jsonrpc: "2.0", method: acpMethods.agent.session.cancel, params: { sessionId: this.sessionId } });
     this.needsUser = false;
     this.emitStatus("working", "正在停止…");
@@ -462,7 +505,24 @@ export class GrokAcpAdapter extends EventEmitter {
         break;
       }
       case "user_message_chunk":
-        this.emitEvent({ type: "user-message", sessionId: this.sessionId, text: update.content?.text || "" });
+        if (update.content?.type === "image" && typeof update.content.data === "string") {
+          this.emitEvent({
+            type: "user-message",
+            sessionId: this.sessionId,
+            text: "",
+            attachments: [{
+              id: crypto.randomUUID(),
+              name: "会话图片",
+              kind: "image",
+              mimeType: typeof update.content.mimeType === "string" ? update.content.mimeType : "image/png",
+              size: Math.floor(update.content.data.length * 0.75),
+              source: update.content.data,
+              isData: true,
+              availability: "ready",
+            }],
+            delivery: "sent",
+          });
+        } else this.emitEvent({ type: "user-message", sessionId: this.sessionId, text: update.content?.text || "", delivery: "sent" });
         break;
       case "agent_thought_chunk":
         this.emitEvent({ type: "thought-chunk", sessionId: this.sessionId, text: update.content?.text || "" });
@@ -539,7 +599,7 @@ export class GrokAcpAdapter extends EventEmitter {
         return;
       case "turn_completed":
         if (update.usage) this.emitEvent({ type: "meta", sessionId: this.sessionId, meta: extractUsageMeta(update.usage) });
-        this.emitEvent({ type: "turn-completed", sessionId: this.sessionId });
+        this.finishTurn("completed");
         if (this.activeQueuedPromptId) {
           this.activeQueuedPromptId = undefined;
           this.working = false;
@@ -733,7 +793,8 @@ export class GrokAcpAdapter extends EventEmitter {
             if (starting) {
               this.activeQueuedPromptId = runningPromptId;
               this.working = true;
-              this.emitEvent({ type: "user-message", sessionId: this.sessionId, text: starting.text });
+              this.beginTurn(starting.clientMessageId);
+              this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: starting.clientMessageId, clientMessageId: starting.clientMessageId, text: starting.text, attachments: starting.attachmentPreviews, delivery: "sending" });
               this.emitStatus("working", "正在处理队列消息…");
             }
           }
@@ -764,6 +825,41 @@ export class GrokAcpAdapter extends EventEmitter {
       await this.options.log.log(`[ACP handler error] ${method}: ${error instanceof Error ? error.message : String(error)}`);
       this.respondError(id, -32603, error instanceof Error ? error.message : String(error));
     }
+  }
+
+  private beginTurn(clientMessageId?: string): TurnPresentation {
+    if (this.activeTurn) return this.activeTurn;
+    this.cancelRequested = false;
+    const presentation: TurnPresentation & { monotonicStartedAt: number } = {
+      turnId: clientMessageId || crypto.randomUUID(),
+      ordinal: this.nextTurnOrdinal++,
+      ...(clientMessageId ? { clientMessageId } : {}),
+      startedAt: new Date().toISOString(),
+      monotonicStartedAt: performance.now(),
+    };
+    this.activeTurn = presentation;
+    const { monotonicStartedAt: _ignored, ...publicPresentation } = presentation;
+    this.emitEvent({ type: "turn-started", sessionId: this.sessionId, presentation: publicPresentation });
+    return publicPresentation;
+  }
+
+  private finishTurn(outcome: TurnOutcome): TurnPresentation | undefined {
+    const active = this.activeTurn;
+    if (!active) return undefined;
+    this.activeTurn = undefined;
+    const completedAt = new Date().toISOString();
+    const presentation: TurnPresentation = {
+      turnId: active.turnId,
+      ordinal: active.ordinal,
+      ...(active.clientMessageId ? { clientMessageId: active.clientMessageId } : {}),
+      startedAt: active.startedAt,
+      completedAt,
+      durationMs: Math.max(0, Math.round(performance.now() - active.monotonicStartedAt)),
+      outcome,
+    };
+    this.cancelRequested = false;
+    this.emitEvent({ type: "turn-completed", sessionId: this.sessionId, presentation });
+    return presentation;
   }
 
   private request(method: string, params: unknown, timeoutMs = 120_000): Promise<unknown> {
@@ -874,7 +970,7 @@ function normalizeReasoningEffort(value: unknown): ReasoningEffort | undefined {
 }
 
 export function buildPromptText(text: string, attachments: Attachment[]): string {
-  const paths = attachments.filter((value) => value.path).map((value) => `@${value.path}`);
+  const paths = attachments.filter((value) => value.kind !== "image" && value.path).map((value) => `@${value.path}`);
   return paths.length ? `${text}\n\n上下文文件：\n${paths.join("\n")}` : text;
 }
 
@@ -896,12 +992,16 @@ function normalizePromptQueue(value: unknown, sessionId: string, previous: Promp
   if (!Array.isArray(value)) return [];
   return value.map((entry, index) => {
     const row = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+    const id = String(row.id ?? row.promptId ?? row.prompt_id ?? `queue-${index}`);
+    const prior = previous.find((entry) => entry.id === id);
     return {
-      id: String(row.id ?? row.promptId ?? row.prompt_id ?? `queue-${index}`),
+      id,
       sessionId,
+      clientMessageId: typeof row.clientMessageId === "string" ? row.clientMessageId : typeof row.client_message_id === "string" ? row.client_message_id : prior?.clientMessageId,
+      attachmentPreviews: prior?.attachmentPreviews,
       text: String(row.text ?? row.prompt ?? row.content ?? ""),
       position: typeof row.position === "number" ? row.position : index,
-      createdAt: typeof row.createdAt === "string" ? row.createdAt : typeof row.created_at === "string" ? row.created_at : previous.find((entry) => entry.id === String(row.id ?? row.promptId ?? row.prompt_id))?.createdAt ?? new Date().toISOString(),
+      createdAt: typeof row.createdAt === "string" ? row.createdAt : typeof row.created_at === "string" ? row.created_at : prior?.createdAt ?? new Date().toISOString(),
       state: row.sendNow || row.state === "interjected" ? "interjected" : row.state === "sending" ? "sending" : "queued",
       version: typeof row.version === "number" ? row.version : 0,
       owner: typeof row.owner === "string" ? row.owner : undefined,

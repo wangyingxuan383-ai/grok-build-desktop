@@ -1,8 +1,9 @@
 import { safeStorage } from "electron";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AutomationGlobalPolicy, AutomationPendingConfirmation, AutomationRunRecord, AutomationTask, AutomationTaskInput, ComputerRiskCategory } from "../../shared/types";
+import type { AutomationGlobalPolicy, AutomationPendingConfirmation, AutomationRegistrationDiagnostic, AutomationRunRecord, AutomationTask, AutomationTaskInput, ComputerRiskCategory } from "../../shared/types";
+import iconv from "iconv-lite";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
 
@@ -236,8 +237,12 @@ export class AutomationService {
     if (!this.scheduler.supported()) { task.registrationStatus = "unsupported"; await this.writeTask(task); return; }
     try {
       if (task.enabled) await this.scheduler.register(stripPrompt(task), this.options.executable, this.options.workerBaseArgs ?? []); else await this.scheduler.unregister(task.id);
-      task.registrationStatus = "registered"; task.registrationError = undefined;
-    } catch (error) { task.registrationStatus = "error"; task.registrationError = sanitizeError(error); }
+      task.registrationStatus = "registered"; task.registrationError = undefined; task.registrationDiagnostic = undefined;
+    } catch (error) {
+      task.registrationStatus = "error";
+      task.registrationDiagnostic = registrationDiagnostic(error, task.enabled ? "register" : "unregister");
+      task.registrationError = task.registrationDiagnostic.message;
+    }
     await this.writeTask(task);
   }
 
@@ -314,9 +319,9 @@ export class WindowsTaskScheduler implements TaskSchedulerAdapter {
   async register(task: AutomationTask, executable: string, baseArgs: string[]): Promise<void> {
     const xml = buildTaskXml(task, executable, [...baseArgs, "--scheduler-worker", task.id, "scheduled"]);
     const temp = join(process.env.TEMP || process.cwd(), `grok-desktop-task-${task.id}.xml`); await writeFile(temp, `\ufeff${xml}`, "utf16le");
-    try { await runSchtasks(["/Create", "/TN", taskName(task.id), "/XML", temp, "/F"]); } finally { await rm(temp, { force: true }); }
+    try { await runSchtasks(["/Create", "/TN", taskName(task.id), "/XML", temp, "/F"], "register"); } finally { await rm(temp, { force: true }); }
   }
-  async unregister(taskId: string): Promise<void> { await runSchtasks(["/Delete", "/TN", taskName(taskId), "/F"]).catch((error) => { if (!/cannot find|找不到/i.test(String(error))) throw error; }); }
+  async unregister(taskId: string): Promise<void> { await runSchtasks(["/Delete", "/TN", taskName(taskId), "/F"], "unregister").catch((error) => { if (!/cannot find|找不到/i.test(String(error))) throw error; }); }
 }
 
 export function buildTaskXml(task: AutomationTask, executable: string, args: string[]): string {
@@ -335,11 +340,62 @@ function scheduleXml(schedule: AutomationTask["schedule"]): string {
 function nextBoundary(time: string): string { const match = /^(\d{2}):(\d{2})$/.exec(time); const date = new Date(); date.setHours(Number(match?.[1] ?? 0), Number(match?.[2] ?? 0), 0, 0); if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1); return localIso(date); }
 function localIso(date: Date): string { const p = (value: number) => String(value).padStart(2, "0"); return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:00`; }
 function taskName(id: string): string { return `Grok Build Desktop - ${safeId(id)}`; }
-function runSchtasks(args: string[]): Promise<void> { return new Promise((resolve, reject) => execFile("schtasks.exe", args, { windowsHide: true, timeout: 30_000 }, (error, stdout, stderr) => error ? reject(new Error(String(stderr || stdout || error.message).trim())) : resolve())); }
+class SchedulerCommandError extends Error {
+  constructor(message: string, readonly operation: "register" | "unregister", readonly exitCode?: number) { super(message); }
+}
+
+function runSchtasks(args: string[], operation: "register" | "unregister"): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("schtasks.exe", args, { windowsHide: true, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout: Buffer[] = []; const stderr: Buffer[] = []; let size = 0; let timedOut = false;
+    const collect = (target: Buffer[]) => (chunk: Buffer) => { if (size < 1024 * 1024) { target.push(Buffer.from(chunk)); size += chunk.length; } };
+    child.stdout.on("data", collect(stdout)); child.stderr.on("data", collect(stderr));
+    const timer = setTimeout(() => { timedOut = true; child.kill(); }, 30_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(new SchedulerCommandError(error.message, operation)); });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      if (code === 0) { resolve(); return; }
+      const output = Buffer.concat(stderr.length ? stderr : stdout);
+      const message = timedOut ? "Windows 任务计划程序响应超时" : decodeWindowsCommandOutput(output).trim() || `Windows 任务计划程序失败（${code ?? -1}）`;
+      reject(new SchedulerCommandError(message, operation, code ?? undefined));
+    });
+  });
+}
+
+/** Decode Windows command output without assuming Node's UTF-8 default. */
+export function decodeWindowsCommandOutput(value: Buffer): string {
+  if (!value.length) return "";
+  if (value.length >= 2 && value[0] === 0xff && value[1] === 0xfe) return iconv.decode(value.subarray(2), "utf16-le");
+  if (value.length >= 2 && value[0] === 0xfe && value[1] === 0xff) return iconv.decode(value.subarray(2), "utf16-be");
+  const evenNulls = countNulls(value, 0); const oddNulls = countNulls(value, 1);
+  if (oddNulls > Math.max(1, value.length / 8) && oddNulls > evenNulls * 2) return iconv.decode(value, "utf16-le");
+  if (evenNulls > Math.max(1, value.length / 8) && evenNulls > oddNulls * 2) return iconv.decode(value, "utf16-be");
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(value); }
+  catch { return iconv.decode(value, "gb18030"); }
+}
+
+function countNulls(value: Buffer, parity: 0 | 1): number { let count = 0; for (let index = parity; index < value.length; index += 2) if (value[index] === 0) count++; return count; }
+
+export function normalizeRegistrationError(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.includes("\ufffd") ? "历史任务注册错误文本编码损坏，请重新健康检查" : value;
+}
+
+function registrationDiagnostic(error: unknown, operation: "register" | "unregister"): AutomationRegistrationDiagnostic {
+  const message = normalizeRegistrationError(sanitizeError(error)) ?? "Windows 任务计划程序操作失败";
+  return { operation: error instanceof SchedulerCommandError ? error.operation : operation, exitCode: error instanceof SchedulerCommandError ? error.exitCode : undefined, code: message.includes("历史任务注册错误文本编码损坏") ? "historical-encoding-damaged" : "scheduler-command-failed", message, repairable: true };
+}
 function quoteArg(value: string): string { return `"${value.replace(/"/g, '\\"')}"`; }
 function xml(value: unknown): string { return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!); }
 function safeId(value: string): string { if (!/^[A-Za-z0-9-]+$/.test(value)) throw new Error("无效任务标识"); return value; }
-function stripPrompt(value: StoredAutomationTask, now = new Date()): AutomationTask { const { encryptedPrompt: _encryptedPrompt, sessionMigrationComplete: _migration, ...task } = value; return { ...task, nextRunAt: task.enabled ? calculateNextRun(task.schedule, now)?.toISOString() : undefined }; }
+function stripPrompt(value: StoredAutomationTask, now = new Date()): AutomationTask {
+  const { encryptedPrompt: _encryptedPrompt, sessionMigrationComplete: _migration, ...task } = value;
+  const registrationError = normalizeRegistrationError(task.registrationError);
+  const registrationDiagnostic = registrationError && registrationError !== task.registrationError
+    ? { operation: "register" as const, code: "historical-encoding-damaged" as const, message: registrationError, repairable: true }
+    : task.registrationDiagnostic;
+  return { ...task, registrationError, registrationDiagnostic, nextRunAt: task.enabled ? calculateNextRun(task.schedule, now)?.toISOString() : undefined };
+}
 function validateTaskInput(value: AutomationTaskInput, requirePrompt: boolean): void { if (!value.name.trim()) throw new Error("任务名称不能为空"); if (!value.workspace.trim()) throw new Error("任务工作区不能为空"); if (requirePrompt && !value.prompt?.trim()) throw new Error("任务提示词不能为空"); if (!value.profile.modelId.trim()) throw new Error("任务模型不能为空"); if (!(value.contextPolicy === "reuse" || value.contextPolicy === "fresh")) throw new Error("任务上下文策略无效"); if (!(["run-once", "skip"] as const).includes(value.missedRunPolicy)) throw new Error("错过运行策略无效"); if (value.skillCommand && !/^\/[A-Za-z0-9._-]+$/.test(value.skillCommand.trim())) throw new Error("Skill 命令必须以 / 开头且不包含参数"); if (value.schedule.kind === "interval" && (!Number.isInteger(value.schedule.minutes) || value.schedule.minutes < 1)) throw new Error("固定间隔不得小于一分钟"); if (value.schedule.kind === "daily" || value.schedule.kind === "weekly") { if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.schedule.time)) throw new Error("任务执行时间格式无效"); } if (value.schedule.kind === "weekly" && (!value.schedule.days.length || value.schedule.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("每周任务至少选择一个有效星期"); if (value.schedule.kind === "once" && !Number.isFinite(new Date(value.schedule.at).getTime())) throw new Error("单次任务时间无效"); }
 function sanitizeError(value: unknown, sensitive: string[] = []): string { let text = value instanceof Error ? value.message : String(value); for (const item of sensitive.filter(Boolean)) text = text.split(item).join("[REDACTED]"); return text.replace(/(?:sk|xai|ghp|github_pat)_[A-Za-z0-9_-]{8,}/gi, "[REDACTED]").slice(0, 1000); }
 async function readJson<T>(path: string): Promise<T> { return JSON.parse(await readFile(path, "utf8")) as T; }
