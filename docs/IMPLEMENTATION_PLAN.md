@@ -35,6 +35,7 @@
 - [x] 唯一一次完整离线套件通过：60 个文件通过、1 个按设计跳过，291 项通过、2 项显式 opt-in/live 跳过；加入安装版版本探针后的最终公开源码扫描通过 243 个文本文件。
 - [x] 唯一一次正式 0.6.4 打包通过 Electron Fuses、源码/产物扫描并生成 Setup、Portable、SHA-256、SBOM 和许可证报告；0.6.0–0.6.3 命名资产全部保留。
 - [x] `win-unpacked` 夹具通过后完成 per-user 安装；文件/Product/Main/About 为 0.6.4，诊断为“可以使用”，桌面/开始菜单快捷方式指向安装目录，安装版 0.6.4 UI 夹具通过。
+- [x] 正式发布 PR 的 Hosted Windows `%TEMP%` 8.3 路径暴露长短路径比较问题；统一 canonical path 边界后，Editor、Memory、Agent/Persona、Git 四组 27 项测试在普通与显式短路径临时目录下均通过，符号链接/目录联接逃逸继续拒绝。
 
 ### v0.6.4 最终候选说明
 

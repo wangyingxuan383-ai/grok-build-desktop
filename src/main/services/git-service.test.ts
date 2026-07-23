@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -22,7 +22,7 @@ describe("GitService", () => {
     await writeFile(join(repo, "untracked file.txt"), "new\n", "utf8");
 
     const status = await service.status(repo);
-    expect(status).toMatchObject({ repositoryRoot: repo, clean: false, branch: { name: "main" } });
+    expect(status).toMatchObject({ repositoryRoot: await realpath(repo), clean: false, branch: { name: "main" } });
     expect(status.remote?.displayUrl).toBe("https://example.com/org/repo.git");
     expect(status.changes).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: "tracked.txt", kind: "modified", staged: false, workingTree: true }),
@@ -63,7 +63,7 @@ describe("GitService", () => {
     await writeFile(join(workspace, "index.ts"), "export {};\n", "utf8");
 
     const preflight = await service.getRepositoryTrust(workspace);
-    expect(preflight).toMatchObject({ workspacePath: workspace, repositoryRoot: repo, required: true, trusted: false });
+    expect(preflight).toMatchObject({ workspacePath: await realpath(workspace), repositoryRoot: await realpath(repo), required: true, trusted: false });
     await expect(service.stage(workspace, ["packages/app/index.ts"])).rejects.toThrow("确认仓库范围");
     await service.setRepositoryTrust(workspace, repo, true);
     expect(await service.getRepositoryTrust(workspace)).toMatchObject({ required: true, trusted: true });

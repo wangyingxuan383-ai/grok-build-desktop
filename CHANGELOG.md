@@ -14,10 +14,12 @@
 - Conversation navigation now survives Dashboard → conversation → file → conversation → task center → conversation without losing the message viewport or composer.
 - The right utility drawer remains visible at narrow widths instead of being hidden by a conflicting media rule. Non-Git Review is an ordinary capability empty state and falls back to recent writes where appropriate.
 - Provider discovery keeps unknown context windows unknown instead of fabricating 128K/200K defaults. Draft probes perform bounded main-process model-list GET requests only, reject redirects/oversized responses and keep credentials out of Renderer logs.
+- Windows path boundaries now canonicalize existing absolute paths and 8.3 aliases before comparison. Hosted Runner `%TEMP%` values such as `RUNNER~1` no longer make Editor, Memory, Agent/Persona or Git fixtures look outside their real workspace, while symlink/junction escapes remain rejected.
 
 ### Verification
 
 - TypeScript and the production main/preload/Renderer build pass. Seven focused files / 55 tests cover provider draft discovery, local-ID collisions, 401/timeout/oversize handling, Review index/detail/stale snapshots, the 850-file index, Scheduler health and Renderer stores/comments.
+- The release PR's first Windows run exposed the 8.3/long-path alias mismatch above. The corrected four affected service suites pass 27/27 both with the ordinary local temp directory and with an explicit 8.3 short-name `%TEMP%` fixture.
 - The isolated 0.6.4 source fixture passes Dashboard → chat → recent file preview → explicit editor → chat → task center → chat, the four-tool right launcher, non-Git Review, 1280×720/1440×810@125%/1920×1080@200% composer bounds, a visible 1100 px drawer and the provider-manager preset/draft workflow. No model request is sent.
 - The one final offline suite passed 291 tests with 2 explicit opt-in/live tests skipped (60 files passed, 1 skipped) using one Windows worker. The final public-source scan passed 243 text files after adding the installed-version probe.
 - The sole formal package passed Electron Fuses and both public-source/artifact scans. The packaged and installed 0.6.4 fixtures pass the navigation cycle, recent-file preview/editor return, four-tool right pane, non-Git Review, responsive composer/drawer and provider manager.
