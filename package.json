@@ -62,7 +62,7 @@
     "electron-builder": "26.15.3",
     "license-checker-rseidelsohn": "5.0.1",
     "typescript": "6.0.3",
-    "vite": "8.1.4",
+    "vite": "8.1.5",
     "vitest": "4.1.10"
   },
   "overrides": {
