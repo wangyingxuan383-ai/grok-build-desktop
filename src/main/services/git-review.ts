@@ -120,10 +120,36 @@ function normalizePatchPath(value: string): string {
   return trimmed.replace(/^[ab]\//, "").replace(/\\([0-7]{3})/g, (_match, octal: string) => String.fromCharCode(Number.parseInt(octal, 8))).replace(/\\"/g, "\"").replace(/\\\\/g, "\\");
 }
 
+function readQuotedGitPath(value: string, start: number, prefix: "a" | "b"): { path: string; next: number } | undefined {
+  if (!value.startsWith(`"${prefix}/`, start)) return undefined;
+  let cursor = start + 3;
+  let path = "";
+  while (cursor < value.length) {
+    const character = value[cursor] ?? "";
+    if (character === "\"") return { path, next: cursor + 1 };
+    if (character === "\\") {
+      const escaped = value[cursor + 1];
+      if (escaped === undefined) return undefined;
+      path += `\\${escaped}`;
+      cursor += 2;
+      continue;
+    }
+    path += character;
+    cursor += 1;
+  }
+  return undefined;
+}
+
 function parseDiffHeader(line: string): { oldPath: string; path: string } | undefined {
   const value = line.replace(/^diff --git\s+/, "");
-  const quoted = value.match(/^"a\/((?:\\.|[^"])*)"\s+"b\/((?:\\.|[^"])*)"$/);
-  if (quoted) return { oldPath: quoted[1] ?? "", path: quoted[2] ?? "" };
+  const oldQuoted = readQuotedGitPath(value, 0, "a");
+  if (oldQuoted) {
+    let cursor = oldQuoted.next;
+    const separatorStart = cursor;
+    while (value[cursor] === " " || value[cursor] === "\t") cursor += 1;
+    const newQuoted = cursor > separatorStart ? readQuotedGitPath(value, cursor, "b") : undefined;
+    if (newQuoted?.next === value.length) return { oldPath: oldQuoted.path, path: newQuoted.path };
+  }
   const divider = value.lastIndexOf(" b/");
   if (!value.startsWith("a/") || divider < 0) return undefined;
   return { oldPath: value.slice(2, divider), path: value.slice(divider + 3) };

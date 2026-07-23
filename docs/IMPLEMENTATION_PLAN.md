@@ -37,6 +37,7 @@
 - [x] `win-unpacked` 夹具通过后完成 per-user 安装；文件/Product/Main/About 为 0.6.4，诊断为“可以使用”，桌面/开始菜单快捷方式指向安装目录，安装版 0.6.4 UI 夹具通过。
 - [x] 正式发布 PR 的 Hosted Windows `%TEMP%` 8.3 路径暴露长短路径比较问题；统一 canonical path 边界后，Editor、Memory、Agent/Persona、Git 四组 27 项测试在普通与显式短路径临时目录下均通过，符号链接/目录联接逃逸继续拒绝。
 - [x] 正式发布安全门禁发现新公布的 `@hono/node-server` 路径穿越与 `fast-uri` 主机混淆公告；固定到已修复版本后 `npm audit` 为 0，TypeScript 与完整 291 项离线测试继续通过，等待 Hosted Windows 复核后合并发布。
+- [x] PR 代码扫描策略进一步识别 4 个高危与 7 个中危问题；将 Diff 头解析改为线性扫描、修复 TOML 空白匹配，并把六个 CDP 探针的动态值改为 `Runtime.callFunctionOn` 参数。脚本语法、TypeScript、6 项聚焦测试、243 文件公开扫描与零漏洞审计本地通过，等待 Hosted CodeQL 复核。
 
 ### v0.6.4 最终候选说明
 
