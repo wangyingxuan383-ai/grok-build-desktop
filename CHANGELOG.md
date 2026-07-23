@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.4 - 2026-07-23 (installed local candidate)
+## 0.6.4 - 2026-07-23 (public Latest release)
 
 ### Changed
 
@@ -23,12 +23,14 @@
 - TypeScript and the production main/preload/Renderer build pass. Seven focused files / 55 tests cover provider draft discovery, local-ID collisions, 401/timeout/oversize handling, Review index/detail/stale snapshots, the 850-file index, Scheduler health and Renderer stores/comments.
 - The release PR's first Windows run exposed the 8.3/long-path alias mismatch above. The corrected four affected service suites pass 27/27 both with the ordinary local temp directory and with an explicit 8.3 short-name `%TEMP%` fixture.
 - The subsequent hosted security gate exposed the new dependency advisories. After resolving `@hono/node-server` to 2.0.11 and `fast-uri` to 3.1.4, `npm audit` reports zero vulnerabilities; TypeScript and the complete 291-test offline suite still pass locally.
-- The pull-request code-scanning policy then surfaced four high and seven medium findings in changed code. The affected parser, TOML patcher and six offline CDP probes were corrected; script syntax checks, TypeScript, 6 focused tests, the 243-file public scan and zero-vulnerability audit pass locally before hosted CodeQL re-evaluation.
+- The pull-request code-scanning policy then surfaced four high and seven medium findings in changed code. The affected parser, TOML patcher and six offline CDP probes were corrected; script syntax checks, TypeScript, 6 focused tests, the 243-file public scan and zero-vulnerability audit pass locally, and hosted CodeQL plus the code-scanning policy completed successfully with no open new PR alerts.
 - The isolated 0.6.4 source fixture passes Dashboard → chat → recent file preview → explicit editor → chat → task center → chat, the four-tool right launcher, non-Git Review, 1280×720/1440×810@125%/1920×1080@200% composer bounds, a visible 1100 px drawer and the provider-manager preset/draft workflow. No model request is sent.
 - The one final offline suite passed 291 tests with 2 explicit opt-in/live tests skipped (60 files passed, 1 skipped) using one Windows worker. The final public-source scan passed 243 text files after adding the installed-version probe.
 - The sole formal package passed Electron Fuses and both public-source/artifact scans. The packaged and installed 0.6.4 fixtures pass the navigation cycle, recent-file preview/editor return, four-tool right pane, non-Git Review, responsive composer/drawer and provider manager.
 - Per-user installation succeeded at `%LOCALAPPDATA%\Programs\Grok Build Desktop`. File/Product/Main/About versions report 0.6.4, diagnostics reports “可以使用”, attachment privacy exclusions remain present, and desktop/Start Menu shortcuts target the installation directory.
 - Final local artifacts: Setup `be0080e4ce0d44528840fa6923e469b26407327d246bbf140e6f761bd76a8ca5`; Portable `1d6104e3ffdad4ae1cc5ca7c80f5352a3e8c63d7e72cb69df55bbc16837480c6`; CycloneDX SBOM `feb7207c0ed97e931fa31a54090658a5ba3aea701fb9af41add6f12817532b67`; third-party licenses `fb8469bdbecff72100bd94c44b2f67f1b596ade9854d95ce862a7559d3b1d82e`. Named 0.6.0–0.6.3 Setup/Portable/SBOM assets remain in `release`.
+- PR #13 merged to `main` at `df5db6b` after Windows, gitleaks, CodeQL and code-scanning checks passed. Tagged workflow `29993675891` rebuilt and scanned the unsigned artifacts, attested Setup/Portable, created a Draft, downloaded it, verified `SHA256SUMS.txt` and provenance, and only then published `v0.6.4` as Latest.
+- Public GitHub assets: Setup `ab4d037a8398ec8c12fc2365efba5ea8c4fae582486dd95f5cd27f8fc8eea1ab`; Portable `635147fafa85b9a0bd4c7d61c9a36a9bb50e4c83410c225ddddccee769945b71`; CycloneDX SBOM `5b789491ac459a0119fcf9f3b62e7140c35ef601d271e65fc6dd57b726b6dae0`; third-party licenses `e86a7b4249bd018f743e8c347e7b555cda81c3208c508e32810a91075d49942b`.
 
 ## 0.6.3 - 2026-07-23 (installed local hotfix)
 
