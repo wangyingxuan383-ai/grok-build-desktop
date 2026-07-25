@@ -4,7 +4,9 @@
 
 Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户端。应用通过 ACP 连接用户本机安装的 Grok CLI，提供项目会话、流式对话、工具与 Diff、插件中心、额度面板、Codex 项目会话只读镜像，以及实验性的 Windows Computer Use。
 
-![使用假账号与示例项目绘制的界面预览](docs/assets/app-overview.svg)
+![项目仪表盘：从一个任务开始](docs/assets/app-dashboard.png)
+
+![会话与计划结果展示](docs/assets/app-conversation.png)
 
 ## 功能
 
@@ -119,3 +121,7 @@ npm run check:public # 扫描个人路径、邮箱、代理与凭据模式
 ## 许可证
 
 [MIT](LICENSE)。第三方组件见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，Release 同时提供 CycloneDX SBOM 和许可证报告。
+
+## 友链
+
+学AI 上L站！ [L站链接](https://linux.do/)
