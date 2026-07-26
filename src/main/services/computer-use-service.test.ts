@@ -16,12 +16,13 @@ describe("Computer Use safety policy", () => {
     }
   });
   it.each([
-    ["powershell", ""], ["pwsh", ""], ["cmd", ""], ["Codex", "任务"], ["notepad", "Windows Security"], ["grok-build-desktop", "Grok Build Desktop"],
+    ["powershell", ""], ["pwsh", ""], ["cmd", ""], ["notepad", "Windows Security"], ["grok-build-desktop", "Grok Build Desktop"],
   ])("blocks protected target %s", (processName, title) => expect(isBlockedComputerTarget(processName, title)).toBe(true));
 
   it("does not block ordinary foreground applications", () => {
     expect(isBlockedComputerTarget("notepad", "notes.txt - Notepad")).toBe(false);
     expect(isBlockedComputerTarget("calculatorapp", "Calculator")).toBe(false);
+    expect(isBlockedComputerTarget("Codex", "Codex 任务")).toBe(false);
   });
 
   it("starts an ordinary app directly by default and retains optional per-app confirmation", async () => {
@@ -103,6 +104,26 @@ describe("Computer Use safety policy", () => {
     expect(state.window.bounds.x).toBe(-1_920);
     expect(state.elements[0]?.bounds).toEqual({ x: 480, y: 320, width: 120, height: 48 });
     expect(mapScreenshotCoordinates({ sessionId: "s", action: "click", x: 480, y: 320 }, state)).toEqual(expect.objectContaining({ x: 600, y: 400 }));
+  });
+
+  it("stays stopped after an emergency stop until the session is explicitly re-armed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "computer-estop-"));
+    const service = new ComputerUseService(root, "missing-helper", "missing-plugin", { log: async () => undefined } as never, () => "agent", () => undefined);
+    try {
+      // A live task is required for emergencyStop to have anything to stop.
+      (service as never as { tasks: Map<string, unknown> }).tasks.set("s1", { sessionId: "s1", appId: "a", appName: "A", status: "running", stepCount: 1, updatedAt: new Date().toISOString() });
+
+      expect(service.emergencyStop("Ctrl+Alt+Esc")).toEqual(["s1"]);
+      expect(service.isEmergencyStopped("s1")).toBe(true);
+
+      // Without the sticky guard the CLI's next start() would succeed and the
+      // agent would resume driving the mouse one tool call later.
+      await expect(service.start({ sessionId: "s1", appId: "a" })).rejects.toThrow("已紧急停止");
+      expect(service.isEmergencyStopped("s2")).toBe(false);
+
+      service.clearEmergencyStop("s1");
+      expect(service.isEmergencyStopped("s1")).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it("returns PNG as MCP image content without duplicating it in text", () => {

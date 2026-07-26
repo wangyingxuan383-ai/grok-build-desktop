@@ -68,6 +68,18 @@ export interface SystemDiagnosticItem {
   details?: string[];
 }
 
+/**
+ * A diagnosis scoped to one failed turn. The static install sweep answers
+ * "is my install healthy"; this answers "why did THIS request fail".
+ */
+export interface FailureDiagnosisReport {
+  failure: TurnFailure;
+  generatedAt: string;
+  headline: string;
+  items: SystemDiagnosticItem[];
+  actions: string[];
+}
+
 export interface SystemCompatibilityReport {
   checkedAt: string;
   overall: "ready" | "limited" | "blocked";
@@ -140,6 +152,8 @@ export interface AppSettings {
 }
 
 export type ProviderProtocol = "chat_completions" | "responses" | "messages";
+export type ProviderUpstreamProtocol = "openai_chat" | "openai_responses" | "anthropic_messages" | "gemini_generate_content" | "compatible_passthrough";
+export type ProviderSchemaProfile = "standard" | "gemini" | "strict";
 export type ProviderAuthScheme = "bearer" | "x_api_key";
 
 export interface ProviderModelDefinition {
@@ -164,6 +178,8 @@ export interface CustomProviderProfile {
   baseUrl: string;
   modelListUrl?: string;
   protocol: ProviderProtocol;
+  upstreamProtocol?: ProviderUpstreamProtocol;
+  schemaProfile?: ProviderSchemaProfile;
   authScheme: ProviderAuthScheme;
   credentialMode: "managed" | "existing" | "none";
   credentialEnv?: string;
@@ -311,6 +327,21 @@ export interface PromptQueueEntry {
   attachmentPreviews?: UserMessageAttachmentPreview[];
 }
 
+export interface QueueOperationReceipt {
+  operationId: string;
+  entryId?: string;
+  state: "queued" | "interjected" | "updated" | "removed" | "reordered" | "cleared";
+  message: string;
+  fallback?: boolean;
+}
+
+export interface PlanDecisionReceipt {
+  requestId: string;
+  verdict: "approved" | "rejected" | "cancelled";
+  state: "accepted" | "duplicate";
+  message: string;
+}
+
 export interface BackgroundTaskSummary {
   id: string;
   sessionId?: string;
@@ -444,11 +475,15 @@ export interface QuotaWindow {
   used?: number;
   limit?: number;
   remaining?: number;
-  unit: "credits" | "usd" | "percent";
+  unit: "credits" | "usd" | "percent" | "tokens";
   periodStart?: string;
   periodEnd?: string;
   resetAt?: string;
   products?: Array<{ label: string; usedPercent?: number }>;
+  source?: "billing-api" | "cli-error";
+  observedAt?: string;
+  modelId?: string;
+  expired?: boolean;
 }
 
 export interface GrokQuotaSnapshot {
@@ -457,6 +492,7 @@ export interface GrokQuotaSnapshot {
   fetchedAt: string;
   stale: boolean;
   partial: boolean;
+  rolling24h?: QuotaWindow;
   weekly?: QuotaWindow;
   monthly?: QuotaWindow;
   onDemand?: QuotaWindow;
@@ -836,6 +872,56 @@ export interface TurnPresentation {
   completedAt?: string;
   durationMs?: number;
   outcome?: TurnOutcome;
+  usage?: TurnUsage;
+}
+
+export interface TurnUsage extends PromptMeta {
+  providerId?: string;
+  source: "acp-turn" | "prompt-result" | "history";
+  exact: true;
+}
+
+/**
+ * What kind of failure this was, which is what decides the useful next action.
+ * A quota wall, a rejected tool schema and an expired credential all surface as
+ * "the request failed" today even though nothing about the remedy is shared.
+ */
+export type TurnFailureClass =
+  | "quota-exhausted"
+  | "schema-rejected"
+  | "auth-expired"
+  | "provider-error"
+  | "network"
+  | "cli-crashed"
+  | "cancelled"
+  | "unknown";
+
+/**
+ * Identity and context for one failed turn. Without this the renderer receives
+ * only a free-text string, so nothing downstream can tell which provider,
+ * model or request failed — which is why the diagnostics centre could not be
+ * connected to a failure and reported an all-green install instead.
+ */
+export interface TurnFailure {
+  failureId: string;
+  at: string;
+  classification: TurnFailureClass;
+  /** Already redacted in the main process before it crosses the bridge. */
+  message: string;
+  sessionId?: string;
+  turnId?: string;
+  modelId?: string;
+  providerId?: string;
+  jsonRpcCode?: number;
+  httpStatus?: number;
+  traceId?: string;
+  retryAfter?: string;
+  gatewayPhase?: "pre-send" | "upstream" | "response";
+  /** How many tool-schema values the compatibility gateway rewrote for this provider. */
+  sanitizedCount?: number;
+  processExitCode?: number;
+  /** Short, class-specific things the user can actually do. */
+  nextActions?: string[];
 }
 
 export interface PermissionOption {
@@ -884,7 +970,7 @@ export type ChatEvent =
   | { type: "computer-permission"; sessionId: string; request: ComputerAppPermissionRequest }
   | { type: "computer-risk"; sessionId: string; request: ComputerRiskConfirmation }
   | { type: "prompt-queue"; sessionId: string; entries: PromptQueueEntry[] }
-  | { type: "error"; sessionId?: string; message: string };
+  | { type: "error"; sessionId?: string; message: string; failure?: TurnFailure };
 
 export interface CliVersionStatus {
   found: boolean;
@@ -946,6 +1032,7 @@ export interface GrokDesktopApi {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState>;
   resetOnboarding(): Promise<OnboardingState>;
   runDiagnostics(): Promise<SystemCompatibilityReport>;
+  diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport>;
   getCliCapabilities(force?: boolean): Promise<import("./workbench-types").CliCapabilitySnapshot>;
   previewSupportBundle(): Promise<SupportBundlePreview>;
   exportSupportBundle(): Promise<string | null>;
@@ -1045,7 +1132,7 @@ export interface GrokDesktopApi {
   setMode(sessionId: string, mode: SessionMode): Promise<void>;
   respondPermission(sessionId: string, requestId: string | number, optionId: string): Promise<void>;
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>): Promise<void>;
-  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<void>;
+  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<PlanDecisionReceipt>;
   pickAttachments(): Promise<Attachment[]>;
   pickAttachmentFolders(): Promise<Attachment[]>;
   attachmentsFromPaths(paths: string[]): Promise<Attachment[]>;
@@ -1093,13 +1180,13 @@ export interface GrokDesktopApi {
   repairAutomationRegistrations(): Promise<AutomationTask[]>;
   checkAutomationHealth(repair?: boolean): Promise<import("./workbench-types").AutomationHealthReport>;
   clearAutomationContext(id: string): Promise<AutomationTask[]>;
-  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
-  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
-  editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void>;
-  removeQueuedPrompt(sessionId: string, id: string): Promise<void>;
-  reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<void>;
-  clearPromptQueue(sessionId: string): Promise<void>;
-  interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<void>;
+  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<QueueOperationReceipt>;
+  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<QueueOperationReceipt>;
+  editQueuedPrompt(sessionId: string, id: string, text: string): Promise<QueueOperationReceipt>;
+  removeQueuedPrompt(sessionId: string, id: string): Promise<QueueOperationReceipt>;
+  reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<QueueOperationReceipt>;
+  clearPromptQueue(sessionId: string): Promise<QueueOperationReceipt>;
+  interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<QueueOperationReceipt>;
   forkSession(sessionId: string, rewindPointId?: string, launch?: import("./workbench-types").ExecutionProfileLaunchInput): Promise<SessionForkResult>;
   listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
   rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void>;

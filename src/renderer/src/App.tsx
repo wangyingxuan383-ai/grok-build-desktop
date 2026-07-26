@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaVideoDuration, MediaVideoResolution, NavigationIntent, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
+import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaVideoDuration, MediaVideoResolution, NavigationIntent, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
 import { buildMediaSlashCommand, detectMediaCapabilities } from "../../shared/media";
 import { resolveComputerMention } from "../../shared/computer-mentions";
 import { buildComposerCommand, normalizeSkillCommand } from "../../shared/composer-capability";
@@ -26,6 +26,7 @@ import { useWorktreeStore } from "./worktree-store";
 import { useGitStore } from "./git-store";
 import { UiIcon, type UiIconName } from "./ui-icons";
 import { ReviewPane } from "./components/ReviewPane";
+import { FailureDiagnosisPanel } from "./components/FailureDiagnosisPanel";
 import { RightUtilityPane, type RightTool } from "./components/RightUtilityPane";
 import { findStaleReviewComment, formatReviewComments, type ReviewCommentDraft } from "./review-comments";
 
@@ -54,6 +55,8 @@ export default function App(): React.JSX.Element {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [operationBusy, setOperationBusy] = useState(false);
   const [sending, setSending] = useState(false);
+  const [composerNotice, setComposerNotice] = useState("");
+  const [diagnosingFailure, setDiagnosingFailure] = useState<TurnFailure>();
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [capability, setCapability] = useState<ComposerCapabilitySelection | undefined>();
@@ -359,11 +362,11 @@ export default function App(): React.JSX.Element {
   const executionRoot = executionAssignment?.cwd || activeSession?.cwd || store.settings?.activeWorkspace || "";
   const lastTurnPaths = useMemo(() => {
     for (let index = turns.length - 1; index >= 0; index--) {
-      const paths = Array.from(new Set(turns[index]!.groups.flatMap((group) => group.items.flatMap((message) => message.kind === "tool" ? (message.tool.locations ?? []).map((location) => location.path).filter((path): path is string => Boolean(path)) : []))));
+      const paths = Array.from(new Set(turns[index]!.groups.filter((group) => group.kind === "files").flatMap((group) => group.items.flatMap((message) => message.kind === "tool" ? (message.tool.locations ?? []).map((location) => location.path).filter((path): path is string => typeof path === "string" && path.length > 0 && isPathInExecutionRoot(path, executionRoot)) : []))));
       if (paths.length) return paths;
     }
     return [];
-  }, [turns]);
+  }, [executionRoot, turns]);
   const utilityTurn = useMemo(() => [...turns].reverse().find((turn) => turn.final || turn.pending.some((item) => item.kind === "plan") || turn.groups.some((group) => group.items.some((item) => item.kind === "plan"))) ?? turns.at(-1), [turns]);
   const navigate = useCallback(async (intent: NavigationIntent): Promise<void> => {
     if (intent.surface === "review") {
@@ -574,9 +577,16 @@ export default function App(): React.JSX.Element {
     }
     try {
       const clientMessageId = crypto.randomUUID();
-      if (delivery === "interject") await window.grokDesktop.interjectPrompt(sessionId, outboundText, attachments, clientMessageId);
-      else if (delivery === "queue") await window.grokDesktop.enqueuePrompt(sessionId, outboundText, attachments, clientMessageId);
+      if (delivery === "interject") {
+        const receipt = await window.grokDesktop.interjectPrompt(sessionId, outboundText, attachments, clientMessageId);
+        setComposerNotice(receipt.message);
+      }
+      else if (delivery === "queue") {
+        const receipt = await window.grokDesktop.enqueuePrompt(sessionId, outboundText, attachments, clientMessageId);
+        setComposerNotice(receipt.message);
+      }
       else await window.grokDesktop.sendPrompt({ sessionId, text: outboundText, attachments, clientMessageId });
+      if (delivery !== "normal") window.setTimeout(() => setComposerNotice(""), 4_000);
       setReviewComments([]);
     }
     catch (error) {
@@ -678,6 +688,7 @@ export default function App(): React.JSX.Element {
   return (
     <div className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`} style={{ fontSize: `${store.settings?.fontScale ?? 100}%` }}>
       <Sidebar
+        version={store.appVersion}
         settings={store.settings}
         sessions={store.sessions}
         codexSessions={store.codexSessions}
@@ -752,7 +763,8 @@ export default function App(): React.JSX.Element {
         {!store.cli?.found ? <EmptyState title="未找到 Grok CLI" text="请在设置中指定 grok.exe 路径。" action="打开设置" onAction={() => setPanel("settings")} />
           : activeCodexId ? <CodexMirror detail={codexDetail} busy={operationBusy} onRefresh={async () => setCodexDetail(await window.grokDesktop.refreshCodexSession(activeCodexId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueCodexSession(activeCodexId); store.setSessions(await window.grokDesktop.setWorkspace(result.cwd)); store.setSettings(await window.grokDesktop.getSettings()); setActiveCodexId(""); setCodexDetail(null); store.setActiveSession(result.sessionId); await refreshSessions(); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideCodexSession(activeCodexId, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(store.settings?.activeWorkspace || "", store.settings?.showArchivedCodex, true)); setActiveCodexId(""); setCodexDetail(null); }} />
           : !activeSession && !view ? <WorkspaceEmptyState workspaces={store.workspaces} onNew={() => void openNewSessionDialog()} onOpen={async (cwd) => { store.setSessions(await window.grokDesktop.setWorkspace(cwd)); store.setSettings(await window.grokDesktop.getSettings()); }} />
-          : <div className="conversation-wrap" onWheelCapture={(event) => { if (event.deltaY < 0) { followTurnRef.current = false; forceFollowRef.current = false; } }}><Virtuoso ref={virtuosoRef} className="conversation" data={turns} computeItemKey={(_index, turn) => turn.id} followOutput={(isAtBottom) => (isAtBottom || forceFollowRef.current) ? "auto" : false} atBottomStateChange={(value) => { atBottomRef.current = value; if (value && !followTurnRef.current) forceFollowRef.current = false; setAtBottom(value); }} itemContent={(index, turn) => <div className={conversationMatches[conversationMatch] === index ? "conversation-match-active" : ""}><TurnCard turn={turn} sessionId={store.activeSessionId} navigationRoot={executionRoot} showThinking={store.settings?.showThinking ?? false} expandTools={store.settings?.expandToolDetails ?? false} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onOpenReview={() => void window.grokDesktop.getGitWorkspaceCapability(executionRoot).then((capability) => { if (capability.available) { setReviewInitialScope("last-turn"); setRightTool("review"); } else setRightTool("files"); }).catch((error) => store.setError(errorMessage(error)))} onFork={index === turns.length - 1 ? () => setPanel("history") : undefined} onResolved={(id) => store.resolveMessage(store.activeSessionId, id)} onRetry={(message) => { setComposer(message.text); store.clearAttachments(); store.addAttachments((message.attachments ?? []).filter((attachment) => attachment.availability === "ready" && Boolean(attachment.source)).map((attachment) => ({ id: attachment.id, name: attachment.name, kind: attachment.kind, mimeType: attachment.mimeType, size: attachment.size, ...(attachment.isData ? { data: attachment.source } : { path: attachment.source }) }))); focusComposer(); }} /></div>} />{!atBottom && !!turns.length && <button className="scroll-to-bottom" onClick={() => { followTurnRef.current = false; forceFollowRef.current = true; atBottomRef.current = true; setAtBottom(true); scrollConversationNow("smooth"); }}>↓ 回到底部</button>}</div>}</div>
+          : <div className="conversation-wrap" onWheelCapture={(event) => { if (event.deltaY < 0) { followTurnRef.current = false; forceFollowRef.current = false; } }}><Virtuoso ref={virtuosoRef} className="conversation" data={turns} computeItemKey={(_index, turn) => turn.id} followOutput={(isAtBottom) => (isAtBottom || forceFollowRef.current) ? "auto" : false} atBottomStateChange={(value) => { atBottomRef.current = value; if (value && !followTurnRef.current) forceFollowRef.current = false; setAtBottom(value); }} itemContent={(index, turn) => <div className={conversationMatches[conversationMatch] === index ? "conversation-match-active" : ""}><TurnCard turn={turn} sessionId={store.activeSessionId} navigationRoot={executionRoot} showThinking={store.settings?.showThinking ?? false} expandTools={store.settings?.expandToolDetails ?? false} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onOpenReview={() => void window.grokDesktop.getGitWorkspaceCapability(executionRoot).then((capability) => { if (capability.available) { setReviewInitialScope("last-turn"); setRightTool("review"); } else setRightTool("files"); }).catch((error) => store.setError(errorMessage(error)))} onFork={index === turns.length - 1 ? () => setPanel("history") : undefined} onResolved={(id) => store.resolveMessage(store.activeSessionId, id)} onDiagnose={setDiagnosingFailure} onRetry={(message) => { setComposer(message.text); store.clearAttachments(); store.addAttachments((message.attachments ?? []).filter((attachment) => attachment.availability === "ready" && Boolean(attachment.source)).map((attachment) => ({ id: attachment.id, name: attachment.name, kind: attachment.kind, mimeType: attachment.mimeType, size: attachment.size, ...(attachment.isData ? { data: attachment.source } : { path: attachment.source }) }))); focusComposer(); }} /></div>} />{!atBottom && !!turns.length && <button className="scroll-to-bottom" onClick={() => { followTurnRef.current = false; forceFollowRef.current = true; atBottomRef.current = true; setAtBottom(true); scrollConversationNow("smooth"); }}>↓ 回到底部</button>}</div>}</div>
+        {diagnosingFailure && createPortal(<FailureDiagnosisPanel failure={diagnosingFailure} onClose={() => setDiagnosingFailure(undefined)} />, document.getElementById("overlay-root")!)}
         {!activeCodexId && <Composer
           inputRef={composerRef}
           text={composer}
@@ -762,11 +774,19 @@ export default function App(): React.JSX.Element {
           sessionId={store.activeSessionId}
           attachments={store.attachments}
           reviewComments={reviewComments}
+          notice={composerNotice}
           commandMatches={commandMatches}
           fileMatches={fileMatches}
           view={view}
           onSend={() => void send(view?.status === "working" ? "queue" : "normal")}
           onInterject={() => void send("interject")}
+          onBlockedSubmit={() => {
+            const reason = view?.status === "needs-user" ? "请先处理当前的计划、权限或问题卡片，然后再发送。"
+              : sending ? "上一条消息仍在发送，稍后会自动恢复。"
+              : "界面正在处理其它操作，请稍候。";
+            setComposerNotice(reason);
+            window.setTimeout(() => setComposerNotice(""), 4_000);
+          }}
           onStop={() => store.activeSessionId && void window.grokDesktop.cancelSession(store.activeSessionId)}
           onAdd={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachments()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
           onAddFolders={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachmentFolders()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
@@ -809,6 +829,7 @@ export default function App(): React.JSX.Element {
 }
 
 function Sidebar(props: {
+  version: string;
   settings?: AppSettings;
   sessions: SessionSummary[];
   codexSessions: CodexSessionSummary[];
@@ -884,7 +905,7 @@ function Sidebar(props: {
       {!props.settings?.codexGroupCollapsed && <><label className="archived-toggle"><input type="checkbox" checked={props.settings?.showArchivedCodex ?? false} onChange={(event) => props.onToggleArchived(event.target.checked)} />显示归档</label>{props.codexSessions.map((session) => <div key={session.id} className={`session-row codex ${props.activeCodexId === session.id ? "active" : ""}`} onClick={() => props.onOpenCodex(session)}><span className="codex-mark">C</span><div className="session-copy"><strong>{session.title}</strong><span>{relativeTime(session.updatedAt)}{session.archived ? " · 已归档" : ""}</span></div><div className="session-actions"><button title="从镜像列表隐藏" onClick={(event) => { event.stopPropagation(); props.onHideCodex(session); }}>×</button></div></div>)}</>}
       {props.workspaces.filter((workspace) => workspace.exists && workspace.cwd.toLocaleLowerCase() !== (props.settings?.activeWorkspace || "").toLocaleLowerCase()).slice(0, 8).map((workspace) => <button className="workspace-task-group collapsed" key={workspace.cwd} title={`${workspace.cwd} · 点击后按需加载任务`} onClick={() => props.onRecent(workspace.cwd)}><UiIcon name="chevron-right" size={12}/><strong>{workspace.name}</strong><span>{workspace.grokSessions}</span></button>)}
     </div></>}
-    <div className="sidebar-footer"><button onClick={() => props.onPanel("accounts")}><span className="avatar">{activeAccount?.label.slice(0, 1).toUpperCase() || "?"}</span><span>{activeAccount?.label || "登录账号"}</span></button><button title="版本与更新" onClick={() => props.onPanel("about")}><UiIcon name="download"/><span>0.6.4</span></button><button className="icon-button" title="设置" onClick={() => props.onPanel("settings")}><UiIcon name="settings"/></button></div>
+    <div className="sidebar-footer"><button onClick={() => props.onPanel("accounts")}><span className="avatar">{activeAccount?.label.slice(0, 1).toUpperCase() || "?"}</span><span>{activeAccount?.label || "登录账号"}</span></button><button title="版本与更新" onClick={() => props.onPanel("about")}><UiIcon name="download"/><span>{props.version}</span></button><button className="icon-button" title="设置" onClick={() => props.onPanel("settings")}><UiIcon name="settings"/></button></div>
   </aside>;
 }
 
@@ -908,11 +929,13 @@ function Composer(props: {
   sessionId: string;
   attachments: ReturnType<typeof useAppStore.getState>["attachments"];
   reviewComments: ReviewCommentDraft[];
+  notice?: string;
   commandMatches: Array<{ name: string; description?: string }>;
   fileMatches: WorkspaceFileCandidate[];
   view: ReturnType<typeof useAppStore.getState>["views"][string] | undefined;
   onSend(): void;
   onInterject(): void;
+  onBlockedSubmit(): void;
   onStop(): void;
   onAdd(): void;
   onAddFolders(): void;
@@ -935,21 +958,27 @@ function Composer(props: {
   const composingRef = useRef(false);
   const tokenTotal = props.view?.meta.totalTokens ?? 0;
   const selectedModel = props.view?.models.find((value) => value.modelId === props.view?.currentModelId);
-  const tokenWindow = selectedModel?.totalContextTokens ?? 512_000;
+  // Models that do not declare a window fall back to 512K so the meter stays
+  // readable. The tooltip says so, since the denominator is then an assumption.
+  const declaredWindow = selectedModel?.totalContextTokens;
+  const tokenWindow = declaredWindow ?? 512_000;
   const percent = Math.min(100, Math.round(tokenTotal / tokenWindow * 100));
-  return <div className="composer-zone">{props.view?.queue.length ? <PromptQueueBar sessionId={props.sessionId} entries={props.view.queue} /> : null}{props.reviewComments.length > 0 && <div className="review-comment-drafts"><span>审核批注草稿</span>{props.reviewComments.map((comment) => <button key={comment.id} title={comment.body} onClick={() => props.onRemoveReviewComment(comment.id)}><code>{comment.path}:L{comment.line}</code><span>{comment.body}</span><b>×</b></button>)}</div>}{props.commandMatches.length > 0 && <div className="slash-menu">{props.commandMatches.map((command) => <button key={command.name} onClick={() => props.onCommand(command.name)}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}</span></button>)}</div>}{props.fileMatches.length > 0 && <div className="slash-menu file-menu">{props.fileMatches.map((file) => <button key={file.path} onClick={() => props.onFile(file)}><strong>@{file.name}</strong><span>{file.relativePath}</span></button>)}</div>}
+  return <div className="composer-zone">{props.notice && <div className="composer-operation-notice" role="status">{props.notice}</div>}{props.view?.status === "needs-user" && <div className="composer-operation-notice waiting" role="status">请先处理当前计划、权限或问题卡片，然后再发送消息。</div>}{props.view?.queue.length ? <PromptQueueBar sessionId={props.sessionId} entries={props.view.queue} /> : null}{props.reviewComments.length > 0 && <div className="review-comment-drafts"><span>审核批注草稿</span>{props.reviewComments.map((comment) => <button key={comment.id} title={comment.body} onClick={() => props.onRemoveReviewComment(comment.id)}><code>{comment.path}:L{comment.line}</code><span>{comment.body}</span><b>×</b></button>)}</div>}{props.commandMatches.length > 0 && <div className="slash-menu">{props.commandMatches.map((command) => <button key={command.name} onClick={() => props.onCommand(command.name)}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}</span></button>)}</div>}{props.fileMatches.length > 0 && <div className="slash-menu file-menu">{props.fileMatches.map((file) => <button key={file.path} onClick={() => props.onFile(file)}><strong>@{file.name}</strong><span>{file.relativePath}</span></button>)}</div>}
     {addOpen && createPortal(<AddPalette onClose={() => { setAddOpen(false); props.onControlSettled(); }} onFiles={() => { setAddOpen(false); props.onAdd(); }} onFolders={() => { setAddOpen(false); props.onAddFolders(); }} onWorkspaceFile={() => { setAddOpen(false); props.onFileMenu(); }} onComputer={() => { setAddOpen(false); props.onComputer(); }} onSkill={(skill) => { setAddOpen(false); props.onCapability({ kind: "skill", label: skill.name, command: normalizeSkillCommand(skill.command), source: skill.source }); props.onControlSettled(); }} onManageExtensions={() => { setAddOpen(false); props.onManageExtensions(); }} />, document.getElementById("overlay-root")!)}
     <div className="composer">{(props.attachments.length > 0 || props.capability) && <div className="attachment-row">{props.capability && <span className={`capability-chip ${props.capability.kind}`}>{props.capability.kind === "computer" ? "◉" : "✦"} @{props.capability.label}<small>仅本次消息</small><button title="移除能力" onClick={props.onClearCapability}>×</button></span>}{props.attachments.map((attachment) => <span className={attachment.kind === "image" ? "composer-image-chip" : ""} key={attachment.id}>{attachment.kind === "image" ? <img src={attachment.data ? `data:${attachment.mimeType || "image/png"};base64,${attachment.data}` : attachment.path ? localFileUrl(attachment.path) : ""} alt="" /> : attachment.kind === "folder" ? "▰" : "▤"}<span>{attachment.name}</span><button title={`移除 ${attachment.name}`} onClick={() => props.onRemove(attachment.id)}>×</button></span>)}</div>}
-      <textarea ref={props.inputRef} value={props.text} onChange={(event) => props.setText(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length) { event.preventDefault(); props.onPaste(images); } }} onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) { event.preventDefault(); props.onHistory(event.key === "ArrowUp" ? -1 : 1); } else if (event.key === "Enter" && event.ctrlKey && !event.nativeEvent.isComposing && !composingRef.current) { event.preventDefault(); if (props.busy && !props.controlsDisabled) props.onInterject(); } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composingRef.current && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!props.controlsDisabled) props.onSend(); } }} placeholder={props.busy ? "继续输入；Enter 排队，Ctrl+Enter 插话…" : "给 Grok 发送消息…"} />
-      <div className="composer-toolbar"><div className="toolbar-left"><button className="icon-button add-button" title="添加文件或能力" aria-expanded={addOpen} aria-haspopup="dialog" disabled={props.controlsDisabled} onClick={() => setAddOpen(!addOpen)}><UiIcon name="plus"/></button><TokenDonut percent={percent} label={`${formatTokens(tokenTotal)} / ${formatTokens(tokenWindow)}`} />{props.view && <ModelControls sessionId={props.sessionId} view={props.view} disabled={props.controlsDisabled || props.busy} onSettled={props.onControlSettled} />}</div>{props.busy ? <div className="busy-send-actions"><button className="queue-send" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}>加入队列</button><button className="send-button stop" title="停止" onClick={props.onStop}><UiIcon name="stop"/></button></div> : <button className="send-button" title="发送" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}><UiIcon name="send"/></button>}</div>
+      {/* Never disabled: disabling mid-IME-composition can swallow
+          compositionend and strand composingRef, killing Enter for good. Typing
+          and drafting stay available; only submission is gated, and it says so. */}
+      <textarea ref={props.inputRef} value={props.text} aria-keyshortcuts="Enter Control+Enter" onChange={(event) => props.setText(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length) { event.preventDefault(); props.onPaste(images); } }} onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) { event.preventDefault(); props.onHistory(event.key === "ArrowUp" ? -1 : 1); } else if (event.key === "Enter" && event.ctrlKey && !event.nativeEvent.isComposing && !composingRef.current) { event.preventDefault(); if (props.controlsDisabled) props.onBlockedSubmit(); else if (props.busy) props.onInterject(); else props.onSend(); } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composingRef.current && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (props.controlsDisabled) props.onBlockedSubmit(); else props.onSend(); } }} placeholder={props.controlsDisabled ? "可以继续输入；请先处理当前计划、权限或问题再发送…" : props.busy ? "继续输入；Enter 排队，Ctrl+Enter 插话…" : "给 Grok 发送消息…"} />
+      <div className="composer-toolbar"><div className="toolbar-left"><button className="icon-button add-button" title="添加文件或能力" aria-expanded={addOpen} aria-haspopup="dialog" disabled={props.controlsDisabled} onClick={() => setAddOpen(!addOpen)}><UiIcon name="plus"/></button><TokenDonut percent={percent} label={`${formatTokens(tokenTotal)} / ${formatTokens(tokenWindow)}`} title={declaredWindow ? undefined : "该模型未上报上下文上限，按 512K 估算"} />{props.view && <ModelControls sessionId={props.sessionId} view={props.view} disabled={props.controlsDisabled || props.busy} onSettled={props.onControlSettled} />}</div>{props.busy ? <div className="busy-send-actions"><button className="queue-send" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}>加入队列</button><button className="interject-send" title="插入当前回合（Ctrl+Enter）" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onInterject}>插话</button><button className="send-button stop" title="停止" onClick={props.onStop}><UiIcon name="stop"/></button></div> : <button className="send-button" title="发送" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}><UiIcon name="send"/></button>}</div>
     </div>
   </div>;
 }
 
 function PromptQueueBar({ sessionId, entries }: { sessionId: string; entries: PromptQueueEntry[] }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false); const [editing, setEditing] = useState<string>(); const [text, setText] = useState(""); const setError = useAppStore((state) => state.setError);
-  const run = async (action: () => Promise<void>): Promise<void> => { try { await action(); } catch (error) { setError(errorMessage(error)); } };
-  return <div className="prompt-queue"><button className="prompt-queue-summary" onClick={() => setExpanded(!expanded)}><span>≡</span><strong>{entries.length} 条消息等待发送</strong><small>{expanded ? "收起" : "展开管理"}</small></button>{expanded && <div className="prompt-queue-list">{entries.map((entry, index) => <div key={entry.id}>{editing === entry.id ? <input autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditing(undefined); if (event.key === "Enter" && text.trim()) void run(async () => { await window.grokDesktop.editQueuedPrompt(sessionId, entry.id, text.trim()); setEditing(undefined); }); }} /> : <span><b>{index + 1}</b>{entry.text}</span>}<button disabled={index === 0} title="上移" onClick={() => void run(() => window.grokDesktop.reorderQueuedPrompt(sessionId, entry.id, index - 1))}>↑</button><button disabled={index === entries.length - 1} title="下移" onClick={() => void run(() => window.grokDesktop.reorderQueuedPrompt(sessionId, entry.id, index + 1))}>↓</button><button title="立即插入当前回合" onClick={() => void run(() => window.grokDesktop.interjectQueuedPrompt(sessionId, entry.id))}>插话</button><button title="编辑" onClick={() => { setEditing(entry.id); setText(entry.text); }}>✎</button><button title="删除" onClick={() => void run(() => window.grokDesktop.removeQueuedPrompt(sessionId, entry.id))}>×</button></div>)}<button className="clear-queue" onClick={() => void run(() => window.grokDesktop.clearPromptQueue(sessionId))}>清空等待队列</button></div>}</div>;
+  const [expanded, setExpanded] = useState(false); const [editing, setEditing] = useState<string>(); const [text, setText] = useState(""); const [notice, setNotice] = useState(""); const setError = useAppStore((state) => state.setError);
+  const run = async (action: () => Promise<{ message?: string } | void>): Promise<void> => { try { const receipt = await action(); if (receipt?.message) { setNotice(receipt.message); window.setTimeout(() => setNotice(""), 4_000); } } catch (error) { setError(errorMessage(error)); } };
+  return <div className="prompt-queue"><button className="prompt-queue-summary" onClick={() => setExpanded(!expanded)}><span>≡</span><strong>{entries.length} 条消息等待发送</strong><small>{expanded ? "收起" : "展开管理"}</small></button>{notice && <p className="queue-operation-notice" role="status">{notice}</p>}{expanded && <div className="prompt-queue-list">{entries.map((entry, index) => { const editable = entry.state === "queued"; return <div key={entry.id}>{editing === entry.id ? <input autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditing(undefined); if (event.key === "Enter" && text.trim()) void run(async () => { const receipt = await window.grokDesktop.editQueuedPrompt(sessionId, entry.id, text.trim()); setEditing(undefined); return receipt; }); }} /> : <span><b>{index + 1}</b>{entry.text}<small>{entry.state === "interjected" ? "插话中" : entry.state === "sending" ? "发送中" : "已排队"}</small></span>}<button disabled={!editable || index === 0} title="上移" onClick={() => void run(() => window.grokDesktop.reorderQueuedPrompt(sessionId, entry.id, index - 1))}>↑</button><button disabled={!editable || index === entries.length - 1} title="下移" onClick={() => void run(() => window.grokDesktop.reorderQueuedPrompt(sessionId, entry.id, index + 1))}>↓</button><button disabled={!editable} title={editable ? "立即插入当前回合" : "该消息已在发送"} onClick={() => void run(() => window.grokDesktop.interjectQueuedPrompt(sessionId, entry.id))}>插话</button><button disabled={!editable} title={editable ? "编辑" : "仅等待中的消息可编辑"} onClick={() => { setEditing(entry.id); setText(entry.text); }}>✎</button><button disabled={!editable} title="删除" onClick={() => void run(() => window.grokDesktop.removeQueuedPrompt(sessionId, entry.id))}>×</button></div>; })}<button className="clear-queue" onClick={() => void run(() => window.grokDesktop.clearPromptQueue(sessionId))}>清空等待队列</button></div>}</div>;
 }
 
 function AddPalette({ onClose, onFiles, onFolders, onWorkspaceFile, onComputer, onSkill, onManageExtensions }: { onClose(): void; onFiles(): void; onFolders(): void; onWorkspaceFile(): void; onComputer(): void; onSkill(skill: SkillSummary): void; onManageExtensions(): void }): React.JSX.Element {
@@ -1011,7 +1040,9 @@ function ModelControls({ sessionId, view, disabled, onSettled }: { sessionId: st
   </div>;
 }
 
-function TokenDonut({ percent, label }: { percent: number; label: string }): React.JSX.Element { return <span className="token-meter" title={label}><span style={{ background: `conic-gradient(var(--accent) ${percent}%, #343940 ${percent}% 100%)` }}><i /></span>{label}</span>; }
+function TokenDonut({ percent, label, title }: { percent: number; label: string; title?: string }): React.JSX.Element {
+  return <span className="token-meter" title={title ? `${label} · ${title}` : label}><span style={{ background: `conic-gradient(var(--accent) ${percent}%, #343940 ${percent}% 100%)` }}><i /></span>{label}</span>;
+}
 
 function SessionHistoryPanel({ sessionId, onClose, onForked, onRewound, confirmAction }: { sessionId: string; onClose(): void; onForked(result: { sessionId: string; parentSessionId: string; cwd: string }): void; onRewound(): void; confirmAction(message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> }): React.JSX.Element {
   const [points, setPoints] = useState<RewindPoint[]>([]); const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false); const [notice, setNotice] = useState("");
@@ -1098,6 +1129,7 @@ function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProvid
   const [category, setCategory] = useState<SettingsCategory>("general");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [computer, setComputer] = useState<ComputerUseSettings>();
+  const [updateActions, setUpdateActions] = useState<Record<string, { state: "running" | "success" | "error" | "cancelled"; message: string; at: string }>>({});
   useEffect(() => { if (category === "computer" && !computer) void window.grokDesktop.getComputerSettings().then(setComputer).catch((error) => store.setError(errorMessage(error))); }, [category, computer]);
   const categories: Array<{ id: SettingsCategory; label: string; icon: UiIconName }> = [
     { id: "general", label: "常规", icon: "settings" }, { id: "appearance", label: "外观", icon: "sparkles" }, { id: "models", label: "模型与会话", icon: "chat" },
@@ -1106,6 +1138,16 @@ function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProvid
   ];
   const save = async (): Promise<void> => { setSaveState("saving"); try { const value = await window.grokDesktop.updateSettings(draft); store.setSettings(value); setDraft(value); setSaveState("saved"); window.setTimeout(() => setSaveState("idle"), 1400); } catch (error) { setSaveState("idle"); store.setError(errorMessage(error)); } };
   const updateComputer = async (patch: Partial<ComputerUseSettings>): Promise<void> => { try { setComputer(await window.grokDesktop.updateComputerSettings(patch)); } catch (error) { store.setError(errorMessage(error)); } };
+  const runUpdateAction = async (key: string, action: () => Promise<string>): Promise<void> => {
+    if (updateActions[key]?.state === "running") return;
+    setUpdateActions((value) => ({ ...value, [key]: { state: "running", message: "正在执行…", at: new Date().toISOString() } }));
+    try {
+      const message = await action();
+      setUpdateActions((value) => ({ ...value, [key]: { state: message === "已取消" ? "cancelled" : "success", message, at: new Date().toISOString() } }));
+    } catch (error) {
+      setUpdateActions((value) => ({ ...value, [key]: { state: "error", message: errorMessage(error), at: new Date().toISOString() } }));
+    }
+  };
   return <div className="modal-backdrop" onMouseDown={onClose}><section className="settings-dialog" role="dialog" aria-modal="true" aria-label="设置" onMouseDown={(event) => event.stopPropagation()}>
     <header><div><h2>设置</h2><span>{saveState === "saving" ? "正在保存…" : saveState === "saved" ? "已保存" : "Grok Build Desktop"}</span></div><button className="icon-button" aria-label="关闭设置" onClick={onClose}><UiIcon name="close"/></button></header>
     <div className="settings-layout"><nav aria-label="设置分类">{categories.map((item) => <button key={item.id} className={category === item.id ? "active" : ""} onClick={() => setCategory(item.id)}><UiIcon name={item.icon}/><span>{item.label}</span></button>)}</nav><main className="settings-content">
@@ -1117,7 +1159,12 @@ function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProvid
       {category === "agents" && <SettingsSection title="Agent" description="Agent、Persona 与 Profiles 在项目范围内验证并原子保存。"><p className="settings-note">打开左侧“开发工具”中的 Agent 或 Profiles，可管理真实定义来源、启用状态和会话分配。</p></SettingsSection>}
       {category === "accounts" && <SettingsSection title="账号与提供商" description="账号凭据仍保存在系统安全存储中；提供商使用独立管理流程。"><dl className="settings-facts"><dt>活动账号</dt><dd>{store.accounts.find((value) => value.active)?.label || "未登录"}</dd><dt>提供商</dt><dd>连接测试只访问模型列表端点，不发送推理请求</dd></dl><div className="settings-action-list"><button onClick={onProviders}>管理自定义提供商与模型</button></div></SettingsSection>}
       {category === "computer" && <SettingsSection title="Computer Use" description="仅控制已明确选择的 Windows 应用。">{computer ? <><label className="check"><input type="checkbox" checked={computer.enabled} onChange={(event) => void updateComputer({ enabled: event.target.checked })}/>启用 Computer Use</label><label className="check"><input type="checkbox" checked={computer.confirmNewApps} onChange={(event) => void updateComputer({ confirmNewApps: event.target.checked })}/>首次控制新应用时确认</label><label>截图最大边长 <strong>{computer.maxScreenshotEdge}px</strong><input type="range" min="640" max="1920" step="128" value={computer.maxScreenshotEdge} onChange={(event) => void updateComputer({ maxScreenshotEdge: Number(event.target.value) })}/></label><dl className="settings-facts"><dt>紧急停止</dt><dd>{computer.emergencyShortcut}</dd><dt>始终允许应用</dt><dd>{computer.alwaysAllowedAppIds.length}</dd></dl></> : <p>正在读取 Computer Use 设置…</p>}</SettingsSection>}
-      {category === "updates" && <SettingsSection title="更新与诊断" description="检查应用、CLI 和本机兼容状态。"><div className="settings-action-list"><button onClick={async () => store.setAppRelease(await window.grokDesktop.checkAppUpdate(true))}>检查应用更新</button><button onClick={async () => store.setCli(await window.grokDesktop.checkCliUpdate())}>检查 Grok CLI 更新</button><button onClick={onDiagnostics}>打开诊断中心</button><button onClick={() => void window.grokDesktop.exportLogs()}>导出脱敏日志</button></div></SettingsSection>}
+      {category === "updates" && <SettingsSection title="更新与诊断" description="应用更新采用手动下载安装；每项操作都会在此显示结果。"><div className="settings-action-list">
+        <button disabled={updateActions.app?.state === "running"} onClick={() => void runUpdateAction("app", async () => { const value = await window.grokDesktop.checkAppUpdate(true); store.setAppRelease(value); if (value.error) throw new Error(value.error); return value.updateAvailable ? `发现 ${value.latestVersion}，请打开 GitHub Release 手动下载并核对 SHA-256。` : `当前 ${value.currentVersion} 已是最新稳定版。`; })}>检查应用更新</button>
+        <button disabled={updateActions.cli?.state === "running"} onClick={() => void runUpdateAction("cli", async () => { const value = await window.grokDesktop.checkCliUpdate(); store.setCli(value); if (value.error) throw new Error(value.error); return value.updateAvailable ? `CLI ${value.currentVersion} 可更新到 ${value.latestVersion}。` : `Grok CLI ${value.currentVersion || "未知"} 已是最新版本。`; })}>检查 Grok CLI 更新</button>
+        <button onClick={() => { setUpdateActions((value) => ({ ...value, diagnostics: { state: "success", message: "已打开诊断中心", at: new Date().toISOString() } })); onDiagnostics(); }}>打开诊断中心</button>
+        <button disabled={updateActions.logs?.state === "running"} onClick={() => void runUpdateAction("logs", async () => { const path = await window.grokDesktop.exportLogs(); return path ? `脱敏日志已导出：${path}` : "已取消"; })}>导出脱敏日志</button>
+      </div><div className="settings-action-results" aria-live="polite">{Object.entries(updateActions).map(([key, value]) => <article className={value.state} key={key}><strong>{({ app: "应用更新", cli: "CLI 更新", diagnostics: "诊断中心", logs: "脱敏日志" } as Record<string, string>)[key] || key}</strong><span>{value.message}</span><time>{new Date(value.at).toLocaleString()}</time>{value.state !== "running" && <button type="button" onClick={() => void navigator.clipboard.writeText(value.message)}>复制</button>}</article>)}</div></SettingsSection>}
       {category === "archived" && <SettingsSection title="已归档会话" description="归档任务不会出现在默认任务列表中。"><div className="archived-settings-list">{store.sessions.filter((session) => session.archived).map((session) => <div key={session.id}><span><strong>{session.title}</strong><small>{relativeTime(session.updatedAt)}</small></span><button onClick={async () => { await window.grokDesktop.archiveSession(session.id, false); if (draft.activeWorkspace) store.setSessions(await window.grokDesktop.listSessions(draft.activeWorkspace)); }}>取消归档</button></div>)}{!store.sessions.some((session) => session.archived) && <p className="settings-note">当前项目没有已归档会话。</p>}</div></SettingsSection>}
     </main></div><footer><button onClick={onClose}>取消</button><button className="primary" disabled={saveState === "saving"} onClick={() => void save()}>{saveState === "saving" ? "保存中…" : "保存设置"}</button></footer>
   </section></div>;
@@ -1227,15 +1274,16 @@ function MediaStudioPanel({ commands, onCreate, onClose }: {
 }
 
 function QuotaPanel({ quota, loading, onRefresh }: { quota: GrokQuotaSnapshot | null; loading: boolean; onRefresh(): void }): React.JSX.Element {
-  return <section className="quota-panel"><header><div><h3>账号额度</h3>{quota && <small>{quota.stale ? "缓存数据" : "更新于"} {new Date(quota.fetchedAt).toLocaleString()}</small>}</div><button disabled={loading} onClick={onRefresh}>{loading ? "刷新中…" : "刷新"}</button></header>{!quota ? <p>正在查询额度…</p> : !quota.supported ? <p>{quota.diagnostics[0]}</p> : <div className="quota-grid">{quota.weekly && <QuotaCard value={quota.weekly} />}{quota.monthly && <QuotaCard value={quota.monthly} />}{quota.onDemand && <QuotaCard value={quota.onDemand} />}{quota.diagnostics.length > 0 && <div className="quota-diagnostics">{quota.diagnostics.map((value) => <p key={value}>{value}</p>)}</div>}</div>}</section>;
+  return <section className="quota-panel"><header><div><h3>账号额度</h3>{quota && <small>{quota.stale ? "缓存数据" : "更新于"} {new Date(quota.fetchedAt).toLocaleString()}</small>}</div><button disabled={loading} onClick={onRefresh}>{loading ? "刷新中…" : "刷新"}</button></header>{!quota ? <p>正在查询额度…</p> : !quota.supported ? <p>{quota.diagnostics[0]}</p> : <div className="quota-grid">{quota.rolling24h && <QuotaCard value={quota.rolling24h} />}{quota.weekly && <QuotaCard value={quota.weekly} />}{quota.monthly && <QuotaCard value={quota.monthly} />}{quota.onDemand && <QuotaCard value={quota.onDemand} />}{quota.diagnostics.length > 0 && <div className="quota-diagnostics">{quota.diagnostics.map((value) => <p key={value}>{value}</p>)}</div>}</div>}</section>;
 }
 
 function QuotaCard({ value }: { value: NonNullable<GrokQuotaSnapshot["weekly"]> }): React.JSX.Element {
   const percent = value.unit === "percent" ? value.used : value.limit && value.used !== undefined ? value.used / value.limit * 100 : undefined;
-  return <div className="quota-card"><strong>{value.label}</strong>{percent !== undefined && <div className="quota-progress"><i style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} /></div>}<div><b>{value.used === undefined ? "使用率未返回" : value.unit === "percent" ? `${value.used.toFixed(1)}% 已用` : `${quotaAmount(value.used)} / ${quotaAmount(value.limit)}`}</b>{value.remaining !== undefined && value.unit !== "percent" && <span>剩余 {quotaAmount(value.remaining)}</span>}</div>{value.products?.map((product) => <small key={product.label}>{product.label}{product.usedPercent === undefined ? "" : `：${product.usedPercent.toFixed(1)}%`}</small>)}{value.resetAt && <small>重置：{new Date(value.resetAt).toLocaleString()}</small>}</div>;
+  return <div className={`quota-card${value.expired ? " expired" : ""}`}><strong>{value.label}</strong>{percent !== undefined && <div className="quota-progress"><i style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} /></div>}<div><b>{value.used === undefined ? "使用率未返回" : value.unit === "percent" ? `${value.used.toFixed(1)}% 已用` : `${quotaAmount(value.used, value.unit)} / ${quotaAmount(value.limit, value.unit)}`}</b>{value.remaining !== undefined && value.unit !== "percent" && <span>剩余 {quotaAmount(value.remaining, value.unit)}</span>}</div>{value.products?.map((product) => <small key={product.label}>{product.label}{product.usedPercent === undefined ? "" : `：${product.usedPercent.toFixed(1)}%`}</small>)}{value.source && <small>来源：{value.source === "cli-error" ? "CLI 限额响应" : "账单接口"}{value.modelId ? ` · ${value.modelId}` : ""}</small>}{value.observedAt && <small>观测：{new Date(value.observedAt).toLocaleString()}{value.expired ? " · 已过期" : ""}</small>}{value.resetAt && <small>重置：{formatQuotaReset(value.resetAt)}</small>}</div>;
 }
 
-function quotaAmount(value?: number): string { return value === undefined ? "—" : `$${(value / 100).toFixed(2)}`; }
+function quotaAmount(value: number | undefined, unit: NonNullable<GrokQuotaSnapshot["weekly"]>["unit"]): string { return value === undefined ? "—" : unit === "tokens" ? `${formatTokens(value)} Token` : `$${(value / 100).toFixed(2)}`; }
+function formatQuotaReset(value: string): string { const parsed = Date.parse(value); return Number.isFinite(parsed) ? new Date(parsed).toLocaleString() : value; }
 
 function ActionDialog({ dialog, onClose }: { dialog: DialogState; onClose(value: string | boolean | null): void }): React.JSX.Element {
   const [value, setValue] = useState(dialog.input?.value ?? "");
@@ -1248,6 +1296,14 @@ function ActionDialog({ dialog, onClose }: { dialog: DialogState; onClose(value:
 
 function EmptyState({ title, text, action, onAction }: { title: string; text: string; action: string; onAction(): void }): React.JSX.Element { return <div className="empty-state"><div className="empty-logo">G</div><h2>{title}</h2><p>{text}</p><button className="primary" onClick={onAction}>{action}</button></div>; }
 function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+function isPathInExecutionRoot(path: string, root: string): boolean {
+  if (!root) return false;
+  const normalize = (value: string): string => value.replace(/^\\\\\?\\/, "").replace(/\//g, "\\").replace(/\\+$/, "").toLocaleLowerCase();
+  const target = normalize(path);
+  const base = normalize(root);
+  if (!/^[a-z]:\\|^\\\\/.test(target)) return true;
+  return target === base || target.startsWith(`${base}\\`);
+}
 function shortPath(value: string): string { const parts = value.split(/[\\/]/).filter(Boolean); return parts.at(-1) || value; }
 function relativeTime(value: string): string { const time = Date.parse(value); if (!Number.isFinite(time)) return "未知时间"; const delta = Date.now() - time; if (delta < 60_000) return "刚刚"; if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`; if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`; return `${Math.floor(delta / 86_400_000)} 天前`; }
 function formatTokens(value: number): string { return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${Math.round(value / 1_000)}K` : String(value); }

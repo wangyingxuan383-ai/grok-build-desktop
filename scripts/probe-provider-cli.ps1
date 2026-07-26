@@ -8,11 +8,12 @@ New-Item -ItemType Directory -Path $probeHome | Out-Null
 $previousHome = $env:GROK_HOME
 $previousKey = $env:GROK_DESKTOP_PROBE_KEY
 $previousHeader = $env:GROK_DESKTOP_PROBE_HEADER
+$previousBaseUrl = $env:GROK_DESKTOP_PROBE_BASE_URL
 try {
   @'
 [model."grok-desktop-probe"]
 model = "upstream-probe"
-base_url = "http://127.0.0.1:19876/v1"
+base_url = "${GROK_DESKTOP_PROBE_BASE_URL}"
 name = "Grok Desktop Probe"
 env_key = "GROK_DESKTOP_PROBE_KEY"
 api_backend = "chat_completions"
@@ -24,6 +25,7 @@ extra_headers = { "X-Probe" = "${GROK_DESKTOP_PROBE_HEADER}" }
   $env:GROK_HOME = $probeHome
   $env:GROK_DESKTOP_PROBE_KEY = "public-test-placeholder"
   $env:GROK_DESKTOP_PROBE_HEADER = "public-test-header"
+  $env:GROK_DESKTOP_PROBE_BASE_URL = "http://127.0.0.1:19876/v1"
   function Invoke-CliProbe([string[]]$Arguments) {
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $CliPath
@@ -49,6 +51,7 @@ extra_headers = { "X-Probe" = "${GROK_DESKTOP_PROBE_HEADER}" }
     cli = $version.Out.Trim()
     inspectAccepted = $true
     customModelAccepted = -not [bool]$warnings.Count
+    environmentBaseUrlAccepted = -not [bool]$warnings.Count
     warnings = $warnings
   } | ConvertTo-Json
 }
@@ -56,5 +59,6 @@ finally {
   $env:GROK_HOME = $previousHome
   $env:GROK_DESKTOP_PROBE_KEY = $previousKey
   $env:GROK_DESKTOP_PROBE_HEADER = $previousHeader
+  $env:GROK_DESKTOP_PROBE_BASE_URL = $previousBaseUrl
   Remove-Item -LiteralPath $probeHome -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -107,10 +107,13 @@ import type {
   AgentDashboardQuery,
   AgentDashboardSnapshot,
   AutomationHealthReport,
+  FailureDiagnosisReport,
+  TurnFailure,
 } from "../shared/types";
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
 import { REASONING_EFFORTS } from "../shared/types";
+import { classifyTurnFailure, turnFailureActions } from "../shared/turn-failure";
 import { AccountVault } from "./services/account-vault";
 import { AuthService } from "./services/auth-service";
 import { locateGrokCli } from "./services/cli-locator";
@@ -271,6 +274,7 @@ export class AppController {
       (leaseId) => void this.computer.releaseLease(leaseId),
       () => this.vault.mcpSecretEnvironment(),
       (cwd) => this.memory.sessionEnvironment(cwd),
+      () => this.providerLaunchEnvironment(),
       (sessionId, session) => this.finalizeMemorySession(sessionId, session),
     );
     this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
@@ -302,7 +306,15 @@ export class AppController {
         computerHostPath: join(resourcesRoot, "native", "win-x64", `GrokComputerHost.exe${resourceSuffix}`),
       },
     );
-    this.quota = new GrokQuotaService(this.vault, () => this.settingsStore.get(), () => this.readCliVersion(), this.log);
+    this.quota = new GrokQuotaService(
+      this.vault,
+      () => this.settingsStore.get(),
+      () => this.readCliVersion(),
+      this.log,
+      undefined,
+      undefined,
+      join(userDataPath, "quota.json"),
+    );
     this.extensions = new ExtensionService(() => this.settingsStore.get(), (method, params) => this.processes.extensionRequest(method, params), this.log, (name, values) => this.vault.setMcpSecrets(name, values), (name) => this.vault.removeMcpSecrets(name), () => this.processes.reloadIdleExtensions());
     this.codexPlugins = new CodexPluginService(userDataPath, this.log);
     this.appRelease = new AppReleaseService(this.buildInfo, this.log);
@@ -346,7 +358,7 @@ export class AppController {
       },
       references: async (providerId) => this.providerReferences(providerId),
     });
-    this.diagnostics = new DiagnosticsService(userDataPath, this.buildInfo, () => this.settingsStore.get(), () => this.auth.activeApiKey(), () => this.getComputerCapability(), this.log, this.appConfig.mockCliPath, { providers: () => this.providers.list(), automations: () => this.automations.list() });
+    this.diagnostics = new DiagnosticsService(userDataPath, this.buildInfo, () => this.settingsStore.get(), () => this.auth.activeApiKey(), () => this.getComputerCapability(), this.log, this.appConfig.mockCliPath, { providers: () => this.providers.list(), automations: () => this.automations.list(), quota: () => this.quota.get() });
   }
 
   setWindow(window: BrowserWindow): void {
@@ -401,6 +413,8 @@ export class AppController {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState> { return this.onboarding.update(patch); }
   resetOnboarding(): Promise<OnboardingState> { return this.onboarding.reset(); }
   runDiagnostics(): Promise<SystemCompatibilityReport> { return this.diagnostics.run(); }
+  /** Scoped to one failed turn; does not re-run the four-subprocess install sweep. */
+  diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport> { return this.diagnostics.diagnoseFailure(failure); }
   getCliCapabilities(force = false): Promise<CliCapabilitySnapshot> { return this.cliCapabilities.get(force); }
   async previewSupportBundle(): Promise<SupportBundlePreview> { return this.diagnostics.preview(); }
   async exportSupportBundle(): Promise<string | null> {
@@ -729,7 +743,7 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.2 Review 与会话验收", createdAt: now, updatedAt: now, messageCount: 34, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.5 稳定交互验收", createdAt: now, updatedAt: now, messageCount: 35, status: "cold", pinned: true, originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -737,18 +751,25 @@ export class AppController {
     const events: ChatEvent[] = [
       { type: "session-ready", sessionId, models: [{ modelId: "fixture-model", name: "Offline Fixture", totalContextTokens: 512_000 }], currentModelId: "fixture-model", effort: "high" },
       ...legacyEvents,
-      { type: "turn-presentations-restore", sessionId, presentations: [{ turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed" }] },
+      { type: "turn-presentations-restore", sessionId, presentations: [{ turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed", usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150, modelId: "fixture-model", source: "prompt-result", exact: true } }] },
       { type: "user-message", sessionId, id: "fixture-client-images", clientMessageId: "fixture-client-images", text: "请检查这些界面截图。", attachments: prepared.previews, delivery: "sent" },
       { type: "thought-chunk", sessionId, text: "正在核对布局、交互状态和附件可见性。" },
       { type: "tool-call", sessionId, tool: { toolCallId: "fixture-read", title: "读取界面结构", kind: "read_file", status: "completed", output: "已读取会话壳层。", locations: [{ path: "src/renderer/src/App.tsx", line: 1 }] } },
       { type: "tool-call", sessionId, tool: { toolCallId: "fixture-edit", title: "修改会话样式", kind: "edit_file", status: "completed", output: "已更新消息与附件布局。", oldText: ".message { width: 100%; }", newText: ".message { width: min(760px, 100%); }", locations: [{ path: "src/renderer/src/styles.css", line: 1 }] } },
       { type: "message-chunk", sessionId, text: "界面结构已按任务流收敛，图片在发送后保留于用户消息中。" },
       { type: "media", sessionId, media: "image", source: png, isData: true, mimeType: "image/png" },
-      { type: "turn-completed", sessionId, presentation: { turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed" } },
+      { type: "turn-completed", sessionId, presentation: { turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed", usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150, modelId: "fixture-model", source: "prompt-result", exact: true } } },
+      { type: "error", sessionId, message: "HTTP 400\nProvider: fixture-provider\nTrace: fixture-trace\n响应: GenerateContentRequest.tools[0].function_declarations[0].parameters.properties[status].enum[4]: cannot be empty", failure: {
+        failureId: "fixture-failure", at: now, classification: "schema-rejected",
+        message: "GenerateContentRequest.tools[0].function_declarations[0].parameters.properties[status].enum[4]: cannot be empty",
+        sessionId, modelId: "fixture-model", providerId: "fixture-provider", httpStatus: 400,
+        traceId: "fixture-trace", gatewayPhase: "upstream", sanitizedCount: 0,
+        nextActions: ["把提供商「Fixture」的工具 Schema 改为 Gemini / Antigravity 档后重试", "改档后重试本回合；应用会在转发前清理不被接受的枚举与类型"],
+      } },
       { type: "user-message", sessionId, id: "fixture-plan", clientMessageId: "fixture-plan", text: "列出后续步骤。", delivery: "sent" },
       { type: "plan", sessionId, text: "1. 验证左右侧栏。\n2. 验证消息与文件卡。\n3. 验证输入框和底部环境栏。" },
       { type: "message-chunk", sessionId, text: "计划已完成，所有入口均映射到真实功能。" },
-      { type: "turn-completed", sessionId },
+      { type: "turn-completed", sessionId, presentation: { turnId: "fixture-plan", clientMessageId: "fixture-plan", ordinal: 1, startedAt: "2026-07-22T07:02:00.000Z", completedAt: "2026-07-22T07:03:23.000Z", durationMs: 83_000, outcome: "completed", usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150, modelId: "fixture-model", source: "prompt-result", exact: true } } },
       { type: "user-message", sessionId, id: "fixture-client-failed", clientMessageId: "fixture-client-failed", text: "这条消息用于测试失败恢复。", attachments: failed.previews, delivery: "failed" },
       { type: "status", sessionId, status: "idle", text: "离线夹具" },
     ];
@@ -1004,29 +1025,30 @@ export class AppController {
       } finally { await accountContext.cleanup(); }
     });
   }
-  async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
+  async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
     clientMessageId ??= crypto.randomUUID();
     const prepared = await this.attachmentCache.prepare(sessionId, attachments);
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "queued");
-    await this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
+    return this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
   }
-  async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
+  async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
     clientMessageId ??= crypto.randomUUID();
     const prepared = await this.attachmentCache.prepare(sessionId, attachments);
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
     try {
-      await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
+      const receipt = await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
       await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent");
+      return receipt;
     } catch (error) {
       await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed");
       throw error;
     }
   }
-  editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void> { return this.processes.get(sessionId).editQueuedPrompt(id, text); }
-  removeQueuedPrompt(sessionId: string, id: string): Promise<void> { return this.processes.get(sessionId).removeQueuedPrompt(id); }
-  reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<void> { return this.processes.get(sessionId).reorderQueuedPrompt(id, position); }
-  clearPromptQueue(sessionId: string): Promise<void> { return this.processes.get(sessionId).clearPromptQueue(); }
-  interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<void> { return this.processes.get(sessionId).interjectQueuedPrompt(id, text); }
+  editQueuedPrompt(sessionId: string, id: string, text: string) { return this.processes.get(sessionId).editQueuedPrompt(id, text); }
+  removeQueuedPrompt(sessionId: string, id: string) { return this.processes.get(sessionId).removeQueuedPrompt(id); }
+  reorderQueuedPrompt(sessionId: string, id: string, position: number) { return this.processes.get(sessionId).reorderQueuedPrompt(id, position); }
+  clearPromptQueue(sessionId: string) { return this.processes.get(sessionId).clearPromptQueue(); }
+  interjectQueuedPrompt(sessionId: string, id: string, text?: string) { return this.processes.get(sessionId).interjectQueuedPrompt(id, text); }
   async forkSession(sessionId: string, rewindPointId?: string, launch?: ExecutionProfileLaunchInput): Promise<SessionForkResult> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
     const parentAssignment = await this.profiles.assignment(sessionId);
@@ -1133,7 +1155,21 @@ export class AppController {
   getComputerSettings(): Promise<ComputerUseSettings> { return this.computer.getSettings(); }
   updateComputerSettings(patch: Partial<ComputerUseSettings>): Promise<ComputerUseSettings> { return this.computer.updateSettings(patch); }
   setComputerStateObserver(observer: (state: ComputerTaskState) => void): void { this.computerStateObserver = observer; }
-  emergencyStopComputer(source = "Ctrl+Alt+Esc"): void { this.computer.emergencyStop(source); }
+  /**
+   * Stopping the Computer Use task is not enough on its own: the Grok turn that
+   * is issuing the tool calls keeps running. Cancel it too, or the agent simply
+   * continues with its next step.
+   */
+  emergencyStopComputer(source = "Ctrl+Alt+Esc"): void {
+    for (const sessionId of this.computer.emergencyStop(source)) {
+      try { this.processes.get(sessionId).cancel(); }
+      catch (error) { void this.log.log(`紧急停止后取消会话失败：${error instanceof Error ? error.message : String(error)}`); }
+    }
+  }
+
+  async logEmergencyShortcutUnavailable(): Promise<void> {
+    await this.log.log("全局快捷键 Ctrl+Alt+Esc 注册失败，可能已被其他程序占用；Computer Use 浮层将提示回到主窗口停止。");
+  }
 
   async exportLogs(): Promise<string | null> {
     const target = await dialog.showSaveDialog(this.window!, { title: "导出脱敏日志", defaultPath: "grok-build-desktop.log" });
@@ -1201,7 +1237,65 @@ export class AppController {
   async dispose(): Promise<void> {
     await this.auth.dispose();
     await this.processes.dispose();
+    await this.providers.dispose();
     await this.computer.dispose();
+  }
+
+  /**
+   * The adapter knows the model and the JSON-RPC error; the gateway knows the
+   * HTTP status, trace id and how many schema values it had to rewrite. Neither
+   * alone can explain the failure, so they are joined here, in the only process
+   * that can see both. Mutates in place: the event is sent to the renderer next.
+   */
+  private async enrichFailure(failure: TurnFailure): Promise<void> {
+    try {
+      failure.message = redactSecrets(failure.message).slice(0, 8_000);
+      const provider = await this.providers?.providerForModel(failure.modelId);
+      if (!provider) { failure.nextActions = turnFailureActions(failure.classification); return; }
+      failure.providerId = provider.id;
+      // Match only a recent observation: an older one describes a different turn.
+      const observed = this.providers?.gatewayFailures(provider.id)
+        .find((record) => Date.parse(failure.at) - Date.parse(record.at) < 60_000);
+      if (observed) {
+        failure.httpStatus ??= observed.status;
+        failure.traceId ??= observed.traceId;
+        failure.retryAfter ??= observed.retryAfter;
+        failure.gatewayPhase ??= observed.phase;
+        failure.sanitizedCount ??= observed.sanitizedCount;
+        failure.classification = classifyTurnFailure({ message: failure.message, httpStatus: failure.httpStatus, jsonRpcCode: failure.jsonRpcCode });
+      }
+      // A Gemini-family upstream on the pass-through profile is the single most
+      // actionable case: the remedy is one setting, not a retry.
+      if (failure.classification === "schema-rejected" && (provider.schemaProfile ?? "standard") === "standard") {
+        failure.nextActions = [`把提供商「${provider.name}」的工具 Schema 改为 Gemini / Antigravity 档后重试`, ...turnFailureActions(failure.classification).slice(1)];
+      } else failure.nextActions = turnFailureActions(failure.classification);
+    } catch (error) {
+      await this.log.log(`失败诊断信息补全失败：${error instanceof Error ? error.message : String(error)}`);
+      failure.nextActions ??= turnFailureActions(failure.classification);
+    }
+  }
+
+  /**
+   * Quota bookkeeping reads the vault and writes quota.json. It must never
+   * delay or suppress delivering the error event that triggered it, so it runs
+   * detached and reports its own failures.
+   */
+  private captureQuotaSignal(message: string, modelId?: string): void {
+    void this.quota.captureError(message, modelId).catch((error) => this.log.log(`滚动额度采集失败：${error instanceof Error ? error.message : String(error)}`));
+  }
+
+  /**
+   * Custom providers are optional, so a broken managed block, a failed user
+   * environment write or a concurrent config.toml edit must not be able to
+   * block launching sessions that do not use a provider at all.
+   */
+  private async providerLaunchEnvironment(): Promise<Record<string, string>> {
+    if (!this.providers) return {};
+    try { return await this.providers.desktopEnvironment(); }
+    catch (error) {
+      await this.log.log(`提供商兼容环境不可用，本次会话按无提供商启动：${error instanceof Error ? error.message : String(error)}`);
+      return {};
+    }
   }
 
   private async handleEvent(event: ChatEvent): Promise<void> {
@@ -1212,7 +1306,12 @@ export class AppController {
     if (event.type === "user-message-status") await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery);
     if (event.type === "turn-completed") await this.computer.settleSession(event.sessionId, "completed", "Computer Use 回合已完成");
     if (event.type === "error" && event.sessionId) await this.computer.settleSession(event.sessionId, "error", event.message);
+    if (event.type === "error") {
+      this.captureQuotaSignal(event.message, event.sessionId ? this.processes.snapshot(event.sessionId)?.modelId : undefined);
+      if (event.failure) await this.enrichFailure(event.failure);
+    }
     if (event.type === "status" && event.status === "error") await this.computer.settleSession(event.sessionId, "error", event.text || "Grok 进程异常，Computer Use 已清理");
+    if (event.type === "status" && event.status === "error" && event.text) this.captureQuotaSignal(event.text, this.processes.snapshot(event.sessionId)?.modelId);
     this.window?.webContents.send("grok:event", event);
     if (event.type === "status" && (event.status === "working" || event.status === "needs-user")) this.runningSessions.add(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && event.sessionId !== this.focusedSessionId) {

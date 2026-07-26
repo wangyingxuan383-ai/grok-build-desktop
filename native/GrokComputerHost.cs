@@ -19,7 +19,7 @@ internal static class GrokComputerHost
     private static readonly Dictionary<string, AutomationElement> Elements = new Dictionary<string, AutomationElement>();
     private static readonly Dictionary<IntPtr, string> LatestStates = new Dictionary<IntPtr, string>();
     private static readonly HashSet<string> BlockedProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-        "grok build desktop", "grok-build-desktop", "codex", "chatgpt", "powershell", "pwsh", "cmd", "windowsterminal", "wt", "conhost"
+        "grok build desktop", "grok-build-desktop", "chatgpt", "powershell", "pwsh", "cmd", "windowsterminal", "wt", "conhost"
     };
 
     [STAThread]

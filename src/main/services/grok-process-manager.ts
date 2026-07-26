@@ -27,6 +27,7 @@ export class GrokProcessManager {
     private readonly onSessionClosed?: (leaseId: string | undefined) => void,
     private readonly getMcpSecretEnvironment: () => Promise<Record<string, string>> = async () => ({}),
     private readonly getWorkspaceEnvironment: (cwd: string) => Promise<Record<string, string>> = async () => ({}),
+    private readonly getProviderEnvironment: () => Promise<Record<string, string>> = async () => ({}),
     private readonly beforeSessionClose?: (sessionId: string, session: GrokAcpAdapter, reason: "close" | "shutdown" | "reap" | "cap") => Promise<void>,
   ) {
     this.reaper = setInterval(() => void this.reap(), 5 * 60_000);
@@ -413,8 +414,9 @@ export class GrokProcessManager {
     const apiKey = await this.getApiKey();
     const mcpSecretEnvironment = await this.getMcpSecretEnvironment();
     const workspaceEnvironment = await this.getWorkspaceEnvironment(cwd);
+    const providerEnvironment = await this.getProviderEnvironment();
     const extensions = await this.getSessionExtensions?.();
-    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, environmentOverride), workspaceEnvironment);
+    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, environmentOverride), workspaceEnvironment);
     const adapter = new GrokAcpAdapter({
       cliPath,
       cwd,

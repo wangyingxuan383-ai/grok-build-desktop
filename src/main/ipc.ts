@@ -1,6 +1,6 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { AppController } from "./app-controller";
-import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, PersonaDefinitionSaveInput, ProviderConnectionDraft, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
+import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, PersonaDefinitionSaveInput, ProviderConnectionDraft, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
 import { isTrustedRendererFrame, type RendererTrustPolicy } from "./security-policy";
 
 export function registerIpc(controller: AppController, window: BrowserWindow, policy: RendererTrustPolicy): void {
@@ -17,6 +17,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("onboarding:update", (patch: Partial<OnboardingState>) => controller.updateOnboarding(patch));
   handle("onboarding:reset", () => controller.resetOnboarding());
   handle("diagnostics:run", () => controller.runDiagnostics());
+  handle("diagnostics:failure", (failure: TurnFailure) => controller.diagnoseFailure(failure));
   handle("diagnostics:cli-capabilities", (force?: boolean) => controller.getCliCapabilities(force));
   handle("diagnostics:support-preview", () => controller.previewSupportBundle());
   handle("diagnostics:support-export", () => controller.exportSupportBundle());

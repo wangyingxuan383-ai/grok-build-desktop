@@ -64,18 +64,22 @@ function DocumentTool({ turn, onExpand }: { turn?: UiChatTurn; onExpand(): void 
 function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string; sessionId?: string; paths: string[]; onNavigate(intent: NavigationIntent): void; onError(message: string): void }): React.JSX.Element {
   const [selected, setSelected] = useState(paths[0] ?? "");
   const [document, setDocument] = useState<EditorDocument>();
+  const [externalPath, setExternalPath] = useState("");
   const [loading, setLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   useEffect(() => { setSelected((value) => paths.includes(value) ? value : paths[0] ?? ""); }, [paths]);
   useEffect(() => {
-    if (!cwd || !selected) { setDocument(undefined); return; }
+    if (!cwd || !selected) { setDocument(undefined); setExternalPath(""); return; }
     let cancelled = false;
+    setPreviewError("");
+    setExternalPath("");
     setLoading(true);
-    void window.grokDesktop.openEditorDocument(cwd, selected).then((result) => { if (!cancelled) setDocument(result.kind === "document" ? result.document : undefined); }).catch((error) => { if (!cancelled) onError(message(error)); }).finally(() => { if (!cancelled) setLoading(false); });
+    void window.grokDesktop.openEditorDocument(cwd, selected).then((result) => { if (!cancelled) { setDocument(result.kind === "document" ? result.document : undefined); setExternalPath(result.kind === "external" ? result.path : ""); if (result.kind !== "document") setPreviewError(result.reason || "此文件需要使用外部应用打开。"); } }).catch((error) => { if (!cancelled) { setDocument(undefined); setExternalPath(""); setPreviewError(message(error)); } }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [cwd, onError, selected]);
   return <div className="right-files-tool">
-    <aside>{paths.map((path) => <button className={selected === path ? "active" : ""} key={path} title={path} onClick={() => setSelected(path)}><UiIcon name="file"/><span>{path}</span></button>)}{!paths.length && <p className="right-tool-empty">最近回合没有可确认的写入文件。</p>}</aside>
-    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre>{document.content}</pre></> : selected ? <p className="right-tool-empty">此文件无法在应用内预览。</p> : null}</main>
+    <aside>{paths.map((path) => <button className={selected === path ? "active" : ""} key={path} title={path} onClick={() => setSelected(path)}><UiIcon name="file"/><span>{relativeDisplayPath(path, cwd)}</span></button>)}{!paths.length && <p className="right-tool-empty">最近回合没有可确认的写入文件。</p>}</aside>
+    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre>{document.content}</pre></> : selected ? <div className="right-tool-empty"><strong>无法预览此文件</strong><p>{previewError || "文件不存在、已移动或不在当前会话的受信任执行目录内。"}</p>{externalPath && <button onClick={() => void window.grokDesktop.openPath(externalPath).catch((error) => onError(message(error)))}>用系统默认应用打开</button>}</div> : null}</main>
   </div>;
 }
 
@@ -96,3 +100,11 @@ function toolTitle(tool: RightUtilityTool): string { return ({ launcher: "侧栏
 function toolSubtitle(tool: RightUtilityTool): string { return ({ launcher: "选择当前任务需要的工具", document: "当前回合", files: "最近回合实际写入", tasks: "Agent、后台、队列与等待" })[tool]; }
 function sessionStatusLabel(status?: string): string { return ({ working: "运行中", "needs-user": "等待操作", error: "失败", idle: "空闲" } as Record<string, string>)[status ?? "idle"] ?? status ?? "空闲"; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+export function relativeDisplayPath(path: string, root: string): string {
+  const slashPath = path.replace(/\//g, "\\");
+  const slashRoot = root.replace(/\//g, "\\").replace(/\\+$/, "");
+  if (!/^[A-Za-z]:\\|^\\\\/.test(slashPath) || !slashRoot) return slashPath;
+  const target = slashPath.toLocaleLowerCase();
+  const base = slashRoot.toLocaleLowerCase();
+  return target.startsWith(`${base}\\`) ? slashPath.slice(slashRoot.length + 1) : slashPath;
+}

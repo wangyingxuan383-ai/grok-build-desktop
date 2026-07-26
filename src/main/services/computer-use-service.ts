@@ -106,7 +106,10 @@ export class ComputerUseService {
   }
 
   bindLease(leaseId: string | undefined, sessionId: string): void { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (lease) lease.sessionId = sessionId; }
-  async releaseLease(leaseId: string | undefined): Promise<void> { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (!lease) return; this.leases.delete(lease.id); const task = this.tasks.get(lease.sessionId); if (task && ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) this.stopWith(task, "Grok 会话已关闭，Computer Use 已清理"); await lease.server.close().catch(() => undefined); this.tasks.delete(lease.sessionId); await this.stopHostIfIdle(); }
+  /** Sessions the user emergency-stopped; cleared only by an explicit re-arm or lease release. */
+  private readonly emergencyStopped = new Set<string>();
+
+  async releaseLease(leaseId: string | undefined): Promise<void> { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (!lease) return; this.leases.delete(lease.id); this.emergencyStopped.delete(lease.sessionId); const task = this.tasks.get(lease.sessionId); if (task && ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) this.stopWith(task, "Grok 会话已关闭，Computer Use 已清理"); await lease.server.close().catch(() => undefined); this.tasks.delete(lease.sessionId); await this.stopHostIfIdle(); }
 
   async listWindows(appId?: string): Promise<ComputerWindow[]> {
     const raw = await this.getHost().call("list_windows", {}) as unknown[];
@@ -122,6 +125,7 @@ export class ComputerUseService {
   async start(input: { sessionId: string; appId: string; windowId?: string }): Promise<ComputerTaskState> {
     const config = await this.getSettings();
     if (!config.enabled) throw new Error("Computer Use 已在扩展中心关闭");
+    if (this.emergencyStopped.has(input.sessionId)) throw new Error("已紧急停止 Computer Use；需要用户在界面上重新授权后才能继续控制");
     const app = (await this.listApps()).find((value) => value.id === input.appId);
     if (!app) throw new Error("目标应用已关闭或不存在");
     if (!app.controllable) throw new Error(app.blockedReason || "此应用不可控制");
@@ -178,11 +182,29 @@ export class ComputerUseService {
 
   respondRisk(requestId: string, approved: boolean): void { const pending = this.pendingRisks.get(requestId); if (!pending) throw new Error("风险确认已失效"); this.pendingRisks.delete(requestId); pending.resolve(approved); }
 
-  emergencyStop(source = "Ctrl+Alt+Esc"): void {
+  /**
+   * Emergency stop must be terminal for the sessions it hits. Flipping task
+   * status alone is not enough: the CLI keeps running and its next start()
+   * would succeed immediately, so the kill switch would buy roughly one step.
+   * Returns the sessions that were actually stopped so the caller can also
+   * cancel their turns.
+   */
+  emergencyStop(source = "Ctrl+Alt+Esc"): string[] {
     for (const pending of this.pendingPermissions.values()) { pending.resolve?.(false); pending.onDecision?.(false); } this.pendingPermissions.clear();
     for (const pending of this.pendingRisks.values()) pending.resolve(false); this.pendingRisks.clear();
-    for (const task of this.tasks.values()) if (["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) this.stopWith(task, `已通过 ${source} 紧急停止`);
+    const stopped: string[] = [];
+    for (const task of this.tasks.values()) {
+      if (!["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) continue;
+      this.emergencyStopped.add(task.sessionId);
+      stopped.push(task.sessionId);
+      this.stopWith(task, `已通过 ${source} 紧急停止`);
+    }
+    return stopped;
   }
+
+  /** Re-arms a session the user emergency-stopped. Only an explicit user action should call this. */
+  clearEmergencyStop(sessionId: string): void { this.emergencyStopped.delete(sessionId); }
+  isEmergencyStopped(sessionId: string): boolean { return this.emergencyStopped.has(sessionId); }
 
   async dispose(): Promise<void> {
     this.emergencyStop(); for (const lease of this.leases.values()) await lease.server.close().catch(() => undefined); this.leases.clear();
@@ -375,7 +397,7 @@ class ComputerHostClient {
 
 function normalizeWindow(value: unknown): ComputerWindow { const row = value as Record<string, unknown>; const processName = string(row.processName); const executablePath = string(row.executablePath) || undefined; const title = string(row.title); const blocked = isBlockedComputerTarget(processName, title); const identity = executablePath ? createHash("sha256").update(executablePath.toLocaleLowerCase()).digest("hex").slice(0, 16) : string(row.appId); return { id: string(row.id), appId: `${processName.toLocaleLowerCase()}:${identity}`, processId: number(row.processId), processName, executablePath, title, bounds: { x: number(row.x), y: number(row.y), width: number(row.width), height: number(row.height) }, dpi: number(row.dpi) || 96, minimized: Boolean(row.minimized), foreground: Boolean(row.foreground), controllable: row.controllable !== false && !blocked, blockedReason: blocked ? "该应用位于 Computer Use 不可控制清单" : string(row.blockedReason) || undefined }; }
 
-export function isBlockedComputerTarget(processName: string, title = ""): boolean { return /^(grok[- ]?build[- ]?desktop|codex|chatgpt|powershell|pwsh|cmd|windowsterminal|wt|conhost)$/i.test(processName.trim()) || /grok build desktop|windows security|user account control|用户账户控制|windows 安全/i.test(title); }
+export function isBlockedComputerTarget(processName: string, title = ""): boolean { return /^(grok[- ]?build[- ]?desktop|chatgpt|powershell|pwsh|cmd|windowsterminal|wt|conhost)$/i.test(processName.trim()) || /grok build desktop|windows security|user account control|用户账户控制|windows 安全/i.test(title); }
 export function isComputerManualInterventionError(value: string): boolean { return /higher privilege|高权限|elevated|default desktop|secure desktop|uac|user account control|用户账户控制|管理员|windows security|windows 安全/i.test(value); }
 export function describeComputerAction(action: ComputerActionName, target = "", key = ""): string {
   const label = target.trim() ? `“${target.trim()}”` : "目标位置";

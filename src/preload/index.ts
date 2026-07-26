@@ -37,6 +37,7 @@ const api: GrokDesktopApi = {
   updateOnboarding: (patch) => ipcRenderer.invoke("onboarding:update", patch),
   resetOnboarding: () => ipcRenderer.invoke("onboarding:reset"),
   runDiagnostics: () => ipcRenderer.invoke("diagnostics:run"),
+  diagnoseFailure: (failure) => ipcRenderer.invoke("diagnostics:failure", failure),
   getCliCapabilities: (force) => ipcRenderer.invoke("diagnostics:cli-capabilities", force),
   previewSupportBundle: () => ipcRenderer.invoke("diagnostics:support-preview"),
   exportSupportBundle: () => ipcRenderer.invoke("diagnostics:support-export"),

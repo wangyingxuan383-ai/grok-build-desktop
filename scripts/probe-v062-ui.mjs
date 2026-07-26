@@ -36,7 +36,11 @@ try {
     overlayBackground: document.querySelector('.conversation-wrap') ? getComputedStyle(document.querySelector('.conversation-wrap'), '::after').backgroundColor : '',
     overlayFilter: document.querySelector('.conversation-wrap') ? getComputedStyle(document.querySelector('.conversation-wrap'), '::after').backdropFilter : '',
   })`);
-  if (initial.appVersion !== "0.6.2") throw new Error(`Renderer version mismatch: ${JSON.stringify(initial)}`);
+  // smoke-app.ps1 derives this from package.json so the assertion tracks the
+  // real release instead of a literal that silently rots between versions.
+  const expectedVersion = process.env.GROK_EXPECTED_APP_VERSION?.trim();
+  if (!expectedVersion) throw new Error("GROK_EXPECTED_APP_VERSION was not provided to the probe");
+  if (initial.appVersion !== expectedVersion) throw new Error(`Renderer version mismatch: expected ${expectedVersion}, got ${JSON.stringify(initial)}`);
   if (initial.projectToolsExpanded || initial.directNav || initial.genericSummary || initial.review) throw new Error(`Default shell state is wrong: ${JSON.stringify(initial)}`);
   if (initial.historyBlocks !== 1 || !initial.elapsed || initial.images < 3 || initial.generatedResults < 1 || initial.finalAnswers < 1 || !initial.composer) throw new Error(`Conversation lifecycle fixture incomplete: ${JSON.stringify(initial)}`);
   if (!initial.backgroundClass.includes('background-conversation') || !initial.backgroundImage.includes('grok-theme://') || initial.dim.trim() !== '0' || initial.opacity.trim() !== '1' || initial.blur.trim() !== '0px') throw new Error(`Background settings were not applied exactly: ${JSON.stringify(initial)}`);
@@ -44,7 +48,9 @@ try {
 
   await evaluate("document.querySelector('.project-tools-heading')?.click()");
   const tools = await waitFor(() => evaluate(`(() => { const values = Array.from(document.querySelectorAll('.project-tools nav button')).map((node) => node.textContent.trim()); return values.length ? values : null; })()`), "Development tools did not expand");
-  for (const label of ["文件", "变更审核", "Worktree", "Memory", "Agent 与 Persona", "Profiles", "Dashboard", "任务", "扩展"]) if (!tools.includes(label)) throw new Error(`Missing development tool: ${label}`);
+  // 文件 and 变更审核 are no longer sidebar tools: files moved to the workbench
+  // view and change review to the right utility pane, verified further below.
+  for (const label of ["Worktree", "Memory", "Agent 与 Persona", "Profiles", "Dashboard", "任务", "扩展"]) if (!tools.includes(label)) throw new Error(`Missing development tool: ${label}`);
 
   await evaluate("document.querySelector('.workspace-button')?.focus(); document.querySelector('.workspace-button')?.click()");
   await waitFor(() => evaluate("document.activeElement === document.querySelector('.workspace-menu-search input')"), "Workspace picker did not focus search");
@@ -53,7 +59,11 @@ try {
   await evaluate("document.querySelector('[aria-label=\"关闭工作区选择器\"]')?.click()");
   await waitFor(() => evaluate("document.activeElement === document.querySelector('.workspace-button')"), "Workspace picker did not return focus");
 
+  // The topbar toggle now opens the right utility pane on its launcher; 审阅 is
+  // one entry inside it rather than a dedicated one-click surface.
   await evaluate("document.querySelector('.review-toggle')?.click()");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.right-tool-launcher'))"), "Right utility launcher did not open");
+  await evaluate("(() => { [...document.querySelectorAll('.right-tool-launcher button')].find(node => node.textContent?.includes('审阅'))?.click(); return true; })()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.review-pane'))"), "Review pane did not open");
   const review = await evaluate(`({ label: document.querySelector('.review-pane')?.getAttribute('aria-label'), scopes: Array.from(document.querySelectorAll('.review-scopes button')).map((node) => node.textContent.trim()), resizer: Boolean(document.querySelector('.review-resizer')), close: Boolean(document.querySelector('[aria-label="关闭审核"]')) })`);
   for (const label of ["Unstaged", "Staged", "Commit", "Branch", "Last turn"]) if (!review.scopes.includes(label)) throw new Error(`Missing Review scope: ${label}`);

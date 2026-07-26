@@ -1,5 +1,19 @@
 # Feature Matrix
 
+## v0.6.5 release candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Plan decision idempotency | Focused/ACP-contract verified | One `sessionId + requestId` decision answers the original server request once. Duplicate clicks return a duplicate receipt and no synthetic approval prompt is created. |
+| Queue/interjection | Focused/contract verified | Queue and mutation receipts are visible; Enter queues, Ctrl+Enter interjects, unsupported same-turn input visibly falls back to the queue head, and only queued entries are editable. |
+| Update/diagnostics actions | Source/build verified | App/CLI checks, diagnostics navigation and redacted-log export expose running/success/error/cancelled state, re-entry protection, timestamp and copyable result. Installed UI verification remains pending. |
+| Provider gateway | Focused + two live probes verified | Loopback-only opaque routing, bounded same-protocol streaming, cancellation/timeouts, selected Trace headers and Gemini/strict Schema cleaning. Isolated CLI 0.2.112 local ACP and one authorized current-Provider minimal turn both passed. |
+| Provider isolation | Focused verified | Credentials/upstream remain main-process environment values; Desktop CLI sees only the loopback override. Literal managed blocks migrate atomically; config, secret and URL rollback/remove tests pass. |
+| Errors and quota | Focused/source verified | Provider errors default collapsed with redacted details. Rolling 24h Token limits are separate from weekly/monthly billing, persisted per account and marked expired. |
+| Auth and Computer Use | Focused verified | Device login has one browser owner. Ordinary Codex is allowed while self/terminal/UAC/security and Windows integrity boundaries remain enforced. |
+| Recent file access | Focused/source verified | Only paths in the real execution root are listed, project paths are relative, and external-open uses the canonical path returned by the main process. |
+| 0.6.5 delivery | Pending | Source/lock/display are 0.6.5 and production build passes. Formal package, install and GitHub release gates have not run; 0.6.4 remains public/installed fallback. |
+
 ## v0.6.4 public stable release / installed local build
 
 | Area | Status | Notes |

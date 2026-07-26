@@ -2,14 +2,26 @@ const endpoint = process.argv[2];
 const entrySelector = process.argv[3];
 if (!endpoint || !entrySelector) throw new Error("CDP endpoint and overlay entry selector are required");
 const panelSelector = ({ ".task-entry": ".task-center", ".extensions-entry": ".extensions-panel", ".media-entry": ".media-studio" })[entrySelector] || ".control-panel";
+const expandProjectTools = {
+  act: `(() => { if (!document.querySelector('.project-tools nav')) document.querySelector('.project-tools-heading')?.click(); return true; })()`,
+  ready: `Boolean(document.querySelector('.project-tools nav'))`,
+};
 const mappedEntries = {
+  // These entries live in the collapsed 开发工具 section, so both the existence
+  // check and the click have to expand it first. There is no .sidebar-primary-nav
+  // in the renderer; only an orphaned rule for it survives in styles.css.
+  // Expanding 开发工具 is a React state change, so it gets its own evaluation
+  // and its own wait. Folding it into the retried `exists` check would re-click
+  // the heading on every attempt and toggle the section shut again.
   ".task-entry": {
-    exists: `Boolean([...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '任务'))`,
-    click: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()`,
+    prepare: expandProjectTools,
+    exists: `Boolean([...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '任务'))`,
+    click: `(() => { [...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()`,
   },
   ".extensions-entry": {
-    exists: `Boolean([...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '扩展'))`,
-    click: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()`,
+    prepare: expandProjectTools,
+    exists: `Boolean([...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '扩展'))`,
+    click: `(() => { [...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()`,
   },
   ".media-entry": {
     exists: `Boolean([...document.querySelectorAll('.topbar-more button')].find(node => node.textContent?.trim() === '创作'))`,
@@ -60,6 +72,10 @@ try {
     await evaluate("document.querySelector('.session-row:not(.codex)')?.click(); true");
   }
   const mapped = mappedEntries[entrySelector];
+  if (mapped?.prepare) {
+    await evaluate(mapped.prepare.act);
+    await waitFor(() => evaluate(mapped.prepare.ready), `${entrySelector} entry container did not open`);
+  }
   await waitFor(() => evaluate(mapped?.exists ?? `Boolean(document.querySelector(${JSON.stringify(entrySelector)}))`), `${entrySelector} entry did not render`);
   await evaluate(mapped?.click ?? `document.querySelector(${JSON.stringify(entrySelector)})?.click(); true`);
   await waitFor(() => evaluate(`Boolean(document.querySelector('#overlay-root ${panelSelector}'))`), `${entrySelector} panel did not open in overlay root`);

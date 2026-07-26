@@ -87,6 +87,10 @@ try {
   await request("Emulation.clearDeviceMetricsOverride");
   stage("verify theme editor and whole-window overlay");
   await evaluate("document.querySelector('.sidebar-footer button[title=\"设置\"]')?.click(); true");
+  // The settings surface is a categorized dialog: it opens on 常规, so the
+  // theme editor only mounts after selecting the 外观 category.
+  await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .settings-dialog'))"), "Settings dialog did not open");
+  await evaluate("(() => { [...document.querySelectorAll('.settings-dialog nav button')].find(node => node.textContent?.trim() === '外观')?.click(); return true; })()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.theme-editor'))"), "Theme editor did not open");
   const selectCount = await evaluate("document.querySelectorAll('.theme-editor select').length");
   if (selectCount < 1) throw new Error("Theme mode selector is missing");
@@ -96,7 +100,7 @@ try {
   await waitFor(() => evaluate("document.querySelector('.app-shell')?.classList.contains('background-window')"), "Whole-window background scope did not apply immediately");
   const overlayBounds = await evaluate(`(() => {
     const root = document.querySelector('#overlay-root');
-    const panel = root?.querySelector('.control-panel');
+    const panel = root?.querySelector('.settings-dialog');
     const backdrop = root?.querySelector('.modal-backdrop');
     if (!root || !panel || !backdrop) return null;
     const rect = panel.getBoundingClientRect();
@@ -106,10 +110,10 @@ try {
   if (!overlayBounds?.parent || overlayBounds.backdropPosition !== 'fixed' || overlayBounds.left < 0 || overlayBounds.top < 0 || overlayBounds.right > overlayBounds.width || overlayBounds.bottom > overlayBounds.height) {
     throw new Error(`Whole-window background displaced the settings overlay: ${JSON.stringify(overlayBounds)}`);
   }
-  await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))"), "Settings overlay did not establish keyboard focus");
+  await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .settings-dialog'))"), "Settings overlay did not establish keyboard focus");
   stage("verify overlay focus trap and theme switches");
   const focusCycle = await evaluate(`(() => {
-    const panel = document.querySelector('#overlay-root .control-panel');
+    const panel = document.querySelector('#overlay-root .settings-dialog');
     const visible = (node) => { const style = getComputedStyle(node); return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0; };
     const items = [...panel.querySelectorAll('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')].filter(visible);
     items.at(-1)?.focus();
@@ -117,7 +121,7 @@ try {
   })()`);
   if (focusCycle.count < 2) throw new Error(`Settings overlay has too few focusable controls: ${JSON.stringify(focusCycle)}`);
   await pressKey("Tab");
-  const cycledInside = await evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))");
+  const cycledInside = await evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .settings-dialog'))");
   if (!cycledInside) throw new Error("Tab escaped the topmost settings overlay");
   await evaluate(`(() => { const select = document.querySelector('.theme-editor select'); const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; setter.call(select, 'light'); select.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
   await waitFor(() => evaluate("document.documentElement.dataset.themeResolved === 'light'"), "Light theme did not apply immediately");
@@ -127,20 +131,27 @@ try {
   await waitFor(() => evaluate("document.querySelectorAll('.theme-color-grid input[type=color]').length === 6"), "Custom color controls did not render");
   const customText = await evaluate("document.querySelector('.theme-editor')?.innerText || ''");
   for (const value of ["深色预设", "浅色预设", "选择背景图片"]) if (!customText.includes(value)) throw new Error(`Theme editor is missing ${value}`);
-  await evaluate("document.querySelector('#overlay-root .control-panel > header button')?.click(); true");
-  await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), "Settings panel did not close");
+  await evaluate("document.querySelector('#overlay-root .settings-dialog > header button')?.click(); true");
+  await waitFor(() => evaluate("!document.querySelector('#overlay-root .settings-dialog')"), "Settings panel did not close");
   // Keep the physical/local renderer stress regression as one long flow. A
   // hosted Windows virtual desktop becomes unreliable after repeated viewport,
   // theme and modal transitions even with software rendering, so CI verifies
   // these heavier panels in fresh renderer processes below instead.
   if (!isGitHubHostedRunner) {
     const overlayEntries = [
-      { label: "任务", open: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()` },
-      { label: "扩展", open: `(() => { [...document.querySelectorAll('.sidebar-primary-nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()` },
+      // 开发工具 starts collapsed, and expanding it is a React state change:
+      // the nav is not in the DOM until the next commit, so the expand and the
+      // entry click must be separate evaluations with a wait between them.
+      { label: "任务", expand: true, open: `(() => { [...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()` },
+      { label: "扩展", expand: true, open: `(() => { [...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()` },
       { label: "创作", open: `(() => { const menu = document.querySelector('.topbar-more'); if (menu) menu.open = true; [...(menu?.querySelectorAll('button') ?? [])].find(node => node.textContent?.trim() === '创作')?.click(); return true; })()` },
     ];
     for (const entry of overlayEntries) {
       stage(`verify ${entry.label} overlay`);
+      if (entry.expand) {
+        await evaluate("(() => { if (!document.querySelector('.project-tools nav')) document.querySelector('.project-tools-heading')?.click(); return true; })()");
+        await waitFor(() => evaluate("Boolean(document.querySelector('.project-tools nav'))"), "开发工具 did not expand");
+      }
       await evaluate(entry.open);
       await waitFor(() => evaluate("Boolean(document.querySelector('#overlay-root .control-panel'))"), `${entry.label} panel did not open in overlay root`);
       const bounds = await evaluate(`(() => { const rect = document.querySelector('#overlay-root .control-panel').getBoundingClientRect(); return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight }; })()`);

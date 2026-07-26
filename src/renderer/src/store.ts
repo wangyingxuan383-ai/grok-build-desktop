@@ -17,6 +17,7 @@ import type {
   SessionMode,
   SessionSummary,
   ToolCallState,
+  TurnFailure,
   ChatTurnState,
   TurnActivityGroup,
   WorkspaceSummary,
@@ -34,7 +35,7 @@ export type UiMessage =
   | { id: string; kind: "user"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thought"; text: string }
-  | { id: string; kind: "error"; text: string }
+  | { id: string; kind: "error"; text: string; failure?: TurnFailure }
   | { id: string; kind: "tool"; tool: ToolCallState }
   | { id: string; kind: "permission"; request: PermissionRequest; resolved?: boolean }
   | { id: string; kind: "question"; requestId: string | number; questions: QuestionItem[]; resolved?: boolean }
@@ -352,7 +353,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
     case "error":
       next.status = "error";
       next.messages = next.messages.map((message) => message.kind === "tool" && (message.tool.status === "in_progress" || message.tool.status === "pending") ? { ...message, tool: { ...message.tool, status: "failed" as const, error: message.tool.error || "会话在工具完成前中断" } } : message);
-      next.messages.push({ id: `error-${crypto.randomUUID()}`, kind: "error", text: event.message });
+      next.messages.push({ id: `error-${crypto.randomUUID()}`, kind: "error", text: event.message, ...(event.failure ? { failure: event.failure } : {}) });
       if (next.messages.at(-1)?.kind !== "turn-end") next.messages.push({ id: `turn-end-${crypto.randomUUID()}`, kind: "turn-end" });
       break;
   }
