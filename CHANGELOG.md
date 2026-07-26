@@ -2,6 +2,13 @@
 
 ## 0.6.6 - unreleased (in progress)
 
+### Review outside Git
+
+- Non-Git workspaces can finally review changes. A new Agent 改动 surface is built from the real before/after text the agent's own write tool calls already carried, scoped to the last turn or the whole session, with a side-by-side diff.
+- This is not a Git stand-in: nothing stages, commits or branches, and none is implied. It is also strictly more faithful than `git status` for this question — a file the agent edited and then reverted, or one already committed, still appears because the agent really did write it.
+- Where no before-text was captured the surface says so and shows the result, rather than diffing against an empty string and implying the file was created.
+- Clicking 在 Review 中查看 in a non-Git folder used to silently redirect to an unrelated file list; it now opens this surface.
+
 ### Structured failures
 
 - Failures now cross the process boundary as data instead of one free-text string. `TurnFailure` carries a classification, the model, the provider, the HTTP status, the upstream trace id, `retry-after`, the gateway phase and how many tool-schema values were rewritten. Previously the ACP adapter captured the JSON-RPC `data` payload and nothing in the codebase ever read it back, and the `code` was dropped outright — which is why nothing downstream could tell one failure from another.

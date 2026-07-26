@@ -106,8 +106,10 @@ import type {
   SessionLaunchResult,
   AgentDashboardQuery,
   AgentDashboardSnapshot,
+  AgentChangeIndex,
   AutomationHealthReport,
   FailureDiagnosisReport,
+  ToolCallState,
   TurnFailure,
 } from "../shared/types";
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
@@ -120,6 +122,7 @@ import { locateGrokCli } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
 import { JsonStore } from "./services/json-store";
+import { AgentChangeService } from "./services/agent-change-service";
 import { LogService, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
@@ -216,6 +219,7 @@ export class AppController {
   private window?: BrowserWindow;
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
+  private readonly agentChanges = new AgentChangeService();
   private readonly runningSessions = new Set<string>();
 
   constructor(private readonly userDataPath: string) {
@@ -1275,6 +1279,17 @@ export class AppController {
     }
   }
 
+  /** Records a real agent write so non-Git workspaces can still review changes. */
+  private recordAgentChange(sessionId: string, tool: ToolCallState): void {
+    const snapshot = this.processes.snapshot(sessionId);
+    this.agentChanges.record(sessionId, snapshot?.cwd ?? "", this.processes.get(sessionId)?.activeTurnId, tool);
+  }
+
+  /** Real agent writes for this session; empty when the agent has not written anything. */
+  getAgentChanges(sessionId: string, scope: "last-turn" | "session"): AgentChangeIndex {
+    return this.agentChanges.index(sessionId, scope);
+  }
+
   /**
    * Quota bookkeeping reads the vault and writes quota.json. It must never
    * delay or suppress delivering the error event that triggered it, so it runs
@@ -1303,6 +1318,7 @@ export class AppController {
     if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
       await this.turnPresentations.recordForSession(event.sessionId, event.presentation);
     }
+    if (event.type === "tool-call") this.recordAgentChange(event.sessionId, event.tool);
     if (event.type === "user-message-status") await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery);
     if (event.type === "turn-completed") await this.computer.settleSession(event.sessionId, "completed", "Computer Use 回合已完成");
     if (event.type === "error" && event.sessionId) await this.computer.settleSession(event.sessionId, "error", event.message);

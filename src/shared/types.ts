@@ -69,6 +69,35 @@ export interface SystemDiagnosticItem {
 }
 
 /**
+ * One file the agent actually wrote, with the before/after text the ACP tool
+ * call carried. Not a git substitute: it records what the agent did, which is
+ * also more faithful than `git status` for a file that was edited and then
+ * reverted, or one that has already been committed.
+ */
+export interface AgentFileChange {
+  id: string;
+  path: string;
+  absolutePath: string;
+  toolCallId: string;
+  at: string;
+  status: "applied" | "failed";
+  turnId?: string;
+  before?: string;
+  after?: string;
+  beforeTruncated?: boolean;
+  afterTruncated?: boolean;
+  /** `missing-before` and `none` must be shown as such rather than diffed against "". */
+  baseline?: "captured" | "missing-before" | "none";
+}
+
+export interface AgentChangeIndex {
+  cwd: string;
+  scope: "last-turn" | "session";
+  files: AgentFileChange[];
+  createdAt: string;
+}
+
+/**
  * A diagnosis scoped to one failed turn. The static install sweep answers
  * "is my install healthy"; this answers "why did THIS request fail".
  */
@@ -1033,6 +1062,7 @@ export interface GrokDesktopApi {
   resetOnboarding(): Promise<OnboardingState>;
   runDiagnostics(): Promise<SystemCompatibilityReport>;
   diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport>;
+  getAgentChanges(sessionId: string, scope: "last-turn" | "session"): Promise<AgentChangeIndex>;
   getCliCapabilities(force?: boolean): Promise<import("./workbench-types").CliCapabilitySnapshot>;
   previewSupportBundle(): Promise<SupportBundlePreview>;
   exportSupportBundle(): Promise<string | null>;

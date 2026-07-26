@@ -42,6 +42,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("git:status", (cwd: string) => controller.getGitStatus(cwd));
   handle("git:diff", (cwd: string, staged: boolean, path?: string) => controller.getGitDiff(cwd, staged, path));
   handle("git:review", (cwd: string, scope: GitReviewScope) => controller.getGitReview(cwd, scope));
+  handle("agent-changes:get", (sessionId: string, scope: "last-turn" | "session") => controller.getAgentChanges(sessionId, scope));
   handle("git:review:index", (cwd: string, scope: GitReviewScope) => controller.getGitReviewIndex(cwd, scope));
   handle("git:review:file", (cwd: string, scope: GitReviewScope, snapshotId: string, fileId: string) => controller.getGitReviewFileDetail(cwd, scope, snapshotId, fileId));
   handle("git:review:hunk", (cwd: string, input: GitHunkActionInput) => controller.applyGitReviewHunk(cwd, input));

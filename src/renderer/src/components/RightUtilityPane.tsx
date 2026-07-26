@@ -5,7 +5,7 @@ import { UiIcon, type UiIconName } from "../ui-icons";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 
 export type RightUtilityTool = "launcher" | "document" | "files" | "tasks";
-export type RightTool = "review" | RightUtilityTool;
+export type RightTool = "review" | "agent-changes" | RightUtilityTool;
 
 export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
   tool: RightUtilityTool;
@@ -45,6 +45,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, ses
 function ToolLauncher({ onTool }: { onTool(tool: RightTool): void }): React.JSX.Element {
   const tools: Array<{ id: RightTool; icon: UiIconName; title: string; text: string }> = [
     { id: "review", icon: "git", title: "审阅", text: "Git 变更、逐文件 Diff 与行级批注" },
+    { id: "agent-changes", icon: "file", title: "Agent 改动", text: "非 Git 工作区：本回合/本会话的真实写入" },
     { id: "document", icon: "file", title: "计划与结果", text: "当前回合的真实计划和最终回答" },
     { id: "files", icon: "folder", title: "最近文件", text: "最近回合写入文件及只读预览" },
     { id: "tasks", icon: "tasks", title: "侧边任务", text: "Agent、后台任务、队列与等待状态" },

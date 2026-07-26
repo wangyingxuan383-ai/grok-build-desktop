@@ -1357,3 +1357,19 @@ button.danger-text { color: var(--danger); }
 .structured-error.auth-expired > summary strong { color: var(--danger); }
 
 .candidate-owner { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-secondary); font-size: .92em; font-style: normal; }
+
+.agent-change-pane .review-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
+.agent-change-pane .review-header > div { display: grid; gap: 2px; }
+.agent-change-pane .review-header span { color: var(--muted); font-size: .7em; }
+.agent-change-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 2px; padding: 6px; border-right: 1px solid var(--border); }
+.agent-change-list > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; text-align: left; }
+.agent-change-list > button:hover, .agent-change-list > button.active { background: var(--hover); color: var(--text); }
+.agent-change-list > button.failed .agent-change-path { color: var(--danger); }
+.agent-change-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: .78em; }
+.agent-change-tag { flex: none; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 18%, transparent); font-size: .66em; }
+.agent-change-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.agent-change-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82em; }
+.agent-change-note { margin: 9px 12px; padding: 8px 10px; border-radius: 7px; background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--text-secondary); font-size: .76em; }
+.agent-change-note.failed { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.agent-change-after { margin: 0 12px 12px; max-height: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .76em; }
+.agent-change-pane .review-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }

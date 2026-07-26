@@ -61,7 +61,11 @@ try {
   await evaluate("document.querySelector('.review-toggle')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.right-tool-launcher'))"), "Right tool launcher did not open");
   const launcher = await evaluate(`Array.from(document.querySelectorAll('.right-tool-launcher > button')).map((node) => node.textContent.trim())`);
-  if (launcher.length !== 4 || !launcher.some((value) => value.includes("计划与结果")) || !launcher.some((value) => value.includes("最近文件"))) throw new Error(`Right launcher mismatch: ${JSON.stringify(launcher)}`);
+  // Assert the entries by name. An exact count breaks on every addition, which
+  // is how the preset count and the version literal rotted.
+  const requiredTools = ["审阅", "Agent 改动", "计划与结果", "最近文件", "侧边任务"];
+  const missingTools = requiredTools.filter((label) => !launcher.some((value) => value.includes(label)));
+  if (missingTools.length) throw new Error(`Right launcher mismatch: ${JSON.stringify({ launcher, missingTools })}`);
   await clickText('.right-tool-launcher > button', '计划与结果');
   await waitFor(() => evaluate("Boolean(document.querySelector('.document-tool'))"), "Plan/result tool did not open");
   await clickText('.right-utility-tabs button', '工具');

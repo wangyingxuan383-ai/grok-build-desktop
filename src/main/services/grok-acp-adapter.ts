@@ -140,6 +140,7 @@ export class GrokAcpAdapter extends EventEmitter {
   get effort(): ReasoningEffort { return this.currentEffort; }
   get processOptions(): SessionProcessOptions { return { agentProfilePath: this.options.agentProfilePath, sessionMeta: this.options.sessionMeta ? structuredClone(this.options.sessionMeta) : undefined, alwaysApprove: this.options.alwaysApprove }; }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
+  get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
   setNextTurnOrdinal(value: number): void { this.nextTurnOrdinal = Math.max(this.nextTurnOrdinal, Math.max(0, Math.floor(value))); }
 
   async waitForCommands(timeoutMs = 2_000): Promise<CommandInfo[]> {
