@@ -716,6 +716,8 @@ export interface ComputerApp {
   windowCount: number;
   controllable: boolean;
   blockedReason?: string;
+  /** `elevated` is a permanent Windows integrity boundary; `blocklist` is our own policy. */
+  blockedCode?: "elevated" | "blocklist";
 }
 
 export interface ComputerWindow {
@@ -731,6 +733,8 @@ export interface ComputerWindow {
   foreground: boolean;
   controllable: boolean;
   blockedReason?: string;
+  /** `elevated` is a permanent Windows integrity boundary; `blocklist` is our own policy. */
+  blockedCode?: "elevated" | "blocklist";
 }
 
 export interface ComputerElement {
@@ -803,6 +807,15 @@ export interface ComputerTaskState {
   message?: string;
   pointer?: { x: number; y: number; action: ComputerActionName; label?: string };
   manualInterventionRequired?: boolean;
+  /**
+   * Why the user is being asked to intervene. `uac-handoff` is transient and
+   * resuming is meaningful; `elevation-blocked` is permanent and resuming can
+   * never succeed, so offering the same button for both traps the user in a
+   * loop against an unfixable target.
+   */
+  interventionKind?: "uac-handoff" | "elevation-blocked";
+  /** Short cause, rendered in the headline slot so a nowrap strip cannot clip it away. */
+  headline?: string;
 }
 
 export interface ComputerAppPermissionRequest {

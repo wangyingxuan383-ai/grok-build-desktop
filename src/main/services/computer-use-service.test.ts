@@ -139,3 +139,45 @@ describe("Computer Use safety policy", () => {
     expect(String(result.content[0]?.text)).not.toContain("ZGV0YWls");
   });
 });
+
+describe("elevated target handling", () => {
+  const service = (windows: unknown[]) => {
+    const value = new ComputerUseService("C:\nope", "missing-helper", "missing-plugin", { log: async () => undefined } as never, () => "agent", () => undefined);
+    (value as never as { listApps(): Promise<unknown[]> }).listApps = async () => [{ id: "app:1", name: "Elevated App", controllable: false, blockedReason: "目标窗口运行于更高权限级别" }];
+    (value as never as { listWindows(): Promise<unknown[]> }).listWindows = async () => windows;
+    return value;
+  };
+  const elevatedWindow = { id: "w1", appId: "app:1", controllable: false, blockedCode: "elevated", blockedReason: "目标窗口运行于更高权限级别" };
+
+  it("publishes a task state so the refusal reaches a UI surface at all", async () => {
+    const published: unknown[] = [];
+    const value = service([elevatedWindow]);
+    (value as never as { publish(task: unknown): void }).publish = (task: unknown) => { published.push(task); };
+
+    // Previously start() threw before any task existed, so nothing downstream
+    // could classify it and the live strip never appeared.
+    await expect(value.start({ sessionId: "s", appId: "app:1" })).rejects.toThrow(/管理员权限/);
+    expect(published.length).toBeGreaterThan(0);
+    expect(published.at(-1)).toMatchObject({ interventionKind: "elevation-blocked", status: "paused" });
+  });
+
+  it("puts the cause in the headline, which is the slot neither surface clips", async () => {
+    const published: Array<{ headline?: string; message?: string }> = [];
+    const value = service([elevatedWindow]);
+    (value as never as { publish(task: unknown): void }).publish = (task) => { published.push(task as never); };
+    await value.start({ sessionId: "s", appId: "app:1" }).catch(() => undefined);
+    expect(published.at(-1)?.headline).toContain("管理员权限");
+    expect(published.at(-1)?.message).toContain("不会自行提权");
+  });
+
+  it("does not mark a permanent elevation as a completable manual step", async () => {
+    const published: Array<{ manualInterventionRequired?: boolean; interventionKind?: string }> = [];
+    const value = service([elevatedWindow]);
+    (value as never as { publish(task: unknown): void }).publish = (task) => { published.push(task as never); };
+    await value.start({ sessionId: "s", appId: "app:1" }).catch(() => undefined);
+    // "已手动完成，继续" against an elevated target can never succeed; offering
+    // it is what trapped the user in a resume loop.
+    expect(published.at(-1)?.manualInterventionRequired).toBe(false);
+    expect(published.at(-1)?.interventionKind).toBe("elevation-blocked");
+  });
+});

@@ -126,7 +126,10 @@ internal static class GrokComputerHost
             { "id", HwndString(hwnd) }, { "appId", processName.ToLowerInvariant() }, { "processId", (int)pid }, { "processName", processName },
             { "executablePath", path }, { "title", title.ToString() }, { "x", rect.Left }, { "y", rect.Top }, { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top },
             { "dpi", GetDpi(hwnd) }, { "minimized", IsIconic(hwnd) }, { "foreground", GetForegroundWindow() == hwnd }, { "controllable", !blocked },
-            { "blockedReason", elevated ? "目标窗口运行于更高权限级别" : blocked ? "该应用位于 Computer Use 不可控制清单" : null }
+            { "blockedReason", elevated ? "目标窗口运行于更高权限级别" : blocked ? "该应用位于 Computer Use 不可控制清单" : null },
+            // Machine-readable so the app can tell a permanent integrity-level
+            // barrier from a transient UAC prompt without parsing prose.
+            { "blockedCode", elevated ? "elevated" : blocked ? "blocklist" : null }
         };
     }
 

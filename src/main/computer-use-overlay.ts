@@ -16,7 +16,7 @@ export function renderComputerOverlayHtml(task: ComputerTaskState, displayBounds
   const pointer = task.pointer && task.pointer.x >= displayBounds.x && task.pointer.x < displayBounds.x + displayBounds.width && task.pointer.y >= displayBounds.y && task.pointer.y < displayBounds.y + displayBounds.height
     ? `<div class="pointer ${task.pointer.action.includes("click") ? "clicking" : ""}" style="left:${Math.round(task.pointer.x - displayBounds.x)}px;top:${Math.round(task.pointer.y - displayBounds.y)}px" aria-hidden="true"><i></i></div>`
     : "";
-  const stateLabel = risk ? "等待确认" : paused ? (task.manualInterventionRequired ? "等待手动确认" : "已暂停") : "正在控制";
+  const stateLabel = task.headline || (risk ? "等待确认" : paused ? (task.manualInterventionRequired ? "等待手动确认" : "已暂停") : "正在控制");
   const stopLabel = shortcutRegistered ? "Ctrl+Alt+Esc 停止" : "回到 Grok 窗口停止";
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Grok Computer Use Active</title>

@@ -128,9 +128,12 @@ export class ComputerUseService {
     if (this.emergencyStopped.has(input.sessionId)) throw new Error("已紧急停止 Computer Use；需要用户在界面上重新授权后才能继续控制");
     const app = (await this.listApps()).find((value) => value.id === input.appId);
     if (!app) throw new Error("目标应用已关闭或不存在");
-    if (!app.controllable) throw new Error(app.blockedReason || "此应用不可控制");
     const windows = await this.listWindows(app.id);
-    const window = input.windowId ? windows.find((value) => value.id === input.windowId) : windows.find((value) => value.controllable);
+    const requested = input.windowId ? windows.find((value) => value.id === input.windowId) : undefined;
+    if (!app.controllable || (requested && !requested.controllable)) {
+      throw this.publishBlocked(input.sessionId, app, requested ?? windows[0]);
+    }
+    const window = requested ?? windows.find((value) => value.controllable);
     if (!window) throw new Error("未找到可控制的目标窗口");
     const now = new Date().toISOString();
     const task: ComputerTaskState = { sessionId: input.sessionId, appId: app.id, windowId: window.id, appName: app.name, status: "idle", stepCount: 0, updatedAt: now };
@@ -152,6 +155,12 @@ export class ComputerUseService {
     try {
       const target = (await this.listWindows(task.appId)).find((value) => value.id === task.windowId);
       if (!target) throw new Error("原目标窗口已关闭；请重新选择窗口");
+      if (!target.controllable) {
+        // Retrying cannot change a Windows integrity boundary; say so instead
+        // of looping the user through a button that can never succeed.
+        this.markElevationBlocked(task, target);
+        return { ...task };
+      }
       return this.activateTask(task, target);
     } catch (error) {
       const reason = message(error);
@@ -345,10 +354,43 @@ export class ComputerUseService {
     task.message = text; task.lastAction = action ?? task.lastAction; task.pointer = pointer && action ? { ...pointer, action, label: text } : undefined; task.updatedAt = new Date().toISOString(); this.publish(task);
   }
 
+  /** A transient Windows confirmation: resuming after the user completes it is meaningful. */
   private requireManualIntervention(task: ComputerTaskState, reason: string): void {
-    task.status = "paused"; task.manualInterventionRequired = true; task.pointer = undefined;
-    task.message = `需要你手动完成 Windows UAC、管理员或安全确认。完成后回到 Grok Build Desktop 点击“继续”。${reason ? `（${reason}）` : ""}`;
+    task.status = "paused"; task.manualInterventionRequired = true; task.interventionKind = "uac-handoff"; task.pointer = undefined;
+    // The cause goes in the headline, which the live strip and the overlay
+    // render in their own slot; both clip the message with nowrap + ellipsis,
+    // so a reason appended to the end of a long sentence is never seen.
+    task.headline = "等待你完成 Windows 确认";
+    task.message = `请在系统弹出的 UAC 或安全确认中完成操作，然后回到 Grok Build Desktop 点击“继续”。${reason ? `（${reason}）` : ""}`;
     task.updatedAt = new Date().toISOString(); this.publish(task);
+  }
+
+  /**
+   * A permanently elevated target. Windows forbids a normal-integrity process
+   * from driving a higher-integrity window, and no amount of retrying changes
+   * that — so this must not offer the same "completed it, continue" button.
+   */
+  private markElevationBlocked(task: ComputerTaskState, window?: ComputerWindow): void {
+    task.status = "paused"; task.manualInterventionRequired = false; task.interventionKind = "elevation-blocked"; task.pointer = undefined;
+    task.headline = "目标以管理员权限运行，无法控制";
+    task.message = window?.blockedCode === "blocklist"
+      ? "该应用在 Computer Use 的不可控制清单中。"
+      : "Windows 不允许普通权限的程序控制管理员权限的窗口。可以用普通权限重新启动目标程序，或以管理员身份启动 Grok Build Desktop 后重试；应用不会自行提权。";
+    task.updatedAt = new Date().toISOString(); this.publish(task);
+  }
+
+  /**
+   * Publishes a task state for a refusal that happens before any task exists.
+   * Without this the throw never reaches a UI surface at all: the live strip
+   * and overlay never appear and the user only sees whatever the model chooses
+   * to say about a raw tool error.
+   */
+  private publishBlocked(sessionId: string, app: { id: string; name: string; blockedReason?: string }, window?: ComputerWindow): Error {
+    const now = new Date().toISOString();
+    const task: ComputerTaskState = { sessionId, appId: app.id, appName: app.name, status: "paused", stepCount: 0, updatedAt: now, startedAt: now };
+    this.tasks.set(sessionId, task);
+    this.markElevationBlocked(task, window);
+    return new Error(`${task.headline}：${task.message}`);
   }
 
   private async isAllowed(sessionId: string, appId: string): Promise<boolean> { const settings = await this.settings.get(); return settings.alwaysAllowedAppIds.includes(appId) || this.onceAllowed.has(`${sessionId}:${appId}`.toLocaleLowerCase()); }
@@ -395,7 +437,13 @@ class ComputerHostClient {
   private onLine(line: string): void { try { const value = JSON.parse(line) as { id: number; ok: boolean; result?: unknown; error?: string }; const pending = this.pending.get(value.id); if (!pending) return; this.pending.delete(value.id); clearTimeout(pending.timer); if (value.ok) pending.resolve(value.result); else pending.reject(new Error(value.error || "Computer Host 操作失败")); } catch { void this.log.log("Computer Host 返回无效 JSON"); } }
 }
 
-function normalizeWindow(value: unknown): ComputerWindow { const row = value as Record<string, unknown>; const processName = string(row.processName); const executablePath = string(row.executablePath) || undefined; const title = string(row.title); const blocked = isBlockedComputerTarget(processName, title); const identity = executablePath ? createHash("sha256").update(executablePath.toLocaleLowerCase()).digest("hex").slice(0, 16) : string(row.appId); return { id: string(row.id), appId: `${processName.toLocaleLowerCase()}:${identity}`, processId: number(row.processId), processName, executablePath, title, bounds: { x: number(row.x), y: number(row.y), width: number(row.width), height: number(row.height) }, dpi: number(row.dpi) || 96, minimized: Boolean(row.minimized), foreground: Boolean(row.foreground), controllable: row.controllable !== false && !blocked, blockedReason: blocked ? "该应用位于 Computer Use 不可控制清单" : string(row.blockedReason) || undefined }; }
+function normalizeWindow(value: unknown): ComputerWindow { const row = value as Record<string, unknown>; const processName = string(row.processName); const executablePath = string(row.executablePath) || undefined; const title = string(row.title); const blocked = isBlockedComputerTarget(processName, title); const identity = executablePath ? createHash("sha256").update(executablePath.toLocaleLowerCase()).digest("hex").slice(0, 16) : string(row.appId); return { id: string(row.id), appId: `${processName.toLocaleLowerCase()}:${identity}`, processId: number(row.processId), processName, executablePath, title, bounds: { x: number(row.x), y: number(row.y), width: number(row.width), height: number(row.height) }, dpi: number(row.dpi) || 96, minimized: Boolean(row.minimized), foreground: Boolean(row.foreground), controllable: row.controllable !== false && !blocked, blockedReason: blocked ? "该应用位于 Computer Use 不可控制清单" : string(row.blockedReason) || undefined, ...(blockedCode(row, blocked) ? { blockedCode: blockedCode(row, blocked)! } : {}) }; }
+
+function blockedCode(row: Record<string, unknown>, blocked: boolean): ComputerWindow["blockedCode"] | undefined {
+  const raw = string(row.blockedCode);
+  if (raw === "elevated" || raw === "blocklist") return raw;
+  return blocked ? "blocklist" : undefined;
+}
 
 export function isBlockedComputerTarget(processName: string, title = ""): boolean { return /^(grok[- ]?build[- ]?desktop|chatgpt|powershell|pwsh|cmd|windowsterminal|wt|conhost)$/i.test(processName.trim()) || /grok build desktop|windows security|user account control|用户账户控制|windows 安全/i.test(title); }
 export function isComputerManualInterventionError(value: string): boolean { return /higher privilege|高权限|elevated|default desktop|secure desktop|uac|user account control|用户账户控制|管理员|windows security|windows 安全/i.test(value); }

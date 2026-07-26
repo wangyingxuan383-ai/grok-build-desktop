@@ -2,6 +2,13 @@
 
 ## 0.6.6 - unreleased (in progress)
 
+### Computer Use: the elevated-target dead end
+
+- Asking to control an already-elevated app used to throw before any task existed, so nothing downstream could classify it, no state was ever published, and neither the live strip nor the desktop overlay appeared. The user's only channel was whatever the model chose to say about a raw tool error. The refusal now publishes a real task state.
+- A transient UAC prompt and a permanently elevated target were one state with one message. For the permanent case there is nothing to complete, yet the UI offered "已手动完成，继续" — and `resume` re-activated without checking controllability, hit the identical error and re-armed the identical button, forever. They are now distinct: `uac-handoff` keeps the resume affordance, `elevation-blocked` explains the Windows integrity rule, names the two legitimate remedies, and offers no button that cannot succeed.
+- The one message that carried the reason put it in a parenthetical at the end of a long single-line string, and both surfaces that render it clip with `nowrap` + ellipsis — so the reason was never visible. The cause now goes in the headline slot, which neither surface clips.
+- The native host reports a machine-readable `blockedCode` so the app distinguishes a permanent integrity boundary from its own blocklist without parsing prose.
+
 ### Token activity
 
 - Per-turn usage is now recorded and rolled up: 24h, today, 7d, 30d and month, plus a 53-week activity heatmap with daily, weekly and cumulative views, filterable by model. Reachable from a Token 活动 settings category.
