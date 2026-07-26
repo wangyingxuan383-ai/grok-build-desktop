@@ -48,7 +48,7 @@ sandbox: true
 - 进入收口前已有 7 个功能提交，涵盖 0.6.5 稳定交互、结构化失败、非 Git Review、Token 活动、Computer Use 提权状态和 UI 体感。
 - `package.json` / lockfile 已提升为 `0.6.6`。
 - 本机 CLI 兼容基准：`0.2.112 (9bbd559437)`。
-- 本机已安装并验证 0.6.6；GitHub 公开 Latest 在远端发布门槛完成前仍是 `v0.6.4`。
+- 本机已安装并验证 0.6.6；GitHub `v0.6.6` 已正式发布为 Latest。
 - 旧 0.6.5 产物生成于后续提交之前，属于过期候选，不能上传为 0.6.6。
 
 ## 3. 0.6.5/0.6.6 已实现范围
@@ -151,21 +151,18 @@ Claude 的并行复审原始结果保存在：
   - 诊断中心报告“可以使用”，支持包继续排除附件正文和完整路径。
   - 桌面与开始菜单快捷方式均指向 `%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`。
 
-以上是本机候选证据，不是 GitHub 公开发布证据。仍需完成 PR/合并、标签和 Release workflow。
+以上本机证据与下节公开发布证据均已完成。
 
-## 6. 正式收口顺序
+## 6. 正式发布证据
 
-1. 不要重复完整本地打包；本节第 5 部分的本机门槛已通过。
-2. 运行最终 `git diff --check` 与公开扫描，提交并推送开发分支，创建/合并 PR。
-3. 在合并提交上创建并推送 `v0.6.6` 标签。
-4. 等待 `.github/workflows/release.yml`：
-   - Hosted Windows 重建并扫描。
-   - 创建 Draft。
-   - 回下载全部资产。
-   - 校验 `SHA256SUMS.txt`。
-   - 验证 Setup/Portable provenance attestations。
-   - 发布为 Latest。
-5. 下载公开资产并与远端清单复核；最后补一个发布证据提交。
+- PR #15：`https://github.com/wangyingxuan383-ai/grok-build-desktop/pull/15`
+- 合并提交：`2d413d4e807a7de185c157a7fc89c284530c6b15`
+- 标签：`v0.6.6`
+- Release workflow：`30216468056`
+- Release：`https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.6.6`
+- 状态：Latest、非 Draft、非 prerelease。
+- Workflow 的 Hosted Windows 构建、公开扫描、Setup/Portable attestation、Draft 创建、回下载、SHA-256/provenance 验证和最终发布全部通过。
+- 公开资产另行下载到临时目录复核，五项文件均与 `SHA256SUMS.txt` 一致；Setup/Portable 的 attestations 均验证到 GitHub-hosted `release.yml`、tag `v0.6.6` 和提交 `2d413d4`。
 
 ## 7. 本地 0.6.6 资产
 
@@ -182,4 +179,9 @@ release/SHA256SUMS.txt
 - SBOM：SHA-256 `c4489c6c07492c943db339474d0d5c6fe20ce810dc1b6a0bfce946e436a8bc51`
 - 第三方许可证：SHA-256 `1ad863e9d4753397efa8ab297e057882b2f04d665bb5e8ed7062d71b900b8ca5`
 
-Hosted Windows 会重新构建公开资产，远端哈希预期与本机候选不同。Release URL、workflow ID、公开哈希和 provenance 必须在工作流成功后回写。
+公开 Hosted Windows 资产（与本机候选不同）：
+
+- Setup：143,758,507 bytes；SHA-256 `911d5350d7c24999d2c17fc6a9fa8513a5173dc6304d873c8a9fe2f112f28416`
+- Portable：194,251,272 bytes；SHA-256 `5b6dc4ccc0e44f7a65b44508b8c3e17d35302cd961d61d3ac72dfe4e692688ca`
+- SBOM：364,228 bytes；SHA-256 `33882c6a738fc97285e2d41ace5ffadb57da5ba44261d6bf76b79c089387e9d5`
+- 第三方许可证：139,909 bytes；SHA-256 `d18189fbbb412ed10b00a5b47582d8f465751d2a2172968ba824f08515f6a3b3`
