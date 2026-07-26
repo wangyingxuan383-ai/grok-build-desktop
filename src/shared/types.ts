@@ -219,6 +219,8 @@ export interface AppSettings {
   recentWorkspaces: string[];
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
+  /** The 开发工具 section resets to collapsed on every launch without this. */
+  projectToolsOpen?: boolean;
   sessionGroupCollapsed?: Partial<Record<SessionOriginKind, boolean>>;
   showArchivedCodex?: boolean;
   theme: ThemeSettings;

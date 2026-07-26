@@ -2,6 +2,12 @@
 
 ## 0.6.6 - unreleased (in progress)
 
+### Interface polish
+
+- The text-size and density settings now apply to every surface. `#overlay-root` is a sibling of `#root`, so every portaled dialog, palette and panel sat outside `.app-shell` and inherited neither — setting the text size visibly did nothing to any of them. Measured in the packaged renderer: the settings dialog went from ignoring the setting to scaling 16px → 24px at 150%.
+- Code blocks are no longer re-tokenized on every streaming frame. The highlight effect depended on the growing source text, so a block still arriving was fully re-highlighted each frame; it now waits for the text to settle and shows plain text meanwhile, which is all anyone can read mid-stream anyway.
+- The 开发工具 section remembers whether it was open instead of collapsing on every launch.
+
 ### Computer Use: the elevated-target dead end
 
 - Asking to control an already-elevated app used to throw before any task existed, so nothing downstream could classify it, no state was ever published, and neither the live strip nor the desktop overlay appeared. The user's only channel was whatever the model chose to say about a raw tool error. The refusal now publishes a real task state.

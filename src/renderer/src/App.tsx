@@ -20,7 +20,7 @@ import { ExecutionProfileWorkbench, SessionLaunchDialog } from "./components/Exe
 import { AgentDashboardWorkbench } from "./components/AgentDashboardWorkbench";
 import { buildChatTurns, useAppStore } from "./store";
 import { useWorkbenchStore, type WorkbenchView } from "./workbench-store";
-import { applyThemeToDocument, cacheThemeForEarlyStartup, contrastRatio, DARK_COLORS, LIGHT_COLORS, themeBackgroundClass } from "./theme";
+import { applyShellPreferencesToDocument, applyThemeToDocument, cacheThemeForEarlyStartup, contrastRatio, DARK_COLORS, LIGHT_COLORS, themeBackgroundClass } from "./theme";
 import { groupSessionsByOrigin, sessionSourceLabel } from "./session-groups";
 import { useWorktreeStore } from "./worktree-store";
 import { useGitStore } from "./git-store";
@@ -284,6 +284,13 @@ export default function App(): React.JSX.Element {
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
   }, [store.settings?.theme]);
+
+  // Reading preferences belong on the document root: #overlay-root is a sibling
+  // of #root, so every portaled dialog sits outside .app-shell and inherited
+  // neither the text-size nor the density setting.
+  useEffect(() => {
+    applyShellPreferencesToDocument(store.settings?.fontScale ?? 100, store.settings?.uiDensity ?? "balanced");
+  }, [store.settings?.fontScale, store.settings?.uiDensity]);
 
   useEffect(() => {
     const onFocus = (): void => {
@@ -688,7 +695,7 @@ export default function App(): React.JSX.Element {
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;
 
   return (
-    <div className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`} style={{ fontSize: `${store.settings?.fontScale ?? 100}%` }}>
+    <div className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`}>
       <Sidebar
         version={store.appVersion}
         settings={store.settings}
@@ -864,7 +871,7 @@ function Sidebar(props: {
   onPanel(panel: Panel): void;
 }): React.JSX.Element {
   const [showRecent, setShowRecent] = useState(false);
-  const [projectToolsOpen, setProjectToolsOpen] = useState(false);
+  const [projectToolsOpen, setProjectToolsOpen] = useState(() => props.settings?.projectToolsOpen ?? false);
   const [openSessionMenu, setOpenSessionMenu] = useState("");
   useEffect(() => {
     if (!openSessionMenu) return;
@@ -897,7 +904,7 @@ function Sidebar(props: {
     <div className="brand"><button className="brand-product" title="Grok Build Desktop"><span className="brand-wordmark">G</span><strong>Grok</strong><UiIcon name="chevron-down" size={13}/></button><button className="icon-button brand-search" title="搜索会话" onClick={() => document.getElementById("session-search")?.focus()}><UiIcon name="search"/></button></div>
     <button className="new-task-button" disabled={props.busy} onClick={props.onNew}><UiIcon name="plus"/><span>新建任务</span></button>
     <div className="sidebar-context"><button className="workspace-button" onClick={() => setShowRecent(!showRecent)}><UiIcon name="folder"/><span className="workspace-name">{shortPath(props.settings?.activeWorkspace || "选择工作区")}</span><UiIcon name="chevron-down" size={13}/></button></div>
-    <section className="project-tools"><button className="project-tools-heading" onClick={() => setProjectToolsOpen((value) => !value)} aria-expanded={projectToolsOpen}><span><UiIcon name={projectToolsOpen ? "chevron-down" : "chevron-right"} size={13}/>开发工具</span></button>{projectToolsOpen && <nav>{projectTools.map((item) => <button key={item.view} className={item.view === props.activeView ? "active" : ""} onClick={() => props.onView(item.view)}><UiIcon name={item.icon}/><span>{item.label}</span></button>)}<button onClick={() => props.onPanel("tasks")}><UiIcon name="tasks"/><span>任务</span></button><button onClick={() => props.onPanel("extensions")}><UiIcon name="extensions"/><span>扩展</span></button></nav>}</section>
+    <section className="project-tools"><button className="project-tools-heading" onClick={() => setProjectToolsOpen((value) => { const next = !value; void window.grokDesktop.updateSettings({ projectToolsOpen: next }).catch(() => undefined); return next; })} aria-expanded={projectToolsOpen}><span><UiIcon name={projectToolsOpen ? "chevron-down" : "chevron-right"} size={13}/>开发工具</span></button>{projectToolsOpen && <nav>{projectTools.map((item) => <button key={item.view} className={item.view === props.activeView ? "active" : ""} onClick={() => props.onView(item.view)}><UiIcon name={item.icon}/><span>{item.label}</span></button>)}<button onClick={() => props.onPanel("tasks")}><UiIcon name="tasks"/><span>任务</span></button><button onClick={() => props.onPanel("extensions")}><UiIcon name="extensions"/><span>扩展</span></button></nav>}</section>
     {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onClose={() => setShowRecent(false)} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onClear={props.onClear} />}
     {props.activeView === "files" ? <FileExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "source-control" ? <GitExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "worktrees" ? <WorktreeExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : <>
     <div className="search"><UiIcon name="search" size={14}/><input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="搜索任务" /></div>
