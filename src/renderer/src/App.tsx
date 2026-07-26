@@ -695,7 +695,7 @@ export default function App(): React.JSX.Element {
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;
 
   return (
-    <div className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`}>
+    <div className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool && activeWorkbenchView === "chat" ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`}>
       <Sidebar
         version={store.appVersion}
         settings={store.settings}
@@ -1005,7 +1005,23 @@ function AddPalette({ onClose, onFiles, onFolders, onWorkspaceFile, onComputer, 
     document.body.style.overflow = "hidden";
     void window.grokDesktop.listSkills().then(setSkills).catch((value) => setError(errorMessage(value))).finally(() => setLoading(false));
     window.setTimeout(() => panelRef.current?.querySelector<HTMLButtonElement>("button[data-palette-item]")?.focus(), 0);
-    const key = (event: KeyboardEvent): void => { if (event.key === "Escape") { event.preventDefault(); closeRef.current(); } };
+    const key = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
+      // The global overlay trap keys off `hasBlockingOverlay`, which does not
+      // include this palette, so Tab containment has to live here or the
+      // aria-modal claim is not true.
+      if (event.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+        .filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (!panel.contains(document.activeElement)) { event.preventDefault(); first.focus(); return; }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
     window.addEventListener("keydown", key);
     return () => { window.removeEventListener("keydown", key); document.body.style.overflow = previousOverflow; window.setTimeout(() => previousFocus?.focus(), 0); };
   }, []);

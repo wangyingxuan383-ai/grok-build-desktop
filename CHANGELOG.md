@@ -7,6 +7,8 @@
 - The text-size and density settings now apply to every surface. `#overlay-root` is a sibling of `#root`, so every portaled dialog, palette and panel sat outside `.app-shell` and inherited neither — setting the text size visibly did nothing to any of them. Measured in the packaged renderer: the settings dialog went from ignoring the setting to scaling 16px → 24px at 150%.
 - Code blocks are no longer re-tokenized on every streaming frame. The highlight effect depended on the growing source text, so a block still arriving was fully re-highlighted each frame; it now waits for the text to settle and shows plain text meanwhile, which is all anyone can read mid-stream anyway.
 - The 开发工具 section remembers whether it was open instead of collapsing on every launch.
+- The add palette declared `aria-modal` but Tab escaped to the page behind it: the global overlay focus trap keys off a flag that does not include the palette, so it was never armed. Tab is now contained.
+- Leaving the chat view no longer leaves the shell reserving space for a right pane that is not rendered there.
 
 ### Computer Use: the elevated-target dead end
 
