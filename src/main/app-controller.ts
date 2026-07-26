@@ -108,6 +108,8 @@ import type {
   AgentDashboardSnapshot,
   AgentChangeIndex,
   AutomationHealthReport,
+  TokenActivityQuery,
+  TokenActivityReport,
   FailureDiagnosisReport,
   ToolCallState,
   TurnFailure,
@@ -123,6 +125,7 @@ import { CliUpdateService } from "./services/cli-update-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
 import { JsonStore } from "./services/json-store";
 import { AgentChangeService } from "./services/agent-change-service";
+import { TokenActivityService } from "./services/token-activity-service";
 import { LogService, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
@@ -220,6 +223,7 @@ export class AppController {
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
   private readonly agentChanges = new AgentChangeService();
+  private readonly tokenActivity: TokenActivityService;
   private readonly runningSessions = new Set<string>();
 
   constructor(private readonly userDataPath: string) {
@@ -362,6 +366,7 @@ export class AppController {
       },
       references: async (providerId) => this.providerReferences(providerId),
     });
+    this.tokenActivity = new TokenActivityService(userDataPath);
     this.diagnostics = new DiagnosticsService(userDataPath, this.buildInfo, () => this.settingsStore.get(), () => this.auth.activeApiKey(), () => this.getComputerCapability(), this.log, this.appConfig.mockCliPath, { providers: () => this.providers.list(), automations: () => this.automations.list(), quota: () => this.quota.get() });
   }
 
@@ -417,6 +422,7 @@ export class AppController {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState> { return this.onboarding.update(patch); }
   resetOnboarding(): Promise<OnboardingState> { return this.onboarding.reset(); }
   runDiagnostics(): Promise<SystemCompatibilityReport> { return this.diagnostics.run(); }
+  getTokenActivity(query: TokenActivityQuery = {}): Promise<TokenActivityReport> { return this.tokenActivity.report(query); }
   /** Scoped to one failed turn; does not re-run the four-subprocess install sweep. */
   diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport> { return this.diagnostics.diagnoseFailure(failure); }
   getCliCapabilities(force = false): Promise<CliCapabilitySnapshot> { return this.cliCapabilities.get(force); }
@@ -691,6 +697,8 @@ export class AppController {
     await this.processes.close(sessionId);
     await this.catalog.delete(assignment?.cwd ?? cwd, sessionId);
     await this.profiles.removeAssignment(sessionId);
+    await this.tokenActivity.forgetSession(sessionId).catch((error) => this.log.log(`Token 活动明细清理失败：${error instanceof Error ? error.message : String(error)}`));
+    this.agentChanges.clear(sessionId);
     await this.dashboard.clear(`session:${sessionId}`);
     await this.attachmentCache.cleanupSession(sessionId);
     await this.turnPresentations.delete(sessionId);
@@ -1317,6 +1325,10 @@ export class AppController {
     await this.dashboard.record(event);
     if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
       await this.turnPresentations.recordForSession(event.sessionId, event.presentation);
+      if (event.type === "turn-completed") {
+        await this.tokenActivity.record(event.sessionId, event.presentation, { workspace: this.processes.snapshot(event.sessionId)?.cwd })
+          .catch((error) => this.log.log(`Token 活动记录失败：${error instanceof Error ? error.message : String(error)}`));
+      }
     }
     if (event.type === "tool-call") this.recordAgentChange(event.sessionId, event.tool);
     if (event.type === "user-message-status") await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery);

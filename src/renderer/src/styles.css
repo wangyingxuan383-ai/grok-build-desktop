@@ -1373,3 +1373,26 @@ button.danger-text { color: var(--danger); }
 .agent-change-note.failed { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 .agent-change-after { margin: 0 12px 12px; max-height: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .76em; }
 .agent-change-pane .review-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; }
+
+.token-activity { display: grid; gap: 14px; }
+.token-activity-controls { display: flex; align-items: end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.token-activity-views { display: flex; gap: 4px; }
+.token-activity-views button { padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: .78em; }
+.token-activity-views button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--text); }
+.token-window-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 9px; }
+.token-window-grid article { display: grid; gap: 3px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.token-window-grid strong { color: var(--muted); font-size: .72em; font-weight: 600; }
+.token-window-grid b { font-size: 1.25em; font-weight: 650; }
+.token-window-grid span { color: var(--text-secondary); font-size: .7em; }
+.token-window-grid small { color: var(--muted); font-size: .68em; }
+.token-heatmap { display: grid; gap: 9px; padding: 13px; border: 1px solid var(--border); border-radius: 10px; }
+.token-heatmap header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.token-heatmap header span { color: var(--text-secondary); font-size: .74em; }
+.token-heatmap-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, 1fr); gap: 3px; overflow-x: auto; padding-bottom: 3px; }
+.token-cell { width: 11px; height: 11px; border-radius: 3px; background: color-mix(in srgb, var(--muted) 16%, transparent); }
+.token-cell.level-1 { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.token-cell.level-2 { background: color-mix(in srgb, var(--accent) 50%, transparent); }
+.token-cell.level-3 { background: color-mix(in srgb, var(--accent) 74%, transparent); }
+.token-cell.level-4 { background: var(--accent); }
+.token-heatmap footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: .68em; }
+.token-legend { display: inline-flex; align-items: center; gap: 3px; }

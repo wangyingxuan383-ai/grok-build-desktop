@@ -28,6 +28,7 @@ import { UiIcon, type UiIconName } from "./ui-icons";
 import { ReviewPane } from "./components/ReviewPane";
 import { FailureDiagnosisPanel } from "./components/FailureDiagnosisPanel";
 import { AgentChangePane } from "./components/AgentChangePane";
+import { TokenActivityPanel } from "./components/TokenActivityPanel";
 import { RightUtilityPane, type RightTool } from "./components/RightUtilityPane";
 import { findStaleReviewComment, formatReviewComments, type ReviewCommentDraft } from "./review-comments";
 
@@ -1123,7 +1124,7 @@ function WorkspaceMenu({ workspaces, active, onClose, onChoose, onSelect, onPin,
   })}</div>{active && <button className="danger-link workspace-clear" onClick={onClear}>清空当前工作区会话…</button>}</div>;
 }
 
-type SettingsCategory = "general" | "appearance" | "models" | "project" | "worktree" | "agents" | "accounts" | "computer" | "updates" | "archived";
+type SettingsCategory = "general" | "appearance" | "models" | "tokens" | "project" | "worktree" | "agents" | "accounts" | "computer" | "updates" | "archived";
 
 function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProviders }: { initial: AppSettings; knownModels: Array<{ modelId: string; name: string }>; onClose(): void; onDiagnostics(): void; onProviders(): void }): React.JSX.Element {
   const store = useAppStore();
@@ -1134,7 +1135,7 @@ function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProvid
   const [updateActions, setUpdateActions] = useState<Record<string, { state: "running" | "success" | "error" | "cancelled"; message: string; at: string }>>({});
   useEffect(() => { if (category === "computer" && !computer) void window.grokDesktop.getComputerSettings().then(setComputer).catch((error) => store.setError(errorMessage(error))); }, [category, computer]);
   const categories: Array<{ id: SettingsCategory; label: string; icon: UiIconName }> = [
-    { id: "general", label: "常规", icon: "settings" }, { id: "appearance", label: "外观", icon: "sparkles" }, { id: "models", label: "模型与会话", icon: "chat" },
+    { id: "general", label: "常规", icon: "settings" }, { id: "appearance", label: "外观", icon: "sparkles" }, { id: "models", label: "模型与会话", icon: "chat" }, { id: "tokens", label: "Token 活动", icon: "dashboard" },
     { id: "project", label: "项目与 Git", icon: "git" }, { id: "worktree", label: "Worktree 与 Memory", icon: "worktree" }, { id: "agents", label: "Agent", icon: "agents" },
     { id: "accounts", label: "账号与提供商", icon: "account" }, { id: "computer", label: "Computer Use", icon: "workbench" }, { id: "updates", label: "更新与诊断", icon: "download" }, { id: "archived", label: "已归档会话", icon: "archive" },
   ];
@@ -1167,6 +1168,7 @@ function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProvid
         <button onClick={() => { setUpdateActions((value) => ({ ...value, diagnostics: { state: "success", message: "已打开诊断中心", at: new Date().toISOString() } })); onDiagnostics(); }}>打开诊断中心</button>
         <button disabled={updateActions.logs?.state === "running"} onClick={() => void runUpdateAction("logs", async () => { const path = await window.grokDesktop.exportLogs(); return path ? `脱敏日志已导出：${path}` : "已取消"; })}>导出脱敏日志</button>
       </div><div className="settings-action-results" aria-live="polite">{Object.entries(updateActions).map(([key, value]) => <article className={value.state} key={key}><strong>{({ app: "应用更新", cli: "CLI 更新", diagnostics: "诊断中心", logs: "脱敏日志" } as Record<string, string>)[key] || key}</strong><span>{value.message}</span><time>{new Date(value.at).toLocaleString()}</time>{value.state !== "running" && <button type="button" onClick={() => void navigator.clipboard.writeText(value.message)}>复制</button>}</article>)}</div></SettingsSection>}
+      {category === "tokens" && <SettingsSection title="Token 活动" description="只统计 CLI 或提供商真实返回的用量；失败与取消的回合不会返回用量，因此同时显示覆盖情况。"><TokenActivityPanel onError={store.setError}/></SettingsSection>}
       {category === "archived" && <SettingsSection title="已归档会话" description="归档任务不会出现在默认任务列表中。"><div className="archived-settings-list">{store.sessions.filter((session) => session.archived).map((session) => <div key={session.id}><span><strong>{session.title}</strong><small>{relativeTime(session.updatedAt)}</small></span><button onClick={async () => { await window.grokDesktop.archiveSession(session.id, false); if (draft.activeWorkspace) store.setSessions(await window.grokDesktop.listSessions(draft.activeWorkspace)); }}>取消归档</button></div>)}{!store.sessions.some((session) => session.archived) && <p className="settings-note">当前项目没有已归档会话。</p>}</div></SettingsSection>}
     </main></div><footer><button onClick={onClose}>取消</button><button className="primary" disabled={saveState === "saving"} onClick={() => void save()}>{saveState === "saving" ? "保存中…" : "保存设置"}</button></footer>
   </section></div>;

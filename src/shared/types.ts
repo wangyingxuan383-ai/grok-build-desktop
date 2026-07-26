@@ -98,6 +98,50 @@ export interface AgentChangeIndex {
 }
 
 /**
+ * Token totals for one period. Every number is a sum of what the CLI or
+ * provider actually reported — nothing is estimated. `turns` vs `turnsWithUsage`
+ * is the coverage: failed and cancelled turns report no usage at all, so a
+ * period can contain real work that no total can account for.
+ */
+export interface TokenActivityWindow {
+  from: string;
+  turns: number;
+  turnsWithUsage: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedReadTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+export interface TokenDayBucket {
+  day: string;
+  turns: number;
+  turnsWithUsage: number;
+  totalTokens: number;
+}
+
+export interface TokenActivityQuery {
+  modelId?: string;
+  providerId?: string;
+  workspace?: string;
+}
+
+export interface TokenActivityReport {
+  generatedAt: string;
+  windows: {
+    rolling24h: TokenActivityWindow;
+    today: TokenActivityWindow;
+    rolling7d: TokenActivityWindow;
+    rolling30d: TokenActivityWindow;
+    month: TokenActivityWindow;
+  };
+  days: TokenDayBucket[];
+  models: string[];
+  workspaces: string[];
+}
+
+/**
  * A diagnosis scoped to one failed turn. The static install sweep answers
  * "is my install healthy"; this answers "why did THIS request fail".
  */
@@ -1063,6 +1107,7 @@ export interface GrokDesktopApi {
   runDiagnostics(): Promise<SystemCompatibilityReport>;
   diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport>;
   getAgentChanges(sessionId: string, scope: "last-turn" | "session"): Promise<AgentChangeIndex>;
+  getTokenActivity(query?: TokenActivityQuery): Promise<TokenActivityReport>;
   getCliCapabilities(force?: boolean): Promise<import("./workbench-types").CliCapabilitySnapshot>;
   previewSupportBundle(): Promise<SupportBundlePreview>;
   exportSupportBundle(): Promise<string | null>;

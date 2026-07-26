@@ -74,7 +74,7 @@ try {
   await evaluate("document.querySelector('.sidebar-footer button[title=\"设置\"]')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.settings-dialog'))"), "Settings dialog did not open");
   const settings = await evaluate(`({ size: (() => { const box = document.querySelector('.settings-dialog').getBoundingClientRect(); return { width: Math.round(box.width), height: Math.round(box.height) }; })(), categories: Array.from(document.querySelectorAll('.settings-layout > nav button')).map((node) => node.textContent.trim()), close: Boolean(document.querySelector('[aria-label="关闭设置"]')) })`);
-  if (settings.categories.length !== 10 || !settings.close || settings.size.width < 850 || settings.size.height < 620) throw new Error(`Settings shell incomplete: ${JSON.stringify(settings)}`);
+  if (settings.categories.length < 10 || !settings.close || settings.size.width < 850 || settings.size.height < 620) throw new Error(`Settings shell incomplete: ${JSON.stringify(settings)}`);
   await evaluate(`Array.from(document.querySelectorAll('.settings-layout > nav button')).find((node) => node.textContent.trim() === '外观')?.click()`);
   await waitFor(() => evaluate("Boolean(document.querySelector('.background-preview'))"), "Background preview did not render");
   if (!await evaluate(`Array.from(document.querySelectorAll('.theme-background button')).some((node) => node.textContent.trim() === '重置背景参数')`)) throw new Error("Background reset action is missing");

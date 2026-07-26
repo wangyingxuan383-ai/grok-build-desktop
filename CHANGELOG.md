@@ -2,6 +2,12 @@
 
 ## 0.6.6 - unreleased (in progress)
 
+### Token activity
+
+- Per-turn usage is now recorded and rolled up: 24h, today, 7d, 30d and month, plus a 53-week activity heatmap with daily, weekly and cumulative views, filterable by model. Reachable from a Token 活动 settings category.
+- Every number is a sum of what the CLI or provider actually reported. The app never computes usage itself — it only relays `turn_completed.usage`, and failed or cancelled turns carry none — so coverage is stated alongside each total ("N turns, M of which returned no usage") rather than letting a total silently under-report real work.
+- Two tiers of storage with an enforced contract: per-turn detail is deleted when its session is deleted, while the anonymous daily rollup survives and is pruned after roughly 13 months. No prompt text is stored.
+
 ### Review outside Git
 
 - Non-Git workspaces can finally review changes. A new Agent 改动 surface is built from the real before/after text the agent's own write tool calls already carried, scoped to the last turn or the whole session, with a side-by-side diff.

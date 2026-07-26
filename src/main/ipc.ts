@@ -1,6 +1,6 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { AppController } from "./app-controller";
-import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, PersonaDefinitionSaveInput, ProviderConnectionDraft, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
+import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, PersonaDefinitionSaveInput, ProviderConnectionDraft, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TokenActivityQuery, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
 import { isTrustedRendererFrame, type RendererTrustPolicy } from "./security-policy";
 
 export function registerIpc(controller: AppController, window: BrowserWindow, policy: RendererTrustPolicy): void {
@@ -43,6 +43,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("git:diff", (cwd: string, staged: boolean, path?: string) => controller.getGitDiff(cwd, staged, path));
   handle("git:review", (cwd: string, scope: GitReviewScope) => controller.getGitReview(cwd, scope));
   handle("agent-changes:get", (sessionId: string, scope: "last-turn" | "session") => controller.getAgentChanges(sessionId, scope));
+  handle("token-activity:get", (query?: TokenActivityQuery) => controller.getTokenActivity(query));
   handle("git:review:index", (cwd: string, scope: GitReviewScope) => controller.getGitReviewIndex(cwd, scope));
   handle("git:review:file", (cwd: string, scope: GitReviewScope, snapshotId: string, fileId: string) => controller.getGitReviewFileDetail(cwd, scope, snapshotId, fileId));
   handle("git:review:hunk", (cwd: string, input: GitHunkActionInput) => controller.applyGitReviewHunk(cwd, input));
