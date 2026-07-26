@@ -114,6 +114,7 @@
 - [x] 发布前复审修复并发存储覆盖、清理漂移、跨会话故障误关联、ACP 重试丢失、Prompt 超时未取消、流式解析热点和 Computer Use 按键/坐标/超时不确定性。
 - [x] 唯一一次完整本地离线门槛通过：67 个测试文件通过、4 个显式 live 文件跳过；358 项通过、7 项跳过。TypeScript、生产构建、原生 Host、Electron Fuses、打包 UI/Task Scheduler/中文空格 Portable 夹具及前后两次 264 文件公开扫描均通过。
 - [x] 唯一一次正式本地打包生成 0.6.6 Setup、Portable、SHA-256、SBOM 和许可证；同一 Setup 完成 per-user 安装，文件/Main/About 为 0.6.6，诊断为“可以使用”，桌面与开始菜单快捷方式均指向安装目录。
+- [x] PR 首次 Windows 门禁发现 npm 11 严格 `npm ci` 所需的两个可选 `@emnapi` 传递项未写入 lockfile；仅刷新 lock 元数据后 `npm ci --dry-run` 与 `npm audit --omit=dev` 通过。
 - [ ] 提交、PR/合并、`v0.6.6` 标签、Hosted Windows 重建、Draft 回下载、哈希/provenance 验证和 GitHub Latest 发布。
 
 #### D6. 0.6.6 本地候选证据
