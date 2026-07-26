@@ -117,7 +117,7 @@
 - [x] PR 首次 Windows 门禁发现 npm 11 严格 `npm ci` 所需的两个可选 `@emnapi` 传递项未写入 lockfile；刷新 lock 元数据后，第二次门禁又捕获新公布的构建期公告。固定 `brace-expansion 5.0.8` 与 `tar 7.5.22` 后，fresh `npm ci` 和完整 high-level `npm audit` 均为 0 漏洞。
 - [x] fresh 依赖树重建又暴露 Windows PowerShell 5.1 对无 BOM 中文脚本的解析问题，以及 v0.6.2 探针错误依赖 3 个 Virtuoso 行同时挂载的竞态。补齐脚本 UTF-8 BOM、改为语义滚动断言后，最终包重新通过完整 359 项和全部打包 UI 门槛；此前失败候选未发布。
 - [x] CodeQL 发布复审发现回环 Provider 网关会把任意捕获异常返回给本地调用方。公开响应已收敛到固定安全分类，完整的脱敏诊断仅留在主进程；注入私人路径与堆栈的回归测试证明两者不会越过 HTTP 边界。该运行时代码变更要求重新打包和安装，旧候选不发布。
-- [ ] 提交、PR/合并、`v0.6.6` 标签、Hosted Windows 重建、Draft 回下载、哈希/provenance 验证和 GitHub Latest 发布。
+- [x] PR #15 在 Windows、Gitleaks、CodeQL 与代码扫描策略全部通过后合并到 `main` 提交 `2d413d4`；`v0.6.6` 标签触发 workflow `30216468056`，Hosted Windows 重新构建/扫描、生成 attestations、创建 Draft、回下载并验证 SHA-256/provenance 后发布为 GitHub Latest。
 
 #### D6. 0.6.6 本地候选证据
 
@@ -126,6 +126,16 @@
 - CycloneDX SBOM：`c4489c6c07492c943db339474d0d5c6fe20ce810dc1b6a0bfce946e436a8bc51`
 - 第三方许可证：`1ad863e9d4753397efa8ab297e057882b2f04d665bb5e8ed7062d71b900b8ca5`
 - 安装位置使用 `%LOCALAPPDATA%\Programs\Grok Build Desktop`；文档不记录私人绝对路径。公开 Release 资产由 Hosted Windows 重新构建，哈希预期与本机候选不同。
+
+#### D7. 0.6.6 公开发布证据
+
+- Release：`https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.6.6`（Latest，非 Draft，非 prerelease）
+- Workflow：`30216468056`；tag/源提交：`v0.6.6` / `2d413d4e807a7de185c157a7fc89c284530c6b15`
+- Setup：`911d5350d7c24999d2c17fc6a9fa8513a5173dc6304d873c8a9fe2f112f28416`
+- Portable：`5b6dc4ccc0e44f7a65b44508b8c3e17d35302cd961d61d3ac72dfe4e692688ca`
+- CycloneDX SBOM：`33882c6a738fc97285e2d41ace5ffadb57da5ba44261d6bf76b79c089387e9d5`
+- 第三方许可证：`d18189fbbb412ed10b00a5b47582d8f465751d2a2172968ba824f08515f6a3b3`
+- 下载后的五项资产全部与远端 `SHA256SUMS.txt` 一致；Setup/Portable 的 GitHub Artifact Attestations 均验证到 GitHub-hosted `release.yml`、tag `v0.6.6`、提交 `2d413d4`。
 
 ## v0.6.3 稳定热修 → v0.6.4 UI/提供商重构（2026-07-23）
 

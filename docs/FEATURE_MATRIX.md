@@ -1,6 +1,6 @@
 # Feature Matrix
 
-## v0.6.6 locally installed release candidate
+## v0.6.6 public stable release / installed local build
 
 | Area | Status | Notes |
 |---|---|---|
@@ -18,7 +18,7 @@
 | Errors and quota | Focused/source verified | Provider errors default collapsed with redacted details. Rolling 24h Token limits are separate from weekly/monthly billing, persisted per account and marked expired. |
 | Auth and Computer Use | Focused verified | Device login has one browser owner. Ordinary Codex is allowed while self/terminal/UAC/security and Windows integrity boundaries remain enforced. |
 | Recent file access | Focused/source verified | Only paths in the real execution root are listed, project paths are relative, and external-open uses the canonical path returned by the main process. |
-| 0.6.6 delivery | Locally packaged, installed and verified | Source/lock/display/File/Main/About are 0.6.6. Fresh npm 11 install and full high-level audit are clean. The corrected formal local gate passed 359 tests with 7 explicit live skips, production/native/Fuses/UI/Scheduler/Portable checks and 264-file scans; Setup/Portable/SBOM/licenses/hashes were generated, and installed diagnostics/shortcuts passed. GitHub publication is still pending, so 0.6.4 remains the public fallback. |
+| 0.6.6 delivery | Published Latest + installed and verified | Source/lock/display/File/Main/About are 0.6.6. The corrected local gate passed 359 tests with 7 explicit live skips plus production/native/Fuses/UI/Scheduler/Portable checks, and installed diagnostics/shortcuts passed. PR #15 merged at `2d413d4` after Windows, Gitleaks, CodeQL and code-scanning gates. Release workflow `30216468056` rebuilt, scanned, attested, draft-downloaded and hash/provenance-verified all five assets before publishing `v0.6.6` as Latest. Public Setup SHA-256 is `911d5350d7c24999d2c17fc6a9fa8513a5173dc6304d873c8a9fe2f112f28416`; Portable is `5b6dc4ccc0e44f7a65b44508b8c3e17d35302cd961d61d3ac72dfe4e692688ca`. |
 
 ## v0.6.4 public stable release / installed local build
 
