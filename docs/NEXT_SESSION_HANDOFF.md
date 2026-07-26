@@ -163,6 +163,7 @@ Claude 的并行复审原始结果保存在：
 - 状态：Latest、非 Draft、非 prerelease。
 - Workflow 的 Hosted Windows 构建、公开扫描、Setup/Portable attestation、Draft 创建、回下载、SHA-256/provenance 验证和最终发布全部通过。
 - 公开资产另行下载到临时目录复核，五项文件均与 `SHA256SUMS.txt` 一致；Setup/Portable 的 attestations 均验证到 GitHub-hosted `release.yml`、tag `v0.6.6` 和提交 `2d413d4`。
+- 已用下载后的公开 Setup（SHA-256 `911d5350…`）再次执行 per-user 覆盖安装；Main/About `0.6.6`、stable channel、诊断可用、支持包附件排除及桌面/开始菜单快捷方式目标均再次通过。
 
 ## 7. 本地 0.6.6 资产
 

@@ -136,6 +136,7 @@
 - CycloneDX SBOM：`33882c6a738fc97285e2d41ace5ffadb57da5ba44261d6bf76b79c089387e9d5`
 - 第三方许可证：`d18189fbbb412ed10b00a5b47582d8f465751d2a2172968ba824f08515f6a3b3`
 - 下载后的五项资产全部与远端 `SHA256SUMS.txt` 一致；Setup/Portable 的 GitHub Artifact Attestations 均验证到 GitHub-hosted `release.yml`、tag `v0.6.6`、提交 `2d413d4`。
+- 从公开 Release 下载的 Setup（SHA-256 `911d5350…`）已执行 per-user 覆盖安装；安装版再次通过 Main/About `0.6.6`、stable channel、诊断可用、支持包附件排除和桌面/开始菜单快捷方式目标检查。
 
 ## v0.6.3 稳定热修 → v0.6.4 UI/提供商重构（2026-07-23）
 
