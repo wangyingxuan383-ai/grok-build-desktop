@@ -137,14 +137,15 @@ Claude 的并行复审原始结果保存在：
   - Renderer retry/store
 - `npm run build:computer-host`：原生 Host 编译及 `0.3.1 win-x64` 自检通过。
 - 最终修正后的 `scripts/package-win.ps1` 正式本地门槛通过：
-  - 67 个测试文件通过、4 个显式 live 文件跳过；358 项通过、7 项跳过。
+  - 67 个测试文件通过、4 个显式 live 文件跳过；359 项通过、7 项跳过。
   - TypeScript、生产 main/preload/Renderer 构建、原生 Host、Electron Fuses、打包 UI、Task Scheduler、中文空格 Portable 和前后两次 264 文件公开扫描通过。
   - 0.6.6 UI 夹具覆盖完整导航、五种右栏工具、最近文件、非 Git Agent 改动、结构化错误、回合指标、371 日 Token 活动、四个更新/诊断动作、窄窗抽屉和 Provider 管理。
 - PR/clean-install 收口另外确认：
   - npm 11 strict `npm ci` 的可选 `@emnapi` lock 元数据已完整。
   - 新公布的构建期公告通过 `brace-expansion 5.0.8` 与 `tar 7.5.22` 覆盖修复；fresh install 后完整 high-level audit 为 0。
   - Windows PowerShell 5.1 可解析带中文的打包/冒烟脚本；v0.6.2 兼容探针不再依赖 Virtuoso 同时挂载 3 行。
-  - 上述修复后的最终包重新跑完 358 项和全部打包 UI 门槛；此前失败候选未发布。
+  - 上述修复后的最终包重新跑完 359 项和全部打包 UI 门槛；此前失败候选未发布。
+  - CodeQL 随后在发布前发现 Provider 网关可能把任意异常文本返回给回环调用方；公开响应已改为固定安全分类，详细脱敏诊断只留在主进程，并用含私人路径/堆栈的假异常回归测试锁定。包含此运行时修复的新包必须重新完成门槛和安装。
 - 同一个 Setup 已完成 per-user 安装：
   - 文件/Product/Main/About 均为 0.6.6，channel 为 stable。
   - 诊断中心报告“可以使用”，支持包继续排除附件正文和完整路径。
@@ -176,9 +177,9 @@ release/THIRD_PARTY_LICENSES.json
 release/SHA256SUMS.txt
 ```
 
-- Setup：143,757,963 bytes；SHA-256 `77e45135c836bf27f7feb58cc87769522af4e135515b696b40bec6053f94d546`
-- Portable：194,250,744 bytes；SHA-256 `d54e31166b5a60e1922977752bee580cc1b25dded64d1f73199f339b85df8c04`
-- SBOM：SHA-256 `1ecc6a99b9ef975e122e54b79f5ae365861ee3f7636a78ed18833b69361c4e74`
+- Setup：143,758,221 bytes；SHA-256 `b4243d6ebc0137291b0fc38df1b948f554a7be41d787a678ea9594fb99a57a5e`
+- Portable：194,250,848 bytes；SHA-256 `b8edbe0c7a99717da8956e0e540a73410a8de6c6b1d8ce5d7a529f62bb55b4e6`
+- SBOM：SHA-256 `c4489c6c07492c943db339474d0d5c6fe20ce810dc1b6a0bfce946e436a8bc51`
 - 第三方许可证：SHA-256 `1ad863e9d4753397efa8ab297e057882b2f04d665bb5e8ed7062d71b900b8ca5`
 
 Hosted Windows 会重新构建公开资产，远端哈希预期与本机候选不同。Release URL、workflow ID、公开哈希和 provenance 必须在工作流成功后回写。

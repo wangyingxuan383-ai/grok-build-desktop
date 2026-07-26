@@ -185,9 +185,10 @@ export class ProviderGatewayService {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.record({ at: new Date().toISOString(), providerId: failingProviderId, scopeId: failingScopeId, phase: "pre-send", sanitizedCount: 0, message: redactGatewayError(message) });
-      await this.options.log.log(`Provider gateway request failed: ${redactGatewayError(message)}`);
-      jsonError(response, /过大|too large/i.test(message) ? 413 : /JSON/i.test(message) ? 400 : 502, message);
+      const redacted = redactGatewayError(message);
+      this.record({ at: new Date().toISOString(), providerId: failingProviderId, scopeId: failingScopeId, phase: "pre-send", sanitizedCount: 0, message: redacted });
+      await this.options.log.log(`Provider gateway request failed: ${redacted}`);
+      jsonError(response, /过大|too large/i.test(message) ? 413 : /JSON/i.test(message) ? 400 : 502, publicGatewayError(message));
     }
   }
 }
@@ -306,6 +307,16 @@ function jsonError(response: ServerResponse, status: number, message: string): v
 
 function redactGatewayError(value: string): string {
   return value.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]").replace(/([?&](?:key|token|api_key)=)[^&\s]+/gi, "$1[REDACTED]").slice(0, 600);
+}
+
+/** Never expose arbitrary exception text or stack/file details to the loopback caller. */
+function publicGatewayError(value: string): string {
+  if (/请求过大|request too large/i.test(value)) return "提供商请求过大";
+  if (/响应过大|response too large/i.test(value)) return "提供商响应过大";
+  if (/JSON/i.test(value)) return "提供商请求不是有效 JSON";
+  if (/超时|timed?\s*out|timeout/i.test(value)) return "提供商请求超时";
+  if (/取消|cancel|abort/i.test(value)) return "提供商请求已取消";
+  return "提供商网关请求失败";
 }
 
 function escapeRegex(value: string): string {

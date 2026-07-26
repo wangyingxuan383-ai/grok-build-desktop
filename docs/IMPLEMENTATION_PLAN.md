@@ -112,17 +112,18 @@
 - [x] 持久化精确 `TurnUsage`，实现逐回合耗时/Token、24h/今日/7天/30天/月度统计和精确 371 日的 53 周活动图。
 - [ ] 跨协议 Chat/Responses/Anthropic/Gemini 转换按用户决定延期；0.6.6 正式范围保持已验证的同协议透传、Gemini/strict Schema 清理、错误与流式转发，不伪装为已完成。
 - [x] 发布前复审修复并发存储覆盖、清理漂移、跨会话故障误关联、ACP 重试丢失、Prompt 超时未取消、流式解析热点和 Computer Use 按键/坐标/超时不确定性。
-- [x] 最终修正后的完整本地离线门槛通过：67 个测试文件通过、4 个显式 live 文件跳过；358 项通过、7 项跳过。TypeScript、生产构建、原生 Host、Electron Fuses、打包 UI/Task Scheduler/中文空格 Portable 夹具及前后两次 264 文件公开扫描均通过。
+- [x] 最终修正后的完整本地离线门槛通过：67 个测试文件通过、4 个显式 live 文件跳过；359 项通过、7 项跳过。TypeScript、生产构建、原生 Host、Electron Fuses、打包 UI/Task Scheduler/中文空格 Portable 夹具及前后两次 264 文件公开扫描均通过。
 - [x] 最终修正后的正式本地打包生成 0.6.6 Setup、Portable、SHA-256、SBOM 和许可证；同一 Setup 完成 per-user 安装，文件/Main/About 为 0.6.6，诊断为“可以使用”，桌面与开始菜单快捷方式均指向安装目录。
 - [x] PR 首次 Windows 门禁发现 npm 11 严格 `npm ci` 所需的两个可选 `@emnapi` 传递项未写入 lockfile；刷新 lock 元数据后，第二次门禁又捕获新公布的构建期公告。固定 `brace-expansion 5.0.8` 与 `tar 7.5.22` 后，fresh `npm ci` 和完整 high-level `npm audit` 均为 0 漏洞。
-- [x] fresh 依赖树重建又暴露 Windows PowerShell 5.1 对无 BOM 中文脚本的解析问题，以及 v0.6.2 探针错误依赖 3 个 Virtuoso 行同时挂载的竞态。补齐脚本 UTF-8 BOM、改为语义滚动断言后，最终包重新通过完整 358 项和全部打包 UI 门槛；此前失败候选未发布。
+- [x] fresh 依赖树重建又暴露 Windows PowerShell 5.1 对无 BOM 中文脚本的解析问题，以及 v0.6.2 探针错误依赖 3 个 Virtuoso 行同时挂载的竞态。补齐脚本 UTF-8 BOM、改为语义滚动断言后，最终包重新通过完整 359 项和全部打包 UI 门槛；此前失败候选未发布。
+- [x] CodeQL 发布复审发现回环 Provider 网关会把任意捕获异常返回给本地调用方。公开响应已收敛到固定安全分类，完整的脱敏诊断仅留在主进程；注入私人路径与堆栈的回归测试证明两者不会越过 HTTP 边界。该运行时代码变更要求重新打包和安装，旧候选不发布。
 - [ ] 提交、PR/合并、`v0.6.6` 标签、Hosted Windows 重建、Draft 回下载、哈希/provenance 验证和 GitHub Latest 发布。
 
 #### D6. 0.6.6 本地候选证据
 
-- Setup：`77e45135c836bf27f7feb58cc87769522af4e135515b696b40bec6053f94d546`
-- Portable：`d54e31166b5a60e1922977752bee580cc1b25dded64d1f73199f339b85df8c04`
-- CycloneDX SBOM：`1ecc6a99b9ef975e122e54b79f5ae365861ee3f7636a78ed18833b69361c4e74`
+- Setup：`b4243d6ebc0137291b0fc38df1b948f554a7be41d787a678ea9594fb99a57a5e`
+- Portable：`b8edbe0c7a99717da8956e0e540a73410a8de6c6b1d8ce5d7a529f62bb55b4e6`
+- CycloneDX SBOM：`c4489c6c07492c943db339474d0d5c6fe20ce810dc1b6a0bfce946e436a8bc51`
 - 第三方许可证：`1ad863e9d4753397efa8ab297e057882b2f04d665bb5e8ed7062d71b900b8ca5`
 - 安装位置使用 `%LOCALAPPDATA%\Programs\Grok Build Desktop`；文档不记录私人绝对路径。公开 Release 资产由 Hosted Windows 重新构建，哈希预期与本机候选不同。
 

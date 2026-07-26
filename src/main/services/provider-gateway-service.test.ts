@@ -208,4 +208,26 @@ describe("ProviderGatewayService", () => {
       await new Promise<void>((resolve) => upstream.close(() => resolve()));
     }
   });
+
+  it("never returns arbitrary upstream exception or stack details to the loopback caller", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-public-error-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "public-error", name: "Public error", baseUrl: "https://fixture.invalid", protocol: "chat_completions",
+      upstreamProtocol: "openai_chat", schemaProfile: "standard", authScheme: "bearer", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async () => { throw new Error("C:\\private\\gateway.ts:44\nat internalHandler (secret.ts:2:1)"); },
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route("public-error")}/chat/completions`, { method: "POST", body: "{}" });
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: { message: "提供商网关请求失败", phase: "provider-gateway" } });
+    } finally {
+      await gateway.dispose();
+    }
+  });
 });

@@ -4,7 +4,7 @@
 
 | Area | Status | Notes |
 |---|---|---|
-| Structured failures | Focused/source verified | Evidence-based classifications, scoped Provider/gateway observations, trace/retry/schema facts, class-specific diagnosis and expandable redacted error details. Concurrent CLI processes cannot borrow one another's failure record. |
+| Structured failures | Focused/source verified | Evidence-based classifications, scoped Provider/gateway observations, trace/retry/schema facts, class-specific diagnosis and expandable redacted error details. Concurrent CLI processes cannot borrow one another's failure record, and arbitrary gateway exceptions never cross the loopback response boundary; the detailed redacted diagnostic remains main-process-only. |
 | Non-Git Agent changes | Focused/UI verified | Real tool-call before/after snapshots provide last-turn/session review without Git staging/commit/branch controls; missing baselines are stated rather than fabricated. |
 | Token activity | Focused/UI verified | Exact Provider/CLI usage only, per-turn metrics, 24h/today/7d/30d/month rollups, coverage counts and a 371-day/53-week heatmap. Session detail deletion and 13-month anonymous retention are enforced. |
 | Storage/cleanup integrity | Focused verified | JsonStore mutation queues prevent lost updates; workspace/session deletion removes all associated local projections while unrelated running sessions remain alive. |
@@ -18,7 +18,7 @@
 | Errors and quota | Focused/source verified | Provider errors default collapsed with redacted details. Rolling 24h Token limits are separate from weekly/monthly billing, persisted per account and marked expired. |
 | Auth and Computer Use | Focused verified | Device login has one browser owner. Ordinary Codex is allowed while self/terminal/UAC/security and Windows integrity boundaries remain enforced. |
 | Recent file access | Focused/source verified | Only paths in the real execution root are listed, project paths are relative, and external-open uses the canonical path returned by the main process. |
-| 0.6.6 delivery | Locally packaged, installed and verified | Source/lock/display/File/Main/About are 0.6.6. Fresh npm 11 install and full high-level audit are clean. The corrected formal local gate passed 358 tests with 7 explicit live skips, production/native/Fuses/UI/Scheduler/Portable checks and 264-file scans; Setup/Portable/SBOM/licenses/hashes were generated, and installed diagnostics/shortcuts passed. GitHub publication is still pending, so 0.6.4 remains the public fallback. |
+| 0.6.6 delivery | Locally packaged, installed and verified | Source/lock/display/File/Main/About are 0.6.6. Fresh npm 11 install and full high-level audit are clean. The corrected formal local gate passed 359 tests with 7 explicit live skips, production/native/Fuses/UI/Scheduler/Portable checks and 264-file scans; Setup/Portable/SBOM/licenses/hashes were generated, and installed diagnostics/shortcuts passed. GitHub publication is still pending, so 0.6.4 remains the public fallback. |
 
 ## v0.6.4 public stable release / installed local build
 
