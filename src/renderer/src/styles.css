@@ -1355,3 +1355,5 @@ button.danger-text { color: var(--danger); }
 .structured-error.schema-rejected > summary strong { color: #d9a441; }
 .structured-error.quota-exhausted > summary strong { color: #d9a441; }
 .structured-error.auth-expired > summary strong { color: var(--danger); }
+
+.candidate-owner { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text-secondary); font-size: .92em; font-style: normal; }
