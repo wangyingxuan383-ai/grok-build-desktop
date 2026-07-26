@@ -282,7 +282,7 @@ export class AppController {
       (leaseId) => void this.computer.releaseLease(leaseId),
       () => this.vault.mcpSecretEnvironment(),
       (cwd) => this.memory.sessionEnvironment(cwd),
-      () => this.providerLaunchEnvironment(),
+      (scopeId) => this.providerLaunchEnvironment(scopeId),
       (sessionId, session) => this.finalizeMemorySession(sessionId, session),
     );
     this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
@@ -696,24 +696,32 @@ export class AppController {
     const assignment = await this.profiles.assignment(sessionId);
     await this.processes.close(sessionId);
     await this.catalog.delete(assignment?.cwd ?? cwd, sessionId);
+    await this.cleanupSessionState(sessionId);
+  }
+
+  async clearSessions(cwd: string, keepSessionId?: string): Promise<void> {
+    const assignments = (await this.profiles.listAssignments()).filter((value) => samePath(value.sourceWorkspacePath, cwd) && value.sessionId !== keepSessionId);
+    const removedSessionIds = new Set([
+      ...(await this.catalog.list(cwd)).map((session) => session.id),
+      ...assignments.map((value) => value.sessionId),
+    ].filter((id) => id !== keepSessionId));
+    await Promise.all([...removedSessionIds].map((sessionId) => this.processes.close(sessionId).catch(() => undefined)));
+    await this.catalog.clear(cwd, keepSessionId);
+    for (const assignment of assignments) {
+      await this.catalog.delete(assignment.cwd, assignment.sessionId).catch(() => undefined);
+    }
+    await this.tokenActivity.forgetSessions(removedSessionIds).catch((error) => this.log.log(`Token 活动明细批量清理失败：${error instanceof Error ? error.message : String(error)}`));
+    for (const sessionId of removedSessionIds) await this.cleanupSessionState(sessionId, false);
+  }
+
+  private async cleanupSessionState(sessionId: string, forgetTokens = true): Promise<void> {
     await this.profiles.removeAssignment(sessionId);
-    await this.tokenActivity.forgetSession(sessionId).catch((error) => this.log.log(`Token 活动明细清理失败：${error instanceof Error ? error.message : String(error)}`));
+    if (forgetTokens) await this.tokenActivity.forgetSession(sessionId).catch((error) => this.log.log(`Token 活动明细清理失败：${error instanceof Error ? error.message : String(error)}`));
     this.agentChanges.clear(sessionId);
     await this.dashboard.clear(`session:${sessionId}`);
     await this.attachmentCache.cleanupSession(sessionId);
     await this.turnPresentations.delete(sessionId);
     if (this.focusedSessionId === sessionId) this.focusedSessionId = "";
-  }
-
-  async clearSessions(cwd: string, keepSessionId?: string): Promise<void> {
-    const removedSessionIds = (await this.catalog.list(cwd)).map((session) => session.id).filter((id) => id !== keepSessionId);
-    await this.processes.stopAll();
-    await this.catalog.clear(cwd, keepSessionId);
-    for (const assignment of (await this.profiles.listAssignments()).filter((value) => samePath(value.sourceWorkspacePath, cwd) && value.sessionId !== keepSessionId)) {
-      await this.catalog.delete(assignment.cwd, assignment.sessionId).catch(() => undefined);
-      await this.profiles.removeAssignment(assignment.sessionId);
-    }
-    await Promise.all(removedSessionIds.flatMap((sessionId) => [this.attachmentCache.cleanupSession(sessionId), this.turnPresentations.delete(sessionId)]));
   }
 
   pinSession(sessionId: string, pinned: boolean): Promise<void> { return this.catalog.pin(sessionId, pinned); }
@@ -755,7 +763,7 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.5 稳定交互验收", createdAt: now, updatedAt: now, messageCount: 35, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.6 能力完善验收", createdAt: now, updatedAt: now, messageCount: 35, status: "cold", pinned: true, originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -1260,21 +1268,32 @@ export class AppController {
    * that can see both. Mutates in place: the event is sent to the renderer next.
    */
   private async enrichFailure(failure: TurnFailure): Promise<void> {
+    const gatewayScopeId = failure.gatewayScopeId;
+    delete failure.gatewayScopeId;
     try {
       failure.message = redactSecrets(failure.message).slice(0, 8_000);
       const provider = await this.providers?.providerForModel(failure.modelId);
       if (!provider) { failure.nextActions = turnFailureActions(failure.classification); return; }
       failure.providerId = provider.id;
       // Match only a recent observation: an older one describes a different turn.
-      const observed = this.providers?.gatewayFailures(provider.id)
-        .find((record) => Date.parse(failure.at) - Date.parse(record.at) < 60_000);
+      const observed = this.providers?.gatewayFailures(provider.id, gatewayScopeId)
+        .find((record) => {
+          const delta = Date.parse(failure.at) - Date.parse(record.at);
+          return delta >= 0 && delta < 60_000;
+        });
       if (observed) {
         failure.httpStatus ??= observed.status;
         failure.traceId ??= observed.traceId;
         failure.retryAfter ??= observed.retryAfter;
         failure.gatewayPhase ??= observed.phase;
         failure.sanitizedCount ??= observed.sanitizedCount;
-        failure.classification = classifyTurnFailure({ message: failure.message, httpStatus: failure.httpStatus, jsonRpcCode: failure.jsonRpcCode });
+        failure.classification = classifyTurnFailure({
+          message: failure.message,
+          httpStatus: failure.httpStatus,
+          jsonRpcCode: failure.jsonRpcCode,
+          processExitCode: failure.processExitCode,
+          cancelled: failure.cancelled,
+        });
       }
       // A Gemini-family upstream on the pass-through profile is the single most
       // actionable case: the remedy is one setting, not a retry.
@@ -1312,9 +1331,9 @@ export class AppController {
    * environment write or a concurrent config.toml edit must not be able to
    * block launching sessions that do not use a provider at all.
    */
-  private async providerLaunchEnvironment(): Promise<Record<string, string>> {
+  private async providerLaunchEnvironment(scopeId: string): Promise<Record<string, string>> {
     if (!this.providers) return {};
-    try { return await this.providers.desktopEnvironment(); }
+    try { return await this.providers.desktopEnvironment(scopeId); }
     catch (error) {
       await this.log.log(`提供商兼容环境不可用，本次会话按无提供商启动：${error instanceof Error ? error.message : String(error)}`);
       return {};
@@ -1322,25 +1341,37 @@ export class AppController {
   }
 
   private async handleEvent(event: ChatEvent): Promise<void> {
-    await this.dashboard.record(event);
+    // Failure enrichment changes what the renderer presents, so it is the only
+    // disk/network-adjacent observer allowed to run before delivery.
+    if (event.type === "error") {
+      this.captureQuotaSignal(event.message, event.sessionId ? this.processes.snapshot(event.sessionId)?.modelId : undefined);
+      if (event.failure) await this.enrichFailure(event.failure);
+    }
+    this.window?.webContents.send("grok:event", event);
+
+    // Everything below is a secondary projection. A full disk, stale cache or
+    // optional dashboard must never suppress the primary chat event.
+    await this.dashboard.record(event).catch((error) => this.log.log(`Agent Dashboard 记录失败：${error instanceof Error ? error.message : String(error)}`));
     if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
-      await this.turnPresentations.recordForSession(event.sessionId, event.presentation);
+      await this.turnPresentations.recordForSession(event.sessionId, event.presentation)
+        .catch((error) => this.log.log(`回合展示记录失败：${error instanceof Error ? error.message : String(error)}`));
       if (event.type === "turn-completed") {
         await this.tokenActivity.record(event.sessionId, event.presentation, { workspace: this.processes.snapshot(event.sessionId)?.cwd })
           .catch((error) => this.log.log(`Token 活动记录失败：${error instanceof Error ? error.message : String(error)}`));
       }
     }
-    if (event.type === "tool-call") this.recordAgentChange(event.sessionId, event.tool);
-    if (event.type === "user-message-status") await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery);
-    if (event.type === "turn-completed") await this.computer.settleSession(event.sessionId, "completed", "Computer Use 回合已完成");
-    if (event.type === "error" && event.sessionId) await this.computer.settleSession(event.sessionId, "error", event.message);
-    if (event.type === "error") {
-      this.captureQuotaSignal(event.message, event.sessionId ? this.processes.snapshot(event.sessionId)?.modelId : undefined);
-      if (event.failure) await this.enrichFailure(event.failure);
+    if (event.type === "tool-call") {
+      try { this.recordAgentChange(event.sessionId, event.tool); }
+      catch (error) { await this.log.log(`Agent 改动记录失败：${error instanceof Error ? error.message : String(error)}`); }
     }
-    if (event.type === "status" && event.status === "error") await this.computer.settleSession(event.sessionId, "error", event.text || "Grok 进程异常，Computer Use 已清理");
+    if (event.type === "user-message-status") {
+      await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery)
+        .catch((error) => this.log.log(`消息附件状态记录失败：${error instanceof Error ? error.message : String(error)}`));
+    }
+    if (event.type === "turn-completed") await this.computer.settleSession(event.sessionId, "completed", "Computer Use 回合已完成").catch(() => undefined);
+    if (event.type === "error" && event.sessionId) await this.computer.settleSession(event.sessionId, "error", event.message).catch(() => undefined);
+    if (event.type === "status" && event.status === "error") await this.computer.settleSession(event.sessionId, "error", event.text || "Grok 进程异常，Computer Use 已清理").catch(() => undefined);
     if (event.type === "status" && event.status === "error" && event.text) this.captureQuotaSignal(event.text, this.processes.snapshot(event.sessionId)?.modelId);
-    this.window?.webContents.send("grok:event", event);
     if (event.type === "status" && (event.status === "working" || event.status === "needs-user")) this.runningSessions.add(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && event.sessionId !== this.focusedSessionId) {
       await this.catalog.markUnread(event.sessionId, event.status === "error");

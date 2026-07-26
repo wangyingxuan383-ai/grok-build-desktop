@@ -68,6 +68,7 @@ interface AdapterOptions extends SessionProcessOptions {
   extensionLeaseId?: string;
   effortFlag?: "--effort" | "--reasoning-effort";
   permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>;
+  providerScopeId?: string;
 }
 
 export interface UserPromptPresentation {
@@ -522,10 +523,11 @@ export class GrokAcpAdapter extends EventEmitter {
     const raw = context.error as { code?: number; data?: unknown } | undefined;
     const jsonRpcCode = typeof raw?.code === "number" ? raw.code : undefined;
     const httpStatus = httpStatusFromFailure(message, raw?.data);
+    const cancelled = context.cancelled ?? this.cancelRequested;
     return {
       failureId: crypto.randomUUID(),
       at: new Date().toISOString(),
-      classification: classifyTurnFailure({ message, httpStatus, jsonRpcCode, processExitCode: context.processExitCode, cancelled: context.cancelled ?? this.cancelRequested }),
+      classification: classifyTurnFailure({ message, httpStatus, jsonRpcCode, processExitCode: context.processExitCode, cancelled }),
       message,
       sessionId: this.sessionId || undefined,
       turnId: this.activeTurn?.turnId,
@@ -533,6 +535,8 @@ export class GrokAcpAdapter extends EventEmitter {
       ...(jsonRpcCode === undefined ? {} : { jsonRpcCode }),
       ...(httpStatus === undefined ? {} : { httpStatus }),
       ...(context.processExitCode === undefined ? {} : { processExitCode: context.processExitCode }),
+      ...(cancelled ? { cancelled: true } : {}),
+      ...(this.options.providerScopeId ? { gatewayScopeId: this.options.providerScopeId } : {}),
     };
   }
 
@@ -709,6 +713,15 @@ export class GrokAcpAdapter extends EventEmitter {
           this.emitStatus("idle", "已完成");
         }
         return;
+      case "retry_state": {
+        const attempt = optionalPositiveInteger(update.attempt ?? update.retry_attempt ?? update.retryAttempt);
+        const maxAttempts = optionalPositiveInteger(update.max_attempts ?? update.maxAttempts);
+        const delayMs = optionalNonNegativeNumber(update.delay_ms ?? update.delayMs ?? update.retry_after_ms);
+        const reason = firstNonEmptyString(update.reason, update.message, update.error);
+        this.emitEvent({ type: "turn-retry", sessionId: this.sessionId, attempt, maxAttempts, delayMs, reason });
+        this.emitStatus("working", formatRetryStatus(attempt, maxAttempts, delayMs, reason));
+        return;
+      }
       case "task_backgrounded":
         this.handleTaskBackgrounded(update);
         return;
@@ -971,6 +984,7 @@ export class GrokAcpAdapter extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        if (method === acpMethods.agent.session.prompt) this.cancel();
         reject(new Error(`ACP 请求超时：${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
@@ -1171,13 +1185,33 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
 }
 
+function optionalPositiveInteger(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(number) && number > 0 ? number : undefined;
+}
+
+function optionalNonNegativeNumber(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && Boolean(value.trim()))?.trim();
+}
+
+function formatRetryStatus(attempt?: number, maxAttempts?: number, delayMs?: number, reason?: string): string {
+  const count = attempt ? `第 ${attempt}${maxAttempts ? `/${maxAttempts}` : ""} 次` : "";
+  const wait = delayMs !== undefined ? `${Math.max(0, Math.round(delayMs / 1000))} 秒后` : "";
+  return ["上游请求正在重试", count, wait, reason].filter(Boolean).join(" · ");
+}
+
 /** Recovers an upstream HTTP status from the error text or JSON-RPC data payload. */
 function httpStatusFromFailure(message: string, data: unknown): number | undefined {
   const fromData = (data as { status?: unknown; httpStatus?: unknown } | undefined);
   for (const candidate of [fromData?.status, fromData?.httpStatus]) {
     if (typeof candidate === "number" && candidate >= 100 && candidate < 600) return candidate;
   }
-  const match = /HTTP\s+(\d{3})/i.exec(message) ?? /"code"\s*:\s*(\d{3})/.exec(message);
+  const match = /\bHTTP\s+(\d{3})\b/i.exec(message) ?? /"code"\s*:\s*(\d{3})\b/.exec(message);
   const parsed = match ? Number(match[1]) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 100 && parsed < 600 ? parsed : undefined;
 }

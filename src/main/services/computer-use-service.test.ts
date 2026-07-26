@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState, shouldConfirmComputerRisk, shouldRequestComputerAppPermission } from "./computer-use-service";
+import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerHostTimeout, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState, shouldConfirmComputerRisk, shouldRequestComputerAppPermission } from "./computer-use-service";
 
 describe("Computer Use safety policy", () => {
   it("is accepted and available-by-default while preserving the user's enable toggle", async () => {
@@ -159,6 +159,11 @@ describe("elevated target handling", () => {
     await expect(value.start({ sessionId: "s", appId: "app:1" })).rejects.toThrow(/管理员权限/);
     expect(published.length).toBeGreaterThan(0);
     expect(published.at(-1)).toMatchObject({ interventionKind: "elevation-blocked", status: "paused" });
+  });
+
+  it("distinguishes an uncertain host timeout from a confirmed failed action", () => {
+    expect(isComputerHostTimeout(new Error("Computer Host click 超时"))).toBe(true);
+    expect(isComputerHostTimeout(new Error("目标窗口不存在"))).toBe(false);
   });
 
   it("puts the cause in the headline, which is the slot neither surface clips", async () => {

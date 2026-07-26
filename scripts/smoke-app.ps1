@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Executable,
     [string]$ProbeScript = 'probe-renderer.mjs',
@@ -37,14 +37,14 @@ $DebugPort = Get-Random -Minimum 19000 -Maximum 25000
 $HostedRunnerFlags = if ($env:GITHUB_ACTIONS -eq 'true') { '--disable-gpu' } else { '' }
 $Info.Arguments = ("--remote-debugging-port=$DebugPort --user-data-dir=`"$ProfileRoot`" $HostedRunnerFlags $ApplicationArguments").Trim()
 $Info.EnvironmentVariables['GROK_DESKTOP_OFFLINE_SMOKE'] = '1'
-if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs')) {
+if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) {
     $Info.EnvironmentVariables['GROK_DESKTOP_UI_FIXTURE'] = '1'
     $ThemeDirectory = Join-Path $ProfileRoot 'themes'
     [IO.Directory]::CreateDirectory($ThemeDirectory) | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $ThemeDirectory 'background.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='))
-    if ($ProbeScript -in @('probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs')) {
-        $FixtureWorkspace = if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs')) { $ProfileRoot } else { (Split-Path -Parent $PSScriptRoot) }
-        if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs')) {
+    if ($ProbeScript -in @('probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) {
+        $FixtureWorkspace = if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) { $ProfileRoot } else { (Split-Path -Parent $PSScriptRoot) }
+        if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) {
             $FixtureSource = Join-Path $FixtureWorkspace 'src\renderer\src'
             [IO.Directory]::CreateDirectory($FixtureSource) | Out-Null
             [IO.File]::WriteAllText((Join-Path $FixtureSource 'App.tsx'), "export const fixture = 'app';`n", [Text.UTF8Encoding]::new($false))

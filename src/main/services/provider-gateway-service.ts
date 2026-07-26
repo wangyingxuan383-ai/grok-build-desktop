@@ -17,6 +17,7 @@ const RESPONSE_HEADERS = new Set([
 export interface GatewayFailureRecord {
   at: string;
   providerId: string;
+  scopeId: string;
   status?: number;
   statusText?: string;
   traceId?: string;
@@ -57,8 +58,11 @@ export class ProviderGatewayService {
   constructor(private readonly options: ProviderGatewayOptions) {}
 
   /** Most recent failures first, optionally narrowed to one provider. */
-  recentFailures(providerId?: string): GatewayFailureRecord[] {
-    return this.failures.filter((value) => !providerId || value.providerId === providerId).slice().reverse();
+  recentFailures(providerId?: string, scopeId?: string): GatewayFailureRecord[] {
+    return this.failures
+      .filter((value) => (!providerId || value.providerId === providerId) && (!scopeId || value.scopeId === scopeId))
+      .slice()
+      .reverse();
   }
 
   private record(entry: GatewayFailureRecord): void {
@@ -66,9 +70,9 @@ export class ProviderGatewayService {
     while (this.failures.length > 20) this.failures.shift();
   }
 
-  async route(providerId: string): Promise<string> {
+  async route(providerId: string, scopeId = "unscoped"): Promise<string> {
     await this.start();
-    return `http://127.0.0.1:${this.port}/${this.token}/${encodeURIComponent(providerId)}`;
+    return `http://127.0.0.1:${this.port}/${this.token}/${encodeURIComponent(providerId)}/${encodeURIComponent(scopeId)}`;
   }
 
   /**
@@ -109,12 +113,15 @@ export class ProviderGatewayService {
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     let failingProviderId = "unknown";
+    let failingScopeId = "unknown";
     try {
       if (request.method !== "POST") return jsonError(response, 405, "只允许推理 POST 请求");
-      const match = new RegExp(`^/${escapeRegex(this.token)}/([^/]+)(/.*)?$`).exec(request.url ?? "");
+      const match = new RegExp(`^/${escapeRegex(this.token)}/([^/]+)/([^/]+)(/.*)?$`).exec(request.url ?? "");
       if (!match) return jsonError(response, 404, "提供商路由不存在");
       const providerId = decodeURIComponent(match[1]!);
+      const scopeId = decodeURIComponent(match[2]!);
       failingProviderId = providerId;
+      failingScopeId = scopeId;
       const provider = (await this.options.providers()).find((value) => value.owned && value.id === providerId);
       if (!provider) return jsonError(response, 404, "提供商不存在");
       const raw = await readRequest(request, this.options.maxRequestBytes ?? MAX_REQUEST_BYTES);
@@ -126,7 +133,7 @@ export class ProviderGatewayService {
         body = Buffer.from(JSON.stringify(sanitized.value));
         changed = sanitized.changed;
       }
-      const upstreamUrl = joinUrl(provider.baseUrl, match[2] || "");
+      const upstreamUrl = joinUrl(provider.baseUrl, match[3] || "");
       const abort = new AbortController();
       const timeout = setTimeout(() => abort.abort(new Error("提供商请求超时")), this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
       request.once("aborted", () => abort.abort());
@@ -154,6 +161,7 @@ export class ProviderGatewayService {
         this.record({
           at: new Date().toISOString(),
           providerId: provider.id,
+          scopeId,
           status: upstream.status,
           statusText: upstream.statusText,
           traceId: traceHeader(upstream.headers),
@@ -177,7 +185,7 @@ export class ProviderGatewayService {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.record({ at: new Date().toISOString(), providerId: failingProviderId, phase: "pre-send", sanitizedCount: 0, message: redactGatewayError(message) });
+      this.record({ at: new Date().toISOString(), providerId: failingProviderId, scopeId: failingScopeId, phase: "pre-send", sanitizedCount: 0, message: redactGatewayError(message) });
       await this.options.log.log(`Provider gateway request failed: ${redactGatewayError(message)}`);
       jsonError(response, /过大|too large/i.test(message) ? 413 : /JSON/i.test(message) ? 400 : 502, message);
     }

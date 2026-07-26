@@ -1008,6 +1008,9 @@ export interface TurnFailure {
   /** How many tool-schema values the compatibility gateway rewrote for this provider. */
   sanitizedCount?: number;
   processExitCode?: number;
+  cancelled?: boolean;
+  /** Opaque process-local gateway scope used only to correlate one CLI process. */
+  gatewayScopeId?: string;
   /** Short, class-specific things the user can actually do. */
   nextActions?: string[];
 }
@@ -1052,6 +1055,7 @@ export type ChatEvent =
   | { type: "command-output"; sessionId: string; command: string; output: string; exitCode: number | null; truncated: boolean }
   | { type: "turn-started"; sessionId: string; presentation: TurnPresentation }
   | { type: "turn-completed"; sessionId: string; presentation?: TurnPresentation }
+  | { type: "turn-retry"; sessionId: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
   | { type: "turn-presentations-restore"; sessionId: string; presentations: TurnPresentation[] }
   | { type: "subagent"; sessionId: string; update: { sessionUpdate?: string; subagent_id?: string; duration_ms?: number; output?: string; [key: string]: unknown } }
   | { type: "computer-state"; sessionId: string; state: ComputerTaskState }

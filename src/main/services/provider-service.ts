@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -169,7 +169,7 @@ export class ProviderService {
    * and migrating an older managed block are best-effort: a registry failure or
    * a concurrently edited config.toml must not cost the caller its routes.
    */
-  async desktopEnvironment(): Promise<Record<string, string>> {
+  async desktopEnvironment(scopeId: string = randomUUID()): Promise<Record<string, string>> {
     const providers = (await this.store.get()).providers;
     if (!providers.length) return {};
     let needsMigration = false;
@@ -183,7 +183,7 @@ export class ProviderService {
         await this.log.log(`提供商地址环境变量写入失败，直接命令行使用需手动设置 ${name}：${error instanceof Error ? error.message : String(error)}`);
       }
       if (!config.includes(`\${${name}}`)) needsMigration = true;
-      environment[name] = await this.gateway.route(provider.id);
+      environment[name] = await this.gateway.route(provider.id, scopeId);
     }
     if (needsMigration) {
       try {
@@ -209,8 +209,8 @@ export class ProviderService {
   }
 
   /** Most recent gateway-observed failures, newest first. */
-  gatewayFailures(providerId?: string): ReturnType<ProviderGatewayService["recentFailures"]> {
-    return this.gateway.recentFailures(providerId);
+  gatewayFailures(providerId?: string, scopeId?: string): ReturnType<ProviderGatewayService["recentFailures"]> {
+    return this.gateway.recentFailures(providerId, scopeId);
   }
 
   async test(id: string): Promise<ProviderConnectivityResult> {

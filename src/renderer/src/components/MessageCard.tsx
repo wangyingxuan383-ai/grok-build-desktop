@@ -17,6 +17,11 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   if (message.kind === "user") return <UserMessageCard message={message} onRetry={onRetry} />;
   if (message.kind === "assistant") return <div className="message-row assistant"><div className="assistant-body"><LazyMarkdownView text={message.text} /></div></div>;
   if (message.kind === "thought") return <div className="thought-card"><LazyMarkdownView text={message.text} /></div>;
+  if (message.kind === "retry") {
+    const count = message.attempt ? `第 ${message.attempt}${message.maxAttempts ? `/${message.maxAttempts}` : ""} 次` : "";
+    const wait = message.delayMs !== undefined ? `${Math.max(0, Math.round(message.delayMs / 1000))} 秒后` : "";
+    return <div className="retry-state-card"><span className="process-dot running" /><strong>上游请求正在重试</strong><span>{[count, wait, message.reason].filter(Boolean).join(" · ")}</span></div>;
+  }
   if (message.kind === "error") return <ErrorCard text={message.text} failure={message.failure} onDiagnose={onDiagnose} />;
   if (message.kind === "media") return <GeneratedMediaCard message={message} />;
   if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;

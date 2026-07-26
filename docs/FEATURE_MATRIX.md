@@ -1,18 +1,24 @@
 # Feature Matrix
 
-## v0.6.5 release candidate
+## v0.6.6 locally installed release candidate
 
 | Area | Status | Notes |
 |---|---|---|
+| Structured failures | Focused/source verified | Evidence-based classifications, scoped Provider/gateway observations, trace/retry/schema facts, class-specific diagnosis and expandable redacted error details. Concurrent CLI processes cannot borrow one another's failure record. |
+| Non-Git Agent changes | Focused/UI verified | Real tool-call before/after snapshots provide last-turn/session review without Git staging/commit/branch controls; missing baselines are stated rather than fabricated. |
+| Token activity | Focused/UI verified | Exact Provider/CLI usage only, per-turn metrics, 24h/today/7d/30d/month rollups, coverage counts and a 371-day/53-week heatmap. Session detail deletion and 13-month anonymous retention are enforced. |
+| Storage/cleanup integrity | Focused verified | JsonStore mutation queues prevent lost updates; workspace/session deletion removes all associated local projections while unrelated running sessions remain alive. |
+| Retry and streaming | Focused/source verified | ACP retry lifecycle is visible, Prompt budget expiry cancels the real turn, and growing final text remains plain until one completed Markdown render. |
+| Computer Use action integrity | Native/focused verified | Per-action MCP schemas, punctuation-aware key mapping, window-bounded pointer/drag, horizontal wheel and unknown-outcome timeout handling supplement the existing same-integrity safety boundary. |
 | Plan decision idempotency | Focused/ACP-contract verified | One `sessionId + requestId` decision answers the original server request once. Duplicate clicks return a duplicate receipt and no synthetic approval prompt is created. |
 | Queue/interjection | Focused/contract verified | Queue and mutation receipts are visible; Enter queues, Ctrl+Enter interjects, unsupported same-turn input visibly falls back to the queue head, and only queued entries are editable. |
-| Update/diagnostics actions | Source/build verified | App/CLI checks, diagnostics navigation and redacted-log export expose running/success/error/cancelled state, re-entry protection, timestamp and copyable result. Installed UI verification remains pending. |
+| Update/diagnostics actions | Packaged/installed UI verified | App/CLI checks, diagnostics navigation and redacted-log export expose running/success/error/cancelled state, re-entry protection, timestamp and copyable result. The installed probe opened diagnostics and received “可以使用”. |
 | Provider gateway | Focused + two live probes verified | Loopback-only opaque routing, bounded same-protocol streaming, cancellation/timeouts, selected Trace headers and Gemini/strict Schema cleaning. Isolated CLI 0.2.112 local ACP and one authorized current-Provider minimal turn both passed. |
 | Provider isolation | Focused verified | Credentials/upstream remain main-process environment values; Desktop CLI sees only the loopback override. Literal managed blocks migrate atomically; config, secret and URL rollback/remove tests pass. |
 | Errors and quota | Focused/source verified | Provider errors default collapsed with redacted details. Rolling 24h Token limits are separate from weekly/monthly billing, persisted per account and marked expired. |
 | Auth and Computer Use | Focused verified | Device login has one browser owner. Ordinary Codex is allowed while self/terminal/UAC/security and Windows integrity boundaries remain enforced. |
 | Recent file access | Focused/source verified | Only paths in the real execution root are listed, project paths are relative, and external-open uses the canonical path returned by the main process. |
-| 0.6.5 delivery | Pending | Source/lock/display are 0.6.5 and production build passes. Formal package, install and GitHub release gates have not run; 0.6.4 remains public/installed fallback. |
+| 0.6.6 delivery | Locally packaged, installed and verified | Source/lock/display/File/Main/About are 0.6.6. The formal local gate passed 358 tests with 7 explicit live skips, production/native/Fuses/UI/Scheduler/Portable checks and 264-file scans; Setup/Portable/SBOM/licenses/hashes were generated, and installed diagnostics/shortcuts passed. GitHub publication is still pending, so 0.6.4 remains the public fallback. |
 
 ## v0.6.4 public stable release / installed local build
 

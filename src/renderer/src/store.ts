@@ -35,6 +35,7 @@ export type UiMessage =
   | { id: string; kind: "user"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thought"; text: string }
+  | { id: string; kind: "retry"; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
   | { id: string; kind: "error"; text: string; failure?: TurnFailure }
   | { id: string; kind: "tool"; tool: ToolCallState }
   | { id: string; kind: "permission"; request: PermissionRequest; resolved?: boolean }
@@ -230,6 +231,14 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
     case "thought-chunk":
       next.messages = appendText(next.messages, "thought", event.text);
       break;
+    case "turn-retry": {
+      const id = `retry-${next.turnPresentations.at(-1)?.turnId ?? "active"}`;
+      const value: UiMessage = { id, kind: "retry", attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, reason: event.reason };
+      const index = next.messages.findIndex((message) => message.kind === "retry" && message.id === id);
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
+      break;
+    }
     case "tool-call": {
       const index = next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === event.tool.toolCallId);
       if (index >= 0) next.messages[index] = { id: event.tool.toolCallId, kind: "tool", tool: { ...(next.messages[index] as Extract<UiMessage, { kind: "tool" }>).tool, ...event.tool } };
@@ -428,7 +437,7 @@ function buildTurn(id: string, messages: UiMessage[], completed: boolean, runnin
 }
 
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
-  if (message.kind === "thought" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
+  if (message.kind === "thought" || message.kind === "retry" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
   if (message.kind !== "tool") return "other";
   const value = `${message.tool.kind || ""} ${message.tool.title}`.toLowerCase();
   if (/sub.?agent/.test(value)) return "subagents";

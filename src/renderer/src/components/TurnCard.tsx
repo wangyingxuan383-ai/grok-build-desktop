@@ -40,7 +40,7 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
       </details>)}</div>
     </details>}
     {turn.pending.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onResolved={onResolved} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
-    {turn.final && <div className="final-answer"><div className="final-answer-toolbar"><span>最终回答</span><div><button title="复制最终回答" onClick={() => void navigator.clipboard.writeText(turn.final!.text)}>复制</button>{onFork && <button title="从当前任务末尾创建真实分叉" onClick={onFork}>从这里分叉</button>}</div></div><LazyMarkdownView text={turn.final.text} />{turn.presentation && <TurnMetrics presentation={turn.presentation}/>}</div>}
+    {turn.final && <div className="final-answer"><div className="final-answer-toolbar"><span>{turn.running ? "正在生成" : "最终回答"}</span><div><button title="复制最终回答" onClick={() => void navigator.clipboard.writeText(turn.final!.text)}>复制</button>{onFork && <button title="从当前任务末尾创建真实分叉" onClick={onFork}>从这里分叉</button>}</div></div>{turn.running ? <pre className="streaming-answer">{turn.final.text}</pre> : <LazyMarkdownView text={turn.final.text} />}{turn.presentation && <TurnMetrics presentation={turn.presentation}/>}</div>}
     {turn.trailing.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
     {/* A turn that failed or was cancelled has no final answer, and those are
         exactly the turns where the time and tokens already spent matter most. */}

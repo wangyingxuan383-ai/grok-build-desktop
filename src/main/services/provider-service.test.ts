@@ -44,9 +44,9 @@ describe("ProviderService", () => {
     await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
     try {
       const variable = managedBaseUrlEnvironmentName("sample");
-      const desktop = await service.desktopEnvironment();
+      const desktop = await service.desktopEnvironment("session-scope");
       expect(environment.values.get(variable)).toBe("https://api.example.test/v1");
-      expect(desktop[variable]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample$/);
+      expect(desktop[variable]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/session-scope$/);
       expect(desktop[variable]).not.toContain("api.example.test");
     } finally {
       await service.dispose();
@@ -70,8 +70,8 @@ describe("ProviderService", () => {
     await writeFile(join(grokHome, "config.toml"), "# 用户注释\n[ui]\nsimple_mode = true\n");
     validateConfig = async () => { throw new Error("config.toml 校验失败"); };
     try {
-      const desktop = await service.desktopEnvironment();
-      expect(desktop[managedBaseUrlEnvironmentName("sample")]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample$/);
+      const desktop = await service.desktopEnvironment("degraded-scope");
+      expect(desktop[managedBaseUrlEnvironmentName("sample")]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/degraded-scope$/);
     } finally {
       await service.dispose();
     }

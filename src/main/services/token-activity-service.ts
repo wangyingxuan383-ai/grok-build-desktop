@@ -55,41 +55,46 @@ export class TokenActivityService {
     const usage = presentation.usage;
     const at = presentation.completedAt ?? this.now().toISOString();
     const day = at.slice(0, 10);
-    const data = await this.store.get();
+    await this.store.mutate((data) => {
+      if (data.turns.some((turn) => turn.turnId === presentation.turnId && turn.sessionId === sessionId)) return data;
 
-    if (data.turns.some((turn) => turn.turnId === presentation.turnId && turn.sessionId === sessionId)) return;
+      const record: TurnRecord = {
+        at, sessionId, turnId: presentation.turnId,
+        hasUsage: Boolean(usage),
+        ...(usage?.modelId ? { modelId: usage.modelId } : {}),
+        ...(usage?.providerId ? { providerId: usage.providerId } : {}),
+        ...(context.workspace ? { workspace: context.workspace } : {}),
+        ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
+        ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
+        ...(usage?.cachedReadTokens === undefined ? {} : { cachedReadTokens: usage.cachedReadTokens }),
+        ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
+        ...(usage?.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
+      };
+      data.turns.push(record);
 
-    const record: TurnRecord = {
-      at, sessionId, turnId: presentation.turnId,
-      hasUsage: Boolean(usage),
-      ...(usage?.modelId ? { modelId: usage.modelId } : {}),
-      ...(usage?.providerId ? { providerId: usage.providerId } : {}),
-      ...(context.workspace ? { workspace: context.workspace } : {}),
-      ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
-      ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
-      ...(usage?.cachedReadTokens === undefined ? {} : { cachedReadTokens: usage.cachedReadTokens }),
-      ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-      ...(usage?.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
-    };
-    data.turns.push(record);
-
-    const rollup = data.days[day] ?? { day, turns: 0, turnsWithUsage: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    rollup.turns += 1;
-    if (record.hasUsage) rollup.turnsWithUsage += 1;
-    rollup.inputTokens += record.inputTokens ?? 0;
-    rollup.outputTokens += record.outputTokens ?? 0;
-    rollup.totalTokens += record.totalTokens ?? sumParts(record);
-    data.days[day] = rollup;
-
-    await this.store.set(prune(data, this.now()));
+      const rollup = data.days[day] ?? { day, turns: 0, turnsWithUsage: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+      rollup.turns += 1;
+      if (record.hasUsage) rollup.turnsWithUsage += 1;
+      rollup.inputTokens += record.inputTokens ?? 0;
+      rollup.outputTokens += record.outputTokens ?? 0;
+      rollup.totalTokens += record.totalTokens ?? sumParts(record);
+      data.days[day] = rollup;
+      return prune(data, this.now());
+    });
   }
 
   /** Per-turn detail is deleted with its session; the anonymous daily rollup survives. */
   async forgetSession(sessionId: string): Promise<void> {
-    const data = await this.store.get();
-    const remaining = data.turns.filter((turn) => turn.sessionId !== sessionId);
-    if (remaining.length === data.turns.length) return;
-    await this.store.set({ ...data, turns: remaining });
+    await this.forgetSessions([sessionId]);
+  }
+
+  /** Batch form prevents concurrent clear operations from overwriting each other. */
+  async forgetSessions(sessionIds: Iterable<string>): Promise<void> {
+    const removed = new Set(sessionIds);
+    if (!removed.size) return;
+    await this.store.mutate((data) => {
+      data.turns = data.turns.filter((turn) => !removed.has(turn.sessionId));
+    });
   }
 
   async report(query: TokenActivityQuery = {}): Promise<TokenActivityReport> {
@@ -143,8 +148,8 @@ function sum(turns: TurnRecord[], field: "inputTokens" | "outputTokens" | "cache
 function dayBuckets(days: Record<string, DayRollup>, now: Date): TokenDayBucket[] {
   const buckets: TokenDayBucket[] = [];
   const cursor = startOfDay(now);
-  cursor.setUTCDate(cursor.getUTCDate() - 371);
-  for (let index = 0; index <= 371; index += 1) {
+  cursor.setUTCDate(cursor.getUTCDate() - 370);
+  for (let index = 0; index < 371; index += 1) {
     const day = cursor.toISOString().slice(0, 10);
     const rollup = days[day];
     buckets.push({

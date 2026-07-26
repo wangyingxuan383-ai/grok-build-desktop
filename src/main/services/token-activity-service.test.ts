@@ -50,6 +50,17 @@ describe("token activity recording", () => {
     expect((await activity.report()).windows.today.turns).toBe(1);
   });
 
+  it("does not lose concurrent turns or their anonymous rollup", async () => {
+    const { service: activity } = await service();
+    await Promise.all([
+      activity.record("s1", turn({ turnId: "concurrent-a", usage: usage(10, 1) })),
+      activity.record("s2", turn({ turnId: "concurrent-b", usage: usage(20, 2) })),
+    ]);
+    const report = await activity.report();
+    expect(report.windows.today).toMatchObject({ turns: 2, turnsWithUsage: 2, totalTokens: 33 });
+    expect(report.days.at(-1)).toMatchObject({ turns: 2, turnsWithUsage: 2, totalTokens: 33 });
+  });
+
   it("separates rolling windows from calendar windows", async () => {
     const { service: activity } = await service();
     // 20 hours ago: inside rolling 24h, but on the previous calendar day.
@@ -72,11 +83,22 @@ describe("token activity recording", () => {
     expect(report.days.at(-1)).toMatchObject({ day: "2026-07-26", turns: 1, totalTokens: 120 });
   });
 
+  it("removes several sessions in one transaction without losing a concurrent turn", async () => {
+    const { service: activity } = await service();
+    await activity.record("s1", turn({ turnId: "old-a", usage: usage(10, 1) }));
+    await activity.record("s2", turn({ turnId: "old-b", usage: usage(20, 2) }));
+    await Promise.all([
+      activity.forgetSessions(["s1", "s2"]),
+      activity.record("s3", turn({ turnId: "new-c", usage: usage(30, 3) })),
+    ]);
+    expect((await activity.report()).windows.today).toMatchObject({ turns: 1, totalTokens: 33 });
+  });
+
   it("emits a full 53-week day series including empty days", async () => {
     const { service: activity } = await service();
     await activity.record("s1", turn({ usage: usage(5, 5) }));
     const days = (await activity.report()).days;
-    expect(days).toHaveLength(372);
+    expect(days).toHaveLength(371);
     expect(days.at(-1)?.day).toBe("2026-07-26");
     expect(days.filter((bucket) => bucket.totalTokens > 0)).toHaveLength(1);
   });

@@ -55,6 +55,18 @@ describe("agent change recording", () => {
     expect(app).toMatchObject({ before: "v1", after: "v3" });
   });
 
+  it("keeps the earliest baseline truncation flag with the baseline it describes", () => {
+    const service = new AgentChangeService();
+    const large = "界".repeat(100_000);
+    service.record("s", CWD, "turn-1", edit({ toolCallId: "a", oldText: large, newText: "v2" }));
+    service.record("s", CWD, "turn-2", edit({ toolCallId: "b", oldText: "v2", newText: "v3" }));
+
+    const file = service.index("s", "session").files[0]!;
+    expect(file.beforeTruncated).toBe(true);
+    expect(Buffer.byteLength(file.before ?? "", "utf8")).toBeLessThanOrEqual(256 * 1024);
+    expect(file.before?.endsWith("�")).toBe(false);
+  });
+
   it("records a failed write as failed rather than dropping it", () => {
     const service = new AgentChangeService();
     service.record("s", CWD, "turn-1", edit({ status: "failed" }));

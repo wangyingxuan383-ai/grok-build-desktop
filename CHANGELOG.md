@@ -1,6 +1,16 @@
 # Changelog
 
-## 0.6.6 - unreleased (in progress)
+## 0.6.6 - 2026-07-27
+
+### Release hardening
+
+- Session metadata stores now perform atomic queued read/modify/write mutations. Concurrent Token turns and Agent Dashboard updates no longer overwrite one another; clearing a workspace removes the exact session assignments, token detail, non-Git change snapshots, dashboard records, attachments and turn presentation metadata without stopping unrelated live sessions.
+- Provider failure observations are correlated with an opaque per-process scope and a one-sided time window. A nearby failure from another simultaneous session, or a future timestamp, can no longer be attached to the wrong turn. Cancel and process-exit evidence survives the enrichment pass.
+- ACP `retry_state` notifications are now visible in the running process block, including attempt, limit, delay and upstream reason where supplied. A Prompt that exceeds its turn budget sends the real ACP cancel notification instead of merely abandoning the Renderer-side Promise.
+- Primary chat events reach the Renderer before optional dashboard, Token, attachment or Computer Use projections touch disk. A projection failure is logged and cannot suppress the answer or error that the user is waiting to see.
+- The 53-week activity grid is exactly 371 days. UTF-8 change snapshots clip on code-point boundaries, preserve the true earliest-baseline truncation flag and no longer leave NUL bytes in the TypeScript source.
+- Streaming final answers use a stable plain-text surface until completion instead of reparsing the entire growing Markdown document every frame. Workbench dialog dependencies are memoized so Git and Worktree effects no longer reload on every App render.
+- Computer Use publishes action-specific MCP schemas, clamps element and drag coordinates to the selected window, maps punctuation through the Windows keyboard layout, supports horizontal wheel input, and records a native-host timeout as an unknown outcome that requires re-observation rather than a confirmed failure.
 
 ### Interface polish
 
@@ -38,6 +48,14 @@
 - The main process joins the two — it is the only place that can see both the adapter's model and the gateway's trace — redacts the message, and adds a targeted action when a Gemini-family upstream is still on the pass-through schema profile, which is the one case where the remedy is a single setting rather than a retry.
 - Diagnostics gained a failure-scoped path. `diagnoseFailure` runs only the checks that bear on the class at hand — the schema profile for a rejected tool schema, the real quota windows for an exhausted quota, the credential source for an expired key, route and proxy for a network failure, and the CLI probes only where a crash makes them the relevant evidence. It deliberately does not re-run the four-subprocess install sweep, which for most classes costs the better part of a minute and then reports all-green.
 - The error card renders the classification, the facts that are actually present and the suggested actions. Its previous summary parsed an `HTTP nnn / Provider: x` shape that only the offline fixture ever produced, so against a real failure it degraded to showing the first line.
+
+### Verification
+
+- The one formal local release gate passed: 67 test files passed and 4 explicitly live-gated files skipped; 358 tests passed and 7 skipped. TypeScript, the production main/preload/Renderer build, the native Computer Host build/self-test, Electron Fuses, packaged UI fixtures, Task Scheduler, a Chinese/space Portable path, and both 264-file public-source scans passed.
+- The packaged 0.6.6 fixture verified conversation/workbench/task navigation, the five real right-pane tools, recent-file preview, non-Git Agent changes, collapsed structured errors, turn metrics, the exact 371-day Token activity grid, all four update/diagnostic actions, narrow-window drawer behavior and Provider management.
+- The same Setup was installed per-user. File/Product, main-process bootstrap and About report 0.6.6; diagnostics reports “可以使用”; attachment-body/full-path support-bundle exclusions remain present; Desktop and Start Menu shortcuts target the installed executable.
+- Local candidate SHA-256: Setup `f2243fca80aaf65ff2bd9bb19b906148b9dbd6d146e0da217463c3418e54336b`; Portable `a7e13083f3eb4fa47366361599d2758b7cafc3b1261a86280dd01b85dd16031f`; SBOM `574f1a30cdf8c5601c1ff7f90b8947a6264a06ed5c10c79fc5998d9160b7b738`; licenses `ba47a0f00251011e478d840865ccf43846e9b422834d612c348181681f4f8154`.
+- GitHub Release hashes and provenance are recorded only after the tagged Hosted Windows workflow rebuilds, downloads and verifies the public assets. Cross-protocol Provider translation remains deliberately deferred; 0.6.6 supports the verified same-protocol gateway and Gemini/strict Schema profiles.
 
 ## 0.6.5 - 2026-07-26 (release candidate)
 

@@ -1396,3 +1396,28 @@ button.danger-text { color: var(--danger); }
 .token-cell.level-4 { background: var(--accent); }
 .token-heatmap footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: .68em; }
 .token-legend { display: inline-flex; align-items: center; gap: 3px; }
+.streaming-answer {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.7;
+  color: inherit;
+  background: transparent;
+  border: 0;
+}
+
+.retry-state-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+}
+
+.retry-state-card > span:last-child {
+  margin-left: auto;
+  font-size: 12px;
+}

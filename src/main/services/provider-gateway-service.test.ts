@@ -99,6 +99,30 @@ describe("ProviderGatewayService", () => {
     expect(listeners()).toBe(before);
   });
 
+  it("keeps failure observations isolated to the exact launched process scope", async () => {
+    const upstream = createServer((_request, response) => response.writeHead(429, { "x-request-id": "scope-trace" }).end("{}"));
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-scope-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "scoped", name: "Scoped", baseUrl: `http://127.0.0.1:${address.port}`, protocol: "chat_completions",
+      upstreamProtocol: "openai_chat", schemaProfile: "standard", authScheme: "bearer", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({ providers: async () => [provider], fetcher: fetch, log: new LogService(join(root, "gateway.log")) });
+    try {
+      await fetch(`${await gateway.route("scoped", "session-a")}/chat/completions`, { method: "POST", body: "{}" });
+      await fetch(`${await gateway.route("scoped", "session-b")}/chat/completions`, { method: "POST", body: "{}" });
+      expect(gateway.recentFailures("scoped", "session-a")).toEqual([expect.objectContaining({ scopeId: "session-a", status: 429 })]);
+      expect(gateway.recentFailures("scoped", "session-b")).toEqual([expect.objectContaining({ scopeId: "session-b", status: 429 })]);
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
   it("forwards non-UTF-8 request bytes to the upstream unchanged", async () => {
     const payload = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x1a]);
     let received = Buffer.alloc(0);

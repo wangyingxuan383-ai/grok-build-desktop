@@ -223,12 +223,33 @@ export class ComputerUseService {
 
   private createMcpServer(leaseId: string): McpServer {
     const server = new McpServer({ name: "grok-desktop-computer", version: "0.3.1" });
-    const schema = {
-      appId: z.string().optional(), windowId: z.string().optional(), stateId: z.string().optional(), elementId: z.string().optional(),
-      x: z.number().int().optional(), y: z.number().int().optional(), endX: z.number().int().optional(), endY: z.number().int().optional(), deltaX: z.number().int().optional(), deltaY: z.number().int().optional(),
-      key: z.string().optional(), text: z.string().optional(), value: z.string().optional(), milliseconds: z.number().int().min(0).max(30000).optional(),
-      detailX: z.number().int().min(0).optional(), detailY: z.number().int().min(0).optional(), detailWidth: z.number().int().min(1).max(2000).optional(), detailHeight: z.number().int().min(1).max(2000).optional(),
-      risk: z.enum(["delete", "external-communication", "financial", "install", "account-access", "security-settings", "sensitive-transfer"]).optional(), riskSummary: z.string().optional(),
+    const windowId = z.string().min(1);
+    const stateId = z.string().min(1);
+    const elementId = z.string().min(1).optional();
+    const coordinate = z.number().int().optional();
+    const risk = z.enum(["delete", "external-communication", "financial", "install", "account-access", "security-settings", "sensitive-transfer"]).optional();
+    const riskFields = { risk, riskSummary: z.string().max(1000).optional() };
+    const targetFields = { stateId, elementId, x: coordinate, y: coordinate, ...riskFields };
+    const detailFields = {
+      detailX: z.number().int().min(0).optional(), detailY: z.number().int().min(0).optional(),
+      detailWidth: z.number().int().min(1).max(2000).optional(), detailHeight: z.number().int().min(1).max(2000).optional(),
+    };
+    const schemas: Record<string, Record<string, z.ZodTypeAny>> = {
+      list_apps: {},
+      list_windows: { appId: z.string().optional() },
+      start: { appId: z.string().min(1), windowId: windowId.optional() },
+      pause: {}, resume: {}, stop: {}, launch_app: {},
+      activate_window: { stateId },
+      get_window_state: detailFields,
+      click: targetFields,
+      double_click: targetFields,
+      perform_secondary_action: targetFields,
+      scroll: { ...targetFields, deltaX: coordinate, deltaY: coordinate },
+      press_key: { stateId, key: z.string().min(1).max(80), ...riskFields },
+      type_text: { stateId, elementId, text: z.string().max(100_000), ...riskFields },
+      set_value: { stateId, elementId: z.string().min(1), value: z.string().max(100_000), ...riskFields },
+      drag: { ...targetFields, endX: coordinate, endY: coordinate },
+      wait: { stateId, milliseconds: z.number().int().min(0).max(30_000).optional() },
     };
     const descriptions: Record<string, string> = {
       list_apps: "List visible Windows applications and whether they can be controlled.", list_windows: "List exact visible windows.", start: "Activate an exact target window. Ordinary apps are allowed by default unless the user enables per-app confirmation.",
@@ -236,7 +257,7 @@ export class ComputerUseService {
       launch_app: "Launch another instance of the currently authorized installed application.", activate_window: "Bring an authorized target window to the foreground.", get_window_state: "Observe the target using UI Automation and a PNG screenshot.",
       click: "Invoke or click one element.", double_click: "Double-click one element.", scroll: "Scroll one target.", press_key: "Press one key or chord.", type_text: "Type non-secret text.", set_value: "Set a non-secret accessible value.", drag: "Perform one drag.", perform_secondary_action: "Open one context menu.", wait: "Wait briefly, then observe.",
     };
-    for (const name of Object.keys(descriptions)) server.registerTool(name, { description: descriptions[name], inputSchema: schema }, async (input) => this.mcpCall(leaseId, name, input as Record<string, unknown>));
+    for (const name of Object.keys(descriptions)) server.registerTool(name, { description: descriptions[name], inputSchema: schemas[name] ?? {} }, async (input) => this.mcpCall(leaseId, name, input as Record<string, unknown>));
     return server;
   }
 
@@ -299,10 +320,17 @@ export class ComputerUseService {
       const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), sessionId); task.lastState = state; task.stepCount += 1; task.lastAction = action; task.message = `${actionDescription.replace(/^正在/, "已").replace(/…$/, "")}，正在分析新画面`; task.updatedAt = new Date().toISOString(); this.publish(task);
       await this.audit(task, action, true); return buildComputerStateResult(state, task);
     } catch (error) {
-      if (auditTask && auditAction) await this.audit(auditTask, auditAction, false).catch(() => undefined);
+      const outcomeUnknown = isComputerHostTimeout(error);
+      if (auditTask && auditAction) await this.audit(auditTask, auditAction, outcomeUnknown ? "unknown" : false).catch(() => undefined);
       const reason = message(error);
       if (auditTask) {
         if (isComputerManualInterventionError(reason)) this.requireManualIntervention(auditTask, reason);
+        else if (outcomeUnknown) {
+          auditTask.lastState = undefined;
+          auditTask.message = `操作结果未知：${reason}。必须重新观察窗口后再继续，不能假定操作失败。`;
+          auditTask.updatedAt = new Date().toISOString();
+          this.publish(auditTask);
+        }
         else if (auditTask.status === "running") { auditTask.message = `操作未完成：${reason}`; auditTask.updatedAt = new Date().toISOString(); this.publish(auditTask); }
       }
       return { isError: true, content: [{ type: "text", text: reason }] };
@@ -398,7 +426,7 @@ export class ComputerUseService {
   private stopWith(task: ComputerTaskState, text: string): void { task.status = "stopped"; task.message = text; task.pointer = undefined; task.manualInterventionRequired = false; task.updatedAt = new Date().toISOString(); task.lastState = undefined; this.onceAllowed.delete(`${task.sessionId}:${task.appId}`.toLocaleLowerCase()); this.publish(task); void this.stopHostIfIdle(); }
   private publish(task: ComputerTaskState): void { this.emit({ ...task }, "state"); }
   private async stopHostIfIdle(): Promise<void> { if (Array.from(this.tasks.values()).some((task) => ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status))) return; await this.host?.dispose(); this.host = undefined; }
-  private async audit(task: ComputerTaskState, action: ComputerActionName, ok: boolean): Promise<void> { await mkdir(dirname(this.auditPath), { recursive: true }); await appendFile(this.auditPath, `${JSON.stringify({ at: new Date().toISOString(), sessionId: task.sessionId, appId: task.appId, action, ok })}\n`, "utf8"); }
+  private async audit(task: ComputerTaskState, action: ComputerActionName, outcome: boolean | "unknown"): Promise<void> { await mkdir(dirname(this.auditPath), { recursive: true }); await appendFile(this.auditPath, `${JSON.stringify({ at: new Date().toISOString(), sessionId: task.sessionId, appId: task.appId, action, ok: typeof outcome === "boolean" ? outcome : null, outcome })}\n`, "utf8"); }
   private getHost(): ComputerHostClient { return this.host ??= new ComputerHostClient(this.helperPath, this.log, () => this.handleHostExit()); }
   private handleHostExit(): void {
     for (const pending of this.pendingPermissions.values()) { pending.resolve?.(false); pending.onDecision?.(false); } this.pendingPermissions.clear();
@@ -447,6 +475,7 @@ function blockedCode(row: Record<string, unknown>, blocked: boolean): ComputerWi
 
 export function isBlockedComputerTarget(processName: string, title = ""): boolean { return /^(grok[- ]?build[- ]?desktop|chatgpt|powershell|pwsh|cmd|windowsterminal|wt|conhost)$/i.test(processName.trim()) || /grok build desktop|windows security|user account control|用户账户控制|windows 安全/i.test(title); }
 export function isComputerManualInterventionError(value: string): boolean { return /higher privilege|高权限|elevated|default desktop|secure desktop|uac|user account control|用户账户控制|管理员|windows security|windows 安全/i.test(value); }
+export function isComputerHostTimeout(error: unknown): boolean { return /Computer Host .+ 超时/i.test(message(error)); }
 export function describeComputerAction(action: ComputerActionName, target = "", key = ""): string {
   const label = target.trim() ? `“${target.trim()}”` : "目标位置";
   const descriptions: Record<ComputerActionName, string> = {

@@ -58,7 +58,7 @@ function DocumentTool({ turn, onExpand }: { turn?: UiChatTurn; onExpand(): void 
   const final = turn?.final;
   return <div className="right-tool-scroll document-tool">
     <section><header><strong>计划</strong>{plan && <button onClick={() => void navigator.clipboard.writeText(plan.text)}>复制</button>}</header>{plan ? <LazyMarkdownView text={plan.text}/> : <p className="right-tool-empty">当前回合没有计划卡。</p>}</section>
-    <section><header><strong>最终结果</strong>{final && <span><button onClick={() => void navigator.clipboard.writeText(final.text)}>复制</button><button onClick={onExpand}>在主区展开</button></span>}</header>{final ? <LazyMarkdownView text={final.text}/> : <p className="right-tool-empty">当前回合尚无最终回答。</p>}</section>
+    <section><header><strong>{turn?.running ? "正在生成" : "最终结果"}</strong>{final && <span><button onClick={() => void navigator.clipboard.writeText(final.text)}>复制</button><button onClick={onExpand}>在主区展开</button></span>}</header>{final ? turn?.running ? <pre className="streaming-answer">{final.text}</pre> : <LazyMarkdownView text={final.text}/> : <p className="right-tool-empty">当前回合尚无最终回答。</p>}</section>
   </div>;
 }
 
