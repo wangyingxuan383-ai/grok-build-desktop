@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AppSettings, ChatEvent, CommandInfo, LiveStatus, ReasoningEffort, SessionMode } from "../../shared/types";
 import { buildCliEnv, detectEffortFlag, locateGrokCli } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
@@ -27,6 +28,7 @@ export class GrokProcessManager {
     private readonly onSessionClosed?: (leaseId: string | undefined) => void,
     private readonly getMcpSecretEnvironment: () => Promise<Record<string, string>> = async () => ({}),
     private readonly getWorkspaceEnvironment: (cwd: string) => Promise<Record<string, string>> = async () => ({}),
+    private readonly getProviderEnvironment: (scopeId: string) => Promise<Record<string, string>> = async () => ({}),
     private readonly beforeSessionClose?: (sessionId: string, session: GrokAcpAdapter, reason: "close" | "shutdown" | "reap" | "cap") => Promise<void>,
   ) {
     this.reaper = setInterval(() => void this.reap(), 5 * 60_000);
@@ -413,8 +415,10 @@ export class GrokProcessManager {
     const apiKey = await this.getApiKey();
     const mcpSecretEnvironment = await this.getMcpSecretEnvironment();
     const workspaceEnvironment = await this.getWorkspaceEnvironment(cwd);
+    const providerScopeId = randomUUID();
+    const providerEnvironment = await this.getProviderEnvironment(providerScopeId);
     const extensions = await this.getSessionExtensions?.();
-    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, environmentOverride), workspaceEnvironment);
+    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, environmentOverride), workspaceEnvironment);
     const adapter = new GrokAcpAdapter({
       cliPath,
       cwd,
@@ -428,6 +432,7 @@ export class GrokProcessManager {
       extensionLeaseId: extensions?.leaseId,
       effortFlag: await detectEffortFlag(cliPath, env),
       permissionDecider,
+      providerScopeId,
       agentProfilePath: processOptions?.agentProfilePath,
       sessionMeta: processOptions?.sessionMeta,
       alwaysApprove: processOptions?.alwaysApprove ?? mode === "auto",

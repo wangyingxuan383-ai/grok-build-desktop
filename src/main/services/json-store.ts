@@ -32,6 +32,22 @@ export class JsonStore<T extends object> {
     });
   }
 
+  /**
+   * Runs a complete read/modify/write transaction inside this store's queue.
+   * Callers must not call get/set/patch from the mutator itself because that
+   * would enqueue behind the transaction that is currently waiting for it.
+   */
+  async mutate(mutator: (current: T) => T | void | Promise<T | void>): Promise<T> {
+    return this.enqueue(async () => {
+      const current = structuredClone(await this.load());
+      const result = await mutator(current);
+      const candidate = structuredClone(result ?? current);
+      await this.persist(candidate);
+      this.value = candidate;
+      return structuredClone(candidate);
+    });
+  }
+
   private async load(): Promise<T> {
     if (this.value) return structuredClone(this.value);
     try {

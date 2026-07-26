@@ -10,16 +10,26 @@ describe("Computer Use visible overlay", () => {
     expect(isComputerTaskVisiblyActive({ ...base, status: "completed" })).toBe(false);
   });
 
-  it("renders the blue status frame, Esc affordance and escaped action text", () => {
+  it("renders the blue status frame, kill-switch affordance and escaped action text", () => {
     const html = renderComputerOverlayHtml({
       sessionId: "s", appName: "Fixture <App>", status: "running", stepCount: 2, updatedAt: "now",
       message: "正在点击 <Delete>", pointer: { x: 200, y: 150, action: "click" },
     }, { x: 100, y: 50, width: 1200, height: 800 }, true);
     expect(html).toContain("data-computer-overlay=\"active\"");
-    expect(html).toContain("Esc 停止");
+    expect(html).toContain("Ctrl+Alt+Esc 停止");
     expect(html).toContain("Fixture &lt;App&gt;");
     expect(html).toContain("正在点击 &lt;Delete&gt;");
     expect(html).toContain("left:100px;top:100px");
     expect(html).not.toContain("Fixture <App>");
+  });
+
+  it("admits the shortcut is unavailable rather than advertising a dead key", () => {
+    const html = renderComputerOverlayHtml(
+      { sessionId: "s", appName: "App", status: "running", stepCount: 1, updatedAt: "now" },
+      { x: 0, y: 0, width: 800, height: 600 },
+      false,
+    );
+    expect(html).toContain("回到 Grok 窗口停止");
+    expect(html).not.toContain("Ctrl+Alt+Esc 停止");
   });
 });

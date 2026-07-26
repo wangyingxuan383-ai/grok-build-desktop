@@ -130,6 +130,55 @@ afterEach(async () => {
 });
 
 describe("AuthService lifecycle", () => {
+  it("lets the app open exactly one browser when the CLI supports --no-browser", async () => {
+    const newRaw = authJson("new", "new-token");
+    const openExternal = vi.fn(async () => undefined);
+    let loginArgs: string[] = [];
+    const script = spawnLoginScript(`
+      process.stdout.write("Open https://auth.example.test/device?user_code=ABCD-EFGH\\n");
+      require("node:fs").writeFileSync(process.env.AUTH_PATH, process.env.NEW_RAW);
+    `, newRaw);
+    const harness = await createHarness(authJson("old", "old-token"), {
+      supportsNoBrowser: async () => true,
+      openExternal,
+      spawnLogin: (cliPath, args, options) => {
+        loginArgs = [...args];
+        return script(cliPath, args, options);
+      },
+    });
+
+    const result = await harness.service.loginDevice();
+
+    expect(result.error).toBeUndefined();
+    expect(loginArgs).toEqual(["login", "--device-auth", "--no-browser"]);
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1));
+    expect(openExternal).toHaveBeenCalledWith("https://auth.example.test/device?user_code=ABCD-EFGH");
+  });
+
+  it("lets the CLI own the browser when --no-browser is unavailable", async () => {
+    const newRaw = authJson("new", "new-token");
+    const openExternal = vi.fn(async () => undefined);
+    let loginArgs: string[] = [];
+    const script = spawnLoginScript(`
+      process.stdout.write("Open https://auth.example.test/device?user_code=ABCD-EFGH\\n");
+      require("node:fs").writeFileSync(process.env.AUTH_PATH, process.env.NEW_RAW);
+    `, newRaw);
+    const harness = await createHarness(authJson("old", "old-token"), {
+      supportsNoBrowser: async () => false,
+      openExternal,
+      spawnLogin: (cliPath, args, options) => {
+        loginArgs = [...args];
+        return script(cliPath, args, options);
+      },
+    });
+
+    const result = await harness.service.loginDevice();
+
+    expect(result.error).toBeUndefined();
+    expect(loginArgs).toEqual(["login", "--device-auth"]);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
   it("clears running and restores the previous file and account after a non-zero login exit", async () => {
     const oldRaw = authJson("old", "old-token");
     const newRaw = authJson("new", "new-token");

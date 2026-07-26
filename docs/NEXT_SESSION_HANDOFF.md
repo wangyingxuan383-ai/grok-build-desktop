@@ -1,89 +1,185 @@
-# Grok Build Desktop 下一会话交接（2026-07-23）
+# Grok Build Desktop 下一会话完整交接（2026-07-27，0.6.6 发布收口）
 
-> 当前目标已完成到本地安装版和公开 Latest `v0.6.4`。后续会话不要重复本轮完整离线套件、正式打包或付费模型验收；先复用本文证据，只验证后续实际改动。本文不含账号、Token、提示词正文、Codex 会话内容或本机绝对附件路径。
+> 本文替换 0.6.5 阶段的旧交接。当前正式目标是 **0.6.6**；用户已决定延期跨协议 Provider 转换，不能把它写成已实现。完成状态必须以本文的“发布证据”段和 GitHub Release 实际状态为准。
 
-## 1. 必读与工作树纪律
+## 1. 必读顺序与安全边界
 
 1. `AGENTS.md`
 2. 本文
-3. `docs/IMPLEMENTATION_PLAN.md` 的 v0.6.3→v0.6.4 章节
+3. `docs/IMPLEMENTATION_PLAN.md`
 4. `docs/FEATURE_MATRIX.md`
 5. `docs/CODEX_UI_PARITY.md`
 6. `docs/CLI_COMPATIBILITY.md`
 7. `CHANGELOG.md`
 
-开始前检查 `git status`。0.6.0–0.6.4 功能已通过 PR #13 合并到 `main`，`v0.6.4` 标签位于提交 `df5db6b`；GitHub Release 已公开并标记为 Latest。不要移动或替换已发布标签/资产。
+随后执行：
 
-## 2. 当前版本与本机交付
+```powershell
+git status --short --branch
+git log --oneline --decorate -12
+gh release list --limit 5
+```
 
-- 源码、lockfile、应用显示版本：`0.6.4`。
-- per-user 安装路径：`%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`。
-- 文件版本 `0.6.4`、产品版本 `0.6.4.0`；Main `app.getVersion()` 与 About 为 `0.6.4`，诊断中心为“可以使用”。
-- 桌面与开始菜单快捷方式均指向安装目录，不是 `release\win-unpacked`。
-- 当前接受的 Grok CLI 边界仍为 `0.2.106 (bde89716f6)`；0.6.3/0.6.4 未增加必需 ACP 私有方法，也未发送付费模型提示词。
+不要：
 
-## 3. 0.6.3 热修结果
+- 丢弃未提交工作树或从旧 `main` 重做。
+- 覆盖、移动或删除 0.6.4/0.6.5 本地产物和公开 0.6.4 Release。
+- 在未通过自动化/实机验证前声称功能、安装或发布成功。
+- 将密钥、完整 Provider 请求/响应、提示词、绝对私人路径或附件正文写入日志、支持包或文档。
+- 在正式包验证前替换用户正在使用的安装版。
+- 关闭正在运行的 Codex。
 
-- Scheduler 输出按 Buffer 经 UTF-8/UTF-16/GB18030 兼容路径解码，注册失败使用结构化稳定诊断；带 `�` 的历史文本改为可恢复说明。
-- 所有会话入口使用统一目标打开流程；会话主区为标题/消息/输入框固定网格，工作台有明确“返回会话”，Virtuoso 在返回后重新测量。
-- 非 Git Review 为普通能力空状态，窄窗不再出现按钮可点但面板被 CSS 隐藏；重复底部环境栏已删除。
-- 0.6.3 已安装验证后才继续 0.6.4。首个暴露 720 px 输入框越界的候选被拒绝，未作为最终资产。
-
-## 4. 0.6.4 已完成能力
-
-- **右侧工具区**：统一启动器只映射真实 Review、计划/结果、最近文件、侧边任务；每工具保存 420–760 px 宽度，窄窗为覆盖抽屉，不含假终端/浏览器。
-- **可扩展 Review**：`GitReviewIndex` 先返回轻量文件列表，`GitReviewFileDetail` 只读取选中文件 Patch；850 文件夹具不再一次渲染全部 hunk。五类范围、暂存/取消/恢复、快照过期和行批注保留。
-- **导航与文件**：左栏不再常驻 File/Review；最近写入先在右栏只读预览，显式选择“编辑文件”后进入中央 Monaco。Dashboard→会话→文件→会话→任务中心→会话保持输入框、滚动和焦点。
-- **提供商中心**：独立列表＋详情弹窗，五类预设；未保存草稿即可测试连接/获取模型，支持搜索、多选导入、可编辑安全本地 ID、重复稳定哈希和手工补充。
-- **探测边界**：主进程只向模型列表端点执行有超时、2 MiB 上限、禁止重定向的 GET；支持 OpenAI/Responses、Anthropic、Ollama/本地及兼容网关列表形状。凭据不进日志/诊断，未知上下文保持未知。
-- **Windows 路径边界**：绝对路径先统一到 canonical long path，Hosted Runner 的 8.3 `%TEMP%` 别名不再误报 Editor、Memory、Agent/Persona 或 Git 越界；符号链接和目录联接逃逸仍拒绝。
-- **保留能力**：0.6.1 图片缓存/发送后预览/失败恢复/重开、0.6.2 回合折叠/真实耗时/背景参数/NavigationIntent 及 Renderer 沙箱边界均保留。
-
-## 5. 最终验证证据
-
-- 聚焦门槛：7 个文件 / 55 项测试通过；覆盖 provider 草稿/三协议/401/超时/超量/冲突 ID、Review index/detail/快照过期/850 文件、Scheduler 健康和 Renderer store/comments。
-- TypeScript、生产 main/preload/Renderer 构建和最终 243 文件公开源码扫描通过。
-- 唯一一次完整离线套件：60 个文件通过、1 个按设计跳过；291 项通过、2 项显式 opt-in/live 跳过，使用 1 个 Windows Worker。
-- 0.6.4 源码、`win-unpacked` 与安装版均通过同一隔离夹具：Dashboard→chat→file preview→explicit editor→chat→tasks→chat、四工具右栏、非 Git Review、1280×720、1440×810@125%、1920×1080@200%、1100 px 抽屉和提供商中心。
-- 唯一一次正式打包通过 Electron Fuses、源码/产物扫描并保留 0.6.0–0.6.3 命名 Setup/Portable/SBOM。
-- 安装版 Main/About/诊断/支持包附件排除和快捷方式目标均通过。
-
-## 6. 最终本地产物
-
-`release\SHA256SUMS.txt`：
-
-- Setup：`Grok-Build-Desktop-Setup-v0.6.4-x64.exe`
-  `be0080e4ce0d44528840fa6923e469b26407327d246bbf140e6f761bd76a8ca5`
-- Portable：`Grok-Build-Desktop-Portable-v0.6.4-x64.zip`
-  `1d6104e3ffdad4ae1cc5ca7c80f5352a3e8c63d7e72cb69df55bbc16837480c6`
-- CycloneDX SBOM：`Grok-Build-Desktop-0.6.4-SBOM.cdx.json`
-  `feb7207c0ed97e931fa31a54090658a5ba3aea701fb9af41add6f12817532b67`
-- 第三方许可证：`THIRD_PARTY_LICENSES.json`
-  `fb8469bdbecff72100bd94c44b2f67f1b596ade9854d95ce862a7559d3b1d82e`
-
-0.6.0–0.6.3 Setup、Portable 与 SBOM 命名资产仍在 `release`。通用许可证报告和 `SHA256SUMS.txt` 按当前候选更新，这是发布目录的既有约定。
-
-## 7. 公开发布证据
-
-- Release：`https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.6.4`
-- PR #13 合并提交：`df5db6bed55ba317f24cb235aacd342bea7a563d`。
-- Release workflow `29993675891` 成功；云端重新打包、公开产物扫描、Setup/Portable attest、Draft 回下载、`SHA256SUMS.txt` 和 provenance 验证均通过，之后才发布为 Latest。
-- Setup：`ab4d037a8398ec8c12fc2365efba5ea8c4fae582486dd95f5cd27f8fc8eea1ab`
-- Portable：`635147fafa85b9a0bd4c7d61c9a36a9bb50e4c83410c225ddddccee769945b71`
-- CycloneDX SBOM：`5b789491ac459a0119fcf9f3b62e7140c35ef601d271e65fc6dd57b726b6dae0`
-- 第三方许可证：`e86a7b4249bd018f743e8c347e7b555cda81c3208c508e32810a91075d49942b`
-
-本地产物和 GitHub Hosted Runner 产物来自不同构建环境，哈希不同是预期行为；公开分发以 GitHub Release 的清单为准。
-
-## 8. 仍未完成的外部门槛
-
-- Windows 10 22H2、Windows 11 23H2/24H2、中文用户名、标准权限、物理 125–200% DPI 与双屏矩阵。
-- 从公开 `v0.5.16` 安装包到公开 `v0.6.4` 安装包的真实覆盖升级，以及 DPAPI 账号、持久任务、专属会话、Codex 接力和 AppData 保留矩阵。
-- Windows Authenticode 外部签名尚未配置；公开资产为工作流明确标注的 unsigned 构建，并有 GitHub artifact attestations。
-- 不要重复付费 `/remember`、私有 Worktree ACP 或真实提供商推理。
-
-## 9. 后续会话开场指令
+Renderer 继续保持：
 
 ```text
-先读取 AGENTS.md、docs/NEXT_SESSION_HANDOFF.md、docs/IMPLEMENTATION_PLAN.md 的 v0.6.3→v0.6.4 章节、docs/FEATURE_MATRIX.md、docs/CODEX_UI_PARITY.md、docs/CLI_COMPATIBILITY.md 和 CHANGELOG.md，并检查 git status。v0.6.4 已完成本地安装、GitHub 公开 Latest 发布和验证，不要重复完整套件、正式打包或付费验收；只处理我明确要求的后续改动或外部矩阵，并运行直接受影响的聚焦验证。
+nodeIntegration: false
+contextIsolation: true
+sandbox: true
 ```
+
+文件、Git、进程、凭据、网络、Provider 网关、Token 统计和 ACP 都必须留在 Electron 主进程。
+
+## 2. 仓库与版本状态
+
+- 仓库：`C:\Users\TestUser\Documents\GROK`
+- 开发分支：`codex/v0.6.5-0.6.6`
+- 进入本轮收口前 HEAD：`241c64a`
+- 基线 `origin/main`：`71660b3`
+- 进入收口前已有 7 个功能提交，涵盖 0.6.5 稳定交互、结构化失败、非 Git Review、Token 活动、Computer Use 提权状态和 UI 体感。
+- `package.json` / lockfile 已提升为 `0.6.6`。
+- 本机 CLI 兼容基准：`0.2.112 (9bbd559437)`。
+- 本机已安装并验证 0.6.6；GitHub 公开 Latest 在远端发布门槛完成前仍是 `v0.6.4`。
+- 旧 0.6.5 产物生成于后续提交之前，属于过期候选，不能上传为 0.6.6。
+
+## 3. 0.6.5/0.6.6 已实现范围
+
+### 稳定交互
+
+- 计划批准/继续规划/取消按 `sessionId + requestId` 幂等；只回答原 `x.ai/exit_plan_mode` 请求，不再制造 `[Plan approved]` 第二条 Prompt。
+- 排队、编辑、删除、重排和插话有回执；不支持即时插话时明确降级到队首。
+- 更新、CLI 检查、诊断中心、脱敏日志导出均有运行/成功/失败/取消状态和防重入。
+- 设备码登录只有一个浏览器所有者；滚动 24 小时 Token 限额与周/月账单额度分离。
+- 自定义模型显示 Provider 前缀；错误默认折叠并显示可复制的脱敏诊断。
+
+### Provider 与结构化失败
+
+- 主进程回环网关使用随机端口、不可猜路由和进程级 scope；Renderer 不接触密钥。
+- 当前正式能力是**同协议透传**、流式响应、取消、大小/超时边界、选定 Trace 头和 Gemini/strict Schema 清理。
+- Gemini/Antigravity 空枚举 HTTP 400 已真实复现；相同请求经 Gemini 档清理后通过。
+- `TurnFailure` 保留 HTTP、JSON-RPC、进程退出、取消、模型、Provider、Trace、retry-after、网关阶段和清理计数。
+- 故障关联要求同 Provider、同 CLI 进程 scope，且网关记录时间不晚于回合错误、差值小于 60 秒。
+- 失败诊断按类别执行针对性检查，不再对每个错误运行无关的全量安装诊断。
+
+### Review、文件与 Token
+
+- Git Review 继续提供 Unstaged/Staged/Commit/Branch/Last turn、单文件懒加载 Diff 和受控 Git 操作。
+- 非 Git 使用 Agent 工具真实 before/after 写入，提供 Last turn / Session changes；没有基线时明确显示，绝不伪造 Git staged/commit/branch。
+- 最近文件、工具位置和编辑器跳转使用会话/Worktree 真实根目录；二进制、外部、缺失和越界以行内原因降级。
+- 每回合显示真实耗时和 CLI/Provider 精确 Token；无明细时只显示总量或“未返回用量”。
+- Token 活动持久化逐回合明细和匿名日汇总，提供 24h/今日/7天/30天/本月及 371 日（53 周）活动图；会话删除移除明细，匿名日汇总最多保留约 13 个月。
+
+### 会话、流式与 Computer Use
+
+- JsonStore 支持排队的原子 read/modify/write；Token 和 Dashboard 并发记录不再丢失。
+- 清空工作区只关闭被删除的会话，并清理 assignment、Token 明细、Agent 改动、Dashboard、附件和回合展示；不停止其他工作区的实时会话。
+- 主聊天事件先发 Renderer，Dashboard/Token/附件/Computer Use 等投影失败只记录日志。
+- ACP `retry_state` 显示次数、上限、等待和原因；Prompt 超时会发送真实 ACP cancel。
+- 流式最终回答显示稳定纯文本，完成后才进行完整 Markdown/公式/代码渲染。
+- Computer Use 允许普通权限 Codex，仍阻止应用自身、终端、UAC/安全界面和跨完整性级别控制。
+- 原生 Host 按动作公开 Schema，窗口内约束点击/拖动，按当前键盘布局映射标点，支持水平滚轮；Host 超时记为“结果未知，需重新观察”，不记成确定失败。
+
+## 4. 本轮发布前复审修复
+
+Claude 的并行复审原始结果保存在：
+
+```text
+<temporary-review-output>
+```
+
+已修：
+
+1. 故障 enrich 丢失 cancelled/processExitCode。
+2. 网关记录无下界、无会话/进程隔离。
+3. Token/Dashboard JsonStore 并发 read-modify-write 覆盖。
+4. clearSessions 未清 Token/Agent changes/Dashboard 且误停无关会话。
+5. Agent change 最早基线的截断标志不一致。
+6. UTF-8/CJK 以 UTF-16 单元裁剪。
+7. 热力图 372 日而不是 371 日。
+8. ACP retry_state 被丢弃。
+9. Prompt 超时只丢 Promise、不取消 CLI。
+10. Host 超时误记为确定失败。
+11. 元素点击和拖动终点可能越出目标窗口。
+12. `press_key "."` 被当作 Delete。
+13. `deltaX` 未生效。
+14. 所有 Computer Use MCP 工具共享一份“全字段可选”Schema。
+15. 流式最终回答每帧重建 Markdown。
+16. Git/Worktree 工作台收到每次 App render 新建的 dialogs 对象而反复加载。
+17. 可选投影先于 Renderer 发送，磁盘失败可吞掉主事件。
+
+明确延期/已知边界：
+
+- 跨协议 Chat/Responses/Anthropic/Gemini Translator 未做，用户决定暂缓；不能在功能矩阵或 Release Notes 中宣称支持。
+- 非 Git before/after 快照当前只覆盖本次应用进程捕获到的真实写入；旧会话没有基线时只读降级。
+- Computer Use UIA 树仍是有界扁平交互元素列表；未实现完整父子语义树。
+- 原生动作后仍采用有界短等待和重新截图，尚未实现通用像素稳定检测。
+- Provider 推理自动重试没有新增：ACP/上游实际发布的 `retry_state` 会显示，但 Desktop 不自行重复可能产生副作用的推理请求。
+
+## 5. 已通过的本地正式候选验证
+
+- `npm run typecheck`
+- 7 个聚焦测试文件，82 项通过：
+  - JsonStore 并发 mutate
+  - Token 并发记录、批量删除与 371 日热力图
+  - Agent change CJK 裁剪/截断
+  - Provider 网关进程 scope
+  - Turn failure
+  - Computer Use 超时分类
+  - Renderer retry/store
+- `npm run build:computer-host`：原生 Host 编译及 `0.3.1 win-x64` 自检通过。
+- 最终修正后的 `scripts/package-win.ps1` 正式本地门槛通过：
+  - 67 个测试文件通过、4 个显式 live 文件跳过；359 项通过、7 项跳过。
+  - TypeScript、生产 main/preload/Renderer 构建、原生 Host、Electron Fuses、打包 UI、Task Scheduler、中文空格 Portable 和前后两次 264 文件公开扫描通过。
+  - 0.6.6 UI 夹具覆盖完整导航、五种右栏工具、最近文件、非 Git Agent 改动、结构化错误、回合指标、371 日 Token 活动、四个更新/诊断动作、窄窗抽屉和 Provider 管理。
+- PR/clean-install 收口另外确认：
+  - npm 11 strict `npm ci` 的可选 `@emnapi` lock 元数据已完整。
+  - 新公布的构建期公告通过 `brace-expansion 5.0.8` 与 `tar 7.5.22` 覆盖修复；fresh install 后完整 high-level audit 为 0。
+  - Windows PowerShell 5.1 可解析带中文的打包/冒烟脚本；v0.6.2 兼容探针不再依赖 Virtuoso 同时挂载 3 行。
+  - 上述修复后的最终包重新跑完 359 项和全部打包 UI 门槛；此前失败候选未发布。
+  - CodeQL 随后在发布前发现 Provider 网关可能把任意异常文本返回给回环调用方；公开响应已改为固定安全分类，详细脱敏诊断只留在主进程，并用含私人路径/堆栈的假异常回归测试锁定。包含此运行时修复的新包必须重新完成门槛和安装。
+- 同一个 Setup 已完成 per-user 安装：
+  - 文件/Product/Main/About 均为 0.6.6，channel 为 stable。
+  - 诊断中心报告“可以使用”，支持包继续排除附件正文和完整路径。
+  - 桌面与开始菜单快捷方式均指向 `%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`。
+
+以上是本机候选证据，不是 GitHub 公开发布证据。仍需完成 PR/合并、标签和 Release workflow。
+
+## 6. 正式收口顺序
+
+1. 不要重复完整本地打包；本节第 5 部分的本机门槛已通过。
+2. 运行最终 `git diff --check` 与公开扫描，提交并推送开发分支，创建/合并 PR。
+3. 在合并提交上创建并推送 `v0.6.6` 标签。
+4. 等待 `.github/workflows/release.yml`：
+   - Hosted Windows 重建并扫描。
+   - 创建 Draft。
+   - 回下载全部资产。
+   - 校验 `SHA256SUMS.txt`。
+   - 验证 Setup/Portable provenance attestations。
+   - 发布为 Latest。
+5. 下载公开资产并与远端清单复核；最后补一个发布证据提交。
+
+## 7. 本地 0.6.6 资产
+
+```text
+release/Grok-Build-Desktop-Setup-v0.6.6-x64.exe
+release/Grok-Build-Desktop-Portable-v0.6.6-x64.zip
+release/Grok-Build-Desktop-0.6.6-SBOM.cdx.json
+release/THIRD_PARTY_LICENSES.json
+release/SHA256SUMS.txt
+```
+
+- Setup：143,758,221 bytes；SHA-256 `b4243d6ebc0137291b0fc38df1b948f554a7be41d787a678ea9594fb99a57a5e`
+- Portable：194,250,848 bytes；SHA-256 `b8edbe0c7a99717da8956e0e540a73410a8de6c6b1d8ce5d7a529f62bb55b4e6`
+- SBOM：SHA-256 `c4489c6c07492c943db339474d0d5c6fe20ce810dc1b6a0bfce946e436a8bc51`
+- 第三方许可证：SHA-256 `1ad863e9d4753397efa8ab297e057882b2f04d665bb5e8ed7062d71b900b8ca5`
+
+Hosted Windows 会重新构建公开资产，远端哈希预期与本机候选不同。Release URL、workflow ID、公开哈希和 provenance 必须在工作流成功后回写。

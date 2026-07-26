@@ -5,7 +5,7 @@ import { UiIcon, type UiIconName } from "../ui-icons";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 
 export type RightUtilityTool = "launcher" | "document" | "files" | "tasks";
-export type RightTool = "review" | RightUtilityTool;
+export type RightTool = "review" | "agent-changes" | RightUtilityTool;
 
 export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
   tool: RightUtilityTool;
@@ -45,6 +45,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, ses
 function ToolLauncher({ onTool }: { onTool(tool: RightTool): void }): React.JSX.Element {
   const tools: Array<{ id: RightTool; icon: UiIconName; title: string; text: string }> = [
     { id: "review", icon: "git", title: "审阅", text: "Git 变更、逐文件 Diff 与行级批注" },
+    { id: "agent-changes", icon: "file", title: "Agent 改动", text: "非 Git 工作区：本回合/本会话的真实写入" },
     { id: "document", icon: "file", title: "计划与结果", text: "当前回合的真实计划和最终回答" },
     { id: "files", icon: "folder", title: "最近文件", text: "最近回合写入文件及只读预览" },
     { id: "tasks", icon: "tasks", title: "侧边任务", text: "Agent、后台任务、队列与等待状态" },
@@ -57,25 +58,29 @@ function DocumentTool({ turn, onExpand }: { turn?: UiChatTurn; onExpand(): void 
   const final = turn?.final;
   return <div className="right-tool-scroll document-tool">
     <section><header><strong>计划</strong>{plan && <button onClick={() => void navigator.clipboard.writeText(plan.text)}>复制</button>}</header>{plan ? <LazyMarkdownView text={plan.text}/> : <p className="right-tool-empty">当前回合没有计划卡。</p>}</section>
-    <section><header><strong>最终结果</strong>{final && <span><button onClick={() => void navigator.clipboard.writeText(final.text)}>复制</button><button onClick={onExpand}>在主区展开</button></span>}</header>{final ? <LazyMarkdownView text={final.text}/> : <p className="right-tool-empty">当前回合尚无最终回答。</p>}</section>
+    <section><header><strong>{turn?.running ? "正在生成" : "最终结果"}</strong>{final && <span><button onClick={() => void navigator.clipboard.writeText(final.text)}>复制</button><button onClick={onExpand}>在主区展开</button></span>}</header>{final ? turn?.running ? <pre className="streaming-answer">{final.text}</pre> : <LazyMarkdownView text={final.text}/> : <p className="right-tool-empty">当前回合尚无最终回答。</p>}</section>
   </div>;
 }
 
 function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string; sessionId?: string; paths: string[]; onNavigate(intent: NavigationIntent): void; onError(message: string): void }): React.JSX.Element {
   const [selected, setSelected] = useState(paths[0] ?? "");
   const [document, setDocument] = useState<EditorDocument>();
+  const [externalPath, setExternalPath] = useState("");
   const [loading, setLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   useEffect(() => { setSelected((value) => paths.includes(value) ? value : paths[0] ?? ""); }, [paths]);
   useEffect(() => {
-    if (!cwd || !selected) { setDocument(undefined); return; }
+    if (!cwd || !selected) { setDocument(undefined); setExternalPath(""); return; }
     let cancelled = false;
+    setPreviewError("");
+    setExternalPath("");
     setLoading(true);
-    void window.grokDesktop.openEditorDocument(cwd, selected).then((result) => { if (!cancelled) setDocument(result.kind === "document" ? result.document : undefined); }).catch((error) => { if (!cancelled) onError(message(error)); }).finally(() => { if (!cancelled) setLoading(false); });
+    void window.grokDesktop.openEditorDocument(cwd, selected).then((result) => { if (!cancelled) { setDocument(result.kind === "document" ? result.document : undefined); setExternalPath(result.kind === "external" ? result.path : ""); if (result.kind !== "document") setPreviewError(result.reason || "此文件需要使用外部应用打开。"); } }).catch((error) => { if (!cancelled) { setDocument(undefined); setExternalPath(""); setPreviewError(message(error)); } }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [cwd, onError, selected]);
   return <div className="right-files-tool">
-    <aside>{paths.map((path) => <button className={selected === path ? "active" : ""} key={path} title={path} onClick={() => setSelected(path)}><UiIcon name="file"/><span>{path}</span></button>)}{!paths.length && <p className="right-tool-empty">最近回合没有可确认的写入文件。</p>}</aside>
-    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre>{document.content}</pre></> : selected ? <p className="right-tool-empty">此文件无法在应用内预览。</p> : null}</main>
+    <aside>{paths.map((path) => <button className={selected === path ? "active" : ""} key={path} title={path} onClick={() => setSelected(path)}><UiIcon name="file"/><span>{relativeDisplayPath(path, cwd)}</span></button>)}{!paths.length && <p className="right-tool-empty">最近回合没有可确认的写入文件。</p>}</aside>
+    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre>{document.content}</pre></> : selected ? <div className="right-tool-empty"><strong>无法预览此文件</strong><p>{previewError || "文件不存在、已移动或不在当前会话的受信任执行目录内。"}</p>{externalPath && <button onClick={() => void window.grokDesktop.openPath(externalPath).catch((error) => onError(message(error)))}>用系统默认应用打开</button>}</div> : null}</main>
   </div>;
 }
 
@@ -96,3 +101,11 @@ function toolTitle(tool: RightUtilityTool): string { return ({ launcher: "侧栏
 function toolSubtitle(tool: RightUtilityTool): string { return ({ launcher: "选择当前任务需要的工具", document: "当前回合", files: "最近回合实际写入", tasks: "Agent、后台、队列与等待" })[tool]; }
 function sessionStatusLabel(status?: string): string { return ({ working: "运行中", "needs-user": "等待操作", error: "失败", idle: "空闲" } as Record<string, string>)[status ?? "idle"] ?? status ?? "空闲"; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+export function relativeDisplayPath(path: string, root: string): string {
+  const slashPath = path.replace(/\//g, "\\");
+  const slashRoot = root.replace(/\//g, "\\").replace(/\\+$/, "");
+  if (!/^[A-Za-z]:\\|^\\\\/.test(slashPath) || !slashRoot) return slashPath;
+  const target = slashPath.toLocaleLowerCase();
+  const base = slashRoot.toLocaleLowerCase();
+  return target.startsWith(`${base}\\`) ? slashPath.slice(slashRoot.length + 1) : slashPath;
+}

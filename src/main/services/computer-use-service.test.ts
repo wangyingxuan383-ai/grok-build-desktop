@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState, shouldConfirmComputerRisk, shouldRequestComputerAppPermission } from "./computer-use-service";
+import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerHostTimeout, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState, shouldConfirmComputerRisk, shouldRequestComputerAppPermission } from "./computer-use-service";
 
 describe("Computer Use safety policy", () => {
   it("is accepted and available-by-default while preserving the user's enable toggle", async () => {
@@ -16,12 +16,13 @@ describe("Computer Use safety policy", () => {
     }
   });
   it.each([
-    ["powershell", ""], ["pwsh", ""], ["cmd", ""], ["Codex", "任务"], ["notepad", "Windows Security"], ["grok-build-desktop", "Grok Build Desktop"],
+    ["powershell", ""], ["pwsh", ""], ["cmd", ""], ["notepad", "Windows Security"], ["grok-build-desktop", "Grok Build Desktop"],
   ])("blocks protected target %s", (processName, title) => expect(isBlockedComputerTarget(processName, title)).toBe(true));
 
   it("does not block ordinary foreground applications", () => {
     expect(isBlockedComputerTarget("notepad", "notes.txt - Notepad")).toBe(false);
     expect(isBlockedComputerTarget("calculatorapp", "Calculator")).toBe(false);
+    expect(isBlockedComputerTarget("Codex", "Codex 任务")).toBe(false);
   });
 
   it("starts an ordinary app directly by default and retains optional per-app confirmation", async () => {
@@ -105,6 +106,26 @@ describe("Computer Use safety policy", () => {
     expect(mapScreenshotCoordinates({ sessionId: "s", action: "click", x: 480, y: 320 }, state)).toEqual(expect.objectContaining({ x: 600, y: 400 }));
   });
 
+  it("stays stopped after an emergency stop until the session is explicitly re-armed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "computer-estop-"));
+    const service = new ComputerUseService(root, "missing-helper", "missing-plugin", { log: async () => undefined } as never, () => "agent", () => undefined);
+    try {
+      // A live task is required for emergencyStop to have anything to stop.
+      (service as never as { tasks: Map<string, unknown> }).tasks.set("s1", { sessionId: "s1", appId: "a", appName: "A", status: "running", stepCount: 1, updatedAt: new Date().toISOString() });
+
+      expect(service.emergencyStop("Ctrl+Alt+Esc")).toEqual(["s1"]);
+      expect(service.isEmergencyStopped("s1")).toBe(true);
+
+      // Without the sticky guard the CLI's next start() would succeed and the
+      // agent would resume driving the mouse one tool call later.
+      await expect(service.start({ sessionId: "s1", appId: "a" })).rejects.toThrow("已紧急停止");
+      expect(service.isEmergencyStopped("s2")).toBe(false);
+
+      service.clearEmergencyStop("s1");
+      expect(service.isEmergencyStopped("s1")).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it("returns PNG as MCP image content without duplicating it in text", () => {
     const result = buildComputerStateResult({ stateId: "state", sessionId: "s", window: {} as never, capturedAt: "now", screenshot: "cG5n", screenshotMimeType: "image/png", elements: [], treeTruncated: false } as never, { sessionId: "s", status: "running", stepCount: 1, updatedAt: "now" });
     expect(result.content).toEqual([expect.objectContaining({ type: "text" }), { type: "image", data: "cG5n", mimeType: "image/png" }]);
@@ -116,5 +137,52 @@ describe("Computer Use safety policy", () => {
     expect(result.content).toHaveLength(3);
     expect(result.content[2]).toEqual(expect.objectContaining({ type: "image", data: "ZGV0YWls", _meta: expect.objectContaining({ role: "detail" }) }));
     expect(String(result.content[0]?.text)).not.toContain("ZGV0YWls");
+  });
+});
+
+describe("elevated target handling", () => {
+  const service = (windows: unknown[]) => {
+    const value = new ComputerUseService("C:\nope", "missing-helper", "missing-plugin", { log: async () => undefined } as never, () => "agent", () => undefined);
+    (value as never as { listApps(): Promise<unknown[]> }).listApps = async () => [{ id: "app:1", name: "Elevated App", controllable: false, blockedReason: "目标窗口运行于更高权限级别" }];
+    (value as never as { listWindows(): Promise<unknown[]> }).listWindows = async () => windows;
+    return value;
+  };
+  const elevatedWindow = { id: "w1", appId: "app:1", controllable: false, blockedCode: "elevated", blockedReason: "目标窗口运行于更高权限级别" };
+
+  it("publishes a task state so the refusal reaches a UI surface at all", async () => {
+    const published: unknown[] = [];
+    const value = service([elevatedWindow]);
+    (value as never as { publish(task: unknown): void }).publish = (task: unknown) => { published.push(task); };
+
+    // Previously start() threw before any task existed, so nothing downstream
+    // could classify it and the live strip never appeared.
+    await expect(value.start({ sessionId: "s", appId: "app:1" })).rejects.toThrow(/管理员权限/);
+    expect(published.length).toBeGreaterThan(0);
+    expect(published.at(-1)).toMatchObject({ interventionKind: "elevation-blocked", status: "paused" });
+  });
+
+  it("distinguishes an uncertain host timeout from a confirmed failed action", () => {
+    expect(isComputerHostTimeout(new Error("Computer Host click 超时"))).toBe(true);
+    expect(isComputerHostTimeout(new Error("目标窗口不存在"))).toBe(false);
+  });
+
+  it("puts the cause in the headline, which is the slot neither surface clips", async () => {
+    const published: Array<{ headline?: string; message?: string }> = [];
+    const value = service([elevatedWindow]);
+    (value as never as { publish(task: unknown): void }).publish = (task) => { published.push(task as never); };
+    await value.start({ sessionId: "s", appId: "app:1" }).catch(() => undefined);
+    expect(published.at(-1)?.headline).toContain("管理员权限");
+    expect(published.at(-1)?.message).toContain("不会自行提权");
+  });
+
+  it("does not mark a permanent elevation as a completable manual step", async () => {
+    const published: Array<{ manualInterventionRequired?: boolean; interventionKind?: string }> = [];
+    const value = service([elevatedWindow]);
+    (value as never as { publish(task: unknown): void }).publish = (task) => { published.push(task as never); };
+    await value.start({ sessionId: "s", appId: "app:1" }).catch(() => undefined);
+    // "已手动完成，继续" against an elevated target can never succeed; offering
+    // it is what trapped the user in a resume loop.
+    expect(published.at(-1)?.manualInterventionRequired).toBe(false);
+    expect(published.at(-1)?.interventionKind).toBe("elevation-blocked");
   });
 });

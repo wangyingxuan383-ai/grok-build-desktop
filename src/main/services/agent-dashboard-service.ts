@@ -47,37 +47,38 @@ export class AgentDashboardService {
   async record(event: ChatEvent): Promise<void> {
     if (!event.sessionId) return;
     if (!["status", "tool-call", "turn-completed", "permission", "question", "error", "subagent", "meta"].includes(event.type)) return;
-    const state = await this.store.get();
-    const now = new Date().toISOString();
-    const rootId = rootNodeId(event.sessionId);
-    const root = state.records[rootId] ?? createRecord(rootId, event.sessionId, "主会话", now);
+    const sessionId = event.sessionId;
+    await this.store.mutate((state) => {
+      const now = new Date().toISOString();
+      const rootId = rootNodeId(sessionId);
+      const root = state.records[rootId] ?? createRecord(rootId, sessionId, "主会话", now);
 
-    if (event.type === "status") {
-      root.status = event.status === "working" ? "running" : event.status === "needs-user" ? "waiting" : event.status === "error" ? "failed" : event.status === "idle" && root.status === "running" ? "completed" : root.status;
-      root.latestAction = event.text || statusLabel(root.status);
-      if (root.status === "running" && !root.startedAt) root.startedAt = now;
-      if (["completed", "failed", "stopped"].includes(root.status)) root.completedAt = now;
-      if (root.status === "waiting") root.waitingReason = event.text || "等待用户操作";
-      if (root.status === "failed") root.failureReason = event.text || "会话运行失败";
-    } else if (event.type === "tool-call") {
-      const tools = new Set(root.toolIds ?? []); tools.add(event.tool.toolCallId); root.toolIds = [...tools]; root.toolCount = tools.size;
-      root.latestAction = event.tool.title || event.tool.kind || "工具调用";
-      if (event.tool.status === "failed") root.failureReason = event.tool.error || "工具调用失败";
-    } else if (event.type === "turn-completed") {
-      if (root.status === "running") root.status = "completed";
-      root.completedAt = now; root.latestAction = "本轮已完成";
-    } else if (event.type === "permission" || event.type === "question") {
-      root.status = "waiting"; root.waitingReason = event.type === "permission" ? "等待工具权限确认" : "等待问题答复"; root.latestAction = root.waitingReason;
-    } else if (event.type === "error") {
-      root.status = "failed"; root.failureReason = event.message; root.latestAction = event.message; root.completedAt = now;
-    } else if (event.type === "meta") {
-      root.contextUsed = event.meta.totalTokens; root.modelId = event.meta.modelId || root.modelId;
-    } else if (event.type === "subagent") {
-      updateSubagent(state.records, root, event.update, now);
-    }
-    root.updatedAt = now;
-    state.records[rootId] = root;
-    await this.store.set(state);
+      if (event.type === "status") {
+        root.status = event.status === "working" ? "running" : event.status === "needs-user" ? "waiting" : event.status === "error" ? "failed" : event.status === "idle" && root.status === "running" ? "completed" : root.status;
+        root.latestAction = event.text || statusLabel(root.status);
+        if (root.status === "running" && !root.startedAt) root.startedAt = now;
+        if (["completed", "failed", "stopped"].includes(root.status)) root.completedAt = now;
+        if (root.status === "waiting") root.waitingReason = event.text || "等待用户操作";
+        if (root.status === "failed") root.failureReason = event.text || "会话运行失败";
+      } else if (event.type === "tool-call") {
+        const tools = new Set(root.toolIds ?? []); tools.add(event.tool.toolCallId); root.toolIds = [...tools]; root.toolCount = tools.size;
+        root.latestAction = event.tool.title || event.tool.kind || "工具调用";
+        if (event.tool.status === "failed") root.failureReason = event.tool.error || "工具调用失败";
+      } else if (event.type === "turn-completed") {
+        if (root.status === "running") root.status = "completed";
+        root.completedAt = now; root.latestAction = "本轮已完成";
+      } else if (event.type === "permission" || event.type === "question") {
+        root.status = "waiting"; root.waitingReason = event.type === "permission" ? "等待工具权限确认" : "等待问题答复"; root.latestAction = root.waitingReason;
+      } else if (event.type === "error") {
+        root.status = "failed"; root.failureReason = event.message; root.latestAction = event.message; root.completedAt = now;
+      } else if (event.type === "meta") {
+        root.contextUsed = event.meta.totalTokens; root.modelId = event.meta.modelId || root.modelId;
+      } else if (event.type === "subagent") {
+        updateSubagent(state.records, root, event.update, now);
+      }
+      root.updatedAt = now;
+      state.records[rootId] = root;
+    });
   }
 
   async snapshot(input: DashboardSnapshotInput): Promise<AgentDashboardSnapshot> {
@@ -127,13 +128,13 @@ export class AgentDashboardService {
   }
 
   async clear(nodeId?: string): Promise<void> {
-    const state = await this.store.get();
-    if (!nodeId) state.records = {};
-    else {
-      delete state.records[nodeId];
-      for (const [id, value] of Object.entries(state.records)) if (value.parentId === nodeId) delete state.records[id];
-    }
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      if (!nodeId) state.records = {};
+      else {
+        delete state.records[nodeId];
+        for (const [id, value] of Object.entries(state.records)) if (value.parentId === nodeId) delete state.records[id];
+      }
+    });
   }
 }
 

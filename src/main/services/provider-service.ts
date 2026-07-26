@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,6 +7,7 @@ import { parse, stringify, type TomlTable } from "smol-toml";
 import type { CustomProviderInput, CustomProviderProfile, ProviderConnectionDraft, ProviderConnectivityResult, ProviderDraftProbeResult, ProviderModelCandidate, ProviderModelDefinition } from "../../shared/types";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
+import { ProviderGatewayService } from "./provider-gateway-service";
 
 const START = "# >>> Grok Build Desktop managed models >>>";
 const END = "# <<< Grok Build Desktop managed models <<<";
@@ -35,12 +36,18 @@ export class ProviderService {
   private readonly store: JsonStore<ProviderStoreData>;
   private readonly fetcher: typeof fetch;
   private readonly environment: ProviderEnvironment;
+  private readonly gateway: ProviderGatewayService;
 
   constructor(userDataPath: string, private readonly log: LogService, private readonly options: ProviderServiceOptions = {}) {
     this.configPath = join(options.grokHome ?? join(homedir(), ".grok"), "config.toml");
     this.store = new JsonStore(join(userDataPath, "providers.json"), { providers: [] });
     this.fetcher = options.fetcher ?? fetch;
     this.environment = options.environment ?? new WindowsUserEnvironment();
+    this.gateway = new ProviderGatewayService({
+      providers: async () => (await this.store.get()).providers,
+      fetcher: this.fetcher,
+      log: this.log,
+    });
   }
 
   async list(): Promise<CustomProviderProfile[]> {
@@ -63,6 +70,8 @@ export class ProviderService {
     const existingEnvName = previous?.credentialEnv;
     const envName = input.credentialMode === "managed" ? managedEnvironmentName(input.id) : input.credentialMode === "existing" ? normalizeEnvironmentName(input.credentialEnv || "") : undefined;
     const previousSecret = envName ? await this.environment.read(envName) : undefined;
+    const baseUrlEnv = managedBaseUrlEnvironmentName(input.id);
+    const previousBaseUrl = await this.environment.read(baseUrlEnv);
     const previousExistingSecret = existingEnvName && existingEnvName !== envName ? await this.environment.read(existingEnvName) : previousSecret;
     if (input.credentialMode === "managed" && !input.credentialValue && !previousSecret) throw new Error("请输入提供商密钥");
     await this.assertNoExternalCollision(input, originalConfig, data.providers);
@@ -73,6 +82,8 @@ export class ProviderService {
       baseUrl: normalizeBaseUrl(input.baseUrl),
       modelListUrl: input.modelListUrl?.trim() || undefined,
       protocol: input.protocol,
+      upstreamProtocol: input.upstreamProtocol ?? protocolUpstreamDefault(input.protocol),
+      schemaProfile: input.schemaProfile ?? "standard",
       authScheme: input.authScheme,
       credentialMode: input.credentialMode,
       credentialEnv: envName,
@@ -93,6 +104,7 @@ export class ProviderService {
         await this.environment.write(envName!, input.credentialValue);
         environmentChanged = true;
       }
+      if (previousBaseUrl !== profile.baseUrl) await this.environment.write(baseUrlEnv, profile.baseUrl);
       if (existingEnvName && existingEnvName !== envName && !nextProviders.some((value) => value.credentialEnv === existingEnvName)) {
         await this.environment.write(existingEnvName, undefined);
         previousEnvironmentCleared = true;
@@ -109,6 +121,7 @@ export class ProviderService {
       if (storeChanged) await this.store.set(data).catch((rollbackError) => this.log.log(`提供商索引回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (environmentChanged && envName) await this.environment.write(envName, previousSecret).catch((rollbackError) => this.log.log(`提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (previousEnvironmentCleared && existingEnvName) await this.environment.write(existingEnvName, previousExistingSecret).catch((rollbackError) => this.log.log(`旧提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      if (previousBaseUrl !== profile.baseUrl) await this.environment.write(baseUrlEnv, previousBaseUrl).catch((rollbackError) => this.log.log(`提供商地址环境变量回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       await this.log.log(`提供商配置回滚：${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
@@ -124,6 +137,8 @@ export class ProviderService {
     const nextProviders = data.providers.filter((value) => value.id !== id);
     const removeEnvironment = Boolean(target.credentialMode === "managed" && target.credentialEnv && !nextProviders.some((value) => value.credentialEnv === target.credentialEnv));
     const previousSecret = removeEnvironment && target.credentialEnv ? await this.environment.read(target.credentialEnv) : undefined;
+    const baseUrlEnv = managedBaseUrlEnvironmentName(target.id);
+    const previousBaseUrl = await this.environment.read(baseUrlEnv);
     let storeChanged = false;
     let environmentChanged = false;
     try {
@@ -135,6 +150,7 @@ export class ProviderService {
         await this.environment.write(target.credentialEnv, undefined);
         environmentChanged = true;
       }
+      await this.environment.write(baseUrlEnv, undefined);
       await this.rotateBackups();
       await this.options.reloadModels?.();
       return this.list();
@@ -142,8 +158,59 @@ export class ProviderService {
       await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.store.set(data).catch((rollbackError) => this.log.log(`提供商索引回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (environmentChanged && target.credentialEnv) await this.environment.write(target.credentialEnv, previousSecret).catch((rollbackError) => this.log.log(`提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      await this.environment.write(baseUrlEnv, previousBaseUrl).catch((rollbackError) => this.log.log(`提供商地址环境变量回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       throw error;
     }
+  }
+
+  /**
+   * Session-launch path. The loopback routes are the only thing the desktop CLI
+   * process actually needs, so persisting the upstream URL for direct CLI use
+   * and migrating an older managed block are best-effort: a registry failure or
+   * a concurrently edited config.toml must not cost the caller its routes.
+   */
+  async desktopEnvironment(scopeId: string = randomUUID()): Promise<Record<string, string>> {
+    const providers = (await this.store.get()).providers;
+    if (!providers.length) return {};
+    let needsMigration = false;
+    const config = await readFile(this.configPath, "utf8").catch(() => "");
+    const environment: Record<string, string> = {};
+    for (const provider of providers) {
+      const name = managedBaseUrlEnvironmentName(provider.id);
+      try {
+        if (await this.environment.read(name) !== provider.baseUrl) await this.environment.write(name, provider.baseUrl);
+      } catch (error) {
+        await this.log.log(`提供商地址环境变量写入失败，直接命令行使用需手动设置 ${name}：${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!config.includes(`\${${name}}`)) needsMigration = true;
+      environment[name] = await this.gateway.route(provider.id, scopeId);
+    }
+    if (needsMigration) {
+      try {
+        await this.replaceManagedBlock(config, providers, hash(config));
+        await this.options.validateConfig?.();
+      } catch (error) {
+        await this.log.log(`提供商管理块迁移失败，本次会话沿用现有 config.toml：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return environment;
+  }
+
+  dispose(): Promise<void> { return this.gateway.dispose(); }
+
+  /**
+   * Finds which managed provider serves a local model id, so a failed turn can
+   * be matched to what the gateway observed for that upstream.
+   */
+  async providerForModel(modelId: string | undefined): Promise<CustomProviderProfile | undefined> {
+    if (!modelId) return undefined;
+    const providers = (await this.store.get()).providers;
+    return providers.find((provider) => provider.models.some((model) => model.id === modelId));
+  }
+
+  /** Most recent gateway-observed failures, newest first. */
+  gatewayFailures(providerId?: string, scopeId?: string): ReturnType<ProviderGatewayService["recentFailures"]> {
+    return this.gateway.recentFailures(providerId, scopeId);
   }
 
   async test(id: string): Promise<ProviderConnectivityResult> {
@@ -279,8 +346,8 @@ export class ProviderService {
       }
       model[item.id] = {
         model: item.model,
-        base_url: provider.baseUrl,
-        name: item.name,
+        base_url: `\${${managedBaseUrlEnvironmentName(provider.id)}}`,
+        name: `${provider.name} · ${item.name}`,
         description: item.description,
         env_key: provider.credentialEnv,
         api_backend: provider.protocol,
@@ -340,6 +407,8 @@ export class ProviderService {
         name: typeof item.name === "string" ? item.name : id,
         baseUrl,
         protocol: item.api_backend === "responses" || item.api_backend === "messages" ? item.api_backend : "chat_completions",
+        upstreamProtocol: item.api_backend === "responses" ? "openai_responses" : item.api_backend === "messages" ? "anthropic_messages" : "openai_chat",
+        schemaProfile: "standard",
         authScheme: item.auth_scheme === "x_api_key" ? "x_api_key" : "bearer",
         credentialMode: envKey ? "existing" : "none",
         credentialEnv: envKey,
@@ -435,6 +504,10 @@ function normalizeModel(value: ProviderModelDefinition): ProviderModelDefinition
 function normalizeHeaders(value: Record<string, string>): Record<string, string> { return Object.fromEntries(Object.entries(value).filter(([key, env]) => key.trim() && env.trim()).map(([key, env]) => [key.trim(), normalizeEnvironmentName(env)])); }
 function normalizeEnvironmentName(value: string): string { const normalized = value.trim().toUpperCase(); if (!/^[A-Z_][A-Z0-9_]*$/.test(normalized)) throw new Error("环境变量名格式无效"); return normalized; }
 function managedEnvironmentName(id: string): string { return `GROK_DESKTOP_PROVIDER_${id}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_") + "_KEY"; }
+export function managedBaseUrlEnvironmentName(id: string): string { return `GROK_DESKTOP_PROVIDER_${id}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_") + "_BASE_URL"; }
+function protocolUpstreamDefault(protocol: CustomProviderInput["protocol"]): NonNullable<CustomProviderInput["upstreamProtocol"]> {
+  return protocol === "responses" ? "openai_responses" : protocol === "messages" ? "anthropic_messages" : "openai_chat";
+}
 function normalizeBaseUrl(value: string): string { return value.trim().replace(/\/+$/, ""); }
 function isInsecureRemote(value: string): boolean { const url = new URL(value); return url.protocol === "http:" && !["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname.toLowerCase()); }
 function draftModelListUrl(provider: ProviderConnectionDraft): string { return provider.modelListUrl?.trim() || `${provider.baseUrl.trim().replace(/\/+$/, "")}/models`; }

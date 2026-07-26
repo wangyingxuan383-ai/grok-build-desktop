@@ -1,0 +1,135 @@
+import { createHash } from "node:crypto";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import type { AgentChangeIndex, AgentFileChange, ToolCallState } from "../../shared/types";
+
+const MAX_TEXT_BYTES = 256 * 1024;
+const MAX_FILES_PER_SESSION = 400;
+
+/** Tool kinds that represent the agent actually writing to a file. */
+const WRITE_KINDS = new Set(["edit_file", "write_file", "create_file", "patch_file", "delete_file"]);
+
+interface SessionChanges {
+  cwd: string;
+  /** Keyed by tool call id so a streamed update replaces rather than duplicates. */
+  byToolCall: Map<string, AgentFileChange>;
+  order: string[];
+}
+
+/**
+ * Records what the agent actually wrote, from the before/after text the ACP
+ * tool call already carries. This is a real baseline, not a reconstruction:
+ * it is what the agent did, which is also more accurate than `git status` for
+ * a file the agent edited and then reverted, or one already committed.
+ *
+ * Deliberately not a git substitute — nothing here stages, commits or branches.
+ */
+export class AgentChangeService {
+  private readonly sessions = new Map<string, SessionChanges>();
+
+  /** Returns true when the tool call was a real write worth recording. */
+  record(sessionId: string, cwd: string, turnId: string | undefined, tool: ToolCallState): boolean {
+    if (!isWriteTool(tool)) return false;
+    const path = firstPath(tool);
+    if (!path) return false;
+    const entry: SessionChanges = this.sessions.get(sessionId) ?? { cwd, byToolCall: new Map<string, AgentFileChange>(), order: [] };
+    entry.cwd = cwd || entry.cwd;
+
+    const absolutePath = isAbsolute(path) ? resolve(path) : resolve(entry.cwd || ".", path);
+    const change: AgentFileChange = {
+      id: `${tool.toolCallId}`,
+      path: workspaceRelative(absolutePath, entry.cwd),
+      absolutePath,
+      toolCallId: tool.toolCallId,
+      at: new Date().toISOString(),
+      status: tool.status === "failed" ? "failed" : "applied",
+      ...(turnId ? { turnId } : {}),
+      ...boundedText("before", tool.oldText),
+      ...boundedText("after", tool.newText),
+    };
+    // A write with neither side captured tells the user nothing beyond "it was
+    // touched", and saying so is better than rendering an empty diff.
+    change.baseline = change.before === undefined ? (change.after === undefined ? "none" : "missing-before") : "captured";
+
+    if (!entry.byToolCall.has(change.id)) entry.order.push(change.id);
+    entry.byToolCall.set(change.id, change);
+    while (entry.order.length > MAX_FILES_PER_SESSION) {
+      const dropped = entry.order.shift();
+      if (dropped) entry.byToolCall.delete(dropped);
+    }
+    this.sessions.set(sessionId, entry);
+    return true;
+  }
+
+  index(sessionId: string, scope: "last-turn" | "session"): AgentChangeIndex {
+    const entry = this.sessions.get(sessionId);
+    const all = entry ? entry.order.map((id) => entry.byToolCall.get(id)!).filter(Boolean) : [];
+    const latestTurn = all.filter((change) => change.turnId).at(-1)?.turnId;
+    const files = scope === "session" || !latestTurn ? all : all.filter((change) => change.turnId === latestTurn);
+    return {
+      cwd: entry?.cwd ?? "",
+      scope,
+      files: dedupeByPathKeepingLatest(files),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  clear(sessionId: string): void { this.sessions.delete(sessionId); }
+}
+
+function isWriteTool(tool: ToolCallState): boolean {
+  if (tool.kind && WRITE_KINDS.has(tool.kind)) return true;
+  // Some CLIs report a generic kind but still carry a diff; that is still a write.
+  return Boolean(tool.oldText !== undefined || tool.newText !== undefined);
+}
+
+function firstPath(tool: ToolCallState): string | undefined {
+  const location = (tool.locations ?? []).find((value) => typeof value.path === "string" && value.path.trim());
+  return location?.path?.trim();
+}
+
+function workspaceRelative(absolutePath: string, cwd: string): string {
+  if (!cwd) return absolutePath;
+  const rel = relative(resolve(cwd), absolutePath);
+  return !rel || rel.startsWith("..") || isAbsolute(rel) ? absolutePath : rel.split(sep).join("/");
+}
+
+function boundedText(field: "before" | "after", value: string | undefined): Partial<AgentFileChange> {
+  if (value === undefined) return {};
+  if (Buffer.byteLength(value, "utf8") <= MAX_TEXT_BYTES) return field === "before" ? { before: value } : { after: value };
+  const bytes = Buffer.from(value, "utf8");
+  let end = MAX_TEXT_BYTES;
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let clipped = "";
+  while (end > 0) {
+    try { clipped = decoder.decode(bytes.subarray(0, end)); break; }
+    catch { end -= 1; }
+  }
+  return field === "before" ? { before: clipped, beforeTruncated: true } : { after: clipped, afterTruncated: true };
+}
+
+/** The same file edited repeatedly in one scope should read as one change. */
+function dedupeByPathKeepingLatest(files: AgentFileChange[]): AgentFileChange[] {
+  const byPath = new Map<string, AgentFileChange>();
+  for (const change of files) {
+    const previous = byPath.get(change.path);
+    // Keep the earliest captured baseline and the latest result, so a file
+    // edited three times shows the whole journey rather than the last step.
+    if (!previous) {
+      byPath.set(change.path, change);
+      continue;
+    }
+    const baseline = previous.before !== undefined
+      ? { before: previous.before, beforeTruncated: previous.beforeTruncated }
+      : { before: change.before, beforeTruncated: change.beforeTruncated };
+    byPath.set(change.path, {
+      ...change,
+      ...baseline,
+      baseline: previous.baseline === "captured" ? "captured" : change.baseline,
+    });
+  }
+  return [...byPath.values()];
+}
+
+export function agentChangeDigest(change: AgentFileChange): string {
+  return createHash("sha256").update(`${change.path}\0${change.before ?? ""}\0${change.after ?? ""}`).digest("hex").slice(0, 16);
+}

@@ -1,5 +1,107 @@
 # Changelog
 
+## 0.6.6 - 2026-07-27
+
+### Release hardening
+
+- Session metadata stores now perform atomic queued read/modify/write mutations. Concurrent Token turns and Agent Dashboard updates no longer overwrite one another; clearing a workspace removes the exact session assignments, token detail, non-Git change snapshots, dashboard records, attachments and turn presentation metadata without stopping unrelated live sessions.
+- Provider failure observations are correlated with an opaque per-process scope and a one-sided time window. A nearby failure from another simultaneous session, or a future timestamp, can no longer be attached to the wrong turn. Cancel and process-exit evidence survives the enrichment pass.
+- ACP `retry_state` notifications are now visible in the running process block, including attempt, limit, delay and upstream reason where supplied. A Prompt that exceeds its turn budget sends the real ACP cancel notification instead of merely abandoning the Renderer-side Promise.
+- Primary chat events reach the Renderer before optional dashboard, Token, attachment or Computer Use projections touch disk. A projection failure is logged and cannot suppress the answer or error that the user is waiting to see.
+- The 53-week activity grid is exactly 371 days. UTF-8 change snapshots clip on code-point boundaries, preserve the true earliest-baseline truncation flag and no longer leave NUL bytes in the TypeScript source.
+- Streaming final answers use a stable plain-text surface until completion instead of reparsing the entire growing Markdown document every frame. Workbench dialog dependencies are memoized so Git and Worktree effects no longer reload on every App render.
+- Computer Use publishes action-specific MCP schemas, clamps element and drag coordinates to the selected window, maps punctuation through the Windows keyboard layout, supports horizontal wheel input, and records a native-host timeout as an unknown outcome that requires re-observation rather than a confirmed failure.
+
+### Interface polish
+
+- The text-size and density settings now apply to every surface. `#overlay-root` is a sibling of `#root`, so every portaled dialog, palette and panel sat outside `.app-shell` and inherited neither — setting the text size visibly did nothing to any of them. Measured in the packaged renderer: the settings dialog went from ignoring the setting to scaling 16px → 24px at 150%.
+- Code blocks are no longer re-tokenized on every streaming frame. The highlight effect depended on the growing source text, so a block still arriving was fully re-highlighted each frame; it now waits for the text to settle and shows plain text meanwhile, which is all anyone can read mid-stream anyway.
+- The 开发工具 section remembers whether it was open instead of collapsing on every launch.
+- The add palette declared `aria-modal` but Tab escaped to the page behind it: the global overlay focus trap keys off a flag that does not include the palette, so it was never armed. Tab is now contained.
+- Leaving the chat view no longer leaves the shell reserving space for a right pane that is not rendered there.
+
+### Computer Use: the elevated-target dead end
+
+- Asking to control an already-elevated app used to throw before any task existed, so nothing downstream could classify it, no state was ever published, and neither the live strip nor the desktop overlay appeared. The user's only channel was whatever the model chose to say about a raw tool error. The refusal now publishes a real task state.
+- A transient UAC prompt and a permanently elevated target were one state with one message. For the permanent case there is nothing to complete, yet the UI offered "已手动完成，继续" — and `resume` re-activated without checking controllability, hit the identical error and re-armed the identical button, forever. They are now distinct: `uac-handoff` keeps the resume affordance, `elevation-blocked` explains the Windows integrity rule, names the two legitimate remedies, and offers no button that cannot succeed.
+- The one message that carried the reason put it in a parenthetical at the end of a long single-line string, and both surfaces that render it clip with `nowrap` + ellipsis — so the reason was never visible. The cause now goes in the headline slot, which neither surface clips.
+- The native host reports a machine-readable `blockedCode` so the app distinguishes a permanent integrity boundary from its own blocklist without parsing prose.
+
+### Token activity
+
+- Per-turn usage is now recorded and rolled up: 24h, today, 7d, 30d and month, plus a 53-week activity heatmap with daily, weekly and cumulative views, filterable by model. Reachable from a Token 活动 settings category.
+- Every number is a sum of what the CLI or provider actually reported. The app never computes usage itself — it only relays `turn_completed.usage`, and failed or cancelled turns carry none — so coverage is stated alongside each total ("N turns, M of which returned no usage") rather than letting a total silently under-report real work.
+- Two tiers of storage with an enforced contract: per-turn detail is deleted when its session is deleted, while the anonymous daily rollup survives and is pruned after roughly 13 months. No prompt text is stored.
+
+### Review outside Git
+
+- Non-Git workspaces can finally review changes. A new Agent 改动 surface is built from the real before/after text the agent's own write tool calls already carried, scoped to the last turn or the whole session, with a side-by-side diff.
+- This is not a Git stand-in: nothing stages, commits or branches, and none is implied. It is also strictly more faithful than `git status` for this question — a file the agent edited and then reverted, or one already committed, still appears because the agent really did write it.
+- Where no before-text was captured the surface says so and shows the result, rather than diffing against an empty string and implying the file was created.
+- Clicking 在 Review 中查看 in a non-Git folder used to silently redirect to an unrelated file list; it now opens this surface.
+
+### Structured failures
+
+- Failures now cross the process boundary as data instead of one free-text string. `TurnFailure` carries a classification, the model, the provider, the HTTP status, the upstream trace id, `retry-after`, the gateway phase and how many tool-schema values were rewritten. Previously the ACP adapter captured the JSON-RPC `data` payload and nothing in the codebase ever read it back, and the `code` was dropped outright — which is why nothing downstream could tell one failure from another.
+- Failures are classified from evidence only — status code, process exit code, or a phrase the upstream itself produced — and an unmatched failure stays `unknown` rather than being forced into a bucket. Each class carries its own concrete next actions.
+- The provider gateway keeps a bounded, in-memory record of what it observed on 4xx/5xx: status, trace id, `retry-after`, phase and sanitize count. It already forwarded all of it and stored none of it. Nothing is persisted and no credential or body is retained.
+- The main process joins the two — it is the only place that can see both the adapter's model and the gateway's trace — redacts the message, and adds a targeted action when a Gemini-family upstream is still on the pass-through schema profile, which is the one case where the remedy is a single setting rather than a retry.
+- Diagnostics gained a failure-scoped path. `diagnoseFailure` runs only the checks that bear on the class at hand — the schema profile for a rejected tool schema, the real quota windows for an exhausted quota, the credential source for an expired key, route and proxy for a network failure, and the CLI probes only where a crash makes them the relevant evidence. It deliberately does not re-run the four-subprocess install sweep, which for most classes costs the better part of a minute and then reports all-green.
+- The error card renders the classification, the facts that are actually present and the suggested actions. Its previous summary parsed an `HTTP nnn / Provider: x` shape that only the offline fixture ever produced, so against a real failure it degraded to showing the first line.
+- A final CodeQL review found that the loopback gateway could return an arbitrary caught exception to its local caller. Public gateway responses now use a small fixed set of safe Chinese messages, while the separately redacted diagnostic remains main-process-only; a regression test injects a fake private path and stack and proves neither crosses the HTTP boundary.
+
+### Verification
+
+- The final corrected local release gate passed: 67 test files passed and 4 explicitly live-gated files skipped; 359 tests passed and 7 skipped. TypeScript, the production main/preload/Renderer build, the native Computer Host build/self-test, Electron Fuses, packaged UI fixtures, Task Scheduler, a Chinese/space Portable path, and both 264-file public-source scans passed.
+- The packaged 0.6.6 fixture verified conversation/workbench/task navigation, the five real right-pane tools, recent-file preview, non-Git Agent changes, collapsed structured errors, turn metrics, the exact 371-day Token activity grid, all four update/diagnostic actions, narrow-window drawer behavior and Provider management.
+- The same Setup was installed per-user. File/Product, main-process bootstrap and About report 0.6.6; diagnostics reports “可以使用”; attachment-body/full-path support-bundle exclusions remain present; Desktop and Start Menu shortcuts target the installed executable.
+- The first PR Windows dependency gate exposed two optional `@emnapi` packages absent from the lockfile under npm 11 strict `npm ci`. The next gate picked up newly published build-time advisories; `brace-expansion` and `tar` are now pinned to 5.0.8 and 7.5.22. A fresh `npm ci` and the full high-level audit report zero vulnerabilities.
+- Rebuilding from that clean dependency tree exposed two acceptance-infrastructure defects before publication: Windows PowerShell 5.1 needed UTF-8 BOMs on the modified packaging/smoke scripts, and the 0.6.2 compatibility probe incorrectly required three simultaneous Virtuoso DOM items. The probe now scrolls to and verifies the historical fixture semantically instead of counting virtualized rows. The rejected candidates were not published; the corrected final package reran the complete 359-test and packaged UI gate.
+- PR review also rejected that candidate before publication because an arbitrary Provider-gateway exception could reach the loopback response. The response is now a fixed safe classification, with the detailed redacted evidence retained only in local main-process diagnostics; the corrected runtime is rebuilt and reinstalled below before tagging.
+- Final local candidate SHA-256: Setup `b4243d6ebc0137291b0fc38df1b948f554a7be41d787a678ea9594fb99a57a5e`; Portable `b8edbe0c7a99717da8956e0e540a73410a8de6c6b1d8ce5d7a529f62bb55b4e6`; SBOM `c4489c6c07492c943db339474d0d5c6fe20ce810dc1b6a0bfce946e436a8bc51`; licenses `1ad863e9d4753397efa8ab297e057882b2f04d665bb5e8ed7062d71b900b8ca5`.
+- GitHub Release hashes and provenance are recorded only after the tagged Hosted Windows workflow rebuilds, downloads and verifies the public assets. Cross-protocol Provider translation remains deliberately deferred; 0.6.6 supports the verified same-protocol gateway and Gemini/strict Schema profiles.
+
+## 0.6.5 - 2026-07-26 (release candidate)
+
+### Fixed
+
+- Plan decisions are keyed by session/request, locked on the first click and answered exactly once over the original ACP server request. Approval no longer emits a synthetic `[Plan approved]` prompt, so it cannot create a duplicate queued user message or second model turn.
+- Queue, edit, remove, reorder and interjection operations return visible operation receipts. `Enter` queues while a turn is running, `Ctrl+Enter` requests same-turn interjection, unsupported interjection visibly falls back to the queue head, and plan/permission/question waits disable the ordinary composer.
+- The four update/diagnostic actions now expose running/success/error/cancelled results, prevent re-entry, copy their result and actually open the diagnostics surface or selected export path.
+- Provider failures render a compact summary with an expandable, copyable redacted HTTP/Provider/route/Trace body. Managed model names include their provider prefix.
+- Device login detects `--no-browser`: either the app opens exactly one browser or the CLI owns browser launch, never both.
+- Rolling 24-hour Grok Free Token limits are parsed separately from weekly/monthly billing, persisted locally per account and marked expired rather than being presented as current after their observation window.
+- Removed Codex from the Computer Use application blocklist while preserving self/terminal/UAC/security-window restrictions and the same-integrity requirement for control.
+- Computer Use emergency stop is now terminal. It marks the session stopped, cancels the Grok turn that is issuing the tool calls, and refuses further `start` calls until the session is explicitly re-armed. Previously it only flipped task status, so the CLI's next tool call re-acquired control roughly one step later.
+- The overlay no longer registers a global bare `Esc`. That grab swallowed Escape system-wide for the whole session — so Escape could not dismiss a menu or cancel a dialog in the target app — and the host's own synthesized `press_key esc`, an ordinary UI step, tripped the emergency stop against itself. `Ctrl+Alt+Esc` remains the OS-wide kill switch, its registration result is now checked, and the overlay says "回到 Grok 窗口停止" instead of advertising a hotkey the OS refused.
+- A Computer Use lease no longer leaks when the Grok CLI fails to spawn. The `closed` event that releases the lease was emitted only from the process `exit` handler, which never fires for a binary that is missing, renamed or quarantined; it now fires exactly once on every disposal path.
+- Recent files are constrained to the real session/Worktree root, shown as relative project paths and retain the main-process external-open path instead of trying to open a broken relative path.
+- Binary files are no longer a dead end. Opening a PNG, PDF or archive returns the same external-application escape hatch an oversized file does instead of throwing, so the file tree, tool-call locations, navigation targets and the recent-files pane all offer "open with the system app" rather than a bare error. Write paths still refuse binaries.
+- The composer is never disabled. Disabling it mid-IME-composition could swallow `compositionend` and leave Enter permanently dead; typing and drafting now always work and only submission is gated, with a stated reason instead of a silent no-op. Interjection also gained a real button next to 加入队列, so `Ctrl+Enter` is no longer the only way to reach it.
+- Failed and cancelled turns now show their duration, token cost and an outcome badge. The metrics footer used to render only inside the final-answer block, hiding the cost of exactly the turns that did not produce one.
+- The composer token meter keeps its 512K fallback for models that do not report a context window, but now says so in its tooltip instead of presenting the assumed denominator as measured.
+- A provider problem can no longer block launching sessions that use no provider. Persisting the upstream URL for direct CLI use and migrating an older managed block are best-effort: a read-only user environment or a concurrently edited `config.toml` is logged and the session still receives its loopback routes.
+- Rolling 24-hour quota capture no longer rides in front of the error event it observes. It runs detached and swallows vault/`quota.json` failures, so a bookkeeping error cannot delay or suppress the failure message the user needs to read.
+
+### Provider compatibility
+
+- Added a loopback-only, random-port Provider gateway with an opaque per-process route. The Renderer never receives the upstream URL or credential; only desktop-launched CLI processes receive the loopback override.
+- The gateway performs same-protocol streaming pass-through, cancellation and bounded request/response handling, does not follow redirects, preserves selected Trace/rate-limit headers and emits structured redacted failures. Request bodies are forwarded as bytes, so binary and multipart payloads survive the hop intact.
+- Parallel session launches share a single gateway listener. Each caller used to bind its own port and only the last was ever closed.
+- Gemini/strict Schema profiles remove null/empty enum members, null types/defaults and unsupported Schema keywords while preserving tool names, required fields and semantics. The default `standard` profile is a true pass-through and never rewrites a request body.
+- Model discovery now pre-selects the Gemini Schema profile when the endpoint serves Gemini-family models, and a Gemini 兼容 preset was added. Because `standard` is a genuine pass-through, leaving a Gemini upstream on it reproduces the empty-enum rejection on the first tool-using turn.
+- Provider TOML uses an environment-backed `base_url`; old literal managed blocks migrate atomically on desktop launch, and config/credential/base-URL rollback remains transactional.
+
+### Verification
+
+- TypeScript, the production main/preload/Renderer build and the full offline suite pass: 64 test files and 319 tests, with 4 files / 7 tests skipped behind explicit `GROK_LIVE_*` and `GROK_CURRENT_PROVIDER_PROBE` gates. `npm audit --omit=dev` reports zero vulnerabilities.
+- A live end-to-end run against a user-authorized Gemini-family endpoint proved the compatibility fix rather than assuming it. Three real calls: a no-tool baseline returned HTTP 200; the same tool schema carrying empty-string enum members returned HTTP 400 `GenerateContentRequest…enum[4]: cannot be empty` on the pass-through `standard` profile, reproducing the originally reported failure verbatim; and the identical request returned HTTP 200 once the `gemini` profile sanitized it. The probe is retained as `provider-gateway.live.test.ts`, gated on `GROK_LIVE_GATEWAY_KEY`/`_BASE`/`_MODEL`, and stores no credential.
+- Seven stale local acceptance-probe assertions and two probe race conditions were found and fixed. They had rotted since the 0.6.4 settings refactor because the local probe chain never runs in CI — `package-win.ps1` takes a different branch under `GITHUB_ACTIONS` — so the 0.6.4 packaging gate never exercised them.
+- An isolated `GROK_HOME` live test with installed CLI `0.2.112 (9bbd559437)` completed ACP `initialize/session/new/prompt` against a local fake OpenAI endpoint, proving `${ENV}` `base_url` expansion reaches `/v1/chat/completions` without a paid request.
+- The user-authorized current managed Provider completed one minimal real ACP turn through the new compatibility gateway; its log recorded Schema sanitization and the former empty-enum HTTP 400 did not recur. The test did not log the credential, request body or response body.
+- The 251-file public-source scan, zero-production-vulnerability audit and source-built 0.6.5 UI fixture pass. The fixture verifies collapsed structured Provider errors, exact 1m23s/input-120/output-30 turn metrics, all four update/diagnostic actions, real diagnostics navigation, the workbench return cycle, non-Git Review empty state, Provider manager and responsive composer/drawer.
+- Formal packaging, per-user installation and GitHub Release publication are still pending; 0.6.4 remains the installed/public fallback until those gates pass.
+
 ## 0.6.4 - 2026-07-23 (public Latest release)
 
 ### Changed
