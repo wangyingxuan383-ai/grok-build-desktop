@@ -1,4 +1,4 @@
-import { BrowserWindow, globalShortcut, screen } from "electron";
+import { BrowserWindow, screen } from "electron";
 import type { Rectangle } from "electron";
 import type { ComputerTaskState } from "../shared/types";
 
@@ -8,7 +8,7 @@ export function isComputerTaskVisiblyActive(task: ComputerTaskState): boolean {
   return ACTIVE_STATUSES.has(task.status);
 }
 
-export function renderComputerOverlayHtml(task: ComputerTaskState, displayBounds: Rectangle, escRegistered: boolean): string {
+export function renderComputerOverlayHtml(task: ComputerTaskState, displayBounds: Rectangle, shortcutRegistered: boolean): string {
   const appName = escapeHtml(task.appName || "Windows 应用");
   const message = escapeHtml(task.message || "Grok 正在观察目标窗口");
   const paused = task.status === "paused";
@@ -16,8 +16,8 @@ export function renderComputerOverlayHtml(task: ComputerTaskState, displayBounds
   const pointer = task.pointer && task.pointer.x >= displayBounds.x && task.pointer.x < displayBounds.x + displayBounds.width && task.pointer.y >= displayBounds.y && task.pointer.y < displayBounds.y + displayBounds.height
     ? `<div class="pointer ${task.pointer.action.includes("click") ? "clicking" : ""}" style="left:${Math.round(task.pointer.x - displayBounds.x)}px;top:${Math.round(task.pointer.y - displayBounds.y)}px" aria-hidden="true"><i></i></div>`
     : "";
-  const stateLabel = risk ? "等待确认" : paused ? (task.manualInterventionRequired ? "等待手动确认" : "已暂停") : "正在控制";
-  const stopLabel = escRegistered ? "Esc 停止" : "Ctrl+Alt+Esc 停止";
+  const stateLabel = task.headline || (risk ? "等待确认" : paused ? (task.manualInterventionRequired ? "等待手动确认" : "已暂停") : "正在控制");
+  const stopLabel = shortcutRegistered ? "Ctrl+Alt+Esc 停止" : "回到 Grok 窗口停止";
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><title>Grok Computer Use Active</title>
 <style>
@@ -33,10 +33,14 @@ export function renderComputerOverlayHtml(task: ComputerTaskState, displayBounds
 export class ComputerUseOverlay {
   private readonly tasks = new Map<string, ComputerTaskState>();
   private overlay?: BrowserWindow;
-  private escRegistered = false;
   private disposed = false;
 
-  constructor(private readonly stop: (source: string) => void) {}
+  /**
+   * @param shortcutRegistered whether the OS actually accepted the global
+   * Ctrl+Alt+Esc kill switch. Another app can already own it, and claiming a
+   * hotkey that does nothing is worse than admitting it is unavailable.
+   */
+  constructor(private readonly stop: (source: string) => void, private readonly shortcutRegistered: () => boolean = () => true) {}
 
   update(task: ComputerTaskState): void {
     if (this.disposed) return;
@@ -48,7 +52,6 @@ export class ComputerUseOverlay {
   dispose(): void {
     this.disposed = true;
     this.tasks.clear();
-    this.unregisterEsc();
     this.overlay?.destroy();
     this.overlay = undefined;
   }
@@ -56,12 +59,10 @@ export class ComputerUseOverlay {
   private refresh(): void {
     const task = Array.from(this.tasks.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
     if (!task) {
-      this.unregisterEsc();
       this.overlay?.destroy();
       this.overlay = undefined;
       return;
     }
-    if (!this.escRegistered) this.escRegistered = globalShortcut.register("Esc", () => this.stop("Esc"));
     const targetBounds = task.lastState?.window.bounds;
     const display = targetBounds ? screen.getDisplayMatching(targetBounds) : screen.getPrimaryDisplay();
     const bounds = display.bounds;
@@ -76,18 +77,13 @@ export class ComputerUseOverlay {
       this.overlay.setIgnoreMouseEvents(true, { forward: true });
       this.overlay.setAlwaysOnTop(true, "floating");
     } else this.overlay.setBounds(bounds, false);
-    const html = renderComputerOverlayHtml(task, bounds, this.escRegistered);
+    const html = renderComputerOverlayHtml(task, bounds, this.shortcutRegistered());
     const overlay = this.overlay;
     void overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
       if (!overlay.isDestroyed()) overlay.showInactive();
     }).catch(() => undefined);
   }
 
-  private unregisterEsc(): void {
-    if (!this.escRegistered) return;
-    globalShortcut.unregister("Esc");
-    this.escRegistered = false;
-  }
 }
 
 function escapeHtml(value: string): string {

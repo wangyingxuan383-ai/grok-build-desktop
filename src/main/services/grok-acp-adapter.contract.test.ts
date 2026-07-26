@@ -110,18 +110,23 @@ rl.on("line", async (line) => {
         _meta: { reasoningEffort: "low" },
       });
       await adapter.prompt("test");
-      await adapter.queuePrompt("queued text", []);
+      const queueReceipt = await adapter.queuePrompt("queued text", []);
+      expect(queueReceipt).toMatchObject({ state: "queued", message: "消息已加入队列" });
+      expect(queueReceipt.operationId).toMatch(/^[0-9a-f-]{36}$/i);
       await waitForFile(queueMarker);
       const queued = JSON.parse(await readFile(queueMarker, "utf8"));
       expect(queued._meta).toMatchObject({ sendNow: false, clientIdentifier: "grok-build-desktop" });
       expect(queued._meta.promptId).toMatch(/^[0-9a-f-]{36}$/i);
-      await adapter.editQueuedPrompt(queued._meta.promptId, "edited queue text");
+      const editReceipt = await adapter.editQueuedPrompt(queued._meta.promptId, "edited queue text");
+      expect(editReceipt).toMatchObject({ entryId: queued._meta.promptId, state: "updated" });
       await waitForFile(queueEditMarker);
       expect(JSON.parse(await readFile(queueEditMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/edit", params: { sessionId: "fake-session", id: queued._meta.promptId, newText: "edited queue text" } });
-      await adapter.interjectQueuedPrompt(queued._meta.promptId);
+      const interjectQueueReceipt = await adapter.interjectQueuedPrompt(queued._meta.promptId);
+      expect(interjectQueueReceipt).toMatchObject({ entryId: queued._meta.promptId, state: "interjected" });
       await waitForFile(queueInterjectMarker);
       expect(JSON.parse(await readFile(queueInterjectMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/interject", params: { sessionId: "fake-session", id: queued._meta.promptId, expectedVersion: 2 } });
-      await adapter.interjectPrompt("same turn");
+      const interjectReceipt = await adapter.interjectPrompt("same turn");
+      expect(interjectReceipt).toMatchObject({ state: "interjected", message: "插话已提交到当前回合" });
       await waitForFile(interjectMarker);
       expect(JSON.parse(await readFile(interjectMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", text: "same turn", interjectionId: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
       expect(await adapter.fork("3")).toMatchObject({ newSessionId: "forked-session" });

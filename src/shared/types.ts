@@ -68,6 +68,91 @@ export interface SystemDiagnosticItem {
   details?: string[];
 }
 
+/**
+ * One file the agent actually wrote, with the before/after text the ACP tool
+ * call carried. Not a git substitute: it records what the agent did, which is
+ * also more faithful than `git status` for a file that was edited and then
+ * reverted, or one that has already been committed.
+ */
+export interface AgentFileChange {
+  id: string;
+  path: string;
+  absolutePath: string;
+  toolCallId: string;
+  at: string;
+  status: "applied" | "failed";
+  turnId?: string;
+  before?: string;
+  after?: string;
+  beforeTruncated?: boolean;
+  afterTruncated?: boolean;
+  /** `missing-before` and `none` must be shown as such rather than diffed against "". */
+  baseline?: "captured" | "missing-before" | "none";
+}
+
+export interface AgentChangeIndex {
+  cwd: string;
+  scope: "last-turn" | "session";
+  files: AgentFileChange[];
+  createdAt: string;
+}
+
+/**
+ * Token totals for one period. Every number is a sum of what the CLI or
+ * provider actually reported — nothing is estimated. `turns` vs `turnsWithUsage`
+ * is the coverage: failed and cancelled turns report no usage at all, so a
+ * period can contain real work that no total can account for.
+ */
+export interface TokenActivityWindow {
+  from: string;
+  turns: number;
+  turnsWithUsage: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedReadTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
+export interface TokenDayBucket {
+  day: string;
+  turns: number;
+  turnsWithUsage: number;
+  totalTokens: number;
+}
+
+export interface TokenActivityQuery {
+  modelId?: string;
+  providerId?: string;
+  workspace?: string;
+}
+
+export interface TokenActivityReport {
+  generatedAt: string;
+  windows: {
+    rolling24h: TokenActivityWindow;
+    today: TokenActivityWindow;
+    rolling7d: TokenActivityWindow;
+    rolling30d: TokenActivityWindow;
+    month: TokenActivityWindow;
+  };
+  days: TokenDayBucket[];
+  models: string[];
+  workspaces: string[];
+}
+
+/**
+ * A diagnosis scoped to one failed turn. The static install sweep answers
+ * "is my install healthy"; this answers "why did THIS request fail".
+ */
+export interface FailureDiagnosisReport {
+  failure: TurnFailure;
+  generatedAt: string;
+  headline: string;
+  items: SystemDiagnosticItem[];
+  actions: string[];
+}
+
 export interface SystemCompatibilityReport {
   checkedAt: string;
   overall: "ready" | "limited" | "blocked";
@@ -134,12 +219,16 @@ export interface AppSettings {
   recentWorkspaces: string[];
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
+  /** The 开发工具 section resets to collapsed on every launch without this. */
+  projectToolsOpen?: boolean;
   sessionGroupCollapsed?: Partial<Record<SessionOriginKind, boolean>>;
   showArchivedCodex?: boolean;
   theme: ThemeSettings;
 }
 
 export type ProviderProtocol = "chat_completions" | "responses" | "messages";
+export type ProviderUpstreamProtocol = "openai_chat" | "openai_responses" | "anthropic_messages" | "gemini_generate_content" | "compatible_passthrough";
+export type ProviderSchemaProfile = "standard" | "gemini" | "strict";
 export type ProviderAuthScheme = "bearer" | "x_api_key";
 
 export interface ProviderModelDefinition {
@@ -164,6 +253,8 @@ export interface CustomProviderProfile {
   baseUrl: string;
   modelListUrl?: string;
   protocol: ProviderProtocol;
+  upstreamProtocol?: ProviderUpstreamProtocol;
+  schemaProfile?: ProviderSchemaProfile;
   authScheme: ProviderAuthScheme;
   credentialMode: "managed" | "existing" | "none";
   credentialEnv?: string;
@@ -311,6 +402,21 @@ export interface PromptQueueEntry {
   attachmentPreviews?: UserMessageAttachmentPreview[];
 }
 
+export interface QueueOperationReceipt {
+  operationId: string;
+  entryId?: string;
+  state: "queued" | "interjected" | "updated" | "removed" | "reordered" | "cleared";
+  message: string;
+  fallback?: boolean;
+}
+
+export interface PlanDecisionReceipt {
+  requestId: string;
+  verdict: "approved" | "rejected" | "cancelled";
+  state: "accepted" | "duplicate";
+  message: string;
+}
+
 export interface BackgroundTaskSummary {
   id: string;
   sessionId?: string;
@@ -444,11 +550,15 @@ export interface QuotaWindow {
   used?: number;
   limit?: number;
   remaining?: number;
-  unit: "credits" | "usd" | "percent";
+  unit: "credits" | "usd" | "percent" | "tokens";
   periodStart?: string;
   periodEnd?: string;
   resetAt?: string;
   products?: Array<{ label: string; usedPercent?: number }>;
+  source?: "billing-api" | "cli-error";
+  observedAt?: string;
+  modelId?: string;
+  expired?: boolean;
 }
 
 export interface GrokQuotaSnapshot {
@@ -457,6 +567,7 @@ export interface GrokQuotaSnapshot {
   fetchedAt: string;
   stale: boolean;
   partial: boolean;
+  rolling24h?: QuotaWindow;
   weekly?: QuotaWindow;
   monthly?: QuotaWindow;
   onDemand?: QuotaWindow;
@@ -607,6 +718,8 @@ export interface ComputerApp {
   windowCount: number;
   controllable: boolean;
   blockedReason?: string;
+  /** `elevated` is a permanent Windows integrity boundary; `blocklist` is our own policy. */
+  blockedCode?: "elevated" | "blocklist";
 }
 
 export interface ComputerWindow {
@@ -622,6 +735,8 @@ export interface ComputerWindow {
   foreground: boolean;
   controllable: boolean;
   blockedReason?: string;
+  /** `elevated` is a permanent Windows integrity boundary; `blocklist` is our own policy. */
+  blockedCode?: "elevated" | "blocklist";
 }
 
 export interface ComputerElement {
@@ -694,6 +809,15 @@ export interface ComputerTaskState {
   message?: string;
   pointer?: { x: number; y: number; action: ComputerActionName; label?: string };
   manualInterventionRequired?: boolean;
+  /**
+   * Why the user is being asked to intervene. `uac-handoff` is transient and
+   * resuming is meaningful; `elevation-blocked` is permanent and resuming can
+   * never succeed, so offering the same button for both traps the user in a
+   * loop against an unfixable target.
+   */
+  interventionKind?: "uac-handoff" | "elevation-blocked";
+  /** Short cause, rendered in the headline slot so a nowrap strip cannot clip it away. */
+  headline?: string;
 }
 
 export interface ComputerAppPermissionRequest {
@@ -836,6 +960,59 @@ export interface TurnPresentation {
   completedAt?: string;
   durationMs?: number;
   outcome?: TurnOutcome;
+  usage?: TurnUsage;
+}
+
+export interface TurnUsage extends PromptMeta {
+  providerId?: string;
+  source: "acp-turn" | "prompt-result" | "history";
+  exact: true;
+}
+
+/**
+ * What kind of failure this was, which is what decides the useful next action.
+ * A quota wall, a rejected tool schema and an expired credential all surface as
+ * "the request failed" today even though nothing about the remedy is shared.
+ */
+export type TurnFailureClass =
+  | "quota-exhausted"
+  | "schema-rejected"
+  | "auth-expired"
+  | "provider-error"
+  | "network"
+  | "cli-crashed"
+  | "cancelled"
+  | "unknown";
+
+/**
+ * Identity and context for one failed turn. Without this the renderer receives
+ * only a free-text string, so nothing downstream can tell which provider,
+ * model or request failed — which is why the diagnostics centre could not be
+ * connected to a failure and reported an all-green install instead.
+ */
+export interface TurnFailure {
+  failureId: string;
+  at: string;
+  classification: TurnFailureClass;
+  /** Already redacted in the main process before it crosses the bridge. */
+  message: string;
+  sessionId?: string;
+  turnId?: string;
+  modelId?: string;
+  providerId?: string;
+  jsonRpcCode?: number;
+  httpStatus?: number;
+  traceId?: string;
+  retryAfter?: string;
+  gatewayPhase?: "pre-send" | "upstream" | "response";
+  /** How many tool-schema values the compatibility gateway rewrote for this provider. */
+  sanitizedCount?: number;
+  processExitCode?: number;
+  cancelled?: boolean;
+  /** Opaque process-local gateway scope used only to correlate one CLI process. */
+  gatewayScopeId?: string;
+  /** Short, class-specific things the user can actually do. */
+  nextActions?: string[];
 }
 
 export interface PermissionOption {
@@ -878,13 +1055,14 @@ export type ChatEvent =
   | { type: "command-output"; sessionId: string; command: string; output: string; exitCode: number | null; truncated: boolean }
   | { type: "turn-started"; sessionId: string; presentation: TurnPresentation }
   | { type: "turn-completed"; sessionId: string; presentation?: TurnPresentation }
+  | { type: "turn-retry"; sessionId: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
   | { type: "turn-presentations-restore"; sessionId: string; presentations: TurnPresentation[] }
   | { type: "subagent"; sessionId: string; update: { sessionUpdate?: string; subagent_id?: string; duration_ms?: number; output?: string; [key: string]: unknown } }
   | { type: "computer-state"; sessionId: string; state: ComputerTaskState }
   | { type: "computer-permission"; sessionId: string; request: ComputerAppPermissionRequest }
   | { type: "computer-risk"; sessionId: string; request: ComputerRiskConfirmation }
   | { type: "prompt-queue"; sessionId: string; entries: PromptQueueEntry[] }
-  | { type: "error"; sessionId?: string; message: string };
+  | { type: "error"; sessionId?: string; message: string; failure?: TurnFailure };
 
 export interface CliVersionStatus {
   found: boolean;
@@ -946,6 +1124,9 @@ export interface GrokDesktopApi {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState>;
   resetOnboarding(): Promise<OnboardingState>;
   runDiagnostics(): Promise<SystemCompatibilityReport>;
+  diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport>;
+  getAgentChanges(sessionId: string, scope: "last-turn" | "session"): Promise<AgentChangeIndex>;
+  getTokenActivity(query?: TokenActivityQuery): Promise<TokenActivityReport>;
   getCliCapabilities(force?: boolean): Promise<import("./workbench-types").CliCapabilitySnapshot>;
   previewSupportBundle(): Promise<SupportBundlePreview>;
   exportSupportBundle(): Promise<string | null>;
@@ -1045,7 +1226,7 @@ export interface GrokDesktopApi {
   setMode(sessionId: string, mode: SessionMode): Promise<void>;
   respondPermission(sessionId: string, requestId: string | number, optionId: string): Promise<void>;
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>): Promise<void>;
-  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<void>;
+  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<PlanDecisionReceipt>;
   pickAttachments(): Promise<Attachment[]>;
   pickAttachmentFolders(): Promise<Attachment[]>;
   attachmentsFromPaths(paths: string[]): Promise<Attachment[]>;
@@ -1093,13 +1274,13 @@ export interface GrokDesktopApi {
   repairAutomationRegistrations(): Promise<AutomationTask[]>;
   checkAutomationHealth(repair?: boolean): Promise<import("./workbench-types").AutomationHealthReport>;
   clearAutomationContext(id: string): Promise<AutomationTask[]>;
-  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
-  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
-  editQueuedPrompt(sessionId: string, id: string, text: string): Promise<void>;
-  removeQueuedPrompt(sessionId: string, id: string): Promise<void>;
-  reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<void>;
-  clearPromptQueue(sessionId: string): Promise<void>;
-  interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<void>;
+  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<QueueOperationReceipt>;
+  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<QueueOperationReceipt>;
+  editQueuedPrompt(sessionId: string, id: string, text: string): Promise<QueueOperationReceipt>;
+  removeQueuedPrompt(sessionId: string, id: string): Promise<QueueOperationReceipt>;
+  reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<QueueOperationReceipt>;
+  clearPromptQueue(sessionId: string): Promise<QueueOperationReceipt>;
+  interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<QueueOperationReceipt>;
   forkSession(sessionId: string, rewindPointId?: string, launch?: import("./workbench-types").ExecutionProfileLaunchInput): Promise<SessionForkResult>;
   listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
   rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void>;

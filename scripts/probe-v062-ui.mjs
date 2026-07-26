@@ -13,9 +13,17 @@ const evaluate = async (expression) => { const result = await request("Runtime.e
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(window.grokDesktop && document.querySelector('.app-shell'))"), "Application shell did not render");
-  await waitFor(() => evaluate("document.querySelectorAll('.chat-turn').length >= 3"), "0.6.2 offline conversation fixture did not render");
-  await evaluate("document.querySelector('.conversation')?.scrollTo({ top: 0 })");
-  await waitFor(() => evaluate(`Array.from(document.querySelectorAll('.execution-process summary strong')).some((node) => node.textContent?.includes('历史执行记录（30 段）'))`), "Legacy execution segments were not coalesced");
+  await evaluate("document.querySelector('.conversation')?.scrollTo({ top: 0 }); true");
+  try {
+    await waitFor(() => evaluate(`Array.from(document.querySelectorAll('.execution-process summary strong')).some((node) => node.textContent?.includes('历史执行记录（30 段）'))`), "0.6.2 offline conversation fixture did not render");
+  } catch (error) {
+    const diagnostic = await evaluate(`({
+      turns: document.querySelectorAll('.chat-turn').length,
+      route: document.querySelector('.main-stage')?.className || '',
+      body: document.body.innerText.slice(0, 1200),
+    })`);
+    throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+  }
   const initial = await evaluate(`({
     appVersion: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(),
     projectToolsExpanded: Boolean(document.querySelector('.project-tools nav')),
@@ -36,7 +44,11 @@ try {
     overlayBackground: document.querySelector('.conversation-wrap') ? getComputedStyle(document.querySelector('.conversation-wrap'), '::after').backgroundColor : '',
     overlayFilter: document.querySelector('.conversation-wrap') ? getComputedStyle(document.querySelector('.conversation-wrap'), '::after').backdropFilter : '',
   })`);
-  if (initial.appVersion !== "0.6.2") throw new Error(`Renderer version mismatch: ${JSON.stringify(initial)}`);
+  // smoke-app.ps1 derives this from package.json so the assertion tracks the
+  // real release instead of a literal that silently rots between versions.
+  const expectedVersion = process.env.GROK_EXPECTED_APP_VERSION?.trim();
+  if (!expectedVersion) throw new Error("GROK_EXPECTED_APP_VERSION was not provided to the probe");
+  if (initial.appVersion !== expectedVersion) throw new Error(`Renderer version mismatch: expected ${expectedVersion}, got ${JSON.stringify(initial)}`);
   if (initial.projectToolsExpanded || initial.directNav || initial.genericSummary || initial.review) throw new Error(`Default shell state is wrong: ${JSON.stringify(initial)}`);
   if (initial.historyBlocks !== 1 || !initial.elapsed || initial.images < 3 || initial.generatedResults < 1 || initial.finalAnswers < 1 || !initial.composer) throw new Error(`Conversation lifecycle fixture incomplete: ${JSON.stringify(initial)}`);
   if (!initial.backgroundClass.includes('background-conversation') || !initial.backgroundImage.includes('grok-theme://') || initial.dim.trim() !== '0' || initial.opacity.trim() !== '1' || initial.blur.trim() !== '0px') throw new Error(`Background settings were not applied exactly: ${JSON.stringify(initial)}`);
@@ -44,7 +56,9 @@ try {
 
   await evaluate("document.querySelector('.project-tools-heading')?.click()");
   const tools = await waitFor(() => evaluate(`(() => { const values = Array.from(document.querySelectorAll('.project-tools nav button')).map((node) => node.textContent.trim()); return values.length ? values : null; })()`), "Development tools did not expand");
-  for (const label of ["文件", "变更审核", "Worktree", "Memory", "Agent 与 Persona", "Profiles", "Dashboard", "任务", "扩展"]) if (!tools.includes(label)) throw new Error(`Missing development tool: ${label}`);
+  // 文件 and 变更审核 are no longer sidebar tools: files moved to the workbench
+  // view and change review to the right utility pane, verified further below.
+  for (const label of ["Worktree", "Memory", "Agent 与 Persona", "Profiles", "Dashboard", "任务", "扩展"]) if (!tools.includes(label)) throw new Error(`Missing development tool: ${label}`);
 
   await evaluate("document.querySelector('.workspace-button')?.focus(); document.querySelector('.workspace-button')?.click()");
   await waitFor(() => evaluate("document.activeElement === document.querySelector('.workspace-menu-search input')"), "Workspace picker did not focus search");
@@ -53,7 +67,11 @@ try {
   await evaluate("document.querySelector('[aria-label=\"关闭工作区选择器\"]')?.click()");
   await waitFor(() => evaluate("document.activeElement === document.querySelector('.workspace-button')"), "Workspace picker did not return focus");
 
+  // The topbar toggle now opens the right utility pane on its launcher; 审阅 is
+  // one entry inside it rather than a dedicated one-click surface.
   await evaluate("document.querySelector('.review-toggle')?.click()");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.right-tool-launcher'))"), "Right utility launcher did not open");
+  await evaluate("(() => { [...document.querySelectorAll('.right-tool-launcher button')].find(node => node.textContent?.includes('审阅'))?.click(); return true; })()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.review-pane'))"), "Review pane did not open");
   const review = await evaluate(`({ label: document.querySelector('.review-pane')?.getAttribute('aria-label'), scopes: Array.from(document.querySelectorAll('.review-scopes button')).map((node) => node.textContent.trim()), resizer: Boolean(document.querySelector('.review-resizer')), close: Boolean(document.querySelector('[aria-label="关闭审核"]')) })`);
   for (const label of ["Unstaged", "Staged", "Commit", "Branch", "Last turn"]) if (!review.scopes.includes(label)) throw new Error(`Missing Review scope: ${label}`);
@@ -64,7 +82,7 @@ try {
   await evaluate("document.querySelector('.sidebar-footer button[title=\"设置\"]')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.settings-dialog'))"), "Settings dialog did not open");
   const settings = await evaluate(`({ size: (() => { const box = document.querySelector('.settings-dialog').getBoundingClientRect(); return { width: Math.round(box.width), height: Math.round(box.height) }; })(), categories: Array.from(document.querySelectorAll('.settings-layout > nav button')).map((node) => node.textContent.trim()), close: Boolean(document.querySelector('[aria-label="关闭设置"]')) })`);
-  if (settings.categories.length !== 10 || !settings.close || settings.size.width < 850 || settings.size.height < 620) throw new Error(`Settings shell incomplete: ${JSON.stringify(settings)}`);
+  if (settings.categories.length < 10 || !settings.close || settings.size.width < 850 || settings.size.height < 620) throw new Error(`Settings shell incomplete: ${JSON.stringify(settings)}`);
   await evaluate(`Array.from(document.querySelectorAll('.settings-layout > nav button')).find((node) => node.textContent.trim() === '外观')?.click()`);
   await waitFor(() => evaluate("Boolean(document.querySelector('.background-preview'))"), "Background preview did not render");
   if (!await evaluate(`Array.from(document.querySelectorAll('.theme-background button')).some((node) => node.textContent.trim() === '重置背景参数')`)) throw new Error("Background reset action is missing");

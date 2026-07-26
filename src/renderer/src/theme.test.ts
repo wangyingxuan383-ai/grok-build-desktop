@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_THEME } from "../../main/services/theme-service";
-import { cacheThemeForEarlyStartup, contrastRatio, readCachedThemeForEarlyStartup, resolvedTheme, themeBackgroundClass, themeCssVariables } from "./theme";
+import { applyShellPreferencesToDocument, cacheThemeForEarlyStartup, contrastRatio, readCachedThemeForEarlyStartup, resolvedTheme, themeBackgroundClass, themeCssVariables } from "./theme";
 
 describe("renderer theme mapping", () => {
   it("resolves system and custom base themes", () => {
@@ -39,5 +39,27 @@ describe("renderer theme mapping", () => {
     expect(readCachedThemeForEarlyStartup(storage)).toEqual(theme);
     values.set([...values.keys()][0]!, JSON.stringify({ mode: "light", colors: {} }));
     expect(readCachedThemeForEarlyStartup(storage)).toBeUndefined();
+  });
+});
+
+// This file runs without a DOM; the helper only touches these two slots.
+const fakeRoot = () => ({ style: {} as CSSStyleDeclaration, dataset: {} as DOMStringMap }) as HTMLElement;
+
+describe("shell reading preferences", () => {
+  it("puts font size and density on the document root so portaled dialogs inherit them", () => {
+    const root = fakeRoot();
+    applyShellPreferencesToDocument(130, "compact", root);
+    // #overlay-root is a sibling of #root, so anything set on .app-shell alone
+    // never reaches a dialog, a palette or the settings panel.
+    expect(root.style.fontSize).toBe("130%");
+    expect(root.dataset.density).toBe("compact");
+  });
+
+  it("clamps an out-of-range scale instead of rendering an unusable interface", () => {
+    const root = fakeRoot();
+    applyShellPreferencesToDocument(5000, "balanced", root);
+    expect(root.style.fontSize).toBe("200%");
+    applyShellPreferencesToDocument(Number.NaN, "balanced", root);
+    expect(root.style.fontSize).toBe("100%");
   });
 });

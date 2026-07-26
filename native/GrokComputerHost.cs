@@ -19,7 +19,7 @@ internal static class GrokComputerHost
     private static readonly Dictionary<string, AutomationElement> Elements = new Dictionary<string, AutomationElement>();
     private static readonly Dictionary<IntPtr, string> LatestStates = new Dictionary<IntPtr, string>();
     private static readonly HashSet<string> BlockedProcesses = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-        "grok build desktop", "grok-build-desktop", "codex", "chatgpt", "powershell", "pwsh", "cmd", "windowsterminal", "wt", "conhost"
+        "grok build desktop", "grok-build-desktop", "chatgpt", "powershell", "pwsh", "cmd", "windowsterminal", "wt", "conhost"
     };
 
     [STAThread]
@@ -76,10 +76,11 @@ internal static class GrokComputerHost
             if (action == "double_click") { Thread.Sleep(60); mouse_event(down, 0, 0, 0, UIntPtr.Zero); mouse_event(up, 0, 0, 0, UIntPtr.Zero); }
         } else if (action == "scroll") {
             AutomationElement element = FindElement(StringValue(input, "elementId"));
-            int delta = IntValue(input, "deltaY", -480);
-            if (!TryScroll(element, delta)) {
+            int deltaX = IntValue(input, "deltaX", 0), deltaY = IntValue(input, "deltaY", deltaX == 0 ? -480 : 0);
+            if (!TryScroll(element, deltaX, deltaY)) {
                 Point point = TargetPoint(hwnd, input, element); SetCursorPos(point.X, point.Y);
-                mouse_event(MOUSEEVENTF_WHEEL, 0, 0, unchecked((uint)delta), UIntPtr.Zero);
+                if (deltaY != 0) mouse_event(MOUSEEVENTF_WHEEL, 0, 0, unchecked((uint)deltaY), UIntPtr.Zero);
+                if (deltaX != 0) mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, unchecked((uint)deltaX), UIntPtr.Zero);
             }
         } else if (action == "press_key") {
             PressKey(StringValue(input, "key"));
@@ -93,6 +94,8 @@ internal static class GrokComputerHost
             RECT rect; GetWindowRect(hwnd, out rect);
             int endX = input.ContainsKey("endX") ? rect.Left + IntValue(input, "endX", 0) : start.X;
             int endY = input.ContainsKey("endY") ? rect.Top + IntValue(input, "endY", 0) : start.Y;
+            endX = Math.Max(rect.Left, Math.Min(rect.Right - 1, endX));
+            endY = Math.Max(rect.Top, Math.Min(rect.Bottom - 1, endY));
             SetCursorPos(start.X, start.Y); mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero); Thread.Sleep(80);
             SetCursorPos(endX, endY); Thread.Sleep(100); mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
         } else throw new InvalidOperationException("Unsupported action: " + action);
@@ -126,7 +129,10 @@ internal static class GrokComputerHost
             { "id", HwndString(hwnd) }, { "appId", processName.ToLowerInvariant() }, { "processId", (int)pid }, { "processName", processName },
             { "executablePath", path }, { "title", title.ToString() }, { "x", rect.Left }, { "y", rect.Top }, { "width", rect.Right - rect.Left }, { "height", rect.Bottom - rect.Top },
             { "dpi", GetDpi(hwnd) }, { "minimized", IsIconic(hwnd) }, { "foreground", GetForegroundWindow() == hwnd }, { "controllable", !blocked },
-            { "blockedReason", elevated ? "目标窗口运行于更高权限级别" : blocked ? "该应用位于 Computer Use 不可控制清单" : null }
+            { "blockedReason", elevated ? "目标窗口运行于更高权限级别" : blocked ? "该应用位于 Computer Use 不可控制清单" : null },
+            // Machine-readable so the app can tell a permanent integrity-level
+            // barrier from a transient UAC prompt without parsing prose.
+            { "blockedCode", elevated ? "elevated" : blocked ? "blocklist" : null }
         };
     }
 
@@ -217,7 +223,7 @@ internal static class GrokComputerHost
 
     private static bool TryInvoke(AutomationElement element) { try { object pattern; if (element.TryGetCurrentPattern(InvokePattern.Pattern, out pattern)) { ((InvokePattern)pattern).Invoke(); return true; } } catch { } return false; }
     private static bool TrySetValue(AutomationElement element, string value) { try { object pattern; if (element.TryGetCurrentPattern(ValuePattern.Pattern, out pattern) && !((ValuePattern)pattern).Current.IsReadOnly) { ((ValuePattern)pattern).SetValue(value); return true; } } catch { } return false; }
-    private static bool TryScroll(AutomationElement element, int delta) {
+    private static bool TryScroll(AutomationElement element, int deltaX, int deltaY) {
         if (element == null) return false;
         try {
             object pattern;
@@ -226,9 +232,10 @@ internal static class GrokComputerHost
             for (int depth = 0; depth < 8 && current != null; depth++) {
                 if (current.TryGetCurrentPattern(ScrollPattern.Pattern, out pattern)) {
                     ScrollPattern scroll = (ScrollPattern)pattern;
-                    if (scroll.Current.VerticallyScrollable) scroll.ScrollVertical(delta < 0 ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement);
-                    else if (scroll.Current.HorizontallyScrollable) scroll.ScrollHorizontal(delta < 0 ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement);
-                    else return false;
+                    bool moved = false;
+                    if (deltaY != 0 && scroll.Current.VerticallyScrollable) { scroll.ScrollVertical(deltaY < 0 ? ScrollAmount.LargeIncrement : ScrollAmount.LargeDecrement); moved = true; }
+                    if (deltaX != 0 && scroll.Current.HorizontallyScrollable) { scroll.ScrollHorizontal(deltaX < 0 ? ScrollAmount.LargeDecrement : ScrollAmount.LargeIncrement); moved = true; }
+                    if (!moved) return false;
                     return true;
                 }
                 current = TreeWalker.ControlViewWalker.GetParent(current);
@@ -237,7 +244,12 @@ internal static class GrokComputerHost
         return false;
     }
     private static AutomationElement FindElement(string id) { AutomationElement value; return !String.IsNullOrEmpty(id) && Elements.TryGetValue(id, out value) ? value : null; }
-    private static Point TargetPoint(IntPtr hwnd, Dictionary<string, object> input, AutomationElement element) { if (element != null) { System.Windows.Rect b = element.Current.BoundingRectangle; return new Point((int)(b.X + b.Width / 2), (int)(b.Y + b.Height / 2)); } RECT rect; GetWindowRect(hwnd, out rect); return new Point(rect.Left + IntValue(input, "x", (rect.Right - rect.Left) / 2), rect.Top + IntValue(input, "y", (rect.Bottom - rect.Top) / 2)); }
+    private static Point TargetPoint(IntPtr hwnd, Dictionary<string, object> input, AutomationElement element) {
+        RECT rect; GetWindowRect(hwnd, out rect);
+        int x = element != null ? (int)(element.Current.BoundingRectangle.X + element.Current.BoundingRectangle.Width / 2) : rect.Left + IntValue(input, "x", (rect.Right - rect.Left) / 2);
+        int y = element != null ? (int)(element.Current.BoundingRectangle.Y + element.Current.BoundingRectangle.Height / 2) : rect.Top + IntValue(input, "y", (rect.Bottom - rect.Top) / 2);
+        return new Point(Math.Max(rect.Left, Math.Min(rect.Right - 1, x)), Math.Max(rect.Top, Math.Min(rect.Bottom - 1, y)));
+    }
     private static void RequireFreshState(IntPtr hwnd, string stateId) { string latest; if (String.IsNullOrEmpty(stateId) || !LatestStates.TryGetValue(hwnd, out latest) || latest != stateId) throw new InvalidOperationException("stateId 已过期；请重新调用 get_window_state"); }
     private static void EnsureWindow(IntPtr hwnd) { if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) throw new InvalidOperationException("目标窗口不存在"); Dictionary<string, object> info = WindowInfo(hwnd); if (!(bool)info["controllable"]) throw new InvalidOperationException((string)info["blockedReason"]); }
     private static void Activate(IntPtr hwnd)
@@ -276,8 +288,26 @@ internal static class GrokComputerHost
     private static bool IsProcessElevated(uint pid) { IntPtr process = IntPtr.Zero, token = IntPtr.Zero; try { process = OpenProcess(0x1000, false, pid); if (process == IntPtr.Zero || !OpenProcessToken(process, 0x0008, out token)) return false; TOKEN_ELEVATION elevation; int size; if (!GetTokenInformation(token, 20, out elevation, Marshal.SizeOf(typeof(TOKEN_ELEVATION)), out size)) return false; return elevation.TokenIsElevated != 0; } catch { return false; } finally { if (token != IntPtr.Zero) CloseHandle(token); if (process != IntPtr.Zero) CloseHandle(process); } }
     private static bool IsInteractiveDefaultDesktop() { IntPtr desktop = IntPtr.Zero; try { desktop = OpenInputDesktop(0, false, 0x0101); if (desktop == IntPtr.Zero) return false; int needed; GetUserObjectInformation(desktop, 2, null, 0, out needed); if (needed <= 0) return false; StringBuilder name = new StringBuilder(needed); return GetUserObjectInformation(desktop, 2, name, name.Capacity, out needed) && String.Equals(name.ToString(), "Default", StringComparison.OrdinalIgnoreCase); } catch { return false; } finally { if (desktop != IntPtr.Zero) CloseDesktop(desktop); } }
     private static uint GetDpi(IntPtr hwnd) { try { return GetDpiForWindow(hwnd); } catch { return 96; } }
-    private static void PressKey(string value) { if (String.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("缺少按键"); string[] parts = value.Split('+'); List<byte> keys = new List<byte>(); foreach (string part in parts) { byte key = VirtualKey(part.Trim()); keybd_event(key, 0, 0, UIntPtr.Zero); keys.Add(key); } for (int i = keys.Count - 1; i >= 0; i--) keybd_event(keys[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero); }
-    private static byte VirtualKey(string key) { string upper = key.ToUpperInvariant(); if (upper == "CTRL" || upper == "CONTROL") return 0x11; if (upper == "ALT") return 0x12; if (upper == "SHIFT") return 0x10; if (upper == "ENTER") return 0x0D; if (upper == "TAB") return 0x09; if (upper == "ESC" || upper == "ESCAPE") return 0x1B; if (upper == "SPACE") return 0x20; if (upper == "BACKSPACE") return 0x08; if (upper == "DELETE") return 0x2E; if (upper == "UP") return 0x26; if (upper == "DOWN") return 0x28; if (upper == "LEFT") return 0x25; if (upper == "RIGHT") return 0x27; if (upper.Length == 1) return (byte)upper[0]; throw new InvalidOperationException("不支持的按键: " + key); }
+    private static void PressKey(string value) {
+        if (String.IsNullOrWhiteSpace(value)) throw new InvalidOperationException("缺少按键");
+        string[] parts = value.Split('+'); List<byte> keys = new List<byte>();
+        foreach (string part in parts) {
+            int modifiers; byte key = VirtualKey(part.Trim(), out modifiers);
+            if ((modifiers & 2) != 0 && !keys.Contains(0x11)) { keybd_event(0x11, 0, 0, UIntPtr.Zero); keys.Add(0x11); }
+            if ((modifiers & 4) != 0 && !keys.Contains(0x12)) { keybd_event(0x12, 0, 0, UIntPtr.Zero); keys.Add(0x12); }
+            if ((modifiers & 1) != 0 && !keys.Contains(0x10)) { keybd_event(0x10, 0, 0, UIntPtr.Zero); keys.Add(0x10); }
+            if (!keys.Contains(key)) { keybd_event(key, 0, 0, UIntPtr.Zero); keys.Add(key); }
+        }
+        for (int i = keys.Count - 1; i >= 0; i--) keybd_event(keys[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    }
+    private static byte VirtualKey(string key, out int modifiers) {
+        modifiers = 0; string upper = key.ToUpperInvariant();
+        if (upper == "CTRL" || upper == "CONTROL") return 0x11; if (upper == "ALT") return 0x12; if (upper == "SHIFT") return 0x10;
+        if (upper == "ENTER") return 0x0D; if (upper == "TAB") return 0x09; if (upper == "ESC" || upper == "ESCAPE") return 0x1B; if (upper == "SPACE") return 0x20;
+        if (upper == "BACKSPACE") return 0x08; if (upper == "DELETE") return 0x2E; if (upper == "UP") return 0x26; if (upper == "DOWN") return 0x28; if (upper == "LEFT") return 0x25; if (upper == "RIGHT") return 0x27;
+        if (key.Length == 1) { short translated = VkKeyScan(key[0]); if (translated == -1) throw new InvalidOperationException("不支持的按键: " + key); modifiers = (translated >> 8) & 0x07; return (byte)(translated & 0xFF); }
+        throw new InvalidOperationException("不支持的按键: " + key);
+    }
     private static void SendUnicode(string text) { foreach (char c in text) { INPUT[] inputs = new INPUT[2]; inputs[0].type = 1; inputs[0].data.ki.wScan = c; inputs[0].data.ki.dwFlags = KEYEVENTF_UNICODE; inputs[1].type = 1; inputs[1].data.ki.wScan = c; inputs[1].data.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP; if (SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT))) != 2) throw new InvalidOperationException("Windows SendInput 失败: " + Marshal.GetLastWin32Error()); } }
     private static IntPtr ParseHwnd(string value) { long parsed; return long.TryParse(value, System.Globalization.NumberStyles.HexNumber, null, out parsed) ? new IntPtr(parsed) : IntPtr.Zero; }
     private static string HwndString(IntPtr value) { return value.ToInt64().ToString("X"); }
@@ -304,6 +334,7 @@ internal static class GrokComputerHost
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT point);
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
     [DllImport("user32.dll")] private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extraInfo);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern short VkKeyScan(char character);
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
     [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -314,7 +345,7 @@ internal static class GrokComputerHost
     [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseDesktop(IntPtr desktop);
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetUserObjectInformation(IntPtr handle, int index, StringBuilder information, int length, out int needed);
-    private const int SW_SHOW = 5, SW_RESTORE = 9; private const uint MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004, MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010, MOUSEEVENTF_WHEEL = 0x0800, KEYEVENTF_KEYUP = 0x0002, KEYEVENTF_UNICODE = 0x0004;
+    private const int SW_SHOW = 5, SW_RESTORE = 9; private const uint MOUSEEVENTF_LEFTDOWN = 0x0002, MOUSEEVENTF_LEFTUP = 0x0004, MOUSEEVENTF_RIGHTDOWN = 0x0008, MOUSEEVENTF_RIGHTUP = 0x0010, MOUSEEVENTF_WHEEL = 0x0800, MOUSEEVENTF_HWHEEL = 0x01000, KEYEVENTF_KEYUP = 0x0002, KEYEVENTF_UNICODE = 0x0004;
     [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct INPUT { public uint type; public INPUTUNION data; }

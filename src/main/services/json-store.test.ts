@@ -35,4 +35,19 @@ describe("JsonStore", () => {
     result.nested.value = 99;
     expect((await store.get()).nested.value).toBe(1);
   });
+
+  it("serializes complete concurrent read-modify-write transactions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-json-store-"));
+    roots.push(root);
+    const store = new JsonStore(join(root, "counter.json"), { count: 0, items: [] as string[] });
+
+    await Promise.all(Array.from({ length: 20 }, (_, index) => store.mutate((value) => {
+      value.count += 1;
+      value.items.push(String(index));
+    })));
+
+    const value = await store.get();
+    expect(value.count).toBe(20);
+    expect(new Set(value.items).size).toBe(20);
+  });
 });

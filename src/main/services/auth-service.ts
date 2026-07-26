@@ -45,6 +45,7 @@ export interface AuthServiceOptions {
   terminateProcessTree?: (child: ChildProcessWithoutNullStreams) => Promise<void>;
   openExternal?: (url: string) => Promise<void>;
   verifyActive?: () => Promise<void>;
+  supportsNoBrowser?: (cliPath: string, env: NodeJS.ProcessEnv) => Promise<boolean>;
 }
 
 class DeviceLoginTimeoutError extends Error {
@@ -63,6 +64,7 @@ export class AuthService {
   private readonly killProcessTree: (child: ChildProcessWithoutNullStreams) => Promise<void>;
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly verifyOverride?: () => Promise<void>;
+  private readonly detectNoBrowser: (cliPath: string, env: NodeJS.ProcessEnv) => Promise<boolean>;
   private operationTail: Promise<void> = Promise.resolve();
   private recoveryPromise?: Promise<void>;
   private loginPromise?: Promise<LoginState>;
@@ -85,6 +87,7 @@ export class AuthService {
     this.killProcessTree = options.terminateProcessTree ?? ((child) => terminateProcessTree(child));
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
     this.verifyOverride = options.verifyActive;
+    this.detectNoBrowser = options.supportsNoBrowser ?? supportsNoBrowser;
   }
 
   getLoginState(): LoginState {
@@ -212,9 +215,10 @@ export class AuthService {
       const settings = await this.getSettings();
       const cliPath = await this.resolveCli(settings.cliPath);
       if (!cliPath) throw new Error("未找到 Grok CLI");
+      const appOwnsBrowser = await this.detectNoBrowser(cliPath, buildCliEnv(settings));
       await this.stopSessions();
       snapshot = await this.captureAuthSnapshot(true);
-      child = this.spawnLogin(cliPath, ["login", "--device-auth"], {
+      child = this.spawnLogin(cliPath, ["login", "--device-auth", ...(appOwnsBrowser ? ["--no-browser"] : [])], {
         env: buildCliEnv(settings),
         windowsHide: true,
         stdio: "pipe",
@@ -228,7 +232,7 @@ export class AuthService {
         const code = /(?:user[_ -]?code|confirmation code|验证码)\s*[:=]?\s*([A-Z0-9-]{4,})/i.exec(combined)?.[1]
           ?? (url ? /[?&]user_code=([^&\s]+)/i.exec(url)?.[1] : undefined);
         this.updateLogin({ running: true, url, code: code ? decodeURIComponent(code) : undefined, message: "请在浏览器中完成登录" });
-        if (url && !opened) {
+        if (appOwnsBrowser && url && !opened) {
           opened = true;
           void this.openExternal(url).catch(() => undefined);
         }
@@ -387,6 +391,15 @@ export class AuthService {
   private updateLogin(next: LoginState): void {
     this.loginState = next;
     if (!this.disposed) this.emitLogin(this.getLoginState());
+  }
+}
+
+async function supportsNoBrowser(cliPath: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  try {
+    const { stdout, stderr } = await execFileAsync(cliPath, ["login", "--help"], { env, timeout: 15_000, windowsHide: true });
+    return /(?:^|\s)--no-browser(?:[=\s,]|$)/m.test(`${stdout}\n${stderr}`);
+  } catch {
+    return false;
   }
 }
 

@@ -31,8 +31,22 @@ export class EditorService {
       byteLength: info.size,
       reason: "文件大于 20 MiB，请使用外部应用打开",
     };
-    const document = await readDocument(resolved.root, resolved.path, resolved.relativePath, this.editableLimit);
-    return { kind: "document", document, path: resolved.path, relativePath: resolved.relativePath, byteLength: document.byteLength };
+    try {
+      const document = await readDocument(resolved.root, resolved.path, resolved.relativePath, this.editableLimit);
+      return { kind: "document", document, path: resolved.path, relativePath: resolved.relativePath, byteLength: document.byteLength };
+    } catch (error) {
+      // A binary file is not an error the user can act on inside the editor.
+      // Report it the same way an oversized file is reported, so every caller
+      // can offer the external-application escape hatch instead of a dead end.
+      if (!(error instanceof BinaryFileError)) throw error;
+      return {
+        kind: "external",
+        path: resolved.path,
+        relativePath: resolved.relativePath,
+        byteLength: info.size,
+        reason: "二进制文件无法在应用内预览，请使用外部应用打开",
+      };
+    }
   }
 
   async save(input: EditorSaveInput): Promise<EditorSaveResult> {
@@ -148,9 +162,14 @@ function buildConflict(input: EditorSaveInput, current: CurrentFileState): Edito
   return undefined;
 }
 
+/** Lets `open` offer an external-application escape hatch while the write paths still reject binaries. */
+class BinaryFileError extends Error {
+  constructor() { super("二进制文件不能在轻量编辑器中打开"); }
+}
+
 async function readDocument(root: string, path: string, relativePath: string, editableLimit: number): Promise<EditorDocument> {
   const [bytes, info] = await Promise.all([readFile(path), stat(path)]);
-  if (bytes.includes(0)) throw new Error("二进制文件不能在轻量编辑器中打开");
+  if (bytes.includes(0)) throw new BinaryFileError();
   const decoded = decode(bytes);
   return {
     workspacePath: root,

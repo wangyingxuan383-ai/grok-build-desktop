@@ -24,3 +24,50 @@ describe("diagnostic redaction", () => {
     expect(excluded).toContain("Memory 内容、文件路径和索引");
   });
 });
+
+describe("failure-scoped diagnosis", () => {
+  const build = { productName: "Grok Build Desktop", version: "0.0.0" } as never;
+  const settings = async () => ({ cliPath: "", httpsProxy: "", httpProxy: "" }) as never;
+  const failure = (patch: Record<string, unknown> = {}) => ({
+    failureId: "f", at: new Date().toISOString(), classification: "schema-rejected",
+    message: "GenerateContentRequest…enum[4]: cannot be empty", modelId: "acme-gemini-3-flash",
+    providerId: "acme", httpStatus: 400, ...patch,
+  }) as never;
+
+  const service = (providers: unknown[] = [], quota?: unknown) => new DiagnosticsService(
+    "C:\nope", build, settings, async () => undefined, async () => ({ available: false }) as never,
+    { log: async () => undefined } as never, "",
+    { providers: async () => providers as never, ...(quota ? { quota: async () => quota as never } : {}) },
+  );
+
+  it("names the pass-through schema profile as the cause instead of reporting a healthy install", async () => {
+    const report = await service([{ id: "acme", name: "Acme", schemaProfile: "standard", hasCredential: true, baseUrl: "https://acme.test/v1", models: [] }])
+      .diagnoseFailure(failure({ sanitizedCount: 0 }));
+    const profile = report.items.find((item) => item.id === "schema-profile");
+    expect(profile?.status).toBe("error");
+    expect(profile?.summary).toContain("直通");
+    // The install sweep's probes must not run for this class.
+    expect(report.items.some((item) => item.id === "cli" || item.id === "models" || item.id === "dpapi")).toBe(false);
+  });
+
+  it("clears the schema check once the provider is on a sanitizing profile", async () => {
+    const report = await service([{ id: "acme", name: "Acme", schemaProfile: "gemini", hasCredential: true, baseUrl: "https://acme.test/v1", models: [] }])
+      .diagnoseFailure(failure({ sanitizedCount: 3 }));
+    expect(report.items.find((item) => item.id === "schema-profile")?.status).toBe("ok");
+  });
+
+  it("reports only real quota windows and never invents one", async () => {
+    const withQuota = await service([], { rolling24h: { label: "滚动 24 小时 Token", used: 1_056_458, limit: 1_000_000 } })
+      .diagnoseFailure(failure({ classification: "quota-exhausted", providerId: undefined }));
+    expect(withQuota.items.find((item) => item.id === "quota")?.details?.[0]).toContain("1056458/1000000");
+
+    const without = await service([]).diagnoseFailure(failure({ classification: "quota-exhausted", providerId: undefined }));
+    expect(without.items.find((item) => item.id === "quota")?.summary).toContain("未能读取");
+  });
+
+  it("runs the CLI probes only for the class where they are the relevant evidence", async () => {
+    const crashed = await service([]).diagnoseFailure(failure({ classification: "cli-crashed", processExitCode: 3, providerId: undefined }));
+    expect(crashed.items.some((item) => item.id === "cli")).toBe(true);
+    expect(crashed.items.find((item) => item.id === "exit")?.summary).toContain("代码 3");
+  });
+});

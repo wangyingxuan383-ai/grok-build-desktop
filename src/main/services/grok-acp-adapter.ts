@@ -12,16 +12,20 @@ import {
   type CommandInfo,
   type ModelInfo,
   type PermissionOption,
+  type PlanDecisionReceipt,
   type PromptMeta,
   type PromptQueueEntry,
+  type QueueOperationReceipt,
   type RewindPoint,
   type ReasoningEffort,
   type SessionMode,
   type ToolCallState,
+  type TurnFailure,
   type TurnOutcome,
   type TurnPresentation,
   type UserMessageAttachmentPreview,
 } from "../../shared/types";
+import { classifyTurnFailure } from "../../shared/turn-failure";
 import { shouldBlockCommand, shouldBlockWrite } from "./plan-gate";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
 import type { LogService } from "./log-service";
@@ -64,6 +68,7 @@ interface AdapterOptions extends SessionProcessOptions {
   extensionLeaseId?: string;
   effortFlag?: "--effort" | "--reasoning-effort";
   permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>;
+  providerScopeId?: string;
 }
 
 export interface UserPromptPresentation {
@@ -113,9 +118,11 @@ export class GrokAcpAdapter extends EventEmitter {
   private activeQueuedPromptId?: string;
   private pendingEffortChange?: PendingEffortChange;
   private pendingPlanRequest?: JsonRpcId;
+  private readonly resolvedPlanRequests = new Map<string, PlanDecisionReceipt>();
   private activeTurn?: TurnPresentation & { monotonicStartedAt: number };
   private nextTurnOrdinal = 0;
   private cancelRequested = false;
+  private closedEmitted = false;
   private disposed = false;
   private currentEffort: ReasoningEffort;
   sessionId = "";
@@ -134,6 +141,7 @@ export class GrokAcpAdapter extends EventEmitter {
   get effort(): ReasoningEffort { return this.currentEffort; }
   get processOptions(): SessionProcessOptions { return { agentProfilePath: this.options.agentProfilePath, sessionMeta: this.options.sessionMeta ? structuredClone(this.options.sessionMeta) : undefined, alwaysApprove: this.options.alwaysApprove }; }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
+  get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
   setNextTurnOrdinal(value: number): void { this.nextTurnOrdinal = Math.max(this.nextTurnOrdinal, Math.max(0, Math.floor(value))); }
 
   async waitForCommands(timeoutMs = 2_000): Promise<CommandInfo[]> {
@@ -178,9 +186,12 @@ export class GrokAcpAdapter extends EventEmitter {
       this.working = false;
       this.needsUser = false;
       this.finishTurn(this.cancelRequested ? "cancelled" : "failed");
-      if (!this.disposed) this.emitEvent({ type: "error", sessionId: this.sessionId || undefined, message: `Grok 进程已退出（代码 ${String(code)}）` });
+      if (!this.disposed) {
+        const message = `Grok 进程已退出（代码 ${String(code)}）`;
+        this.emitEvent({ type: "error", sessionId: this.sessionId || undefined, message, failure: this.buildFailure(message, { processExitCode: code ?? undefined, cancelled: this.cancelRequested }) });
+      }
       this.failAll(new Error(`Grok process exited (${String(code)})`));
-      this.emit("closed");
+      this.emitClosed();
     });
 
     await this.request(acpMethods.agent.initialize, {
@@ -249,7 +260,7 @@ export class GrokAcpAdapter extends EventEmitter {
       const result = await this.request(acpMethods.agent.session.prompt, { sessionId: this.sessionId, prompt }, timeoutMs) as { _meta?: Record<string, unknown> };
       const meta = extractPromptMeta(result);
       this.emitEvent({ type: "meta", sessionId: this.sessionId, meta });
-      this.finishTurn("completed");
+      this.finishTurn("completed", hasUsage(meta) ? { ...meta, modelId: meta.modelId ?? this.currentModelId, source: "prompt-result", exact: true } : undefined);
       this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "sent" });
       this.working = false;
       this.needsUser = false;
@@ -264,7 +275,7 @@ export class GrokAcpAdapter extends EventEmitter {
     }
   }
 
-  async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false, presentation: UserPromptPresentation = {}): Promise<void> {
+  async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false, presentation: UserPromptPresentation = {}): Promise<QueueOperationReceipt> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
     const clientMessageId = presentation.clientMessageId || id;
@@ -284,11 +295,19 @@ export class GrokAcpAdapter extends EventEmitter {
       this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
       this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "failed" });
       this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
-      this.emitEvent({ type: "error", sessionId: this.sessionId, message: error instanceof Error ? error.message : String(error) });
+      const failureMessage = error instanceof Error ? error.message : String(error);
+      this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
     });
+    return {
+      operationId: crypto.randomUUID(),
+      entryId: id,
+      state: sendNow ? "interjected" : "queued",
+      message: sendNow ? "插话已置顶并提交" : "消息已加入队列",
+      fallback: sendNow,
+    };
   }
 
-  async interjectPrompt(text: string, attachments: Attachment[] = [], presentation: UserPromptPresentation = {}): Promise<void> {
+  async interjectPrompt(text: string, attachments: Attachment[] = [], presentation: UserPromptPresentation = {}): Promise<QueueOperationReceipt> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
     const clientMessageId = presentation.clientMessageId || id;
@@ -297,6 +316,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "sending" });
       unwrapExtResult(await this.extension("x.ai/interject", { text, interjectionId: id, content }));
       this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "sent" });
+      return { operationId: crypto.randomUUID(), entryId: id, state: "interjected", message: "插话已提交到当前回合" };
     } catch (error) {
       // Older CLIs do not expose x.ai/interject. Their closest compatible
       // behavior is the official sendNow prompt metadata path.
@@ -304,29 +324,50 @@ export class GrokAcpAdapter extends EventEmitter {
         this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
         throw error;
       }
-      await this.queuePrompt(text, attachments, true, { ...presentation, clientMessageId });
+      return this.queuePrompt(text, attachments, true, { ...presentation, clientMessageId });
     }
   }
 
-  async editQueuedPrompt(id: string, text: string): Promise<void> {
-    this.queueNotification("x.ai/queue/edit", { id, newText: text });
-  }
-  async removeQueuedPrompt(id: string): Promise<void> {
+  async editQueuedPrompt(id: string, text: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
-    this.queueNotification("x.ai/queue/remove", { id, expectedVersion: entry?.version ?? 0 });
+    if (!entry || entry.state !== "queued") throw new Error("仅等待中的队列消息可以编辑");
+    this.queueNotification("x.ai/queue/edit", { id, newText: text });
+    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, text } : value);
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    return { operationId: crypto.randomUUID(), entryId: id, state: "updated", message: "编辑已提交，等待 CLI 确认" };
   }
-  async reorderQueuedPrompt(id: string, position: number): Promise<void> {
+  async removeQueuedPrompt(id: string): Promise<QueueOperationReceipt> {
+    const entry = this.promptQueue.find((value) => value.id === id);
+    if (!entry || entry.state !== "queued") throw new Error("仅等待中的队列消息可以删除");
+    this.queueNotification("x.ai/queue/remove", { id, expectedVersion: entry?.version ?? 0 });
+    this.promptQueue = this.promptQueue.filter((value) => value.id !== id).map((value, position) => ({ ...value, position }));
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    return { operationId: crypto.randomUUID(), entryId: id, state: "removed", message: "队列消息已移除" };
+  }
+  async reorderQueuedPrompt(id: string, position: number): Promise<QueueOperationReceipt> {
     const ordered = [...this.promptQueue].sort((a, b) => a.position - b.position);
     const current = ordered.findIndex((value) => value.id === id);
     if (current < 0) throw new Error("排队消息已不存在，请等待队列刷新");
     const [moved] = ordered.splice(current, 1);
     ordered.splice(Math.max(0, Math.min(position, ordered.length)), 0, moved!);
     this.queueNotification("x.ai/queue/reorder", { orderedIds: ordered.map((value) => value.id) });
+    this.promptQueue = ordered.map((value, nextPosition) => ({ ...value, position: nextPosition }));
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    return { operationId: crypto.randomUUID(), entryId: id, state: "reordered", message: "队列顺序已更新" };
   }
-  async clearPromptQueue(): Promise<void> { this.queueNotification("x.ai/queue/clear", {}); }
-  async interjectQueuedPrompt(id: string, text?: string): Promise<void> {
+  async clearPromptQueue(): Promise<QueueOperationReceipt> {
+    this.queueNotification("x.ai/queue/clear", {});
+    this.promptQueue = [];
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: [] });
+    return { operationId: crypto.randomUUID(), state: "cleared", message: "等待队列已清空" };
+  }
+  async interjectQueuedPrompt(id: string, text?: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
+    if (!entry || entry.state !== "queued") throw new Error("该消息已不在等待队列中");
     this.queueNotification("x.ai/queue/interject", { id, expectedVersion: entry?.version ?? 0, ...(text?.trim() ? { newText: text.trim() } : {}) });
+    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, state: "interjected", ...(text?.trim() ? { text: text.trim() } : {}) } : value);
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    return { operationId: crypto.randomUUID(), entryId: id, state: "interjected", message: "插话请求已提交；若 CLI 不支持即时插话，将按队首消息处理" };
   }
   async fork(targetPromptIndex?: string, newCwd = this.cwd): Promise<Record<string, unknown>> {
     const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
@@ -431,22 +472,79 @@ export class GrokAcpAdapter extends EventEmitter {
     this.emitStatus(this.working ? "working" : "idle");
   }
 
-  async respondPlan(requestId: JsonRpcId | undefined, verdict: "approved" | "rejected" | "cancelled", comment = ""): Promise<void> {
+  async respondPlan(requestId: JsonRpcId | undefined, verdict: "approved" | "rejected" | "cancelled", comment = ""): Promise<PlanDecisionReceipt> {
     const id = requestId ?? this.pendingPlanRequest;
-    if (id !== undefined) {
-      if (verdict === "approved") this.write({ jsonrpc: "2.0", id, result: { outcome: "approved" } });
-      else this.write({ jsonrpc: "2.0", id, error: { code: -32000, message: verdict === "rejected" ? "User rejected the plan" : "User abandoned the plan" } });
+    if (id === undefined) throw new Error("计划请求已经结束或没有可响应的请求 ID");
+    const key = `${this.sessionId || "pending"}:${String(id)}`;
+    const duplicate = this.resolvedPlanRequests.get(key);
+    if (duplicate) return { ...duplicate, state: "duplicate", message: "该计划决策已经提交，未重复执行" };
+    const normalizedComment = comment.trim().slice(0, 8_000);
+    const receipt: PlanDecisionReceipt = {
+      requestId: key,
+      verdict,
+      state: "accepted",
+      message: verdict === "approved" ? "计划已批准，原回合将继续执行" : verdict === "rejected" ? "已要求继续规划" : "计划已取消",
+    };
+    this.resolvedPlanRequests.set(key, receipt);
+    while (this.resolvedPlanRequests.size > 128) {
+      const oldest = this.resolvedPlanRequests.keys().next().value;
+      if (oldest === undefined) break;
+      this.resolvedPlanRequests.delete(oldest);
+    }
+    if (verdict === "approved") {
+      if (!this.write({ jsonrpc: "2.0", id, result: { outcome: "approved", ...(normalizedComment ? { comment: normalizedComment, annotations: { comment: normalizedComment } } : {}) } })) {
+        this.resolvedPlanRequests.delete(key);
+        throw new Error("Grok 进程不可用，计划决策未提交");
+      }
+    } else {
+      const message = verdict === "rejected" ? "User rejected the plan" : "User abandoned the plan";
+      if (!this.write({ jsonrpc: "2.0", id, error: { code: -32000, message, ...(normalizedComment ? { data: { comment: normalizedComment } } : {}) } })) {
+        this.resolvedPlanRequests.delete(key);
+        throw new Error("Grok 进程不可用，计划决策未提交");
+      }
     }
     this.pendingPlanRequest = undefined;
     this.needsUser = false;
     if (verdict === "approved") {
       await this.applyMode("agent");
-      await this.prompt(`[Plan approved]${comment ? ` ${comment}` : ""}\n现在执行该计划。`);
-    } else if (verdict === "rejected") {
-      await this.prompt(`[Plan rejected]${comment ? ` ${comment}` : ""}\n继续规划，不要执行。`);
-    } else {
+    } else if (verdict === "cancelled") {
       await this.applyMode("agent");
     }
+    this.emitStatus(this.working ? "working" : "idle", receipt.message);
+    return receipt;
+  }
+
+  /**
+   * Turns whatever signals this adapter has into a structured failure. The
+   * main process enriches it further (provider, gateway trace) before it
+   * reaches the renderer.
+   */
+  private buildFailure(message: string, context: { error?: unknown; processExitCode?: number; cancelled?: boolean } = {}): TurnFailure {
+    const raw = context.error as { code?: number; data?: unknown } | undefined;
+    const jsonRpcCode = typeof raw?.code === "number" ? raw.code : undefined;
+    const httpStatus = httpStatusFromFailure(message, raw?.data);
+    const cancelled = context.cancelled ?? this.cancelRequested;
+    return {
+      failureId: crypto.randomUUID(),
+      at: new Date().toISOString(),
+      classification: classifyTurnFailure({ message, httpStatus, jsonRpcCode, processExitCode: context.processExitCode, cancelled }),
+      message,
+      sessionId: this.sessionId || undefined,
+      turnId: this.activeTurn?.turnId,
+      modelId: this.currentModelId || undefined,
+      ...(jsonRpcCode === undefined ? {} : { jsonRpcCode }),
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+      ...(context.processExitCode === undefined ? {} : { processExitCode: context.processExitCode }),
+      ...(cancelled ? { cancelled: true } : {}),
+      ...(this.options.providerScopeId ? { gatewayScopeId: this.options.providerScopeId } : {}),
+    };
+  }
+
+  /** `closed` releases the Computer Use lease, so it must fire exactly once on every exit path. */
+  private emitClosed(): void {
+    if (this.closedEmitted) return;
+    this.closedEmitted = true;
+    this.emit("closed");
   }
 
   async dispose(timeoutMs = 5_000): Promise<void> {
@@ -455,13 +553,17 @@ export class GrokAcpAdapter extends EventEmitter {
     this.lines?.close();
     await this.terminal.disposeAll();
     const child = this.process;
-    if (!child || child.exitCode !== null) return;
+    // Emit before the early return: a process that never spawned, or already
+    // exited, still owns a lease that nothing else will ever release.
+    if (!child || child.exitCode !== null) { this.emitClosed(); return; }
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, timeoutMs);
       child.once("exit", () => { clearTimeout(timer); resolve(); });
       if (process.platform === "win32" && child.pid) execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => undefined);
       else child.kill("SIGTERM");
     });
+    // Covers the timeout branch above, where the kill never produced an exit.
+    this.emitClosed();
   }
 
   private async onLine(line: string): Promise<void> {
@@ -480,8 +582,10 @@ export class GrokAcpAdapter extends EventEmitter {
       this.pending.delete(id);
       clearTimeout(pending.timer);
       if (message.error) {
-        const errorObject = message.error as { message?: string; data?: unknown };
-        const error = Object.assign(new Error(errorObject.message || "ACP 请求失败"), { data: errorObject.data });
+        const errorObject = message.error as { code?: number; message?: string; data?: unknown };
+        // `code` used to be dropped here, leaving the renderer with a bare
+        // string and no way to tell one failure class from another.
+        const error = Object.assign(new Error(errorObject.message || "ACP 请求失败"), { code: errorObject.code, data: errorObject.data });
         pending.reject(error);
       } else pending.resolve(message.result);
       return;
@@ -598,14 +702,26 @@ export class GrokAcpAdapter extends EventEmitter {
         this.emitEvent({ type: "subagent", sessionId: this.sessionId, update });
         return;
       case "turn_completed":
-        if (update.usage) this.emitEvent({ type: "meta", sessionId: this.sessionId, meta: extractUsageMeta(update.usage) });
-        this.finishTurn("completed");
+        if (update.usage) {
+          const meta = extractUsageMeta(update.usage);
+          this.emitEvent({ type: "meta", sessionId: this.sessionId, meta });
+          this.finishTurn("completed", { ...meta, modelId: meta.modelId ?? this.currentModelId, source: "acp-turn", exact: true });
+        } else this.finishTurn("completed");
         if (this.activeQueuedPromptId) {
           this.activeQueuedPromptId = undefined;
           this.working = false;
           this.emitStatus("idle", "已完成");
         }
         return;
+      case "retry_state": {
+        const attempt = optionalPositiveInteger(update.attempt ?? update.retry_attempt ?? update.retryAttempt);
+        const maxAttempts = optionalPositiveInteger(update.max_attempts ?? update.maxAttempts);
+        const delayMs = optionalNonNegativeNumber(update.delay_ms ?? update.delayMs ?? update.retry_after_ms);
+        const reason = firstNonEmptyString(update.reason, update.message, update.error);
+        this.emitEvent({ type: "turn-retry", sessionId: this.sessionId, attempt, maxAttempts, delayMs, reason });
+        this.emitStatus("working", formatRetryStatus(attempt, maxAttempts, delayMs, reason));
+        return;
+      }
       case "task_backgrounded":
         this.handleTaskBackgrounded(update);
         return;
@@ -843,7 +959,7 @@ export class GrokAcpAdapter extends EventEmitter {
     return publicPresentation;
   }
 
-  private finishTurn(outcome: TurnOutcome): TurnPresentation | undefined {
+  private finishTurn(outcome: TurnOutcome, usage?: TurnPresentation["usage"]): TurnPresentation | undefined {
     const active = this.activeTurn;
     if (!active) return undefined;
     this.activeTurn = undefined;
@@ -856,6 +972,7 @@ export class GrokAcpAdapter extends EventEmitter {
       completedAt,
       durationMs: Math.max(0, Math.round(performance.now() - active.monotonicStartedAt)),
       outcome,
+      ...(usage ? { usage } : {}),
     };
     this.cancelRequested = false;
     this.emitEvent({ type: "turn-completed", sessionId: this.sessionId, presentation });
@@ -867,6 +984,7 @@ export class GrokAcpAdapter extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        if (method === acpMethods.agent.session.prompt) this.cancel();
         reject(new Error(`ACP 请求超时：${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
@@ -1065,6 +1183,41 @@ function extractUsageMeta(usage: Record<string, unknown>): PromptMeta {
 
 function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && value > 0 ? value : undefined;
+}
+
+function optionalPositiveInteger(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(number) && number > 0 ? number : undefined;
+}
+
+function optionalNonNegativeNumber(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && Boolean(value.trim()))?.trim();
+}
+
+function formatRetryStatus(attempt?: number, maxAttempts?: number, delayMs?: number, reason?: string): string {
+  const count = attempt ? `第 ${attempt}${maxAttempts ? `/${maxAttempts}` : ""} 次` : "";
+  const wait = delayMs !== undefined ? `${Math.max(0, Math.round(delayMs / 1000))} 秒后` : "";
+  return ["上游请求正在重试", count, wait, reason].filter(Boolean).join(" · ");
+}
+
+/** Recovers an upstream HTTP status from the error text or JSON-RPC data payload. */
+function httpStatusFromFailure(message: string, data: unknown): number | undefined {
+  const fromData = (data as { status?: unknown; httpStatus?: unknown } | undefined);
+  for (const candidate of [fromData?.status, fromData?.httpStatus]) {
+    if (typeof candidate === "number" && candidate >= 100 && candidate < 600) return candidate;
+  }
+  const match = /\bHTTP\s+(\d{3})\b/i.exec(message) ?? /"code"\s*:\s*(\d{3})\b/.exec(message);
+  const parsed = match ? Number(match[1]) : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 100 && parsed < 600 ? parsed : undefined;
+}
+
+function hasUsage(value: PromptMeta): boolean {
+  return [value.totalTokens, value.inputTokens, value.outputTokens, value.cachedReadTokens, value.reasoningTokens].some((item) => item !== undefined);
 }
 
 async function readPersistedPromptMeta(cwd: string, sessionId: string): Promise<PromptMeta | undefined> {

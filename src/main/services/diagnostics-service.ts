@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { strToU8, zipSync } from "fflate";
-import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem } from "../../shared/types";
+import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, FailureDiagnosisReport, GrokQuotaSnapshot, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem, TurnFailure } from "../../shared/types";
+import { turnFailureActions, turnFailureLabel } from "../../shared/turn-failure";
 import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
 import { redactSecrets, type LogService } from "./log-service";
 
@@ -21,8 +22,106 @@ export class DiagnosticsService {
     private readonly getComputerCapability: () => Promise<ComputerCapability>,
     private readonly log: LogService,
     private readonly mockCliPath = "",
-    private readonly optional: { providers?: () => Promise<CustomProviderProfile[]>; automations?: () => Promise<AutomationTask[]> } = {},
+    private readonly optional: {
+      providers?: () => Promise<CustomProviderProfile[]>;
+      automations?: () => Promise<AutomationTask[]>;
+      quota?: () => Promise<GrokQuotaSnapshot>;
+    } = {},
   ) {}
+
+  /**
+   * Diagnoses one specific failure. Deliberately does NOT run the four-subprocess
+   * install sweep: for a rejected tool schema or an exhausted quota that sweep
+   * costs the better part of a minute and then reports all-green, because none
+   * of its probes touch the provider, model or request that actually failed.
+   */
+  async diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport> {
+    const items: SystemDiagnosticItem[] = [];
+    const actions = [...(failure.nextActions ?? turnFailureActions(failure.classification))];
+    const provider = failure.providerId ? (await this.optional.providers?.() ?? []).find((value) => value.id === failure.providerId) : undefined;
+
+    items.push({
+      id: "failure", label: "本次失败", status: "error",
+      summary: turnFailureLabel(failure.classification),
+      details: [
+        failure.httpStatus === undefined ? "" : `HTTP ${failure.httpStatus}`,
+        failure.modelId ? `模型 ${failure.modelId}` : "",
+        failure.providerId ? `提供商 ${failure.providerId}` : "",
+        failure.traceId ? `Trace ${failure.traceId}` : "",
+        failure.gatewayPhase ? `阶段 ${failure.gatewayPhase}` : "",
+      ].filter(Boolean),
+    });
+
+    if (failure.classification === "schema-rejected") {
+      const profile = provider?.schemaProfile ?? "standard";
+      const passthrough = profile === "standard";
+      items.push({
+        id: "schema-profile", label: "工具 Schema 兼容档",
+        status: passthrough ? "error" : "ok",
+        summary: passthrough ? "当前为「标准兼容」直通档，请求体原样转发给上游" : `当前为「${profile}」档，转发前会清理不被接受的枚举与类型`,
+        details: [provider ? `提供商 ${provider.name}` : "未能定位该模型所属的受管提供商", `本次网关清理 ${failure.sanitizedCount ?? 0} 处`],
+      });
+    }
+
+    if (failure.classification === "quota-exhausted") {
+      const quota = await this.optional.quota?.().catch(() => undefined);
+      const windows = [quota?.rolling24h, quota?.weekly, quota?.monthly].filter(Boolean);
+      items.push({
+        id: "quota", label: "额度",
+        status: "warning",
+        summary: windows.length ? "以下为账号最近一次读取到的真实额度" : "未能读取到账号额度，仅依据上游返回的限流信息判断",
+        details: windows.map((value) => `${value!.label}：${value!.used ?? "?"}/${value!.limit ?? "?"}${value!.resetAt ? ` · 重置 ${value!.resetAt}` : ""}${value!.expired ? " · 已过期" : ""}`),
+      });
+    }
+
+    if (failure.classification === "auth-expired") {
+      items.push({
+        id: "credential", label: "凭据来源",
+        status: provider ? (provider.hasCredential ? "warning" : "error") : "warning",
+        summary: provider
+          ? (provider.hasCredential ? `提供商「${provider.name}」的密钥存在，但上游拒绝了它` : `提供商「${provider.name}」的密钥环境变量为空`)
+          : "本次失败使用的是账号登录凭据，而非自定义提供商密钥",
+        details: provider?.credentialEnv ? [`环境变量 ${provider.credentialEnv}`] : [],
+      });
+    }
+
+    if (failure.classification === "network" || failure.classification === "provider-error") {
+      const settings = await this.getSettings();
+      items.push({
+        id: "route", label: "网络与路由",
+        status: "warning",
+        summary: provider ? `上游地址 ${provider.baseUrl}` : "未能定位该模型所属的受管提供商",
+        details: [
+          settings.httpsProxy ? `HTTPS 代理 ${settings.httpsProxy}` : "未配置 HTTPS 代理",
+          failure.gatewayPhase === "pre-send" ? "失败发生在应用发出请求之前（本机或 DNS 层）" : "失败发生在上游返回之后",
+          failure.retryAfter ? `上游要求 ${failure.retryAfter} 后重试` : "",
+        ].filter(Boolean),
+      });
+    }
+
+    // A crashed CLI is the one class where the install-level probes are the
+    // relevant evidence, so this is where they are worth their cost.
+    if (failure.classification === "cli-crashed" || failure.classification === "unknown") {
+      const settings = await this.getSettings();
+      const cliPath = this.mockCliPath || await locateGrokCli(settings.cliPath);
+      const version = cliPath ? await readCliVersion(cliPath, buildCliEnv(settings, await this.getApiKey())) : undefined;
+      items.push({
+        id: "cli", label: "Grok CLI",
+        status: version ? "ok" : "error",
+        summary: version ? `已找到 Grok CLI ${version}` : cliPath ? "CLI 存在但无法读取版本" : "未找到 Grok CLI",
+        details: cliPath ? [redactDiagnosticPath(cliPath)] : [],
+      });
+      if (failure.processExitCode !== undefined) items.push({ id: "exit", label: "退出码", status: "error", summary: `Grok 进程以代码 ${failure.processExitCode} 退出`, details: ["可在设置 → 更新与诊断中导出脱敏日志查看退出前的输出"] });
+    }
+
+    return {
+      failure,
+      generatedAt: new Date().toISOString(),
+      headline: turnFailureLabel(failure.classification),
+      items,
+      actions,
+    };
+  }
 
   async run(): Promise<SystemCompatibilityReport> {
     const items: SystemDiagnosticItem[] = [];

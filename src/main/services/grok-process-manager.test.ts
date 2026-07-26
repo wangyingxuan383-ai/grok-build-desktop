@@ -146,11 +146,34 @@ describe("workspace process environment", () => {
   });
 });
 
+describe("adapter close signalling", () => {
+  it("emits closed exactly once even when the process never spawned", async () => {
+    const { GrokAcpAdapter } = await import("./grok-acp-adapter");
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const emitted: string[] = [];
+    adapter.emit = (event: string) => { emitted.push(event); return true; };
+    adapter.closedEmitted = false;
+    adapter.disposed = false;
+    adapter.process = undefined;
+    adapter.finishEffortChange = () => undefined;
+    adapter.lines = undefined;
+    adapter.terminal = { disposeAll: async () => undefined };
+
+    // `closed` is the only hook that releases the Computer Use lease. A spawn
+    // failure emits error+close but never exit, so without this the lease
+    // (MCP server, transport, loopback token) would leak for the app lifetime.
+    await adapter.dispose(10);
+    await adapter.dispose(10);
+
+    expect(emitted.filter((value) => value === "closed")).toHaveLength(1);
+  });
+});
+
 describe("session finalization", () => {
   it("runs the finalization hook for a real close but not for a controlled suspend", async () => {
     const log = { log: vi.fn().mockResolvedValue(undefined) };
     const finalize = vi.fn().mockResolvedValue(undefined);
-    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, async () => ({}), async () => ({}), finalize);
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, async () => ({}), async () => ({}), async () => ({}), finalize);
     const first = { working: false, needsUser: false, dispose: vi.fn().mockResolvedValue(undefined) };
     (manager as any).sessions.set("close-me", first);
     await manager.close("close-me");

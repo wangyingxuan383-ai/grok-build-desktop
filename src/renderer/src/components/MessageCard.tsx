@@ -1,7 +1,8 @@
 import { lazy, memo, Suspense, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { EditorDocument, EditorOpenResult, NavigationIntent } from "../../../shared/types";
+import type { EditorDocument, EditorOpenResult, NavigationIntent, TurnFailure } from "../../../shared/types";
 import type { UiMessage } from "../store";
+import { summarizeTurnFailure } from "../../../shared/turn-failure";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 import { useWorkbenchStore } from "../workbench-store";
 
@@ -11,12 +12,17 @@ const DiffEditor = lazy(async () => {
   return { default: module.DiffEditor };
 });
 
-export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, showThinking, expandTools, onResolved, onRetry, onNavigate }: { message: UiMessage; sessionId: string; navigationRoot?: string; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
+export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, showThinking, expandTools, onResolved, onRetry, onNavigate, onDiagnose }: { message: UiMessage; sessionId: string; navigationRoot?: string; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onDiagnose?: (failure: TurnFailure) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
   if (message.kind === "thought" && !showThinking) return <div className="thinking-placeholder"><span /> 思考过程</div>;
   if (message.kind === "user") return <UserMessageCard message={message} onRetry={onRetry} />;
   if (message.kind === "assistant") return <div className="message-row assistant"><div className="assistant-body"><LazyMarkdownView text={message.text} /></div></div>;
   if (message.kind === "thought") return <div className="thought-card"><LazyMarkdownView text={message.text} /></div>;
-  if (message.kind === "error") return <div className="error-card">{message.text}</div>;
+  if (message.kind === "retry") {
+    const count = message.attempt ? `第 ${message.attempt}${message.maxAttempts ? `/${message.maxAttempts}` : ""} 次` : "";
+    const wait = message.delayMs !== undefined ? `${Math.max(0, Math.round(message.delayMs / 1000))} 秒后` : "";
+    return <div className="retry-state-card"><span className="process-dot running" /><strong>上游请求正在重试</strong><span>{[count, wait, message.reason].filter(Boolean).join(" · ")}</span></div>;
+  }
+  if (message.kind === "error") return <ErrorCard text={message.text} failure={message.failure} onDiagnose={onDiagnose} />;
   if (message.kind === "media") return <GeneratedMediaCard message={message} />;
   if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;
   if (message.kind === "permission") return <PermissionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
@@ -114,9 +120,65 @@ function QuestionCard({ message, sessionId, onResolved }: { message: Extract<UiM
 
 function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "plan" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
   const [comment, setComment] = useState("");
-  const [answered, setAnswered] = useState(false);
-  const answer = async (verdict: "approved" | "rejected" | "cancelled"): Promise<void> => { await window.grokDesktop.respondPlan(sessionId, message.requestId, verdict, comment); setAnswered(true); onResolved?.(message.id); };
-  return <div className="plan-card"><header>实施计划</header><LazyMarkdownView text={message.text || "计划已生成，请选择下一步。"} /><textarea placeholder="可选备注" value={comment} onChange={(event) => setComment(event.target.value)} /><div className="button-row"><button disabled={answered} className="primary" onClick={() => void answer("approved")}>批准并执行</button><button disabled={answered} onClick={() => void answer("rejected")}>继续规划</button><button disabled={answered} className="danger" onClick={() => void answer("cancelled")}>取消</button></div></div>;
+  const [decision, setDecision] = useState<{ state: "idle" | "submitting" | "accepted" | "failed"; message?: string }>({ state: message.resolved ? "accepted" : "idle" });
+  const answer = async (verdict: "approved" | "rejected" | "cancelled"): Promise<void> => {
+    if (decision.state !== "idle" && decision.state !== "failed") return;
+    setDecision({ state: "submitting", message: "正在提交计划决策…" });
+    try {
+      const receipt = await window.grokDesktop.respondPlan(sessionId, message.requestId, verdict, comment);
+      setDecision({ state: "accepted", message: receipt.message });
+      onResolved?.(message.id);
+    } catch (error) {
+      setDecision({ state: "failed", message: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  const locked = decision.state === "submitting" || decision.state === "accepted";
+  return <div className="plan-card"><header>实施计划</header><LazyMarkdownView text={message.text || "计划已生成，请选择下一步。"} /><textarea disabled={locked} placeholder="可选备注（随本次计划决策提交）" value={comment} onChange={(event) => setComment(event.target.value)} />{decision.message && <div className={`plan-decision-status ${decision.state}`}>{decision.message}</div>}<div className="button-row"><button disabled={locked} className="primary" onClick={() => void answer("approved")}>{decision.state === "submitting" ? "提交中…" : "批准并执行"}</button><button disabled={locked} onClick={() => void answer("rejected")}>继续规划</button><button disabled={locked} className="danger" onClick={() => void answer("cancelled")}>取消</button></div></div>;
+}
+
+function ErrorCard({ text, failure, onDiagnose }: { text: string; failure?: TurnFailure; onDiagnose?(failure: TurnFailure): void }): React.JSX.Element {
+  const safe = redactErrorText(text);
+  // A classified failure carries its own summary. summarizeError only ever
+  // matched the offline fixture's format, so it stays as the fallback.
+  const summary = failure ? summarizeTurnFailure(failure) : summarizeError(safe);
+  const facts: Array<[string, string]> = failure ? ([
+    ["状态", failure.httpStatus === undefined ? "" : String(failure.httpStatus)],
+    ["Provider", failure.providerId ?? ""],
+    ["模型", failure.modelId ?? ""],
+    ["Trace", failure.traceId ?? ""],
+    ["重试于", failure.retryAfter ?? ""],
+    ["Schema 清理", failure.sanitizedCount ? `${failure.sanitizedCount} 处` : ""],
+  ].filter(([, value]) => value) as Array<[string, string]>) : [];
+  return <details className={`error-card structured-error ${failure ? failure.classification : ""}`}>
+    <summary><span>请求失败</span><strong>{summary}</strong></summary>
+    <div className="error-detail">
+      {failure?.nextActions?.length ? <div className="failure-actions"><strong>可以这样处理</strong><ul>{failure.nextActions.map((action: string) => <li key={action}>{action}</li>)}</ul></div> : null}
+      {facts.length > 0 && <dl className="failure-facts">{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>}
+      <pre>{safe}</pre>
+      <div className="button-row">
+        <button type="button" onClick={() => void navigator.clipboard.writeText(failure ? `${summary}
+
+${safe}` : safe)}>复制脱敏诊断</button>
+        {failure && onDiagnose && <button type="button" onClick={() => onDiagnose(failure)}>诊断此错误</button>}
+      </div>
+    </div>
+  </details>;
+}
+
+export function summarizeError(value: string): string {
+  const http = /HTTP\s+(\d{3})/i.exec(value)?.[1];
+  const provider = /Provider:\s*([^\r\n]+)/i.exec(value)?.[1]?.trim();
+  const first = value.split(/\r?\n/).map((line) => line.trim()).find(Boolean) || "未知错误";
+  return [http ? `HTTP ${http}` : "", provider ? `Provider ${provider}` : "", first.replace(/^HTTP\s+\d{3}\s*/i, "").slice(0, 120)].filter(Boolean).join(" · ");
+}
+
+export function redactErrorText(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/([?&](?:key|token|api_key|access_token)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/(\"(?:api[_-]?key|x-api-key|access[_-]?token|authorization|cookie|password)\"\s*:\s*(?:\[\s*)?\")[^\"]+/gi, "$1[REDACTED]")
+    .replace(/\b[A-Z]:\\Users\\[^\\\r\n]+/gi, "C:\\Users\\[USER]")
+    .slice(0, 32_000);
 }
 
 function statusLabel(status: string): string { return status === "completed" ? "完成" : status === "failed" ? "失败" : status === "in_progress" ? "运行中" : "等待"; }

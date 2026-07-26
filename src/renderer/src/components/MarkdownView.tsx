@@ -29,10 +29,16 @@ function HighlightedCode({ language, source }: { language: string; source: strin
   const light = useLightTheme();
   useEffect(() => {
     let active = true;
-    void import("./syntax-highlighter").then((module) => module.highlightCode(source, language, light))
-      .then((value) => { if (active) setHtml(value); })
-      .catch(() => setHtml(""));
-    return () => { active = false; };
+    // While a code block is still streaming, `source` grows on every frame and
+    // this effect would re-tokenize the whole block each time. Nobody can read
+    // code that is still arriving, so wait for it to settle first; the plain
+    // fallback below renders in the meantime.
+    const timer = window.setTimeout(() => {
+      void import("./syntax-highlighter").then((module) => module.highlightCode(source, language, light))
+        .then((value) => { if (active) setHtml(value); })
+        .catch(() => { if (active) setHtml(""); });
+    }, 120);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [language, light, source]);
   return <div className="code-wrap"><button onClick={() => void navigator.clipboard.writeText(source)}>复制</button>{html ? <div dangerouslySetInnerHTML={{ __html: html }} /> : <pre><code>{source}</code></pre>}</div>;
 }

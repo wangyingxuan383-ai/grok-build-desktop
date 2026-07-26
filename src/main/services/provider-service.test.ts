@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "smol-toml";
 import type { CustomProviderInput, ProviderConnectionDraft } from "../../shared/types";
 import { LogService } from "./log-service";
-import { ProviderService, providerModelLocalId, type ProviderEnvironment } from "./provider-service";
+import { managedBaseUrlEnvironmentName, ProviderService, providerModelLocalId, type ProviderEnvironment } from "./provider-service";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -33,8 +33,64 @@ describe("ProviderService", () => {
     const values = await service.upsert(input());
     const config = await readFile(join(grokHome, "config.toml"), "utf8");
     expect(config).toContain("# 用户注释"); expect(config).toContain("[ui]"); expect(config).toContain("Grok Build Desktop managed models"); expect(config).toContain("sample-model");
+    expect((parse(config).model as Record<string, any>)["sample-model"].base_url).toBe("${GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL}");
     expect(config).not.toContain("test-secret-value"); expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_KEY")).toBe("test-secret-value");
+    expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL")).toBe("https://api.example.test/v1");
     expect(values.find((value) => value.id === "sample")?.hasCredential).toBe(true);
+  });
+
+  it("keeps the upstream URL in the user environment and gives desktop CLI processes only an opaque loopback route", async () => {
+    const { service, environment } = await fixture();
+    await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
+    try {
+      const variable = managedBaseUrlEnvironmentName("sample");
+      const desktop = await service.desktopEnvironment("session-scope");
+      expect(environment.values.get(variable)).toBe("https://api.example.test/v1");
+      expect(desktop[variable]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/session-scope$/);
+      expect(desktop[variable]).not.toContain("api.example.test");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("still hands the CLI its loopback routes when the environment write and the block migration both fail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-degrade-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true });
+    await writeFile(join(grokHome, "config.toml"), "# 用户注释\n[ui]\nsimple_mode = true\n");
+    const environment = new FakeEnvironment();
+    let validateConfig = async (): Promise<void> => undefined;
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "logs", "app.log")), {
+      grokHome, environment, validateConfig: () => validateConfig(),
+    });
+    await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
+    // Both best-effort side quests now fail: an unwritable user environment and
+    // a managed-block migration rejected by config validation.
+    environment.values.delete(managedBaseUrlEnvironmentName("sample"));
+    environment.write = async () => { throw new Error("registry is read-only"); };
+    await writeFile(join(grokHome, "config.toml"), "# 用户注释\n[ui]\nsimple_mode = true\n");
+    validateConfig = async () => { throw new Error("config.toml 校验失败"); };
+    try {
+      const desktop = await service.desktopEnvironment("degraded-scope");
+      expect(desktop[managedBaseUrlEnvironmentName("sample")]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/degraded-scope$/);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("migrates an older managed block with a literal upstream URL before desktop launch", async () => {
+    const { service, grokHome } = await fixture();
+    await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
+    const configPath = join(grokHome, "config.toml");
+    const current = await readFile(configPath, "utf8");
+    await writeFile(configPath, current.replace("${GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL}", "https://api.example.test/v1"), "utf8");
+    try {
+      await service.desktopEnvironment();
+      const migrated = await readFile(configPath, "utf8");
+      expect(migrated).toContain('base_url = "${GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL}"');
+      expect(migrated).not.toContain('base_url = "https://api.example.test/v1"');
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("writes CLI-compatible reasoning options and an environment-backed x-api-key without auth_scheme", async () => {
@@ -95,7 +151,16 @@ describe("ProviderService", () => {
     await expect(failing.remove("sample")).rejects.toThrow("fake remove reload failure");
     expect(await readFile(join(grokHome, "config.toml"), "utf8")).toBe(original);
     expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_KEY")).toBe("test-secret-value");
+    expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL")).toBe("https://api.example.test/v1");
     expect((await failing.list()).some((value) => value.id === "sample" && value.owned)).toBe(true);
+  });
+
+  it("removes both the managed credential and upstream URL environment variables", async () => {
+    const { service, environment } = await fixture();
+    await service.upsert(input());
+    await service.remove("sample");
+    expect(environment.values.has("GROK_DESKTOP_PROVIDER_SAMPLE_KEY")).toBe(false);
+    expect(environment.values.has("GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL")).toBe(false);
   });
 
   it("updates the official CLI default without replacing the models table", async () => {

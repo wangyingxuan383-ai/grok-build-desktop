@@ -53,6 +53,18 @@ export function themeCssVariables(theme: ThemeSettings, systemDark: boolean): Re
   };
 }
 
+/**
+ * Applies reading preferences to the document root rather than to `.app-shell`.
+ * `#overlay-root` is a sibling of `#root` in index.html, so every portaled
+ * dialog, palette and panel sits outside the shell and inherited none of this —
+ * the text-size setting visibly did nothing to any of them.
+ */
+export function applyShellPreferencesToDocument(fontScale: number, density: string, root: HTMLElement = document.documentElement): void {
+  const scale = Number.isFinite(fontScale) && fontScale > 0 ? Math.min(200, Math.max(50, fontScale)) : 100;
+  root.style.fontSize = `${scale}%`;
+  root.dataset.density = density || "balanced";
+}
+
 export function applyThemeToDocument(theme: ThemeSettings, systemDark: boolean, root: HTMLElement = document.documentElement): void {
   const resolved = resolvedTheme(theme, systemDark);
   root.dataset.theme = theme.mode;

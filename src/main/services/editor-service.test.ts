@@ -82,6 +82,12 @@ describe("workspace tree and editor services", () => {
     await writeFile(join(root, "external.txt"), "1234567890123456789012345");
     expect((await service.open(root, "read-only.txt")).document).toMatchObject({ editable: false });
     expect(await service.open(root, "external.txt")).toMatchObject({ kind: "external", byteLength: 25 });
+    // A binary file must offer the same external escape hatch as an oversized
+    // one; throwing leaves the UI with no way to open a PNG or PDF at all.
+    await writeFile(join(root, "picture.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x1a, 0x0a]));
+    const binary = await service.open(root, "picture.png");
+    expect(binary).toMatchObject({ kind: "external", relativePath: "picture.png" });
+    expect(binary.kind === "external" && binary.reason).toContain("二进制");
     await expect(service.open(root, "../outside.txt")).rejects.toThrow("超出当前工作区");
 
     const link = join(root, "outside-link");

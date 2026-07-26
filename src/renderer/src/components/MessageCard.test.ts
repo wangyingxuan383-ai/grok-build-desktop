@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { navigateToolLocation, toolLocationCandidates } from "./MessageCard";
+import { navigateToolLocation, redactErrorText, summarizeError, toolLocationCandidates } from "./MessageCard";
 
 describe("tool card editor locations", () => {
   it("normalizes ACP locations and file-tool raw inputs without duplicating targets", () => {
@@ -31,5 +31,18 @@ describe("tool card editor locations", () => {
     await expect(navigateToolLocation("large.log", undefined, actions)).resolves.toBe("external");
     expect(actions.openExternal).toHaveBeenCalledWith("C:\\repo\\large.log");
     expect(actions.openDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe("structured provider errors", () => {
+  it("keeps status/provider/trace diagnostics while redacting credentials and the local user path", () => {
+    const safe = redactErrorText('HTTP 400\nProvider: antigravity\nTrace: trace-123\n{"Authorization":["Bearer super-secret"],"x-api-key":"key-secret"}\nC:\\Users\\wang\\private');
+    expect(safe).toContain("HTTP 400");
+    expect(safe).toContain("Provider: antigravity");
+    expect(safe).toContain("Trace: trace-123");
+    expect(safe).toContain("C:\\Users\\[USER]\\private");
+    expect(safe).not.toContain("super-secret");
+    expect(safe).not.toContain("key-secret");
+    expect(summarizeError(safe)).toContain("HTTP 400 · Provider antigravity");
   });
 });

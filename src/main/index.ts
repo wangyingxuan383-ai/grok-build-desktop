@@ -83,9 +83,12 @@ else {
       const { readFile } = await import("node:fs/promises");
       return new Response(await readFile(background.path), { headers: { "Content-Type": background.mimeType, "Cache-Control": "no-store" } });
     });
-    computerOverlay = new ComputerUseOverlay((source) => controller?.emergencyStopComputer(source));
+    // Another application can already own this combination, and an overlay that
+    // advertises a kill switch the OS refused is worse than one that admits it.
+    const emergencyShortcutRegistered = globalShortcut.register("CommandOrControl+Alt+Esc", () => controller?.emergencyStopComputer("Ctrl+Alt+Esc"));
+    if (!emergencyShortcutRegistered) await controller.logEmergencyShortcutUnavailable();
+    computerOverlay = new ComputerUseOverlay((source) => controller?.emergencyStopComputer(source), () => emergencyShortcutRegistered);
     controller.setComputerStateObserver((state) => computerOverlay?.update(state));
-    globalShortcut.register("CommandOrControl+Alt+Esc", () => controller?.emergencyStopComputer("Ctrl+Alt+Esc"));
     const rendererEntry = join(currentDir, "../renderer/index.html");
     const developmentUrl = trustedDevelopmentUrl(process.env.ELECTRON_RENDERER_URL, app.isPackaged);
     const rendererTrust = createRendererTrustPolicy(rendererEntry, developmentUrl);

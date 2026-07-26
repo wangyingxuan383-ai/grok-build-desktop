@@ -74,6 +74,13 @@ describe("session event reducer", () => {
     state = apply(state, { type: "turn-completed", sessionId: "session", presentation: { turnId: "turn-1", clientMessageId: "message-1", ordinal: 0, startedAt: "2026-07-22T00:00:00.000Z", completedAt: "2026-07-22T00:00:01.250Z", durationMs: 1250, outcome: "completed" } });
     expect(state.views.session.turnPresentations).toEqual([expect.objectContaining({ turnId: "turn-1", durationMs: 1250 })]);
   });
+
+  it("keeps retry lifecycle updates visible and replaces the active retry state", () => {
+    let state = apply(baseState(), { type: "turn-started", sessionId: "session", presentation: { turnId: "turn-retry", ordinal: 0, startedAt: "2026-07-27T00:00:00.000Z" } });
+    state = apply(state, { type: "turn-retry", sessionId: "session", attempt: 1, maxAttempts: 3, delayMs: 500, reason: "HTTP 429" });
+    state = apply(state, { type: "turn-retry", sessionId: "session", attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "HTTP 429" });
+    expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "retry", attempt: 2, maxAttempts: 3, delayMs: 1000 })]);
+  });
 });
 
 describe("Codex-style turn grouping", () => {

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AppSettings, GrokQuotaSnapshot, QuotaWindow } from "../../shared/types";
 import type { AccountVault } from "./account-vault";
+import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
 
 const WEEKLY_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -11,9 +12,13 @@ const MONTHLY_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 
 type BillingPayload = { config?: Record<string, unknown> };
 type QuotaRequester = (url: string, headers: Record<string, string>, proxy: string) => Promise<BillingPayload>;
+interface QuotaPersistence { rolling24h: Record<string, QuotaWindow>; }
 
 export class GrokQuotaService {
   private cache = new Map<string, GrokQuotaSnapshot>();
+  private rolling = new Map<string, QuotaWindow>();
+  private readonly store?: JsonStore<QuotaPersistence>;
+  private rollingLoaded = false;
 
   constructor(
     private readonly vault: AccountVault,
@@ -22,11 +27,15 @@ export class GrokQuotaService {
     private readonly log: LogService,
     private readonly requester: QuotaRequester = electronRequest,
     private readonly readCurrentAuth: () => Promise<string> = () => readFile(join(homedir(), ".grok", "auth.json"), "utf8"),
-  ) {}
+    persistencePath?: string,
+  ) {
+    if (persistencePath) this.store = new JsonStore(persistencePath, { rolling24h: {} });
+  }
 
   async get(force = false): Promise<GrokQuotaSnapshot> {
     const active = await this.vault.active();
     if (!active) return unsupported("尚未登录 Grok 账号");
+    await this.loadRolling();
     if (active.profile.kind !== "oauth" || !active.payload.authJson) return { ...unsupported("API Key 配置档不支持订阅额度查询"), accountId: active.profile.id };
     const cached = this.cache.get(active.profile.id);
     if (!force && cached && Date.now() - Date.parse(cached.fetchedAt) < 5 * 60_000) return structuredClone(cached);
@@ -65,7 +74,15 @@ export class GrokQuotaService {
       return structuredClone(stale);
     }
     if (bothFailed) {
-      const failed: GrokQuotaSnapshot = { accountId: active.profile.id, supported: true, fetchedAt: new Date().toISOString(), stale: false, partial: true, diagnostics };
+      const failed: GrokQuotaSnapshot = {
+        accountId: active.profile.id,
+        supported: true,
+        fetchedAt: new Date().toISOString(),
+        stale: false,
+        partial: true,
+        rolling24h: this.rolling.get(active.profile.id),
+        diagnostics,
+      };
       return failed;
     }
 
@@ -75,6 +92,7 @@ export class GrokQuotaService {
       fetchedAt: new Date().toISOString(),
       stale: false,
       partial: weeklyResult.status === "rejected" || monthlyResult.status === "rejected",
+      rolling24h: this.rolling.get(active.profile.id),
       weekly: weekly ?? (weeklyResult.status === "rejected" ? previous?.weekly : undefined),
       monthly: monthlyParsed.monthly ?? (monthlyResult.status === "rejected" ? previous?.monthly : undefined),
       onDemand: monthlyParsed.onDemand ?? (monthlyResult.status === "rejected" ? previous?.onDemand : undefined),
@@ -87,6 +105,27 @@ export class GrokQuotaService {
 
   clear(): void { this.cache.clear(); }
 
+  /**
+   * Best-effort: this runs while an error event is on its way to the user, so a
+   * vault or quota.json failure is logged and swallowed rather than propagated.
+   */
+  async captureError(message: string, modelId?: string): Promise<QuotaWindow | undefined> {
+    const parsed = parseRolling24hQuota(message, modelId);
+    if (!parsed) return undefined;
+    try {
+      const active = await this.vault.active();
+      if (!active) return parsed;
+      await this.loadRolling();
+      this.rolling.set(active.profile.id, parsed);
+      await this.persistRolling();
+      const cached = this.cache.get(active.profile.id);
+      if (cached) this.cache.set(active.profile.id, { ...cached, rolling24h: parsed });
+    } catch (error) {
+      await this.log.log(`滚动额度记录失败，本次仅在内存中生效：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+    }
+    return parsed;
+  }
+
   private async requestWith401Retry(url: string, headers: Record<string, string>, proxy: string): Promise<BillingPayload> {
     try { return await this.requester(url, headers, proxy); }
     catch (error) {
@@ -95,6 +134,23 @@ export class GrokQuotaService {
       if (!refreshed) throw error;
       return this.requester(url, { ...headers, Authorization: `Bearer ${refreshed.token}`, "x-userid": refreshed.userId }, proxy);
     }
+  }
+
+  private async loadRolling(): Promise<void> {
+    if (this.rollingLoaded) return;
+    this.rollingLoaded = true;
+    if (!this.store) return;
+    const data = await this.store.get();
+    const now = Date.now();
+    for (const [accountId, value] of Object.entries(data.rolling24h ?? {})) {
+      if (!value || value.unit !== "tokens") continue;
+      this.rolling.set(accountId, { ...value, expired: rollingExpired(value, now) });
+    }
+  }
+
+  private async persistRolling(): Promise<void> {
+    if (!this.store) return;
+    await this.store.set({ rolling24h: Object.fromEntries(this.rolling) });
   }
 }
 
@@ -135,6 +191,41 @@ export function parseMonthly(payload: BillingPayload): { monthly?: QuotaWindow; 
     unit: "credits" as const, periodStart: start, periodEnd: end, resetAt: end,
   };
   return { monthly, onDemand };
+}
+
+export function parseRolling24hQuota(message: string, modelId?: string): QuotaWindow | undefined {
+  if (!/(?:rolling|滚动).{0,40}(?:24[\s-]*(?:hour|小时)|一天)/is.test(message)) return undefined;
+  const ratio = /(?:tokens?\s*)?(?:actual\s*\/\s*limit|used\s*\/\s*limit|实际\s*\/\s*限额)\s*[:：]?\s*([\d,]+)\s*\/\s*([\d,]+)/i.exec(message)
+    ?? /([\d,]+)\s*\/\s*([\d,]+)\s*(?:tokens?|令牌)/i.exec(message);
+  if (!ratio) return undefined;
+  const used = Number(ratio[1]!.replace(/,/g, ""));
+  const limit = Number(ratio[2]!.replace(/,/g, ""));
+  if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return undefined;
+  const reset = /(?:reset(?:s| at)?|重置(?:时间)?)\s*[:：]?\s*([^\r\n,;]+)/i.exec(message)?.[1]?.trim();
+  const observedAt = new Date().toISOString();
+  return {
+    label: "滚动 24 小时 Token",
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+    unit: "tokens",
+    ...(reset ? { resetAt: normalizeReset(reset, observedAt) } : {}),
+    source: "cli-error",
+    observedAt,
+    ...(modelId ? { modelId } : {}),
+  };
+}
+
+function normalizeReset(value: string, observedAt: string): string {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : value || observedAt;
+}
+
+function rollingExpired(value: QuotaWindow, now = Date.now()): boolean {
+  const reset = value.resetAt ? Date.parse(value.resetAt) : Number.NaN;
+  if (Number.isFinite(reset)) return reset <= now;
+  const observed = value.observedAt ? Date.parse(value.observedAt) : Number.NaN;
+  return Number.isFinite(observed) ? now - observed >= 24 * 60 * 60_000 : true;
 }
 
 function parseOAuthCredential(raw: string): { token: string; userId: string } | undefined {
