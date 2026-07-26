@@ -13,9 +13,17 @@ const evaluate = async (expression) => { const result = await request("Runtime.e
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(window.grokDesktop && document.querySelector('.app-shell'))"), "Application shell did not render");
-  await waitFor(() => evaluate("document.querySelectorAll('.chat-turn').length >= 3"), "0.6.2 offline conversation fixture did not render");
-  await evaluate("document.querySelector('.conversation')?.scrollTo({ top: 0 })");
-  await waitFor(() => evaluate(`Array.from(document.querySelectorAll('.execution-process summary strong')).some((node) => node.textContent?.includes('历史执行记录（30 段）'))`), "Legacy execution segments were not coalesced");
+  await evaluate("document.querySelector('.conversation')?.scrollTo({ top: 0 }); true");
+  try {
+    await waitFor(() => evaluate(`Array.from(document.querySelectorAll('.execution-process summary strong')).some((node) => node.textContent?.includes('历史执行记录（30 段）'))`), "0.6.2 offline conversation fixture did not render");
+  } catch (error) {
+    const diagnostic = await evaluate(`({
+      turns: document.querySelectorAll('.chat-turn').length,
+      route: document.querySelector('.main-stage')?.className || '',
+      body: document.body.innerText.slice(0, 1200),
+    })`);
+    throw new Error(`${error.message}: ${JSON.stringify(diagnostic)}`);
+  }
   const initial = await evaluate(`({
     appVersion: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(),
     projectToolsExpanded: Boolean(document.querySelector('.project-tools nav')),

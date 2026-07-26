@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Executable,
     [string]$ProbeScript = 'probe-renderer.mjs',
