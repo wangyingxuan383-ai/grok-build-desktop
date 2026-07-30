@@ -15,7 +15,7 @@
 - [x] 完整离线套件通过：72 文件 / 391 项通过，4 个 live 文件 / 7 项按设计跳过。
 - [x] TypeScript、Computer Host 0.3.1 自检/资源清单、生产 main/preload/Renderer 构建、273 文件公开扫描、`git diff --check` 和 npm audit（0 vulnerabilities）通过。
 - [x] 生产构建仍报告 Monaco/Shiki/Mermaid 等大型懒加载依赖 chunk；不通过提高 warning limit 隐藏，列为后续性能拆包事项。
-- [ ] 提交并推送源代码修复分支；不创建正式 GitHub Release。
+- [x] 源代码已提交并推送至 `origin/codex/v0.6.14-audit-fixes`；不创建正式 GitHub Release。
 - [ ] 用户恢复本地默认模型上游后，再执行 Provider/真实会话验收；当前按用户要求跳过。
 
 ## v0.6.13 本地验收候选：Anthropic Messages 无签名 thinking 兼容

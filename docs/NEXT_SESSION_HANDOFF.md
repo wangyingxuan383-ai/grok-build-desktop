@@ -2,7 +2,7 @@
 
 > 当前工作分支为 `codex/v0.6.14-audit-fixes`。公开 Latest 仍是 **0.6.6**；0.6.7–0.6.13 是本地候选历史，0.6.14 目前只做源码与离线修复。用户明确说明当前默认模型依赖的本地上游没有运行，暂不做该 P1 或真实 Provider 验收，也不创建正式 Release。
 
-> **2026-07-30 0.6.14 当前状态：** 工作树已修正 Provider 下游关闭误报、成功 HTTP 路由后的 `Internal error` Provider 归因、无签名 Anthropic thinking 的 ACP 思考语义、Windows 缺失 `HOME`、持久日志写盘前脱敏/8 MiB 轮转、JsonStore 损坏备份/陈旧临时文件清理、空能力列表迁移及终端 shell 弃用路径。完整离线结果为 72 文件/391 项通过，4 live 文件/7 项按设计跳过；TypeScript、Computer Host 0.3.1 自检/资源、生产构建、273 文件公开扫描、diff check 和 npm audit 通过。生产构建仍明确报告 Monaco/Shiki/Mermaid 大型依赖 chunk，列为后续性能事项。只剩提交和推送分支；不要启动本地上游，不发送真实或付费请求，不打包/安装/发布，除非用户另行要求。
+> **2026-07-30 0.6.14 当前状态：** 工作树已修正 Provider 下游关闭误报、成功 HTTP 路由后的 `Internal error` Provider 归因、无签名 Anthropic thinking 的 ACP 思考语义、Windows 缺失 `HOME`、持久日志写盘前脱敏/8 MiB 轮转、JsonStore 损坏备份/陈旧临时文件清理、空能力列表迁移及终端 shell 弃用路径。完整离线结果为 72 文件/391 项通过，4 live 文件/7 项按设计跳过；TypeScript、Computer Host 0.3.1 自检/资源、生产构建、273 文件公开扫描、diff check 和 npm audit 通过。生产构建仍明确报告 Monaco/Shiki/Mermaid 大型依赖 chunk，列为后续性能事项。源码已推送到 `origin/codex/v0.6.14-audit-fixes`；不要启动本地上游，不发送真实或付费请求，不打包/安装/发布，除非用户另行要求。
 
 > **2026-07-27 发布后补充（历史状态）：** 用户复现了自定义 `grok-4.5` 在桌面端 401、错误详情仅显示 `Internal error`，以及回合后自动变成官方模型。该阶段工作树加入了会话启动刷新 Windows 用户级 Provider 凭据/Header、保留显式本地模型 ID、普通 Prompt 结构化失败和 `http_status` 解析。此段的“未打包”状态已被后续 0.6.7–0.6.11 本地安装记录取代；公开 Latest 仍为 0.6.6。
 
