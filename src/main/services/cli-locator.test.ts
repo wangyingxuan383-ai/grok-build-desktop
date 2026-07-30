@@ -38,5 +38,17 @@ describe("CLI locator helpers", () => {
     expect(env.HTTPS_PROXY).toBe(settings.httpsProxy);
     expect(env.XAI_API_KEY).toBe("synthetic-test-key");
     expect(env.PATH).toBe(process.env.PATH);
+    expect(env.HOME).toBeTruthy();
+  });
+
+  it("preserves an explicit HOME instead of replacing it with USERPROFILE", () => {
+    const previous = process.env.HOME;
+    process.env.HOME = "X:\\explicit-home";
+    try {
+      expect(buildCliEnv(settings).HOME).toBe("X:\\explicit-home");
+    } finally {
+      if (previous === undefined) delete process.env.HOME;
+      else process.env.HOME = previous;
+    }
   });
 });

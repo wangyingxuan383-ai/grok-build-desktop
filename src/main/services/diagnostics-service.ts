@@ -9,7 +9,7 @@ import { strToU8, zipSync } from "fflate";
 import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, FailureDiagnosisReport, GrokQuotaSnapshot, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem, TurnFailure } from "../../shared/types";
 import { turnFailureActions, turnFailureLabel } from "../../shared/turn-failure";
 import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
-import { redactSecrets, type LogService } from "./log-service";
+import { redactLogText, redactSecrets, type LogService } from "./log-service";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,6 +49,10 @@ export class DiagnosticsService {
         failure.providerId ? `提供商 ${failure.providerId}` : "",
         failure.traceId ? `Trace ${failure.traceId}` : "",
         failure.gatewayPhase ? `阶段 ${failure.gatewayPhase}` : "",
+        failure.gatewayReason ? `断开来源 ${failure.gatewayReason}` : "",
+        failure.gatewayProxyMode ? `网络路由 ${failure.gatewayProxyMode}` : "",
+        failure.gatewayRequestId ? `网关请求 ${failure.gatewayRequestId}` : "",
+        failure.gatewayElapsedMs === undefined ? "" : `网关耗时 ${failure.gatewayElapsedMs} ms`,
       ].filter(Boolean),
     });
 
@@ -92,7 +96,11 @@ export class DiagnosticsService {
         status: "warning",
         summary: provider ? `上游地址 ${provider.baseUrl}` : "未能定位该模型所属的受管提供商",
         details: [
-          settings.httpsProxy ? `HTTPS 代理 ${settings.httpsProxy}` : "未配置 HTTPS 代理",
+          failure.gatewayProxyMode === "direct"
+            ? "本次提供商请求已跳过应用代理"
+            : settings.httpsProxy
+              ? `本次提供商请求继承 HTTPS 代理 ${settings.httpsProxy}`
+              : "本次提供商请求继承系统网络设置",
           failure.gatewayPhase === "pre-send" ? "失败发生在应用发出请求之前（本机或 DNS 层）" : "失败发生在上游返回之后",
           failure.retryAfter ? `上游要求 ${failure.retryAfter} 后重试` : "",
         ].filter(Boolean),
@@ -257,12 +265,5 @@ export function redactDiagnosticPath(path: string): string {
 }
 
 export function redactDiagnosticText(input: string): string {
-  return redactSecrets(input)
-    .replace(/[A-Za-z]:\\Users\\[^\\\s"']+/gi, "%USERPROFILE%")
-    .replace(/[A-Za-z]:\\(?:[^\\\r\n"']+\\)*[^\\\r\n"']*/g, "[REDACTED_PATH]")
-    .replace(/\\\\[^\\\s"']+\\[^\r\n"']+/g, "[REDACTED_NETWORK_PATH]")
-    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")
-    .replace(/https?:\/\/[^\s"']+/gi, (value) => {
-      try { const url = new URL(value); return `${url.protocol}//${url.hostname}${url.port ? ":<port>" : ""}`; } catch { return "[REDACTED_URL]"; }
-    });
+  return redactLogText(input);
 }

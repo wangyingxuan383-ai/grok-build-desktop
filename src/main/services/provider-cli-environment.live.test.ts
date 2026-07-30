@@ -24,8 +24,10 @@ describe.runIf(process.platform === "win32" && process.env.GROK_LIVE_PROVIDER_PR
     await mkdir(workspace, { recursive: true });
     let capturedUrl = "";
     let capturedBody = "";
+    let capturedAuthorization = "";
     const upstream = createServer(async (request, response) => {
       capturedUrl = request.url ?? "";
+      capturedAuthorization = request.headers.authorization ?? "";
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       capturedBody = Buffer.concat(chunks).toString("utf8");
@@ -79,6 +81,7 @@ max_completion_tokens = 1024
       await adapter.start();
       await adapter.prompt("Reply only OK.");
       expect(capturedUrl).toBe("/v1/chat/completions");
+      expect(capturedAuthorization).toBe("Bearer local-probe-placeholder");
       expect(JSON.parse(capturedBody)).toMatchObject({ model: "upstream-probe" });
     } finally {
       await adapter.dispose();

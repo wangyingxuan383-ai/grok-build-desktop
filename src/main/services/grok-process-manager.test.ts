@@ -26,6 +26,13 @@ function fixture(effort: ReasoningEffort, setEffort = vi.fn().mockResolvedValue(
     effort,
     working: false,
     needsUser: false,
+    currentModelId: "grok-test",
+    models: [{
+      modelId: "grok-test",
+      name: "Grok Test",
+      supportsReasoningEffort: true,
+      reasoningEfforts: [{ value: "low", label: "Low" }, { value: "high", label: "High" }],
+    }],
     setEffort,
     dispose: vi.fn().mockResolvedValue(undefined),
   };
@@ -46,25 +53,39 @@ describe("Grok process reasoning effort switching", () => {
     }
   });
 
-  it("falls back to a controlled restart when the live extension is unavailable", async () => {
+  it("keeps the persisted session intact when the live extension is unavailable", async () => {
     const live = vi.fn().mockRejectedValue(new Error("Method not found"));
-    const { manager } = fixture("high", live);
+    const { manager, adapter } = fixture("high", live);
     const restart = vi.spyOn(manager, "restartWithEffort").mockResolvedValue(undefined);
     try {
-      await manager.setEffort("session", "low");
-      expect(restart).toHaveBeenCalledWith("session", "low");
+      await expect(manager.setEffort("session", "low")).rejects.toThrow("应用没有重启该会话");
+      expect(restart).not.toHaveBeenCalled();
+      expect(adapter.dispose).not.toHaveBeenCalled();
     } finally {
       await manager.dispose();
     }
   });
 
-  it("uses restart for the empty CLI-default effort", async () => {
+  it("does not restart an existing session to restore the empty CLI-default effort", async () => {
     const { manager, setEffort } = fixture("high");
     const restart = vi.spyOn(manager, "restartWithEffort").mockResolvedValue(undefined);
     try {
-      await manager.setEffort("session", "");
+      await expect(manager.setEffort("session", "")).rejects.toThrow("已存在会话不能切回 CLI 默认强度");
       expect(setEffort).not.toHaveBeenCalled();
-      expect(restart).toHaveBeenCalledWith("session", "");
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("rejects effort values that the active provider model did not declare", async () => {
+    const { manager, adapter, setEffort } = fixture("high");
+    adapter.currentModelId = "provider-model";
+    adapter.models = [{ modelId: "provider-model", name: "Provider", supportsReasoningEffort: false, reasoningEfforts: [] }];
+    try {
+      await expect(manager.setEffort("session", "xhigh")).rejects.toThrow("可用档位：未声明");
+      expect(setEffort).not.toHaveBeenCalled();
+      expect(adapter.dispose).not.toHaveBeenCalled();
     } finally {
       await manager.dispose();
     }

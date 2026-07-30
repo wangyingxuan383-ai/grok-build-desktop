@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { AppSettings, WorkspaceSource, WorkspaceSummary } from "../../shared/types";
+import type { ClaudeSessionCatalog } from "./claude-session-catalog";
 import type { CodexSessionCatalog } from "./codex-session-catalog";
 import { JsonStore } from "./json-store";
 
@@ -20,6 +21,7 @@ export class WorkspaceCatalog {
   constructor(
     userDataPath: string,
     private readonly codex: CodexSessionCatalog,
+    private readonly claude: ClaudeSessionCatalog,
     private readonly grokHome = join(homedir(), ".grok"),
   ) {
     this.metadata = new JsonStore(join(userDataPath, "workspace-metadata.json"), { pinned: {} });
@@ -34,7 +36,7 @@ export class WorkspaceCatalog {
       const key = normalize(cwd);
       const current = rows.get(key) ?? {
         cwd, name: basename(cwd) || cwd, exists: false, pinned: false, sources: [], sourceSet: new Set<WorkspaceSource>(),
-        grokSessions: 0, codexSessions: 0,
+        grokSessions: 0, codexSessions: 0, claudeSessions: 0,
       };
       current.sourceSet.add(source);
       Object.assign(current, patch);
@@ -62,6 +64,15 @@ export class WorkspaceCatalog {
       const existing = rows.get(key);
       add(session.cwd, "codex", {
         codexSessions: (existing?.codexSessions ?? 0) + 1,
+        lastUsedAt: maxDate(existing?.lastUsedAt, session.updatedAt),
+      });
+    }
+
+    for (const session of await this.claude.listAll(force)) {
+      const key = normalize(session.cwd);
+      const existing = rows.get(key);
+      add(session.cwd, "claude", {
+        claudeSessions: (existing?.claudeSessions ?? 0) + 1,
         lastUsedAt: maxDate(existing?.lastUsedAt, session.updatedAt),
       });
     }

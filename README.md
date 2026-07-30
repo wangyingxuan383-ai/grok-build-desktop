@@ -15,7 +15,7 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 - Codex 风格的回合、多层执行过程折叠、Markdown/GFM、公式、Mermaid、Diff 和媒体。
 - 动态模型、推理强度、Agent / Plan / 自动批准模式。
 - Grok 插件、Marketplace、Skills、MCP、Hooks 和 Codex 插件兼容扫描。
-- 项目范围 Codex 会话只读镜像，并可创建独立 Grok 接力会话。
+- 项目范围 Codex 与 Claude Code 会话只读镜像，并可创建独立 Grok 接力会话。
 - OAuth 周/月/按量额度（取决于当前 Grok CLI 与账号接口）。
 - Windows Computer Use：精确窗口、可见操作状态、紧急停止和高影响操作确认。
 - Codex 风格“+”添加面板：文件、图片、文件夹、工作区文件和已启用插件 Skills；Computer Use 以单次消息能力芯片启用，发送前不提前选择窗口。

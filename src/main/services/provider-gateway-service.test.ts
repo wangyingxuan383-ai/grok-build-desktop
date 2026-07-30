@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CustomProviderProfile } from "../../shared/types";
+import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import { LogService } from "./log-service";
 import { ProviderGatewayService, sanitizeProviderSchema } from "./provider-gateway-service";
 
@@ -41,6 +42,232 @@ describe("provider schema compatibility", () => {
 });
 
 describe("ProviderGatewayService", () => {
+  it("replaces the CLI authorization header with the managed provider credential", async () => {
+    let capturedAuthorization = "";
+    let capturedApiKey = "";
+    let capturedRoute = "";
+    let capturedProxyMode = "";
+    const upstream = createServer((request, response) => {
+      capturedAuthorization = String(request.headers.authorization ?? "");
+      capturedApiKey = String(request.headers["x-api-key"] ?? "");
+      capturedRoute = String(request.headers["x-route"] ?? "");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-auth-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "managed-auth", name: "Managed auth", baseUrl: `http://127.0.0.1:${address.port}/v1`, protocol: "chat_completions",
+      upstreamProtocol: "openai_chat", schemaProfile: "standard", authScheme: "bearer", credentialMode: "managed",
+      proxyMode: "direct",
+      credentialEnv: "MANAGED_PROVIDER_KEY", extraHeaders: { "x-route": "MANAGED_PROVIDER_ROUTE" },
+      models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const values: Record<string, string> = {
+      MANAGED_PROVIDER_KEY: "fresh-provider-key",
+      MANAGED_PROVIDER_ROUTE: "route-a",
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      environment: async (name) => values[name],
+      fetcher: (input, init, proxyMode) => {
+        capturedProxyMode = proxyMode ?? "";
+        return fetch(input, init);
+      },
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer stale-cli-session-token",
+          "x-api-key": "stale-cli-api-key",
+          "x-route": "stale-route",
+        },
+        body: "{}",
+      });
+      expect(response.status).toBe(200);
+      expect(capturedAuthorization).toBe("Bearer fresh-provider-key");
+      expect(capturedApiKey).toBe("");
+      expect(capturedRoute).toBe("route-a");
+      expect(capturedProxyMode).toBe("direct");
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("injects x-api-key credentials and fails before upstream when the managed credential is missing", async () => {
+    let calls = 0;
+    const upstream = createServer((request, response) => {
+      calls += 1;
+      expect(request.headers.authorization).toBeUndefined();
+      expect(request.headers["x-api-key"]).toBe("fresh-anthropic-key");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-api-key-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "api-key", name: "API key", baseUrl: `http://127.0.0.1:${address.port}`, protocol: "messages",
+      upstreamProtocol: "anthropic_messages", schemaProfile: "standard", authScheme: "x_api_key", credentialMode: "existing",
+      credentialEnv: "ANTHROPIC_FIXTURE_KEY", extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    let value: string | undefined = "fresh-anthropic-key";
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      environment: async () => value,
+      fetcher: fetch,
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const route = await gateway.route(provider.id);
+      expect((await fetch(`${route}/messages`, { method: "POST", headers: { authorization: "Bearer cli-token" }, body: "{}" })).status).toBe(200);
+      value = undefined;
+      const missing = await fetch(`${route}/messages`, { method: "POST", headers: { authorization: "Bearer cli-token" }, body: "{}" });
+      expect(missing.status).toBe(401);
+      expect(await missing.json()).toEqual({ error: { message: "提供商凭据不可用", phase: "provider-gateway" } });
+      expect(calls).toBe(1);
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("downgrades only unsigned Anthropic thinking SSE blocks to compatible text", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-anthropic-thinking-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "anthropic-thinking", name: "Anthropic thinking", baseUrl: "https://fixture.invalid/v1", protocol: "messages",
+      upstreamProtocol: "anthropic_messages", schemaProfile: "standard", authScheme: "x_api_key", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const malformed = [
+      'event: message_start\ndata: {"type":"message_start","message":{"content":[]}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"private route"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"answer"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join("");
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          // Deliberately split JSON/SSE boundaries to exercise incremental
+          // parsing instead of a whole-response fixture shortcut.
+          for (let offset = 0; offset < malformed.length; offset += 17) {
+            controller.enqueue(new TextEncoder().encode(malformed.slice(offset, offset + 17)));
+          }
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" } }),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.text();
+      expect(body).toContain(`"content_block":{"type":"text","text":"${PROVIDER_THINKING_START}"}`);
+      expect(body).toContain('"delta":{"type":"text_delta","text":"private route"}');
+      expect(body).toContain(`"delta":{"type":"text_delta","text":"${PROVIDER_THINKING_END}"}`);
+      expect(body).toContain('"delta":{"type":"text_delta","text":"answer"}');
+      expect(body).not.toContain('"type":"thinking"');
+      expect(body).not.toContain('"type":"thinking_delta"');
+      const log = new LogService(join(root, "gateway.log"));
+      let logged = "";
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        logged = await log.read();
+        if (logged.includes("adapted 3 unsigned Anthropic thinking event(s)")) break;
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+      expect(logged).toContain("adapted 3 unsigned Anthropic thinking event(s)");
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
+  it("keeps valid signed Anthropic thinking SSE byte-for-byte unchanged", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-anthropic-signed-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "anthropic-signed", name: "Anthropic signed", baseUrl: "https://fixture.invalid/v1", protocol: "messages",
+      upstreamProtocol: "anthropic_messages", schemaProfile: "standard", authScheme: "x_api_key", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const signed = [
+      'event: content_block_start\r\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}\r\n\r\n',
+      'event: content_block_delta\r\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"ok"}}\r\n\r\n',
+      'event: content_block_delta\r\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed-value"}}\r\n\r\n',
+      'event: content_block_stop\r\ndata: {"type":"content_block_stop","index":0}\r\n\r\n',
+    ].join("");
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async () => new Response(signed, { status: 200, headers: { "content-type": "text/event-stream" } }),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true }),
+      });
+      expect(await response.text()).toBe(signed);
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
+  it("downgrades unsigned thinking in non-streaming Anthropic Messages responses", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-anthropic-json-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "anthropic-json", name: "Anthropic JSON", baseUrl: "https://fixture.invalid/v1", protocol: "messages",
+      upstreamProtocol: "anthropic_messages", schemaProfile: "standard", authScheme: "x_api_key", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async () => Response.json({
+        id: "msg_fixture",
+        type: "message",
+        content: [
+          { type: "thinking", thinking: "route" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: false }),
+      });
+      expect(await response.json()).toMatchObject({
+        content: [
+          { type: "text", text: `${PROVIDER_THINKING_START}route${PROVIDER_THINKING_END}` },
+          { type: "text", text: "answer" },
+        ],
+      });
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
   it("binds only to loopback, sanitizes JSON and streams the upstream response", async () => {
     let captured: any;
     const upstream = createServer(async (request, response) => {
@@ -120,6 +347,89 @@ describe("ProviderGatewayService", () => {
     } finally {
       await gateway.dispose();
       await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("keeps successful body-free observations for later CLI parser attribution", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-observation-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "observed", name: "Observed", baseUrl: "https://fixture.invalid/v1", protocol: "responses",
+      upstreamProtocol: "openai_responses", schemaProfile: "standard", authScheme: "bearer", credentialMode: "none",
+      proxyMode: "direct", extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async () => new Response("data: done\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream", "x-request-id": "completed-trace" },
+      }),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id, "parser-scope")}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true }),
+      });
+      await response.text();
+      expect(gateway.recentFailures(provider.id, "parser-scope")).toEqual([]);
+      expect(gateway.recentObservations(provider.id, "parser-scope")[0]).toMatchObject({
+        outcome: "completed",
+        status: 200,
+        traceId: "completed-trace",
+        endpoint: "responses",
+        proxyMode: "direct",
+      });
+    } finally {
+      await gateway.dispose();
+    }
+  });
+
+  it("classifies a downstream stream close as cancellation instead of provider failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-downstream-close-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "close", name: "Close", baseUrl: "https://fixture.invalid/v1", protocol: "responses",
+      upstreamProtocol: "openai_responses", schemaProfile: "standard", authScheme: "bearer", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+          const timer = setInterval(() => {
+            try { controller.enqueue(new TextEncoder().encode("data: later\n\n")); }
+            catch { clearInterval(timer); }
+          }, 25);
+          init?.signal?.addEventListener("abort", () => {
+            clearInterval(timer);
+            try { controller.error(new Error("fixture observed downstream abort")); } catch { /* already closed */ }
+          }, { once: true });
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id, "closed-scope")}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true }),
+      });
+      const reader = response.body!.getReader();
+      await reader.read();
+      await reader.cancel();
+      for (let attempt = 0; attempt < 100 && !gateway.recentObservations(provider.id, "closed-scope").length; attempt += 1) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+      expect(gateway.recentFailures(provider.id, "closed-scope")).toEqual([]);
+      expect(gateway.recentObservations(provider.id, "closed-scope")[0]).toMatchObject({
+        outcome: "downstream-closed",
+        reason: "downstream-response-closed",
+      });
+    } finally {
+      await gateway.dispose();
     }
   });
 
@@ -203,9 +513,52 @@ describe("ProviderGatewayService", () => {
       const timeout = await fetch(`${route}/slow`, { method: "POST", body: "{}" });
       expect(timeout.status).toBe(502);
       expect(await timeout.json()).toMatchObject({ error: { message: "提供商请求超时", phase: "provider-gateway" } });
+      expect(gateway.recentFailures("limits")[0]).toMatchObject({
+        proxyMode: "inherit",
+        reason: "gateway-timeout",
+        phase: "pre-send",
+        endpoint: "other",
+      });
     } finally {
       await gateway.dispose();
       await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("records an upstream stream truncation after response headers without exposing response content", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-stream-error-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "stream-error", name: "Stream error", baseUrl: "https://fixture.invalid/v1", protocol: "responses",
+      upstreamProtocol: "openai_responses", schemaProfile: "standard", proxyMode: "direct", authScheme: "bearer", credentialMode: "none",
+      extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: async () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("data: first\n\n"));
+          setTimeout(() => controller.error(new Error("upstream fixture stream truncated")), 10);
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id, "stream-scope")}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true }),
+      });
+      await expect(response.text()).rejects.toThrow();
+      expect(gateway.recentFailures(provider.id, "stream-scope")[0]).toMatchObject({
+        proxyMode: "direct",
+        endpoint: "responses",
+        phase: "response",
+        reason: "upstream-stream",
+      });
+      expect(gateway.recentFailures(provider.id, "stream-scope")[0]?.message).not.toContain("data: first");
+    } finally {
+      await gateway.dispose();
     }
   });
 

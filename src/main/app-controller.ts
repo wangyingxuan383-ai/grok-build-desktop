@@ -15,6 +15,8 @@ import type {
   WorkspaceSummary,
   CodexSessionDetail,
   CodexSessionSummary,
+  ClaudeSessionDetail,
+  ClaudeSessionSummary,
   GrokQuotaSnapshot,
   MediaCapabilities,
   ComposerDraftState,
@@ -129,6 +131,7 @@ import { TokenActivityService } from "./services/token-activity-service";
 import { LogService, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
+import { ClaudeSessionCatalog } from "./services/claude-session-catalog";
 import { WorkspaceCatalog } from "./services/workspace-catalog";
 import { GrokQuotaService } from "./services/grok-quota-service";
 import { UiStateService } from "./services/ui-state-service";
@@ -177,7 +180,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentWorkspaces: [],
   activeWorkspace: "",
   codexGroupCollapsed: true,
-  sessionGroupCollapsed: { normal: false, fork: false, worktree: false, automation: true, "codex-continuation": true, other: true },
+  claudeGroupCollapsed: true,
+  sessionGroupCollapsed: { normal: false, fork: false, worktree: false, automation: true, "codex-continuation": true, "claude-continuation": true, other: true },
   showArchivedCodex: false,
   theme: structuredClone(DEFAULT_THEME),
 };
@@ -191,6 +195,7 @@ export class AppController {
   private readonly auth: AuthService;
   private readonly updater: CliUpdateService;
   private readonly codex: CodexSessionCatalog;
+  private readonly claude: ClaudeSessionCatalog;
   private readonly workspaces: WorkspaceCatalog;
   private readonly quota: GrokQuotaService;
   private readonly uiState: UiStateService;
@@ -239,7 +244,8 @@ export class AppController {
     this.attachmentCache = new AttachmentCacheService(userDataPath);
     this.turnPresentations = new TurnPresentationService(userDataPath);
     this.codex = new CodexSessionCatalog(userDataPath, this.log);
-    this.workspaces = new WorkspaceCatalog(userDataPath, this.codex);
+    this.claude = new ClaudeSessionCatalog(userDataPath, this.log);
+    this.workspaces = new WorkspaceCatalog(userDataPath, this.codex, this.claude);
     this.uiState = new UiStateService(userDataPath);
     this.onboarding = new OnboardingService(userDataPath);
     const resourcesRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
@@ -346,11 +352,22 @@ export class AppController {
       },
     });
     this.providers = new ProviderService(userDataPath, this.log, {
-      fetcher: async (input, init) => {
+      fetcher: async (input, init, proxyMode = "inherit") => {
         const settings = await this.settingsStore.get();
-        const network = session.fromPartition("grok-provider", { cache: false });
+        // Separate partitions prevent concurrent direct/proxied providers from
+        // racing over one mutable Electron proxy configuration.
+        const network = session.fromPartition(
+          proxyMode === "direct" ? "grok-provider-direct" : "grok-provider-inherit",
+          { cache: false },
+        );
         const proxy = settings.httpsProxy || settings.httpProxy;
-        await network.setProxy(proxy ? { proxyRules: proxy } : { mode: "system" });
+        await network.setProxy(
+          proxyMode === "direct"
+            ? { mode: "direct" }
+            : proxy
+              ? { proxyRules: proxy }
+              : { mode: "system" },
+        );
         const target = input instanceof URL ? input.toString() : input;
         return network.fetch(target, init);
       },
@@ -412,6 +429,7 @@ export class AppController {
       changelog,
       workspaces: [],
       codexSessions: [],
+      claudeSessions: [],
       buildInfo: this.buildInfo,
       onboarding: await this.onboarding.get(),
     };
@@ -465,8 +483,9 @@ export class AppController {
   }
 
   private async syncSessionOrigins(cwd: string): Promise<void> {
-    const [continuations, tasks, runs] = await Promise.all([
+    const [continuations, claudeContinuations, tasks, runs] = await Promise.all([
       this.codex.listContinuations(cwd).catch(() => []),
+      this.claude.listContinuations(cwd).catch(() => []),
       this.automations.list().catch(() => []),
       this.automations.listRuns().catch(() => []),
     ]);
@@ -478,6 +497,13 @@ export class AppController {
       title: "Codex 接力",
       suggestedTitle: value.title,
     }));
+    values.push(...claudeContinuations.map((value) => ({
+      sessionId: value.sessionId,
+      kind: "claude-continuation" as const,
+      id: value.claudeId,
+      title: "Claude 接力",
+      suggestedTitle: value.title,
+    })));
     for (const task of tasks) {
       if (task.sessionId) values.push({ sessionId: task.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name });
     }
@@ -904,6 +930,40 @@ export class AppController {
     return { sessionId: result.sessionId, cwd: detail.cwd };
   }
 
+  listClaudeSessions(cwd: string, force = false): Promise<ClaudeSessionSummary[]> {
+    return this.claude.list(cwd, force);
+  }
+
+  openClaudeSession(id: string): Promise<ClaudeSessionDetail> { return this.claude.open(id); }
+  refreshClaudeSession(id: string): Promise<ClaudeSessionDetail> { return this.claude.refresh(id); }
+  hideClaudeSession(id: string, hidden = true): Promise<void> { return this.claude.hide(id, hidden); }
+
+  async continueClaudeSession(id: string): Promise<{ sessionId: string; cwd: string }> {
+    const detail = await this.claude.open(id, true);
+    const before = detail.contentHash;
+    const result = await this.processes.create(detail.cwd);
+    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew", "claudeReader"]).catch((error) => this.log.log(error));
+    this.focusedSessionId = result.sessionId;
+    await this.catalog.markRead(result.sessionId);
+    await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "claude-continuation", id, title: "Claude 接力", suggestedTitle: detail.title }]);
+    await this.catalog.rename(result.sessionId, detail.title);
+    await this.claude.recordContinuation(id, result.sessionId);
+    void (async () => {
+      try {
+        await this.processes.get(result.sessionId).prompt(`/resume-claude ${JSON.stringify(detail.path)}`, []);
+      } catch (error) {
+        await this.handleEvent({ type: "error", sessionId: result.sessionId, message: `Claude 接力失败：${error instanceof Error ? error.message : String(error)}` });
+      } finally {
+        const after = await this.claude.contentHash(id).catch(() => "");
+        if (after !== before) {
+          await this.log.log(`Claude read-only hash mismatch: ${id}`);
+          await this.handleEvent({ type: "error", sessionId: result.sessionId, message: "Claude 原会话哈希发生变化；已记录只读约束诊断" });
+        }
+      }
+    })();
+    return { sessionId: result.sessionId, cwd: detail.cwd };
+  }
+
   getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
   listProviders(): Promise<CustomProviderProfile[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
@@ -1274,27 +1334,45 @@ export class AppController {
       failure.message = redactSecrets(failure.message).slice(0, 8_000);
       const provider = await this.providers?.providerForModel(failure.modelId);
       if (!provider) { failure.nextActions = turnFailureActions(failure.classification); return; }
-      failure.providerId = provider.id;
       // Match only a recent observation: an older one describes a different turn.
-      const observed = this.providers?.gatewayFailures(provider.id, gatewayScopeId)
+      const observedFailure = this.providers?.gatewayFailures(provider.id, gatewayScopeId)
         .find((record) => {
           const delta = Date.parse(failure.at) - Date.parse(record.at);
           return delta >= 0 && delta < 60_000;
         });
-      if (observed) {
-        failure.httpStatus ??= observed.status;
-        failure.traceId ??= observed.traceId;
-        failure.retryAfter ??= observed.retryAfter;
-        failure.gatewayPhase ??= observed.phase;
-        failure.sanitizedCount ??= observed.sanitizedCount;
-        failure.classification = classifyTurnFailure({
-          message: failure.message,
-          httpStatus: failure.httpStatus,
-          jsonRpcCode: failure.jsonRpcCode,
-          processExitCode: failure.processExitCode,
-          cancelled: failure.cancelled,
+      const observed = observedFailure ?? this.providers?.gatewayObservations(provider.id, gatewayScopeId)
+        .find((record) => {
+          const delta = Date.parse(failure.at) - Date.parse(record.at);
+          return delta >= 0 && delta < 60_000;
         });
+      if (!observed) {
+        // A requested local model id is not proof that the custom provider
+        // handled the turn. Older persisted sessions can expose only the
+        // upstream alias and remain on the official route. Do not label an
+        // official quota error as a Provider failure without gateway evidence.
+        failure.nextActions = [
+          `本回合没有观察到「${provider.name}」兼容网关请求；应用将重新应用自定义模型路由后再发送`,
+          ...turnFailureActions(failure.classification),
+        ];
+        return;
       }
+      failure.providerId = provider.id;
+      if (observed.status !== undefined && observed.status >= 400) failure.httpStatus ??= observed.status;
+      failure.traceId ??= observed.traceId;
+      failure.retryAfter ??= observed.retryAfter;
+      failure.gatewayPhase ??= observed.phase;
+      if (observed.reason) failure.gatewayReason ??= observed.reason;
+      failure.gatewayProxyMode ??= observed.proxyMode;
+      failure.gatewayRequestId ??= observed.requestId;
+      failure.gatewayElapsedMs ??= observed.elapsedMs;
+      failure.sanitizedCount ??= observed.sanitizedCount;
+      failure.classification = classifyTurnFailure({
+        message: failure.message,
+        httpStatus: failure.httpStatus,
+        jsonRpcCode: failure.jsonRpcCode,
+        processExitCode: failure.processExitCode,
+        cancelled: failure.cancelled,
+      });
       // A Gemini-family upstream on the pass-through profile is the single most
       // actionable case: the remedy is one setting, not a retry.
       if (failure.classification === "schema-rejected" && (provider.schemaProfile ?? "standard") === "standard") {

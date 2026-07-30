@@ -219,6 +219,7 @@ export interface AppSettings {
   recentWorkspaces: string[];
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
+  claudeGroupCollapsed?: boolean;
   /** The 开发工具 section resets to collapsed on every launch without this. */
   projectToolsOpen?: boolean;
   sessionGroupCollapsed?: Partial<Record<SessionOriginKind, boolean>>;
@@ -230,14 +231,18 @@ export type ProviderProtocol = "chat_completions" | "responses" | "messages";
 export type ProviderUpstreamProtocol = "openai_chat" | "openai_responses" | "anthropic_messages" | "gemini_generate_content" | "compatible_passthrough";
 export type ProviderSchemaProfile = "standard" | "gemini" | "strict";
 export type ProviderAuthScheme = "bearer" | "x_api_key";
+export type ProviderProxyMode = "inherit" | "direct";
 
 export interface ProviderModelDefinition {
   id: string;
   model: string;
   name: string;
   description?: string;
+  protocol?: ProviderProtocol;
   contextWindow?: number;
   maxCompletionTokens?: number;
+  /** Seconds without an inference stream event before Grok CLI cancels it. */
+  inferenceIdleTimeoutSeconds?: number;
   reasoningEfforts?: ReasoningEffort[];
 }
 
@@ -255,6 +260,8 @@ export interface CustomProviderProfile {
   protocol: ProviderProtocol;
   upstreamProtocol?: ProviderUpstreamProtocol;
   schemaProfile?: ProviderSchemaProfile;
+  /** Whether desktop requests inherit the app proxy or bypass it. */
+  proxyMode?: ProviderProxyMode;
   authScheme: ProviderAuthScheme;
   credentialMode: "managed" | "existing" | "none";
   credentialEnv?: string;
@@ -285,6 +292,7 @@ export interface ProviderModelCandidate {
   description?: string;
   ownedBy?: string;
   contextWindow?: number;
+  reasoningEfforts?: ReasoningEffort[];
   alreadyConfigured: boolean;
 }
 
@@ -466,7 +474,7 @@ export interface AccountProfile {
 }
 
 export type LiveStatus = "idle" | "working" | "needs-user" | "unread" | "error" | "cold";
-export type SessionOriginKind = "normal" | "fork" | "worktree" | "codex-continuation" | "automation" | "other";
+export type SessionOriginKind = "normal" | "fork" | "worktree" | "codex-continuation" | "claude-continuation" | "automation" | "other";
 
 export interface SessionSummary {
   id: string;
@@ -488,7 +496,7 @@ export interface SessionSummary {
   worktreeId?: string;
 }
 
-export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex";
+export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex" | "claude";
 
 export interface WorkspaceSummary {
   cwd: string;
@@ -499,6 +507,7 @@ export interface WorkspaceSummary {
   lastUsedAt?: string;
   grokSessions: number;
   codexSessions: number;
+  claudeSessions: number;
 }
 
 export interface CodexSessionSummary {
@@ -524,6 +533,35 @@ export interface CodexTurn {
 
 export interface CodexSessionDetail extends CodexSessionSummary {
   turns: CodexTurn[];
+  warnings: string[];
+  lastUserRequest?: string;
+  lastAssistantAction?: string;
+  contentHash: string;
+}
+
+export interface ClaudeSessionSummary {
+  id: string;
+  path: string;
+  cwd: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  hidden: boolean;
+  source?: string;
+  origin?: string;
+  model?: string;
+}
+
+export interface ClaudeTurn {
+  role: "user" | "assistant" | "tool" | "thought";
+  text: string;
+  toolCalls?: unknown[];
+  toolResults?: unknown[];
+  inert?: boolean;
+}
+
+export interface ClaudeSessionDetail extends ClaudeSessionSummary {
+  turns: ClaudeTurn[];
   warnings: string[];
   lastUserRequest?: string;
   lastAssistantAction?: string;
@@ -864,6 +902,13 @@ export interface ModelInfo {
   name: string;
   description?: string;
   totalContextTokens?: number;
+  supportsReasoningEffort?: boolean;
+  reasoningEfforts?: Array<{
+    value: Exclude<ReasoningEffort, "">;
+    label: string;
+    description?: string;
+    default?: boolean;
+  }>;
 }
 
 export interface CommandInfo {
@@ -1005,6 +1050,10 @@ export interface TurnFailure {
   traceId?: string;
   retryAfter?: string;
   gatewayPhase?: "pre-send" | "upstream" | "response";
+  gatewayReason?: "gateway-timeout" | "downstream-request-aborted" | "downstream-response-closed" | "upstream-connect" | "upstream-stream" | "request-validation" | "upstream-http";
+  gatewayProxyMode?: ProviderProxyMode;
+  gatewayRequestId?: string;
+  gatewayElapsedMs?: number;
   /** How many tool-schema values the compatibility gateway rewrote for this provider. */
   sanitizedCount?: number;
   processExitCode?: number;
@@ -1101,6 +1150,7 @@ export interface BootstrapData {
   changelog: string;
   workspaces: WorkspaceSummary[];
   codexSessions: CodexSessionSummary[];
+  claudeSessions: ClaudeSessionSummary[];
   buildInfo: BuildInfo;
   onboarding: OnboardingState;
 }
@@ -1249,6 +1299,11 @@ export interface GrokDesktopApi {
   refreshCodexSession(id: string): Promise<CodexSessionDetail>;
   hideCodexSession(id: string, hidden?: boolean): Promise<void>;
   continueCodexSession(id: string): Promise<{ sessionId: string; cwd: string }>;
+  listClaudeSessions(cwd: string, force?: boolean): Promise<ClaudeSessionSummary[]>;
+  openClaudeSession(id: string): Promise<ClaudeSessionDetail>;
+  refreshClaudeSession(id: string): Promise<ClaudeSessionDetail>;
+  hideClaudeSession(id: string, hidden?: boolean): Promise<void>;
+  continueClaudeSession(id: string): Promise<{ sessionId: string; cwd: string }>;
   getQuota(force?: boolean): Promise<GrokQuotaSnapshot>;
   listProviders(): Promise<CustomProviderProfile[]>;
   upsertProvider(input: CustomProviderInput): Promise<CustomProviderProfile[]>;

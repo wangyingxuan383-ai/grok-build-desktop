@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import type { CustomProviderProfile, ProviderSchemaProfile } from "../../shared/types";
+import type { CustomProviderProfile, ProviderProxyMode, ProviderSchemaProfile } from "../../shared/types";
+import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import type { LogService } from "./log-service";
 
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
@@ -15,16 +16,40 @@ const RESPONSE_HEADERS = new Set([
 
 /** What the gateway saw for one failed upstream call. Kept in memory only. */
 export interface GatewayFailureRecord {
+  requestId: string;
   at: string;
   providerId: string;
   scopeId: string;
+  proxyMode: ProviderProxyMode;
+  endpoint: "responses" | "chat-completions" | "messages" | "other";
+  elapsedMs: number;
   status?: number;
   statusText?: string;
   traceId?: string;
   retryAfter?: string;
   phase: "pre-send" | "upstream" | "response";
+  reason: "gateway-timeout" | "downstream-request-aborted" | "downstream-response-closed" | "upstream-connect" | "upstream-stream" | "request-validation" | "upstream-http";
   sanitizedCount: number;
   message: string;
+}
+
+/** Body-free terminal observation for provider attribution and diagnostics. */
+export interface GatewayRequestObservation {
+  requestId: string;
+  at: string;
+  providerId: string;
+  scopeId: string;
+  proxyMode: ProviderProxyMode;
+  endpoint: GatewayFailureRecord["endpoint"];
+  elapsedMs: number;
+  status?: number;
+  statusText?: string;
+  traceId?: string;
+  retryAfter?: string;
+  phase: GatewayFailureRecord["phase"];
+  reason?: GatewayFailureRecord["reason"];
+  outcome: "completed" | "failed" | "downstream-closed";
+  sanitizedCount: number;
 }
 
 export interface ProviderSchemaSanitizeResult {
@@ -35,7 +60,12 @@ export interface ProviderSchemaSanitizeResult {
 
 export interface ProviderGatewayOptions {
   providers(): Promise<CustomProviderProfile[]>;
-  fetcher: typeof fetch;
+  environment?(name: string): Promise<string | undefined>;
+  fetcher(
+    input: Parameters<typeof fetch>[0],
+    init?: Parameters<typeof fetch>[1],
+    proxyMode?: ProviderProxyMode,
+  ): Promise<Response>;
   log: LogService;
   maxRequestBytes?: number;
   maxResponseBytes?: number;
@@ -53,6 +83,8 @@ export class ProviderGatewayService {
   private starting?: Promise<void>;
   /** Bounded, in-memory only. Never persisted and never contains a credential or a body. */
   private readonly failures: GatewayFailureRecord[] = [];
+  /** Includes successful routes so a later CLI parser error can still be attributed. */
+  private readonly observations: GatewayRequestObservation[] = [];
   private readonly token = randomBytes(24).toString("base64url");
 
   constructor(private readonly options: ProviderGatewayOptions) {}
@@ -65,9 +97,22 @@ export class ProviderGatewayService {
       .reverse();
   }
 
-  private record(entry: GatewayFailureRecord): void {
+  recentObservations(providerId?: string, scopeId?: string): GatewayRequestObservation[] {
+    return this.observations
+      .filter((value) => (!providerId || value.providerId === providerId) && (!scopeId || value.scopeId === scopeId))
+      .slice()
+      .reverse();
+  }
+
+  private observe(entry: GatewayRequestObservation): void {
+    this.observations.push(entry);
+    while (this.observations.length > 200) this.observations.shift();
+  }
+
+  private recordFailure(entry: GatewayFailureRecord): void {
     this.failures.push(entry);
-    while (this.failures.length > 20) this.failures.shift();
+    while (this.failures.length > 100) this.failures.shift();
+    this.observe({ ...entry, outcome: "failed" });
   }
 
   async route(providerId: string, scopeId = "unscoped"): Promise<string> {
@@ -112,8 +157,18 @@ export class ProviderGatewayService {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const requestId = randomBytes(6).toString("hex");
+    const started = Date.now();
     let failingProviderId = "unknown";
     let failingScopeId = "unknown";
+    let proxyMode: ProviderProxyMode = "inherit";
+    let endpoint: GatewayFailureRecord["endpoint"] = "other";
+    let changed = 0;
+    let upstream: Response | undefined;
+    let fetchStarted = false;
+    let abortReason: GatewayFailureRecord["reason"] | undefined;
+    let failureRecorded = false;
+    let cleanupAbortHandlers = (): void => undefined;
     try {
       if (request.method !== "POST") return jsonError(response, 405, "只允许推理 POST 请求");
       const match = new RegExp(`^/${escapeRegex(this.token)}/([^/]+)/([^/]+)(/.*)?$`).exec(request.url ?? "");
@@ -124,31 +179,49 @@ export class ProviderGatewayService {
       failingScopeId = scopeId;
       const provider = (await this.options.providers()).find((value) => value.owned && value.id === providerId);
       if (!provider) return jsonError(response, 404, "提供商不存在");
+      proxyMode = provider.proxyMode ?? "inherit";
+      endpoint = gatewayEndpoint(match[3] || "");
       const raw = await readRequest(request, this.options.maxRequestBytes ?? MAX_REQUEST_BYTES);
       let body = raw;
-      let changed = 0;
+      let streaming = false;
       if (/application\/json/i.test(String(request.headers["content-type"] ?? "")) && raw.length) {
         const parsed = JSON.parse(raw.toString("utf8"));
+        streaming = Boolean(parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).stream);
         const sanitized = sanitizeProviderSchema(parsed, provider.schemaProfile ?? "standard");
         body = Buffer.from(JSON.stringify(sanitized.value));
         changed = sanitized.changed;
       }
+      await this.options.log.log(`Provider gateway request ${requestId} started provider=${provider.id} route=${proxyMode} endpoint=${endpoint} bytes=${body.length} stream=${streaming}`);
       const upstreamUrl = joinUrl(provider.baseUrl, match[3] || "");
       const abort = new AbortController();
-      const timeout = setTimeout(() => abort.abort(new Error("提供商请求超时")), this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
-      request.once("aborted", () => abort.abort());
-      response.once("close", () => { if (!response.writableEnded) abort.abort(); });
-      let upstream: Response;
+      const abortWith = (reason: GatewayFailureRecord["reason"], message: string): void => {
+        abortReason ??= reason;
+        if (!abort.signal.aborted) abort.abort(new Error(message));
+      };
+      const onRequestAborted = (): void => abortWith("downstream-request-aborted", "本机调用方在请求阶段断开");
+      const onResponseClosed = (): void => {
+        if (!response.writableEnded) abortWith("downstream-response-closed", "本机调用方在响应阶段断开");
+      };
+      const timeout = setTimeout(() => abortWith("gateway-timeout", "提供商请求头超时"), this.options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS);
+      request.once("aborted", onRequestAborted);
+      response.once("close", onResponseClosed);
+      cleanupAbortHandlers = () => {
+        clearTimeout(timeout);
+        request.off("aborted", onRequestAborted);
+        response.off("close", onResponseClosed);
+      };
       try {
+        const headers = await this.forwardProviderHeaders(request.headers, provider);
+        fetchStarted = true;
         upstream = await this.options.fetcher(upstreamUrl, {
           method: "POST",
-          headers: forwardHeaders(request.headers),
+          headers,
           // Forwarded as bytes: re-encoding through a UTF-8 string would
           // corrupt binary and multipart payloads.
           body: new Uint8Array(body),
           redirect: "manual",
           signal: abort.signal,
-        });
+        }, proxyMode);
       } finally {
         clearTimeout(timeout);
       }
@@ -158,38 +231,178 @@ export class ProviderGatewayService {
         throw new Error("提供商响应过大");
       }
       if (upstream.status >= 400) {
-        this.record({
+        this.recordFailure({
           at: new Date().toISOString(),
+          requestId,
           providerId: provider.id,
           scopeId,
+          proxyMode,
+          endpoint,
+          elapsedMs: Date.now() - started,
           status: upstream.status,
           statusText: upstream.statusText,
           traceId: traceHeader(upstream.headers),
           retryAfter: upstream.headers.get("retry-after") ?? undefined,
           phase: "upstream",
+          reason: "upstream-http",
           sanitizedCount: changed,
           message: `${upstream.status} ${upstream.statusText}`.trim(),
         });
+        failureRecorded = true;
       }
       response.statusCode = upstream.status;
       response.statusMessage = upstream.statusText;
       for (const [name, value] of upstream.headers) if (RESPONSE_HEADERS.has(name.toLowerCase())) response.setHeader(name, value);
       if (!upstream.body) {
         response.end();
+        cleanupAbortHandlers();
+        if (!failureRecorded) this.observe({
+          at: new Date().toISOString(),
+          requestId,
+          providerId: provider.id,
+          scopeId,
+          proxyMode,
+          endpoint,
+          elapsedMs: Date.now() - started,
+          status: upstream.status,
+          statusText: upstream.statusText,
+          traceId: traceHeader(upstream.headers),
+          retryAfter: upstream.headers.get("retry-after") ?? undefined,
+          phase: "response",
+          outcome: "completed",
+          sanitizedCount: changed,
+        });
+        await this.options.log.log(`Provider gateway request ${requestId} completed status=${upstream.status} elapsedMs=${Date.now() - started}`);
         return;
       }
-      await pipeLimitedResponse(Readable.fromWeb(upstream.body as never), response, this.options.maxResponseBytes ?? MAX_RESPONSE_BYTES);
+      const responseSource = Readable.fromWeb(upstream.body as never);
+      const responseLimit = this.options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+      const anthropicCompatibility = upstream.status < 400
+        && endpoint === "messages"
+        && (provider.upstreamProtocol === "anthropic_messages" || provider.protocol === "messages");
+      const responseChanged = anthropicCompatibility
+        ? await pipeAnthropicMessageResponse(
+          responseSource,
+          response,
+          responseLimit,
+          upstream.headers.get("content-type") ?? "",
+        )
+        : await pipeLimitedResponse(responseSource, response, responseLimit);
+      if (responseChanged) {
+        await this.options.log.log(
+          `Provider gateway adapted ${responseChanged} unsigned Anthropic thinking event(s) for ${provider.id}`,
+        );
+      }
+      cleanupAbortHandlers();
+      if (!failureRecorded) this.observe({
+        at: new Date().toISOString(),
+        requestId,
+        providerId: provider.id,
+        scopeId,
+        proxyMode,
+        endpoint,
+        elapsedMs: Date.now() - started,
+        status: upstream.status,
+        statusText: upstream.statusText,
+        traceId: traceHeader(upstream.headers),
+        retryAfter: upstream.headers.get("retry-after") ?? undefined,
+        phase: "response",
+        outcome: "completed",
+        sanitizedCount: changed,
+      });
+      await this.options.log.log(`Provider gateway request ${requestId} completed status=${upstream.status} elapsedMs=${Date.now() - started}`);
     } catch (error) {
+      cleanupAbortHandlers();
+      const phase: GatewayFailureRecord["phase"] = response.headersSent ? "response" : upstream ? "upstream" : "pre-send";
+      const reason = abortReason ?? (phase === "response" ? "upstream-stream" : fetchStarted ? "upstream-connect" : "request-validation");
+      const elapsedMs = Date.now() - started;
+      if (reason === "downstream-request-aborted" || reason === "downstream-response-closed") {
+        this.observe({
+          requestId,
+          at: new Date().toISOString(),
+          providerId: failingProviderId,
+          scopeId: failingScopeId,
+          proxyMode,
+          endpoint,
+          elapsedMs,
+          status: upstream?.status,
+          statusText: upstream?.statusText,
+          traceId: upstream ? traceHeader(upstream.headers) : undefined,
+          retryAfter: upstream?.headers.get("retry-after") ?? undefined,
+          phase,
+          reason,
+          outcome: "downstream-closed",
+          sanitizedCount: changed,
+        });
+        await this.options.log.log(`Provider gateway request ${requestId} closed by downstream phase=${phase} reason=${reason} route=${proxyMode} elapsedMs=${elapsedMs}`);
+        if (!response.destroyed) response.destroy();
+        return;
+      }
       if (response.headersSent) {
+        const redacted = redactGatewayError(error instanceof Error ? error.message : String(error));
+        if (!failureRecorded) this.recordFailure({
+          requestId,
+          at: new Date().toISOString(),
+          providerId: failingProviderId,
+          scopeId: failingScopeId,
+          proxyMode,
+          endpoint,
+          elapsedMs,
+          phase,
+          reason,
+          sanitizedCount: changed,
+          message: redacted,
+        });
+        await this.options.log.log(`Provider gateway request ${requestId} failed phase=${phase} reason=${reason} route=${proxyMode} elapsedMs=${elapsedMs}: ${redacted}`);
         response.destroy();
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
       const redacted = redactGatewayError(message);
-      this.record({ at: new Date().toISOString(), providerId: failingProviderId, scopeId: failingScopeId, phase: "pre-send", sanitizedCount: 0, message: redacted });
-      await this.options.log.log(`Provider gateway request failed: ${redacted}`);
-      jsonError(response, /过大|too large/i.test(message) ? 413 : /JSON/i.test(message) ? 400 : 502, publicGatewayError(message));
+      if (!failureRecorded) this.recordFailure({
+        requestId,
+        at: new Date().toISOString(),
+        providerId: failingProviderId,
+        scopeId: failingScopeId,
+        proxyMode,
+        endpoint,
+        elapsedMs,
+        phase,
+        reason,
+        sanitizedCount: changed,
+        message: redacted,
+      });
+      await this.options.log.log(`Provider gateway request ${requestId} failed phase=${phase} reason=${reason} route=${proxyMode} elapsedMs=${elapsedMs}: ${redacted}`);
+      jsonError(response, /凭据/.test(message) ? 401 : /过大|too large/i.test(message) ? 413 : /JSON/i.test(message) ? 400 : 502, publicGatewayError(message));
     }
+  }
+
+  /**
+   * The loopback request is made by Grok CLI, whose Authorization header may
+   * contain the signed-in xAI session token after auth recovery. Never forward
+   * that token to a managed custom provider. The gateway is the credential
+   * boundary and injects only the environment values owned by that provider.
+   */
+  private async forwardProviderHeaders(headers: IncomingHttpHeaders, provider: CustomProviderProfile): Promise<Record<string, string>> {
+    const output = forwardHeaders(headers);
+    delete output.authorization;
+    delete output["x-api-key"];
+
+    for (const [headerName, environmentName] of Object.entries(provider.extraHeaders ?? {})) {
+      const normalized = headerName.trim().toLowerCase();
+      if (!normalized) continue;
+      delete output[normalized];
+      const value = await this.options.environment?.(environmentName);
+      if (value) output[normalized] = value;
+    }
+
+    if (provider.credentialMode === "none") return output;
+    if (!provider.credentialEnv) throw new Error("提供商凭据不可用");
+    const credential = await this.options.environment?.(provider.credentialEnv);
+    if (!credential) throw new Error("提供商凭据不可用");
+    if (provider.authScheme === "x_api_key") output["x-api-key"] = credential;
+    else output.authorization = `Bearer ${credential}`;
+    return output;
   }
 }
 
@@ -266,15 +479,205 @@ async function readRequest(request: IncomingMessage, limit: number): Promise<Buf
   return Buffer.concat(chunks);
 }
 
-async function pipeLimitedResponse(source: Readable, response: ServerResponse, limit: number): Promise<void> {
+async function pipeLimitedResponse(source: Readable, response: ServerResponse, limit: number): Promise<number> {
   let size = 0;
   for await (const raw of source) {
     const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
     size += chunk.length;
     if (size > limit) throw new Error("提供商响应过大");
-    if (!response.write(chunk)) await waitForDrain(response);
+    await writeResponse(response, chunk);
   }
   response.end();
+  return 0;
+}
+
+/**
+ * Some OpenAI-compatible/local routers expose an Anthropic Messages endpoint
+ * but stream `thinking` blocks without the required `signature` field. Grok
+ * CLI strictly deserializes Anthropic events and closes the response as soon
+ * as it sees that malformed block.
+ *
+ * Do not forge a signature. For only the malformed block, carry thinking
+ * through an internal marker-delimited text block. The ACP adapter restores it
+ * to the semantic thought channel before it reaches the renderer. Valid signed
+ * Anthropic streams remain byte-for-byte pass-through.
+ */
+async function pipeAnthropicMessageResponse(
+  source: Readable,
+  response: ServerResponse,
+  limit: number,
+  contentType: string,
+): Promise<number> {
+  if (/text\/event-stream/i.test(contentType)) {
+    return pipeAnthropicSseResponse(source, response, limit);
+  }
+  if (!/application\/json/i.test(contentType)) return pipeLimitedResponse(source, response, limit);
+
+  const body = await collectLimitedResponse(source, limit);
+  let output = body;
+  let changed = 0;
+  try {
+    const adapted = adaptAnthropicMessageJson(JSON.parse(body.toString("utf8")));
+    changed = adapted.changed;
+    if (changed) output = Buffer.from(JSON.stringify(adapted.value));
+  } catch {
+    // A provider may label a non-JSON error/body as JSON. Preserve it exactly;
+    // the gateway must not replace the upstream's observable response.
+  }
+  await writeResponse(response, output);
+  response.end();
+  return changed;
+}
+
+async function pipeAnthropicSseResponse(source: Readable, response: ServerResponse, limit: number): Promise<number> {
+  const decoder = new TextDecoder();
+  const downgradedIndexes = new Set<string>();
+  let pending = "";
+  let inputSize = 0;
+  let changed = 0;
+
+  const flushCompleteRecords = async (): Promise<void> => {
+    for (;;) {
+      const boundary = /\r?\n\r?\n/.exec(pending);
+      if (!boundary || boundary.index === undefined) return;
+      const record = pending.slice(0, boundary.index);
+      const separator = boundary[0];
+      pending = pending.slice(boundary.index + separator.length);
+      const adapted = adaptAnthropicSseRecord(record, downgradedIndexes);
+      changed += adapted.changed;
+      if (adapted.value !== undefined) await writeResponse(response, Buffer.from(adapted.value + separator));
+    }
+  };
+
+  for await (const raw of source) {
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    inputSize += chunk.length;
+    if (inputSize > limit) throw new Error("提供商响应过大");
+    pending += decoder.decode(chunk, { stream: true });
+    await flushCompleteRecords();
+  }
+  pending += decoder.decode();
+  await flushCompleteRecords();
+  if (pending) {
+    const adapted = adaptAnthropicSseRecord(pending, downgradedIndexes);
+    changed += adapted.changed;
+    if (adapted.value !== undefined) await writeResponse(response, Buffer.from(adapted.value));
+  }
+  response.end();
+  return changed;
+}
+
+function adaptAnthropicSseRecord(
+  record: string,
+  downgradedIndexes: Set<string>,
+): { value?: string; changed: number } {
+  const newline = record.includes("\r\n") ? "\r\n" : "\n";
+  const lines = record.split(/\r?\n/);
+  const dataIndexes: number[] = [];
+  const dataParts: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^data:(?: ?)(.*)$/.exec(lines[index]!);
+    if (!match) continue;
+    dataIndexes.push(index);
+    dataParts.push(match[1] ?? "");
+  }
+  if (!dataIndexes.length) return { value: record, changed: 0 };
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(dataParts.join("\n"));
+  } catch {
+    return { value: record, changed: 0 };
+  }
+  if (!payload || typeof payload !== "object") return { value: record, changed: 0 };
+  const event = payload as Record<string, unknown>;
+  const indexKey = String(event.index ?? "");
+
+  if (event.type === "content_block_start" && isUnsignedThinkingBlock(event.content_block)) {
+    downgradedIndexes.add(indexKey);
+    event.content_block = { type: "text", text: PROVIDER_THINKING_START };
+    return { value: replaceSseData(lines, dataIndexes, event, newline), changed: 1 };
+  }
+
+  if (event.type === "content_block_delta" && downgradedIndexes.has(indexKey)) {
+    const delta = event.delta;
+    if (delta && typeof delta === "object") {
+      const typedDelta = delta as Record<string, unknown>;
+      if (typedDelta.type === "thinking_delta") {
+        event.delta = { type: "text_delta", text: String(typedDelta.thinking ?? "") };
+        return { value: replaceSseData(lines, dataIndexes, event, newline), changed: 1 };
+      }
+      if (typedDelta.type === "signature_delta") {
+        // The block is now ordinary text; forwarding a signature delta would
+        // make the downstream event invalid.
+        return { changed: 1 };
+      }
+    }
+  }
+
+  if (event.type === "content_block_stop" && downgradedIndexes.delete(indexKey)) {
+    const closing = {
+      type: "content_block_delta",
+      index: event.index,
+      delta: { type: "text_delta", text: PROVIDER_THINKING_END },
+    };
+    const stop = replaceSseData(lines, dataIndexes, event, newline);
+    const eventName = lines.findIndex((line) => /^event:/.test(line));
+    const closingLines = lines.slice();
+    if (eventName >= 0) closingLines[eventName] = "event: content_block_delta";
+    const closingRecord = replaceSseData(closingLines, dataIndexes, closing, newline);
+    return { value: `${closingRecord}${newline}${newline}${stop}`, changed: 1 };
+  }
+
+  return { value: record, changed: 0 };
+}
+
+function adaptAnthropicMessageJson(value: unknown): { value: unknown; changed: number } {
+  if (!value || typeof value !== "object") return { value, changed: 0 };
+  const message = value as Record<string, unknown>;
+  if (!Array.isArray(message.content)) return { value, changed: 0 };
+  let changed = 0;
+  const content = message.content.map((block) => {
+    if (!isUnsignedThinkingBlock(block)) return block;
+    changed += 1;
+    const thinking = String((block as Record<string, unknown>).thinking ?? "");
+    return { type: "text", text: `${PROVIDER_THINKING_START}${thinking}${PROVIDER_THINKING_END}` };
+  });
+  return changed ? { value: { ...message, content }, changed } : { value, changed: 0 };
+}
+
+function isUnsignedThinkingBlock(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const block = value as Record<string, unknown>;
+  return block.type === "thinking" && typeof block.signature !== "string";
+}
+
+function replaceSseData(
+  lines: string[],
+  dataIndexes: number[],
+  payload: Record<string, unknown>,
+  newline: string,
+): string {
+  const output = lines.slice();
+  output[dataIndexes[0]!] = `data: ${JSON.stringify(payload)}`;
+  for (let index = dataIndexes.length - 1; index >= 1; index -= 1) output.splice(dataIndexes[index]!, 1);
+  return output.join(newline);
+}
+
+async function collectLimitedResponse(source: Readable, limit: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const raw of source) {
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    size += chunk.length;
+    if (size > limit) throw new Error("提供商响应过大");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function writeResponse(response: ServerResponse, chunk: Buffer): Promise<void> {
+  if (!response.write(chunk)) await waitForDrain(response);
 }
 
 function waitForDrain(response: ServerResponse): Promise<void> {
@@ -299,6 +702,14 @@ function joinUrl(baseUrl: string, suffix: string): string {
   return `${base}${path}`;
 }
 
+function gatewayEndpoint(suffix: string): GatewayFailureRecord["endpoint"] {
+  const path = suffix.toLowerCase();
+  if (/(^|\/)responses(?:\/|$)/.test(path)) return "responses";
+  if (/(^|\/)chat\/completions(?:\/|$)/.test(path)) return "chat-completions";
+  if (/(^|\/)messages(?:\/|$)/.test(path)) return "messages";
+  return "other";
+}
+
 function jsonError(response: ServerResponse, status: number, message: string): void {
   response.statusCode = status;
   response.setHeader("content-type", "application/json; charset=utf-8");
@@ -311,6 +722,7 @@ function redactGatewayError(value: string): string {
 
 /** Never expose arbitrary exception text or stack/file details to the loopback caller. */
 function publicGatewayError(value: string): string {
+  if (/凭据/.test(value)) return "提供商凭据不可用";
   if (/请求过大|request too large/i.test(value)) return "提供商请求过大";
   if (/响应过大|response too large/i.test(value)) return "提供商响应过大";
   if (/JSON/i.test(value)) return "提供商请求不是有效 JSON";

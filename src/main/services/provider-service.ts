@@ -4,7 +4,8 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse, stringify, type TomlTable } from "smol-toml";
-import type { CustomProviderInput, CustomProviderProfile, ProviderConnectionDraft, ProviderConnectivityResult, ProviderDraftProbeResult, ProviderModelCandidate, ProviderModelDefinition } from "../../shared/types";
+import type { CustomProviderInput, CustomProviderProfile, ProviderConnectionDraft, ProviderConnectivityResult, ProviderDraftProbeResult, ProviderModelCandidate, ProviderModelDefinition, ProviderProxyMode, ReasoningEffort } from "../../shared/types";
+import { DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS, providerReasoningEfforts } from "../../shared/provider-model-capabilities";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
 import { ProviderGatewayService } from "./provider-gateway-service";
@@ -15,14 +16,21 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 interface ProviderStoreData { providers: CustomProviderProfile[]; }
 
+export type ProviderFetcher = (
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+  proxyMode?: ProviderProxyMode,
+) => Promise<Response>;
+
 export interface ProviderEnvironment {
   read(name: string): Promise<string | undefined>;
+  readFresh?(name: string): Promise<string | undefined>;
   write(name: string, value: string | undefined): Promise<void>;
 }
 
 export interface ProviderServiceOptions {
   grokHome?: string;
-  fetcher?: typeof fetch;
+  fetcher?: ProviderFetcher;
   environment?: ProviderEnvironment;
   validateConfig?: () => Promise<void>;
   reloadModels?: () => Promise<void>;
@@ -34,7 +42,7 @@ export interface ProviderServiceOptions {
 export class ProviderService {
   private readonly configPath: string;
   private readonly store: JsonStore<ProviderStoreData>;
-  private readonly fetcher: typeof fetch;
+  private readonly fetcher: ProviderFetcher;
   private readonly environment: ProviderEnvironment;
   private readonly gateway: ProviderGatewayService;
 
@@ -45,6 +53,7 @@ export class ProviderService {
     this.environment = options.environment ?? new WindowsUserEnvironment();
     this.gateway = new ProviderGatewayService({
       providers: async () => (await this.store.get()).providers,
+      environment: async (name) => this.environment.readFresh ? this.environment.readFresh(name) : this.environment.read(name),
       fetcher: this.fetcher,
       log: this.log,
     });
@@ -56,6 +65,12 @@ export class ProviderService {
     const external = await this.readExternalProviders(managedModels);
     const values = await Promise.all([...managed, ...external].map(async (provider) => ({
       ...provider,
+      proxyMode: provider.proxyMode ?? "inherit",
+      models: provider.owned ? provider.models.map((model) => ({
+        ...model,
+        inferenceIdleTimeoutSeconds: providerInferenceIdleTimeoutSeconds(model),
+        reasoningEfforts: providerReasoningEfforts(model.model, model.reasoningEfforts),
+      })) : provider.models,
       hasCredential: provider.credentialMode === "none" ? true : Boolean(provider.credentialEnv && await this.environment.read(provider.credentialEnv)),
     })));
     return values.sort((a, b) => Number(b.owned) - Number(a.owned) || a.name.localeCompare(b.name, "zh-CN"));
@@ -84,6 +99,7 @@ export class ProviderService {
       protocol: input.protocol,
       upstreamProtocol: input.upstreamProtocol ?? protocolUpstreamDefault(input.protocol),
       schemaProfile: input.schemaProfile ?? "standard",
+      proxyMode: input.proxyMode ?? "inherit",
       authScheme: input.authScheme,
       credentialMode: input.credentialMode,
       credentialEnv: envName,
@@ -164,18 +180,27 @@ export class ProviderService {
   }
 
   /**
-   * Session-launch path. The loopback routes are the only thing the desktop CLI
-   * process actually needs, so persisting the upstream URL for direct CLI use
-   * and migrating an older managed block are best-effort: a registry failure or
-   * a concurrently edited config.toml must not cost the caller its routes.
+   * Session-launch path. Refresh credential/header values from their declared
+   * user-environment source instead of trusting the Electron process snapshot:
+   * a provider key can be rotated after the app starts. The Renderer never
+   * receives this object; it is merged only into the spawned CLI process.
    */
   async desktopEnvironment(scopeId: string = randomUUID()): Promise<Record<string, string>> {
     const providers = (await this.store.get()).providers;
     if (!providers.length) return {};
-    let needsMigration = false;
     const config = await readFile(this.configPath, "utf8").catch(() => "");
+    let needsMigration = managedCapabilitiesOutdated(config, providers);
     const environment: Record<string, string> = {};
     for (const provider of providers) {
+      for (const variable of [
+        provider.credentialEnv,
+        ...Object.values(provider.extraHeaders ?? {}),
+      ].filter((value): value is string => Boolean(value))) {
+        const value = this.environment.readFresh
+          ? await this.environment.readFresh(variable)
+          : await this.environment.read(variable);
+        if (value) environment[variable] = value;
+      }
       const name = managedBaseUrlEnvironmentName(provider.id);
       try {
         if (await this.environment.read(name) !== provider.baseUrl) await this.environment.write(name, provider.baseUrl);
@@ -213,6 +238,11 @@ export class ProviderService {
     return this.gateway.recentFailures(providerId, scopeId);
   }
 
+  /** Successful and failed body-free gateway observations, newest first. */
+  gatewayObservations(providerId?: string, scopeId?: string): ReturnType<ProviderGatewayService["recentObservations"]> {
+    return this.gateway.recentObservations(providerId, scopeId);
+  }
+
   async test(id: string): Promise<ProviderConnectivityResult> {
     const provider = (await this.store.get()).providers.find((value) => value.id === id);
     if (!provider) throw new Error("提供商不存在或为只读外部配置");
@@ -222,6 +252,9 @@ export class ProviderService {
       baseUrl: provider.baseUrl,
       modelListUrl: provider.modelListUrl,
       protocol: provider.protocol,
+      upstreamProtocol: provider.upstreamProtocol,
+      schemaProfile: provider.schemaProfile,
+      proxyMode: provider.proxyMode ?? "inherit",
       authScheme: provider.authScheme,
       credentialMode: provider.credentialMode,
       credentialEnv: provider.credentialEnv,
@@ -250,7 +283,7 @@ export class ProviderService {
         headers: await this.draftHeaders(input),
         redirect: "manual",
         signal: AbortSignal.timeout(this.options.probeTimeoutMs ?? 15_000),
-      });
+      }, input.proxyMode ?? "inherit");
       if (response.status >= 300 && response.status < 400) {
         return { ok: false, checkedAt: new Date().toISOString(), latencyMs: Date.now() - started, status: response.status, message: "模型列表端点返回重定向，已拒绝跨源跟随", models: [], endpoint, warnings, candidates: [] };
       }
@@ -267,6 +300,7 @@ export class ProviderService {
           description: model.description,
           ownedBy: model.ownedBy,
           contextWindow: model.contextWindow,
+          reasoningEfforts: providerReasoningEfforts(model.id, model.reasoningEfforts),
           alreadyConfigured: Boolean(configured),
         } satisfies ProviderModelCandidate;
       });
@@ -350,10 +384,11 @@ export class ProviderService {
         name: `${provider.name} · ${item.name}`,
         description: item.description,
         env_key: provider.credentialEnv,
-        api_backend: provider.protocol,
+        api_backend: item.protocol ?? provider.protocol,
         context_window: item.contextWindow,
         max_completion_tokens: item.maxCompletionTokens,
-        reasoning_efforts: item.reasoningEfforts?.filter(Boolean).map((value) => ({ value, label: value })),
+        inference_idle_timeout_secs: providerInferenceIdleTimeoutSeconds(item),
+        reasoning_efforts: providerReasoningEfforts(item.model, item.reasoningEfforts).map((value) => ({ value, label: value })),
         extra_headers: Object.keys(extraHeaders).length ? extraHeaders : undefined,
       };
     }
@@ -409,11 +444,18 @@ export class ProviderService {
         protocol: item.api_backend === "responses" || item.api_backend === "messages" ? item.api_backend : "chat_completions",
         upstreamProtocol: item.api_backend === "responses" ? "openai_responses" : item.api_backend === "messages" ? "anthropic_messages" : "openai_chat",
         schemaProfile: "standard",
+        proxyMode: "inherit",
         authScheme: item.auth_scheme === "x_api_key" ? "x_api_key" : "bearer",
         credentialMode: envKey ? "existing" : "none",
         credentialEnv: envKey,
         extraHeaders: {},
-        models: [{ id, model: typeof item.model === "string" ? item.model : id, name: typeof item.name === "string" ? item.name : id, contextWindow: typeof item.context_window === "number" ? item.context_window : undefined }],
+        models: [{
+          id,
+          model: typeof item.model === "string" ? item.model : id,
+          name: typeof item.name === "string" ? item.name : id,
+          contextWindow: typeof item.context_window === "number" ? item.context_window : undefined,
+          inferenceIdleTimeoutSeconds: typeof item.inference_idle_timeout_secs === "number" ? item.inference_idle_timeout_secs : undefined,
+        }],
         owned: false,
         hasCredential: false,
         insecureHttp: baseUrl ? isInsecureRemote(baseUrl) : false,
@@ -435,6 +477,24 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
     });
     if (value !== undefined && value !== "") process.env[name] = value;
     return value || undefined;
+  }
+  async readFresh(name: string): Promise<string | undefined> {
+    if (process.platform !== "win32") return this.read(name);
+    const result = await new Promise<{ ok: boolean; value?: string }>((resolve) => {
+      execFile(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write([Environment]::GetEnvironmentVariable($args[0],[EnvironmentVariableTarget]::User))", name],
+        { windowsHide: true, timeout: 10_000 },
+        (error, stdout) => resolve(error ? { ok: false } : { ok: true, value: String(stdout) }),
+      );
+    });
+    if (!result.ok) return process.env[name];
+    if (result.value) {
+      process.env[name] = result.value;
+      return result.value;
+    }
+    delete process.env[name];
+    return undefined;
   }
   async write(name: string, value: string | undefined): Promise<void> {
     if (process.platform !== "win32") { if (value === undefined) delete process.env[name]; else process.env[name] = value; return; }
@@ -466,8 +526,10 @@ function validateInput(input: CustomProviderInput): void {
     if (!ID_PATTERN.test(model.id)) throw new Error(`无效模型 ID：${model.id}`);
     if (seen.has(model.id)) throw new Error(`模型 ID 重复：${model.id}`); seen.add(model.id);
     if (!model.model.trim() || !model.name.trim()) throw new Error("模型路由 ID 和显示名称不能为空");
+    if (model.protocol && !["chat_completions", "responses", "messages"].includes(model.protocol)) throw new Error("模型请求协议无效");
     if (model.contextWindow !== undefined && (!Number.isInteger(model.contextWindow) || model.contextWindow < 1024)) throw new Error("上下文窗口必须是不小于 1024 的整数");
     if (model.maxCompletionTokens !== undefined && (!Number.isInteger(model.maxCompletionTokens) || model.maxCompletionTokens < 1)) throw new Error("最大输出必须是正整数");
+    if (model.inferenceIdleTimeoutSeconds !== undefined && (!Number.isInteger(model.inferenceIdleTimeoutSeconds) || model.inferenceIdleTimeoutSeconds < 30 || model.inferenceIdleTimeoutSeconds > 3600)) throw new Error("推理空闲超时必须是 30–3600 秒的整数");
     if (model.reasoningEfforts?.some((value) => !["none", "minimal", "low", "medium", "high", "xhigh"].includes(value))) throw new Error("推理强度包含不支持的值");
   }
   if (input.credentialMode === "existing") normalizeEnvironmentName(input.credentialEnv || "");
@@ -486,9 +548,10 @@ function validateDraft(input: ProviderConnectionDraft): void {
   }
 }
 
-function validateConnection(input: Pick<CustomProviderInput, "id" | "name" | "baseUrl" | "modelListUrl" | "credentialMode" | "credentialEnv" | "allowInsecureHttp">): void {
+function validateConnection(input: Pick<CustomProviderInput, "id" | "name" | "baseUrl" | "modelListUrl" | "credentialMode" | "credentialEnv" | "allowInsecureHttp" | "proxyMode">): void {
   if (!ID_PATTERN.test(input.id)) throw new Error("提供商 ID 只能包含字母、数字、点、下划线和连字符");
   if (!input.name.trim()) throw new Error("请输入提供商名称");
+  if (input.proxyMode !== undefined && input.proxyMode !== "inherit" && input.proxyMode !== "direct") throw new Error("提供商网络路由无效");
   const url = new URL(input.baseUrl);
   if (!/^https?:$/.test(url.protocol)) throw new Error("提供商地址只支持 HTTP 或 HTTPS");
   if (isInsecureRemote(input.baseUrl) && !input.allowInsecureHttp) throw new Error("非本机 HTTP 地址需要明确确认不安全连接");
@@ -500,7 +563,21 @@ function validateConnection(input: Pick<CustomProviderInput, "id" | "name" | "ba
   if (input.credentialMode === "existing") normalizeEnvironmentName(input.credentialEnv || "");
 }
 
-function normalizeModel(value: ProviderModelDefinition): ProviderModelDefinition { return { ...value, id: value.id.trim(), model: value.model.trim(), name: value.name.trim(), description: value.description?.trim() || undefined, reasoningEfforts: value.reasoningEfforts?.filter(Boolean) }; }
+function normalizeModel(value: ProviderModelDefinition): ProviderModelDefinition {
+  const model = value.model.trim();
+  return {
+    ...value,
+    id: value.id.trim(),
+    model,
+    name: value.name.trim(),
+    description: value.description?.trim() || undefined,
+    inferenceIdleTimeoutSeconds: providerInferenceIdleTimeoutSeconds(value),
+    reasoningEfforts: providerReasoningEfforts(model, value.reasoningEfforts),
+  };
+}
+function providerInferenceIdleTimeoutSeconds(model: ProviderModelDefinition): number {
+  return model.inferenceIdleTimeoutSeconds ?? DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS;
+}
 function normalizeHeaders(value: Record<string, string>): Record<string, string> { return Object.fromEntries(Object.entries(value).filter(([key, env]) => key.trim() && env.trim()).map(([key, env]) => [key.trim(), normalizeEnvironmentName(env)])); }
 function normalizeEnvironmentName(value: string): string { const normalized = value.trim().toUpperCase(); if (!/^[A-Z_][A-Z0-9_]*$/.test(normalized)) throw new Error("环境变量名格式无效"); return normalized; }
 function managedEnvironmentName(id: string): string { return `GROK_DESKTOP_PROVIDER_${id}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_") + "_KEY"; }
@@ -515,7 +592,28 @@ function hash(value: string): string { return createHash("sha256").update(value)
 function stripManagedBlock(value: string): string { return value.replace(new RegExp(`${escapeRegex(START)}[\\s\\S]*?${escapeRegex(END)}\\s*`, "g"), ""); }
 function escapeRegex(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function asRecord(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }
-function parseModelList(raw: string): Array<{ id: string; name?: string; description?: string; ownedBy?: string; contextWindow?: number }> {
+function managedCapabilitiesOutdated(config: string, providers: CustomProviderProfile[]): boolean {
+  if (!config.trim()) return false;
+  try {
+    const models = asRecord(asRecord(parse(config)).model);
+    return providers.some((provider) => provider.models.some((model) => {
+      const expected = providerReasoningEfforts(model.model, model.reasoningEfforts);
+      const expectedProtocol = model.protocol ?? provider.protocol;
+      const configured = asRecord(models[model.id]);
+      if (configured.api_backend !== expectedProtocol) return true;
+      if (configured.inference_idle_timeout_secs !== providerInferenceIdleTimeoutSeconds(model)) return true;
+      const current = Array.isArray(configured.reasoning_efforts)
+        ? configured.reasoning_efforts.map(reasoningEffortValue).filter(Boolean)
+        : [];
+      return expected.join("\0") !== current.join("\0");
+    }));
+  } catch {
+    // Invalid user TOML is diagnosed elsewhere; never overwrite it merely to
+    // refresh optional capability metadata.
+    return false;
+  }
+}
+function parseModelList(raw: string): Array<{ id: string; name?: string; description?: string; ownedBy?: string; contextWindow?: number; reasoningEfforts?: ProviderModelDefinition["reasoningEfforts"] }> {
   const parsed = JSON.parse(raw) as any;
   const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : [];
   const seen = new Set<string>();
@@ -525,7 +623,30 @@ function parseModelList(raw: string): Array<{ id: string; name?: string; descrip
     description: typeof value.description === "string" ? value.description : undefined,
     ownedBy: typeof value.owned_by === "string" ? value.owned_by : typeof value.ownedBy === "string" ? value.ownedBy : undefined,
     contextWindow: Number.isInteger(value.context_window) ? value.context_window : Number.isInteger(value.contextWindow) ? value.contextWindow : undefined,
+    reasoningEfforts: providerReasoningEfforts(String(value.id || value.model || value.name || ""), modelReasoningMetadata(value)),
   }).filter((value: { id: string }) => Boolean(value.id) && !seen.has(value.id) && Boolean(seen.add(value.id)));
+}
+
+function modelReasoningMetadata(value: any): ReasoningEffort[] | undefined {
+  const capabilities = asRecord(value?.capabilities);
+  const candidates = [
+    value?.reasoning_efforts,
+    value?.reasoningEfforts,
+    value?.supported_reasoning_efforts,
+    value?.supportedReasoningEfforts,
+    capabilities.reasoning_efforts,
+    capabilities.reasoningEfforts,
+  ];
+  const declared = candidates.find(Array.isArray);
+  return declared?.map(reasoningEffortValue);
+}
+
+function reasoningEffortValue(value: unknown): ReasoningEffort {
+  if (typeof value === "string") return value as ReasoningEffort;
+  if (value && typeof value === "object" && typeof (value as { value?: unknown }).value === "string") {
+    return (value as { value: ReasoningEffort }).value;
+  }
+  return "";
 }
 
 async function readLimitedResponse(response: Response, limit: number): Promise<string> {
