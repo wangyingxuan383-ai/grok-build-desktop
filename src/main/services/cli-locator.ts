@@ -22,6 +22,10 @@ export async function locateGrokCli(configured = ""): Promise<string | undefined
 
 export function buildCliEnv(settings: AppSettings, apiKey?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
+  // Windows normally exposes USERPROFILE but not HOME. Grok CLI uses HOME for
+  // automatic worktree cleanup, so synthesize only the missing conventional
+  // variable without changing GROK_HOME or overriding an explicit user value.
+  if (!env.HOME?.trim()) env.HOME = env.USERPROFILE?.trim() || homedir();
   if (settings.httpProxy) env.HTTP_PROXY = settings.httpProxy;
   if (settings.httpsProxy) env.HTTPS_PROXY = settings.httpsProxy;
   if (apiKey) env.XAI_API_KEY = apiKey;

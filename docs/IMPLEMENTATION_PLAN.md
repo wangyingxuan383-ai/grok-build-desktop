@@ -2,6 +2,104 @@
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
+## v0.6.14 审计修复候选（本地上游暂不验收）
+
+- [x] 建立独立 `codex/v0.6.14-audit-fixes` 分支，保留此前 0.6.7–0.6.13 未提交工作树。
+- [x] 将下游主动关闭从 Provider 故障中分离；新增有界成功/失败/下游关闭观测，允许 HTTP 200 后的 CLI 解析错误仍关联真实 Provider。
+- [x] 将无签名 Anthropic thinking 从普通回答文本恢复为 ACP `thought` 事件，覆盖任意分块边界和未完整标记降级。
+- [x] 补齐 Windows `HOME`；清除已声明为空的旧模型推理档位。
+- [x] AppData 原始日志写入前统一脱敏、单条截断、8 MiB 单备份轮转，并对既有日志做一次原子脱敏。
+- [x] JsonStore 损坏时保留 recovery backup，不再把权限类读取错误当作“文件不存在”；清理超过 24 小时的同存储临时文件。
+- [x] 终端命令显式调用平台 shell 且 `shell: false`，消除 Node shell-string 弃用路径。
+- [x] 聚焦 8 文件 / 70 项测试及 TypeScript 通过；三个 `.cmd` ACP 合约另以 `--trace-deprecation` 验证，无 Node shell 弃用告警。
+- [x] 完整离线套件通过：72 文件 / 391 项通过，4 个 live 文件 / 7 项按设计跳过。
+- [x] TypeScript、Computer Host 0.3.1 自检/资源清单、生产 main/preload/Renderer 构建、273 文件公开扫描、`git diff --check` 和 npm audit（0 vulnerabilities）通过。
+- [x] 生产构建仍报告 Monaco/Shiki/Mermaid 等大型懒加载依赖 chunk；不通过提高 warning limit 隐藏，列为后续性能拆包事项。
+- [ ] 提交并推送源代码修复分支；不创建正式 GitHub Release。
+- [ ] 用户恢复本地默认模型上游后，再执行 Provider/真实会话验收；当前按用户要求跳过。
+
+## v0.6.13 本地验收候选：Anthropic Messages 无签名 thinking 兼容
+
+- [x] 复现 Kiro Claude 4.8/5 失败的真实链路：上游 HTTP 200 且进入 SSE，CLI 因无签名 `thinking` 块报 `missing field signature` 后主动关闭。
+- [x] 在主进程 Provider Gateway 增加通用 Anthropic Messages 响应适配：合法签名流原样透传，只有缺少 `signature` 的非法 thinking 块降级为 `<think>` 文本；不伪造签名、不按 Provider/模型写死。
+- [x] 覆盖分块 SSE、CRLF 合法签名流原样透传和非流式 JSON；网关聚焦测试 15/15、TypeScript、生产构建通过。
+- [x] 使用当前 `kiro-claude-opus-4.8-thinking`、`xhigh` 和本地 `127.0.0.1:8080` 完成隔离 Grok CLI ACP 最小真实回合；未打印凭据或响应正文。
+- [x] 生成独立 0.6.13 Setup、执行 per-user 覆盖安装并核对 File/Product、快捷方式和安装 ASAR 兼容标记。
+- [x] 冷启动安装版并保持 Kiro-Go 运行；应用已打开交给用户执行真实会话验收。
+- [ ] 等待用户验收结果；不扩大为 GitHub 正式发布。
+
+## v0.6.12 本地验收候选：Provider 长流传输路由
+
+- [x] 按服务端 58/88 秒主动取消证据，关联应用日志、进程连接和 Mihomo 服务日志；确认失败请求经应用代理且 Electron 报 `ERR_CONNECTION_CLOSED`。
+- [x] 纠正 0.6.11 推断：当前 Grok CLI 内置文档声明推理空闲默认 600 秒；恢复 Desktop 默认 600 秒，不再用 360 秒覆盖。
+- [x] 提供商增加“继承应用代理 / 直连”通用设置；模型发现与推理统一使用，直连和代理使用独立 Electron partition。
+- [x] 网关增加无正文、无凭据的请求 ID、路由、端点类别、阶段、耗时与断开来源诊断；响应头后的流截断也会记录。
+- [x] 完成 5 文件/41 项 Provider、网关、诊断聚焦测试与 TypeScript。
+- [x] 完成公开扫描、生产/资源构建、单一 Setup、per-user 安装、当前 CPA 直连与六模型 600 秒迁移、安装 ASAR/Fuses/版本/快捷方式/CLI/冷启动检查。
+- [x] 保持用户既定范围：未运行付费推理和完整 UI 套件，未上传 GitHub。
+
+## v0.6.11 本地验收候选：自定义模型推理空闲超时
+
+- [x] 审计三层超时：交互 ACP 回合为 1800 秒，Provider 网关为 600 秒；没有桌面 60 秒总回合取消。
+- [x] 当时确认 CLI 接受模型级 `inference_idle_timeout_secs = 360`；后续 0.6.12 从 CLI 内置参考确认原生默认其实是 600 秒。
+- [x] 0.6.11 曾对 Desktop 管理模型写入 360 秒；0.6.12 已恢复为 600 秒，且证实 360 秒没有触发截图中的 58/88 秒断开。
+- [x] 提供商管理增加逐模型 30–3600 秒输入与详情展示，显式自定义值不被默认值覆盖。
+- [x] 完成 6 文件/47 项聚焦测试、TypeScript、生产构建和原生资源自检。
+- [x] 验证 Fuses，重建并安装单一 0.6.11 Setup；File/Product、快捷方式、安装 ASAR、当前配置迁移、CLI 读取与冷启动通过。
+- [x] 保持用户此前范围：不扩大完整 UI/付费模型测试，不上传 GitHub。
+
+## v0.6.10 本地验收候选：逐模型 Provider 能力
+
+- [x] 读取当前 CPA `/models` 的 `grok-4.5` 原始元数据：仅有 `created/id/object/owned_by`，无思考档位；模型详情端点返回 404。
+- [x] 当前凭据直连 `/responses` 默认及 none/minimal/low/medium/high/xhigh 均为 HTTP 200 并收到 SSE；只认定“参数被接受”，不推断上游一定采用该档位。
+- [x] 隔离 Grok CLI ACP 使用 Responses 后端、high/medium/low 自定义目录启动；同会话 low → high 热切换确认后真实回合完成。
+- [x] 精确 `grok-4.5` 的官方 high/medium/low 只作缺失元数据时的起始建议；上游声明和逐模型用户配置优先，显式空列表不会被自动补回，未来模型不猜测。
+- [x] 模型发现解析常见 `reasoning_efforts`、`supported_reasoning_efforts` 及 camelCase/`capabilities` 变体；提供商管理增加逐模型协议、逐模型思考档位和详情展示。
+- [x] Provider 默认协议与模型覆盖协议分离；混合 CPA 可让 `grok-4.5` 单独走 Responses，其他模型继续继承 Provider 默认协议。
+- [x] 当前本机 `CPA 兼容 · grok-4.5` 已经由通用 ProviderService 迁移为逐模型 Responses + xhigh/high/medium/low/minimal，并保留凭据与 TOML 备份。
+- [x] 6 文件/47 项聚焦测试、TypeScript、生产构建和原生资源自检通过。
+- [x] 重建并安装单一 0.6.10 Setup；旧候选已被替换。SHA-256、File/Product、Fuses、快捷方式、安装 ASAR 能力标记和冷启动通过。
+- [ ] 按用户此前决定，不扩大为完整离线/实机 UI 套件，不生成正式完整 Release 资产，不上传 GitHub。
+
+## v0.6.9 本地验收候选：Provider 鉴权边界
+
+- [x] 复现 0.6.8 用户验收的真实 401：请求已进入 CPA 回环网关并完成 Schema 清理，但上游连续四次拒绝。
+- [x] 使用同一 Windows 用户环境凭据直连验证：`/models` HTTP 200、11 个模型且包含 `grok-4.5`；最小流式 `/chat/completions` HTTP 200 并收到 SSE。
+- [x] 定位根因：回环网关原样转发 CLI 的 `Authorization`；CLI 鉴权恢复后该值可能是 xAI 会话令牌，而不是所选自定义 Provider 的密钥。
+- [x] 网关删除 CLI 传入的 bearer、`x-api-key` 和受管额外 Header，随后从 Provider 自己的 Windows 用户环境变量新鲜读取并注入。
+- [x] 缺少受管凭据时在发送上游前返回固定的“提供商凭据不可用”，不泄漏任意异常或密钥。
+- [x] Bearer、`x-api-key`、额外 Header 覆盖和缺失凭据回归测试通过。
+- [x] 当前 `CPA 兼容 · grok-4.5` 的完整 Grok CLI → 回环网关 → 上游 ACP 最小真实回合通过。
+- [x] 提升到 0.6.9；5 文件/43 项受影响测试、TypeScript、生产构建、原生资源自检和 Electron Fuse 校验通过。
+- [x] 生成单一 Setup（SHA-256 `2a0cc83d69c6cfe2053f23e2d224986f057b28af1c2086d015bfe6f71259c70c`）并 per-user 覆盖安装；File/Product 与桌面/开始菜单快捷方式通过，安装 ASAR 包含新鉴权边界。
+- [ ] 继续按用户决定，将扩大测试、Computer Use/安装版 UI 代验、完整正式资产和 GitHub 上传推迟到验收后。
+
+## v0.6.8 本地验收候选：CPA 会话路由与推理强度
+
+- [x] 复现用户截图：界面显示 `CPA 兼容 · grok-4.5`，但同一回合日志只有官方 xAI Free 额度 429，CPA 网关没有对应观测。
+- [x] 定位根因：Grok CLI 历史只保存上游 `grok-4.5`；本地别名映射掩盖了该差异并跳过真实 `session/set_model(openai-compatible-grok-4.5)`。
+- [x] 恢复会话时比较 ACP 原始模型 ID；本地 Provider ID 不一致就重新应用真实路由，同时继续在界面保留 Provider 前缀。
+- [x] 读取 ACP 模型的 `supportsReasoningEffort/reasoningEfforts`；输入框只展示当前模型声明支持的档位。
+- [x] 未声明推理强度的 Provider 模型禁用热切换并给出配置说明；热切换未确认时不再销毁、重启或回滚历史会话。
+- [x] Provider 错误标签必须有同进程 scope 的近期网关观测；没有网关证据的官方 429 不再伪标为 CPA。
+- [x] 28 项聚焦 Adapter/进程管理/Renderer 能力测试、TypeScript、生产构建和原生资源自检通过。
+- [x] 只生成一个 0.6.8 本地 Setup 并 per-user 覆盖安装；File/Product 与桌面、开始菜单快捷方式通过检查，应用保持关闭交给用户验收。
+- [ ] 继续按用户决定，将扩大测试、实机代验、完整正式资产和 GitHub 上传推迟到用户验收后。
+
+## v0.6.7 本地验收候选：Provider 热修 + Claude 接力
+
+- [x] 复现并定位：同一 Provider 密钥直连 `grok-4.5` 返回 200，但已运行的桌面进程经兼容网关调用返回 401；根因是 Provider 环境值可能在 Electron 启动后轮换，而会话启动只注入回环地址、继续沿用旧的进程环境快照。
+- [x] 每次桌面 CLI 会话启动前从 Windows 当前用户环境重新读取 Provider 凭据和结构化 Header 环境变量；Renderer 仍不接触密钥。
+- [x] 保留显式选择的本地模型 ID：ACP 回合结束只上报上游 `grok-4.5` 时，不再把 `openai-compatible-grok-4.5` 映射成官方模型。
+- [x] 普通 Prompt 失败改为单个结构化 `TurnFailure`；补充 CLI `http_status` 解析，错误详情可关联 HTTP、Provider、本地模型和网关 Schema 清理记录。
+- [x] 30 项聚焦 Adapter/Provider 测试、TypeScript、生产构建通过；用户授权的当前 Provider `grok-4.5` 最小真实回合通过，并在完成后保持本地模型 ID。
+- [x] 审计本机 Claude Code JSONL 结构和 Grok CLI 随附的 `resume-claude`/`session_reader.py claude` 官方接口；不将外部转录当作指令。
+- [x] 新增只读 Claude 会话索引、内置兼容解析、Hash 守卫、隐藏/刷新/继续映射，以及独立的 Claude 接力来源分类。
+- [x] Renderer 增加可折叠 Claude 会话组、只读镜像、刷新/隐藏/在 Grok 中继续；工作区发现和选择器显示 Claude 项目计数。
+- [x] 源码与 lockfile 提升到 0.6.7，作为用户先行验收的本地候选。
+- [x] 36 项受影响测试、TypeScript、生产构建和打包所需原生资源自检通过；0.6.7 本地 Setup 已 per-user 覆盖安装，安装文件版本为 0.6.7。应用保持关闭，留给用户自行启动验收。
+- [ ] 按用户 2026-07-27 决定，扩大回归测试、Computer Use/安装版实机验收、完整正式资产和 GitHub 上传全部推迟到用户验收反馈之后。
+
 ## v0.6.5 稳定修复 → v0.6.6 能力完善（2026-07-26）
 
 ### A. v0.6.5 计划、队列与系统交互

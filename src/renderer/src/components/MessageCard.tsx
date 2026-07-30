@@ -147,6 +147,11 @@ function ErrorCard({ text, failure, onDiagnose }: { text: string; failure?: Turn
     ["模型", failure.modelId ?? ""],
     ["Trace", failure.traceId ?? ""],
     ["重试于", failure.retryAfter ?? ""],
+    ["网关阶段", failure.gatewayPhase ?? ""],
+    ["断开来源", failure.gatewayReason ?? ""],
+    ["网络路由", failure.gatewayProxyMode === "direct" ? "直连" : failure.gatewayProxyMode === "inherit" ? "继承应用代理" : ""],
+    ["网关请求", failure.gatewayRequestId ?? ""],
+    ["网关耗时", failure.gatewayElapsedMs === undefined ? "" : `${failure.gatewayElapsedMs} ms`],
     ["Schema 清理", failure.sanitizedCount ? `${failure.sanitizedCount} 处` : ""],
   ].filter(([, value]) => value) as Array<[string, string]>) : [];
   return <details className={`error-card structured-error ${failure ? failure.classification : ""}`}>

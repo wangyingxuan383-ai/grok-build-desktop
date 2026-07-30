@@ -658,6 +658,7 @@ export const CLI_CAPABILITY_NAMES = [
   "mcp",
   "media",
   "codexReader",
+  "claudeReader",
   "quota",
   "computer",
 ] as const;

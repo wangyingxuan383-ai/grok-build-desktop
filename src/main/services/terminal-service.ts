@@ -28,7 +28,17 @@ export class TerminalService {
   create(params: TerminalCreateParams): { terminalId: string } {
     const env = { ...this.baseEnv };
     for (const value of params.env ?? []) env[value.name] = value.value;
-    const child = spawn(params.command, { cwd: params.cwd || process.cwd(), env, shell: true, windowsHide: true });
+    const shell = process.platform === "win32"
+      ? { executable: env.ComSpec || process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", params.command] }
+      : { executable: env.SHELL || "/bin/sh", args: ["-lc", params.command] };
+    // Invoke the platform shell explicitly. `shell: true` with an argument
+    // string is deprecated by Node and also makes the process boundary opaque.
+    const child = spawn(shell.executable, shell.args, {
+      cwd: params.cwd || process.cwd(),
+      env,
+      shell: false,
+      windowsHide: true,
+    });
     const entry: TerminalEntry = {
       process: child,
       output: "",

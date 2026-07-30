@@ -22,6 +22,7 @@ import type {
   TurnActivityGroup,
   WorkspaceSummary,
   CodexSessionSummary,
+  ClaudeSessionSummary,
   BuildInfo,
   OnboardingState,
   AppReleaseStatus,
@@ -87,6 +88,7 @@ interface AppState {
   attachments: Attachment[];
   workspaces: WorkspaceSummary[];
   codexSessions: CodexSessionSummary[];
+  claudeSessions: ClaudeSessionSummary[];
   buildInfo?: BuildInfo;
   onboarding?: OnboardingState;
   appRelease?: AppReleaseStatus;
@@ -105,6 +107,7 @@ interface AppState {
   clearAttachments(): void;
   setWorkspaces(values: WorkspaceSummary[]): void;
   setCodexSessions(values: CodexSessionSummary[]): void;
+  setClaudeSessions(values: ClaudeSessionSummary[]): void;
   setOnboarding(value: OnboardingState): void;
   setAppRelease(value: AppReleaseStatus): void;
   resolveMessage(sessionId: string, messageId: string): void;
@@ -128,6 +131,7 @@ export const useAppStore = create<AppState>((set) => ({
   attachments: [],
   workspaces: [],
   codexSessions: [],
+  claudeSessions: [],
   appRelease: undefined,
   bootstrap: (data) => set({ ...data, loading: false, error: "" }),
   setLoading: (loading) => set({ loading }),
@@ -146,6 +150,7 @@ export const useAppStore = create<AppState>((set) => ({
   clearAttachments: () => set({ attachments: [] }),
   setWorkspaces: (workspaces) => set({ workspaces }),
   setCodexSessions: (codexSessions) => set({ codexSessions }),
+  setClaudeSessions: (claudeSessions) => set({ claudeSessions }),
   setOnboarding: (onboarding) => set({ onboarding }),
   setAppRelease: (appRelease) => set({ appRelease }),
   resolveMessage: (sessionId, messageId) => set((state) => {

@@ -158,6 +158,11 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("codex:refresh", (id: string) => controller.refreshCodexSession(id));
   handle("codex:hide", (id: string, hidden?: boolean) => controller.hideCodexSession(id, hidden));
   handle("codex:continue", (id: string) => controller.continueCodexSession(id));
+  handle("claude:list", (cwd: string, force?: boolean) => controller.listClaudeSessions(cwd, force));
+  handle("claude:open", (id: string) => controller.openClaudeSession(id));
+  handle("claude:refresh", (id: string) => controller.refreshClaudeSession(id));
+  handle("claude:hide", (id: string, hidden?: boolean) => controller.hideClaudeSession(id, hidden));
+  handle("claude:continue", (id: string) => controller.continueClaudeSession(id));
   handle("quota:get", (force?: boolean) => controller.getQuota(force));
   handle("providers:list", () => controller.listProviders());
   handle("providers:upsert", (input: CustomProviderInput) => controller.upsertProvider(input));

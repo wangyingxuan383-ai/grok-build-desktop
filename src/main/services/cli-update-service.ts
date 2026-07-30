@@ -185,8 +185,10 @@ function probeComputerHost(executable: string): Promise<string> {
 
 function runProcessTree(executable: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const shell = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable);
-    const child = spawn(executable, args, { env, windowsHide: true, shell, stdio: ["ignore", "pipe", "pipe"] });
+    const batch = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable);
+    const command = batch ? (env.ComSpec || process.env.ComSpec || "cmd.exe") : executable;
+    const commandArgs = batch ? ["/d", "/s", "/c", windowsBatchCommand(executable, args)] : args;
+    const child = spawn(command, commandArgs, { env, windowsHide: true, shell: false, windowsVerbatimArguments: batch, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -214,4 +216,12 @@ function runProcessTree(executable: string, args: string[], env: NodeJS.ProcessE
       }
     }, timeoutMs);
   });
+}
+
+function windowsBatchCommand(executable: string, args: string[]): string {
+  const values = [executable, ...args];
+  if (values.some((value) => /[\r\n"&|<>^%!]/.test(value))) {
+    throw new Error("批处理 CLI 路径或参数包含不安全的 cmd.exe 元字符");
+  }
+  return `call ${values.map((value) => `"${value}"`).join(" ")}`;
 }

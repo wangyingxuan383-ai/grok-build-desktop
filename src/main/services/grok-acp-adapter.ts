@@ -25,6 +25,7 @@ import {
   type TurnPresentation,
   type UserMessageAttachmentPreview,
 } from "../../shared/types";
+import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import { classifyTurnFailure } from "../../shared/turn-failure";
 import { shouldBlockCommand, shouldBlockWrite } from "./plan-gate";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
@@ -47,6 +48,65 @@ interface BackgroundTask {
   toolCallId: string;
   title: string;
   command?: string;
+}
+
+export interface ProviderThinkingDemuxState {
+  pending: string;
+  thought: boolean;
+}
+
+export interface ProviderThinkingChunk {
+  role: "assistant" | "thought";
+  text: string;
+}
+
+/**
+ * Restores unsigned Anthropic thinking that the loopback gateway had to carry
+ * through the CLI as marker-delimited text. Markers may be split at arbitrary
+ * ACP chunk boundaries, so the longest possible marker prefix stays buffered.
+ */
+export function demuxProviderThinkingText(
+  state: ProviderThinkingDemuxState,
+  text: string,
+  flush = false,
+): { state: ProviderThinkingDemuxState; chunks: ProviderThinkingChunk[] } {
+  let pending = state.pending + text;
+  let thought = state.thought;
+  const chunks: ProviderThinkingChunk[] = [];
+  const emit = (value: string): void => {
+    if (!value) return;
+    const role = thought ? "thought" : "assistant";
+    const previous = chunks.at(-1);
+    if (previous?.role === role) previous.text += value;
+    else chunks.push({ role, text: value });
+  };
+  for (;;) {
+    const marker = thought ? PROVIDER_THINKING_END : PROVIDER_THINKING_START;
+    const index = pending.indexOf(marker);
+    if (index >= 0) {
+      emit(pending.slice(0, index));
+      pending = pending.slice(index + marker.length);
+      thought = !thought;
+      continue;
+    }
+    if (flush) {
+      emit(pending);
+      pending = "";
+    } else {
+      let held = 0;
+      const max = Math.min(marker.length - 1, pending.length);
+      for (let size = max; size > 0; size -= 1) {
+        if (marker.startsWith(pending.slice(-size))) {
+          held = size;
+          break;
+        }
+      }
+      emit(held ? pending.slice(0, -held) : pending);
+      pending = held ? pending.slice(-held) : "";
+    }
+    break;
+  }
+  return { state: { pending, thought }, chunks };
 }
 
 export interface SessionProcessOptions {
@@ -80,7 +140,21 @@ interface SessionResponse {
   sessionId: string;
   models?: {
     currentModelId?: string;
-    availableModels?: Array<{ modelId: string; name: string; description?: string; _meta?: { totalContextTokens?: number } }>;
+    availableModels?: Array<{
+      modelId: string;
+      name: string;
+      description?: string;
+      _meta?: {
+        totalContextTokens?: number;
+        supportsReasoningEffort?: boolean;
+        reasoningEfforts?: Array<{
+          value?: unknown;
+          label?: unknown;
+          description?: unknown;
+          default?: unknown;
+        }>;
+      };
+    }>;
   };
   modes?: { currentModeId?: string; availableModes?: unknown[] };
 }
@@ -122,9 +196,11 @@ export class GrokAcpAdapter extends EventEmitter {
   private activeTurn?: TurnPresentation & { monotonicStartedAt: number };
   private nextTurnOrdinal = 0;
   private cancelRequested = false;
+  private providerThinking: ProviderThinkingDemuxState = { pending: "", thought: false };
   private closedEmitted = false;
   private disposed = false;
   private currentEffort: ReasoningEffort;
+  private requestedModelId = "";
   sessionId = "";
   models: ModelInfo[] = [];
   commands: CommandInfo[] = [];
@@ -160,6 +236,7 @@ export class GrokAcpAdapter extends EventEmitter {
   constructor(private readonly options: AdapterOptions) {
     super();
     this.currentEffort = options.effort;
+    this.requestedModelId = options.modelId ?? "";
     this.terminal = new TerminalService(options.env);
     this.mode = options.mode;
     this.planActive = options.mode === "plan";
@@ -170,11 +247,14 @@ export class GrokAcpAdapter extends EventEmitter {
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
     const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag, { modelId: this.options.modelId, agentProfilePath: this.options.agentProfilePath, alwaysApprove: this.options.alwaysApprove });
     await this.options.log.log(`spawn ${this.options.cliPath} ${args.join(" ")} cwd=${this.options.cwd}`);
-    const shell = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
-    this.process = spawn(this.options.cliPath, args, {
+    const batch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
+    const executable = batch ? (this.options.env.ComSpec || process.env.ComSpec || "cmd.exe") : this.options.cliPath;
+    const processArgs = batch ? ["/d", "/s", "/c", windowsBatchCommand(this.options.cliPath, args)] : args;
+    this.process = spawn(executable, processArgs, {
       cwd: this.options.cwd,
       env: this.options.env,
-      shell,
+      shell: false,
+      windowsVerbatimArguments: batch,
       windowsHide: true,
     });
     this.lines = createInterface({ input: this.process.stdout });
@@ -206,15 +286,34 @@ export class GrokAcpAdapter extends EventEmitter {
       ...((this.options.pluginDirs?.length || this.options.sessionMeta) ? { _meta: { ...(this.options.sessionMeta ?? {}), ...(this.options.pluginDirs?.length ? { pluginDirs: this.options.pluginDirs } : {}) } } : {}),
     }, 120_000) as SessionResponse;
     this.sessionId = response.sessionId || resumeSessionId || "";
-    this.models = (response.models?.availableModels ?? []).map((model) => ({
-      modelId: model.modelId,
-      name: model.name,
-      description: model.description,
-      totalContextTokens: model._meta?.totalContextTokens,
-    }));
-    this.currentModelId = resolveModelId(response.models?.currentModelId, this.models) || "";
+    this.models = (response.models?.availableModels ?? []).map((model) => {
+      const reasoningEfforts = (model._meta?.reasoningEfforts ?? []).flatMap((item) => {
+        const effort = normalizeReasoningEffort(item.value);
+        if (!effort) return [];
+        return [{
+          value: effort,
+          label: typeof item.label === "string" && item.label.trim() ? item.label : effort,
+          ...(typeof item.description === "string" && item.description.trim() ? { description: item.description } : {}),
+          ...(typeof item.default === "boolean" ? { default: item.default } : {}),
+        }];
+      });
+      return {
+        modelId: model.modelId,
+        name: model.name,
+        description: model.description,
+        totalContextTokens: model._meta?.totalContextTokens,
+        supportsReasoningEffort: model._meta?.supportsReasoningEffort === true && reasoningEfforts.length > 0,
+        reasoningEfforts,
+      };
+    });
+    const reportedModelId = response.models?.currentModelId;
+    this.currentModelId = resolveModelId(reportedModelId, this.models, this.requestedModelId) || "";
     if (resumeSessionId) this.currentEffort = await readPersistedEffort(this.options.cwd, this.sessionId) ?? this.currentEffort;
-    if (this.options.modelId && this.options.modelId !== this.currentModelId) await this.setModel(this.options.modelId);
+    // Persisted sessions store the upstream route id, not the local provider
+    // configuration id. Compare the raw ACP value here so resuming a custom
+    // model really reapplies its route instead of silently using the official
+    // model while the renderer still shows the provider-prefixed alias.
+    if (this.options.modelId && this.options.modelId !== reportedModelId) await this.setModel(this.options.modelId);
     await this.applyMode(this.mode, false);
     this.emitEvent({
       type: "session-ready",
@@ -268,9 +367,13 @@ export class GrokAcpAdapter extends EventEmitter {
     } catch (error) {
       this.working = false;
       this.needsUser = false;
-      this.finishTurn(this.cancelRequested ? "cancelled" : "failed");
       this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
-      this.emitStatus("error", error instanceof Error ? error.message : String(error));
+      const failureMessage = error instanceof Error ? error.message : String(error);
+      this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
+      this.finishTurn(this.cancelRequested ? "cancelled" : "failed");
+      // The structured error event above owns the visible card. A text-bearing
+      // status event would append a second unstructured "Internal error" card.
+      this.emitStatus("error");
       throw error;
     }
   }
@@ -420,9 +523,16 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async setModel(modelId: string): Promise<void> {
-    const result = await this.request("session/set_model", { sessionId: this.sessionId, modelId }) as { _meta?: { model?: { Ok?: string } } };
-    this.currentModelId = resolveModelId(result._meta?.model?.Ok || modelId, this.models) || modelId;
-    this.emitEvent({ type: "session-ready", sessionId: this.sessionId, models: this.models, currentModelId: this.currentModelId, effort: this.effort });
+    const previousRequestedModelId = this.requestedModelId;
+    this.requestedModelId = modelId;
+    try {
+      const result = await this.request("session/set_model", { sessionId: this.sessionId, modelId }) as { _meta?: { model?: { Ok?: string } } };
+      this.currentModelId = resolveModelId(result._meta?.model?.Ok || modelId, this.models, this.requestedModelId) || modelId;
+      this.emitEvent({ type: "session-ready", sessionId: this.sessionId, models: this.models, currentModelId: this.currentModelId, effort: this.effort });
+    } catch (error) {
+      this.requestedModelId = previousRequestedModelId;
+      throw error;
+    }
   }
 
   /**
@@ -604,7 +714,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.lastTouched = Date.now();
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
-        if (update.content?.type === "text") this.emitEvent({ type: "message-chunk", sessionId: this.sessionId, text: update.content.text || "" });
+        if (update.content?.type === "text") this.emitProviderText(update.content.text || "");
         else this.emitMediaFromContent(update.content);
         break;
       }
@@ -678,7 +788,11 @@ export class GrokAcpAdapter extends EventEmitter {
   private handleModelChanged(update: Record<string, any>): void {
     if (update.sessionUpdate !== "model_changed") return;
     const modelId = typeof update.model_id === "string" ? update.model_id : undefined;
-    if (modelId) this.currentModelId = resolveModelId(modelId, this.models) || modelId;
+    if (modelId) {
+      const resolved = resolveModelId(modelId, this.models, this.requestedModelId) || modelId;
+      this.currentModelId = resolved;
+      if (!modelIdsAlias(modelId, this.requestedModelId)) this.requestedModelId = resolved;
+    }
     const effort = normalizeReasoningEffort(update.reasoning_effort);
     if (effort !== undefined) this.currentEffort = effort;
     this.emitEvent({
@@ -945,6 +1059,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private beginTurn(clientMessageId?: string): TurnPresentation {
     if (this.activeTurn) return this.activeTurn;
+    this.providerThinking = { pending: "", thought: false };
     this.cancelRequested = false;
     const presentation: TurnPresentation & { monotonicStartedAt: number } = {
       turnId: clientMessageId || crypto.randomUUID(),
@@ -962,6 +1077,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private finishTurn(outcome: TurnOutcome, usage?: TurnPresentation["usage"]): TurnPresentation | undefined {
     const active = this.activeTurn;
     if (!active) return undefined;
+    this.flushProviderText();
     this.activeTurn = undefined;
     const completedAt = new Date().toISOString();
     const presentation: TurnPresentation = {
@@ -977,6 +1093,21 @@ export class GrokAcpAdapter extends EventEmitter {
     this.cancelRequested = false;
     this.emitEvent({ type: "turn-completed", sessionId: this.sessionId, presentation });
     return presentation;
+  }
+
+  private emitProviderText(text: string, flush = false): void {
+    const result = demuxProviderThinkingText(this.providerThinking, text, flush);
+    this.providerThinking = result.state;
+    for (const chunk of result.chunks) {
+      this.emitEvent(chunk.role === "thought"
+        ? { type: "thought-chunk", sessionId: this.sessionId, text: chunk.text }
+        : { type: "message-chunk", sessionId: this.sessionId, text: chunk.text });
+    }
+  }
+
+  private flushProviderText(): void {
+    this.emitProviderText("", true);
+    this.providerThinking = { pending: "", thought: false };
   }
 
   private request(method: string, params: unknown, timeoutMs = 120_000): Promise<unknown> {
@@ -1207,8 +1338,12 @@ function formatRetryStatus(attempt?: number, maxAttempts?: number, delayMs?: num
 
 /** Recovers an upstream HTTP status from the error text or JSON-RPC data payload. */
 function httpStatusFromFailure(message: string, data: unknown): number | undefined {
-  const fromData = (data as { status?: unknown; httpStatus?: unknown } | undefined);
-  for (const candidate of [fromData?.status, fromData?.httpStatus]) {
+  let normalized = data;
+  if (typeof data === "string") {
+    try { normalized = JSON.parse(data); } catch { /* fall through to text parsing */ }
+  }
+  const fromData = normalized as { status?: unknown; httpStatus?: unknown; http_status?: unknown } | undefined;
+  for (const candidate of [fromData?.status, fromData?.httpStatus, fromData?.http_status]) {
     if (typeof candidate === "number" && candidate >= 100 && candidate < 600) return candidate;
   }
   const match = /\bHTTP\s+(\d{3})\b/i.exec(message) ?? /"code"\s*:\s*(\d{3})\b/.exec(message);
@@ -1257,8 +1392,27 @@ async function resolvePersistedWorkspace(cwd: string): Promise<string> {
   return workspace ? join(sessionsRoot, workspace.name) : join(sessionsRoot, encodeURIComponent(cwd));
 }
 
-function resolveModelId(id: string | undefined, models: ModelInfo[]): string | undefined {
+export function resolveModelId(id: string | undefined, models: ModelInfo[], preferredId?: string): string | undefined {
   if (!id) return id;
+  if (preferredId && models.some((model) => model.modelId === preferredId) && modelIdsAlias(id, preferredId)) return preferredId;
   if (models.some((model) => model.modelId === id)) return id;
   return models.filter((model) => id.startsWith(model.modelId) || model.modelId.startsWith(id)).sort((a, b) => b.modelId.length - a.modelId.length)[0]?.modelId ?? id;
+}
+
+function modelIdsAlias(left: string, right: string): boolean {
+  if (!left || !right) return false;
+  return left === right
+    || left.endsWith(`-${right}`)
+    || right.endsWith(`-${left}`);
+}
+
+function windowsBatchCommand(executable: string, args: string[]): string {
+  const values = [executable, ...args];
+  if (values.some((value) => /[\r\n"&|<>^%!]/.test(value))) {
+    throw new Error("批处理 CLI 路径或参数包含不安全的 cmd.exe 元字符");
+  }
+  const quote = (value: string): string => `"${value}"`;
+  // `call` avoids cmd.exe's special first/last-quote stripping when the batch
+  // path itself is quoted. It also waits for the batch file to return.
+  return `call ${values.map(quote).join(" ")}`;
 }

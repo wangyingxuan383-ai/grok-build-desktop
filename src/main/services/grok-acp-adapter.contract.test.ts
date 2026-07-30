@@ -14,6 +14,7 @@ describe.skipIf(process.platform !== "win32")("Grok ACP contract", () => {
     const marker = join(root, "unknown-response.json");
     const argsMarker = join(root, "args.json");
     const effortMarker = join(root, "effort-request.json");
+    const modelMarker = join(root, "model-request.json");
     const queueMarker = join(root, "queue-request.json");
     const queueEditMarker = join(root, "queue-edit.json");
     const queueInterjectMarker = join(root, "queue-interject.json");
@@ -26,6 +27,7 @@ import { createInterface } from "node:readline";
 const marker = ${JSON.stringify(marker)};
 const argsMarker = ${JSON.stringify(argsMarker)};
 const effortMarker = ${JSON.stringify(effortMarker)};
+const modelMarker = ${JSON.stringify(modelMarker)};
 const queueMarker = ${JSON.stringify(queueMarker)};
 const queueEditMarker = ${JSON.stringify(queueEditMarker)};
 const queueInterjectMarker = ${JSON.stringify(queueInterjectMarker)};
@@ -46,11 +48,15 @@ rl.on("line", async (line) => {
   if (message.method === "session/new") {
     send({ jsonrpc: "2.0", id: "server-unknown", method: "x.test/future_request", params: {} });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "imagine", description: "Create media" }] } } });
-    return send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "fake-session", models: { currentModelId: "grok-test", availableModels: [{ modelId: "grok-test", name: "Grok Test", _meta: { totalContextTokens: 100000 } }] } } });
+    return send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "fake-session", models: { currentModelId: "grok-test", availableModels: [{ modelId: "grok-test", name: "Grok Test", _meta: { totalContextTokens: 100000, supportsReasoningEffort: true, reasoningEfforts: [{ value: "low", label: "Low" }, { value: "high", label: "High", default: true }] } }] } } });
+  }
+  if (message.method === "session/load") {
+    return send({ jsonrpc: "2.0", id: message.id, result: { sessionId: message.params.sessionId, models: { currentModelId: "grok-4.5", availableModels: [{ modelId: "grok-4.5", name: "Official Grok" }, { modelId: "openai-compatible-grok-4.5", name: "CPA Grok" }] } } });
   }
   if (message.method === "session/set_mode") return send({ jsonrpc: "2.0", id: message.id, result: {} });
   if (message.method === "session/set_model") {
     if (message.params?._meta?.reasoningEffort) await writeFile(effortMarker, JSON.stringify(message.params));
+    else await writeFile(modelMarker, JSON.stringify(message.params));
     send({ jsonrpc: "2.0", id: message.id, result: { _meta: { model: { Ok: message.params.modelId } } } });
     if (message.params?._meta?.reasoningEffort) send({ jsonrpc: "2.0", method: "_x.ai/session_notification", params: { sessionId: "fake-session", update: { sessionUpdate: "model_changed", model_id: message.params.modelId, reasoning_effort: message.params._meta.reasoningEffort } } });
     return;
@@ -99,7 +105,12 @@ rl.on("line", async (line) => {
     try {
       const result = await adapter.start();
       expect(result.sessionId).toBe("fake-session");
-      expect(adapter.models[0]).toMatchObject({ modelId: "grok-test", totalContextTokens: 100000 });
+      expect(adapter.models[0]).toMatchObject({
+        modelId: "grok-test",
+        totalContextTokens: 100000,
+        supportsReasoningEffort: true,
+        reasoningEfforts: [{ value: "low", label: "Low" }, { value: "high", label: "High", default: true }],
+      });
       expect(await adapter.waitForCommands()).toEqual([{ name: "imagine", description: "Create media", inputHint: undefined }]);
       await adapter.setEffort("low");
       expect(adapter.effort).toBe("low");
@@ -158,6 +169,26 @@ rl.on("line", async (line) => {
         error: { code: -32601 },
       });
       expect(JSON.parse(await readFile(argsMarker, "utf8"))).toEqual(["agent", "--reasoning-effort", "high", "stdio"]);
+      const resumed = new GrokAcpAdapter({
+        cliPath: fakeCommand,
+        cwd: root,
+        env: process.env,
+        effort: "high",
+        modelId: "openai-compatible-grok-4.5",
+        mode: "agent",
+        log: new LogService(join(root, "resume.log")),
+      });
+      try {
+        await resumed.start("persisted-session");
+        await waitForFile(modelMarker);
+        expect(JSON.parse(await readFile(modelMarker, "utf8"))).toEqual({
+          sessionId: "persisted-session",
+          modelId: "openai-compatible-grok-4.5",
+        });
+        expect(resumed.currentModelId).toBe("openai-compatible-grok-4.5");
+      } finally {
+        await resumed.dispose(500);
+      }
       expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "thought-chunk", sessionId: "fake-session", text: "thinking" }),
         expect.objectContaining({ type: "message-chunk", sessionId: "fake-session", text: "hello" }),

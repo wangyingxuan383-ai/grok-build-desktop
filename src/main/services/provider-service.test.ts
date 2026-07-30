@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import type { CustomProviderInput, ProviderConnectionDraft } from "../../shared/types";
 import { LogService } from "./log-service";
 import { managedBaseUrlEnvironmentName, ProviderService, providerModelLocalId, type ProviderEnvironment } from "./provider-service";
@@ -15,6 +15,11 @@ class FakeEnvironment implements ProviderEnvironment {
   values = new Map<string, string>();
   async read(name: string) { return this.values.get(name); }
   async write(name: string, value: string | undefined) { if (value === undefined) this.values.delete(name); else this.values.set(name, value); }
+}
+
+class RefreshingEnvironment extends FakeEnvironment {
+  fresh = new Map<string, string>();
+  async readFresh(name: string) { return this.fresh.get(name) ?? this.values.get(name); }
 }
 
 async function fixture(config = "# 用户注释\n[ui]\nsimple_mode = true\n") {
@@ -34,9 +39,34 @@ describe("ProviderService", () => {
     const config = await readFile(join(grokHome, "config.toml"), "utf8");
     expect(config).toContain("# 用户注释"); expect(config).toContain("[ui]"); expect(config).toContain("Grok Build Desktop managed models"); expect(config).toContain("sample-model");
     expect((parse(config).model as Record<string, any>)["sample-model"].base_url).toBe("${GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL}");
+    expect((parse(config).model as Record<string, any>)["sample-model"].inference_idle_timeout_secs).toBe(600);
     expect(config).not.toContain("test-secret-value"); expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_KEY")).toBe("test-secret-value");
     expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL")).toBe("https://api.example.test/v1");
     expect(values.find((value) => value.id === "sample")?.hasCredential).toBe(true);
+  });
+
+  it("uses the provider draft network route for model-list probes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-proxy-route-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    let route = "";
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "gateway.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (_input, _init, proxyMode) => {
+        route = proxyMode ?? "";
+        return new Response(JSON.stringify({ data: [{ id: "fixture-model" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    try {
+      const result = await service.probeDraft(draft("https://provider.example.test/v1", { proxyMode: "direct" }));
+      expect(result.ok).toBe(true);
+      expect(route).toBe("direct");
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("keeps the upstream URL in the user environment and gives desktop CLI processes only an opaque loopback route", async () => {
@@ -48,6 +78,26 @@ describe("ProviderService", () => {
       expect(environment.values.get(variable)).toBe("https://api.example.test/v1");
       expect(desktop[variable]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/session-scope$/);
       expect(desktop[variable]).not.toContain("api.example.test");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("refreshes provider credentials and header variables for each desktop CLI launch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-refresh-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const environment = new RefreshingEnvironment();
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "logs", "app.log")), { grokHome, environment });
+    await service.upsert(input({ extraHeaders: { "x-route": "GROK_PROVIDER_ROUTE" } }));
+    environment.values.set("GROK_DESKTOP_PROVIDER_SAMPLE_KEY", "stale-secret");
+    environment.values.set("GROK_PROVIDER_ROUTE", "stale-route");
+    environment.fresh.set("GROK_DESKTOP_PROVIDER_SAMPLE_KEY", "rotated-secret");
+    environment.fresh.set("GROK_PROVIDER_ROUTE", "rotated-route");
+    try {
+      const desktop = await service.desktopEnvironment("fresh-scope");
+      expect(desktop.GROK_DESKTOP_PROVIDER_SAMPLE_KEY).toBe("rotated-secret");
+      expect(desktop.GROK_PROVIDER_ROUTE).toBe("rotated-route");
+      expect(desktop[managedBaseUrlEnvironmentName("sample")]).toMatch(/^http:\/\/127\.0\.0\.1:/);
     } finally {
       await service.dispose();
     }
@@ -108,6 +158,68 @@ describe("ProviderService", () => {
     expect(model.extra_headers["x-api-key"]).toBe("${GROK_DESKTOP_PROVIDER_SAMPLE_KEY}");
     expect(model.extra_headers.Authorization).toBe("");
     expect(raw).not.toContain("test-secret-value");
+  });
+
+  it("restores missing model protocol and the CLI-catalog effort menu without locking manual values", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      await service.upsert(input({
+        protocol: "chat_completions",
+        models: [{ id: "sample-grok-4.5", model: "grok-4.5", name: "Grok 4.5", protocol: "responses", contextWindow: 500_000 }],
+      }));
+      expect((await service.list())[0]?.models[0]?.reasoningEfforts).toEqual(["high", "medium", "low"]);
+      const configPath = join(grokHome, "config.toml");
+      const legacy = parse(await readFile(configPath, "utf8")) as any;
+      delete legacy.model["sample-grok-4.5"].reasoning_efforts;
+      delete legacy.model["sample-grok-4.5"].inference_idle_timeout_secs;
+      legacy.model["sample-grok-4.5"].api_backend = "chat_completions";
+      await writeFile(configPath, `# >>> Grok Build Desktop managed models >>>\n${stringify(legacy).trim()}\n# <<< Grok Build Desktop managed models <<<\n`, "utf8");
+      await service.desktopEnvironment();
+      const refreshed = parse(await readFile(configPath, "utf8")) as any;
+      expect(refreshed.model["sample-grok-4.5"].api_backend).toBe("responses");
+      expect(refreshed.model["sample-grok-4.5"].inference_idle_timeout_secs).toBe(600);
+      expect(refreshed.model["sample-grok-4.5"].reasoning_efforts).toEqual([
+        { value: "high", label: "high" },
+        { value: "medium", label: "medium" },
+        { value: "low", label: "low" },
+      ]);
+
+      await service.upsert(input({
+        protocol: "chat_completions",
+        models: [{
+          id: "sample-grok-4.5",
+          model: "grok-4.5",
+          name: "Grok 4.5",
+          protocol: "responses",
+          contextWindow: 500_000,
+          inferenceIdleTimeoutSeconds: 720,
+          reasoningEfforts: ["xhigh", "high", "medium", "low", "minimal"],
+        }],
+      }));
+      expect((await service.list())[0]?.models[0]).toMatchObject({
+        protocol: "responses",
+        inferenceIdleTimeoutSeconds: 720,
+        reasoningEfforts: ["xhigh", "high", "medium", "low", "minimal"],
+      });
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("removes stale managed reasoning options when the model no longer declares any", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      await service.upsert(input({ models: [{ id: "sample-model", model: "upstream/model", name: "Unknown capabilities" }] }));
+      const configPath = join(grokHome, "config.toml");
+      const legacy = parse(await readFile(configPath, "utf8")) as any;
+      legacy.model["sample-model"].reasoning_efforts = [{ value: "high", label: "high" }];
+      await writeFile(configPath, `# >>> Grok Build Desktop managed models >>>\n${stringify(legacy).trim()}\n# <<< Grok Build Desktop managed models <<<\n`, "utf8");
+      await service.desktopEnvironment();
+      const refreshed = parse(await readFile(configPath, "utf8")) as any;
+      expect(refreshed.model["sample-model"].reasoning_efforts).toEqual([]);
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("rejects collisions with externally managed model ids", async () => {
@@ -209,7 +321,7 @@ describe("ProviderService", () => {
   it("probes unsaved drafts across OpenAI, Ollama and Anthropic model-list shapes", async () => {
     const server = createServer((request, response) => {
       response.setHeader("content-type", "application/json");
-      if (request.url === "/openai") response.end(JSON.stringify({ data: [{ id: "gpt-test", name: "GPT Test", owned_by: "test" }] }));
+      if (request.url === "/openai") response.end(JSON.stringify({ data: [{ id: "gpt-test", name: "GPT Test", owned_by: "test", supported_reasoning_efforts: ["minimal", "high"] }] }));
       else if (request.url === "/ollama") response.end(JSON.stringify({ models: [{ name: "qwen:test", model: "qwen:test" }] }));
       else response.end(JSON.stringify([{ id: "claude-test", display_name: "Claude Test", context_window: 200_000 }]));
     });
@@ -222,7 +334,7 @@ describe("ProviderService", () => {
       const openai = await service.probeDraft(draft(base, { modelListUrl: `${base}/openai` }));
       const ollama = await service.discoverDraftModels(draft(base, { id: "ollama", modelListUrl: `${base}/ollama` }));
       const anthropic = await service.probeDraft(draft(base, { id: "anthropic", protocol: "messages", modelListUrl: `${base}/anthropic` }));
-      expect(openai).toMatchObject({ ok: true, candidates: [{ remoteId: "gpt-test", name: "GPT Test", ownedBy: "test", alreadyConfigured: false }] });
+      expect(openai).toMatchObject({ ok: true, candidates: [{ remoteId: "gpt-test", name: "GPT Test", ownedBy: "test", reasoningEfforts: ["minimal", "high"], alreadyConfigured: false }] });
       expect(ollama[0]).toMatchObject({ remoteId: "qwen:test", name: "qwen:test" });
       expect(anthropic.candidates[0]).toMatchObject({ remoteId: "claude-test", name: "Claude Test", contextWindow: 200_000 });
     } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
