@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { pathWithin } from "../../shared/path-utils";
 
 const UNSAFE_SHELL_SYNTAX = /[\0\r\n;&|<>`^]|\$\(|\$\{|@\(|%|![A-Za-z_][A-Za-z0-9_]*!/;
 const SIMPLE_READ_ONLY_COMMAND = /^(?:pwd|dir|ls|Get-(?:ChildItem|Content|Item|Location)|type|cat|head|tail|findstr|rg|grep)(?:\s+.*)?$/i;
@@ -10,10 +10,7 @@ const SAFE_GROK_QUERY = /^grok\s+(?:--version|version|models|inspect)(?:\s+.*)?$
 const WRITE_CAPABLE_QUERY_FLAG = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff\b|--exec\b|-exec(?:dir)?\b|-delete\b|-fprint(?:f)?\b|--pre(?:-glob)?\b)/i;
 
 export function isWithinWorkspace(candidate: string, workspaceRoot: string): boolean {
-  const target = resolve(candidate);
-  const root = resolve(workspaceRoot);
-  const rel = relative(root, target);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return pathWithin(candidate, workspaceRoot);
 }
 
 export function shouldBlockWrite(path: string, workspaceRoot: string, planActive: boolean): boolean {

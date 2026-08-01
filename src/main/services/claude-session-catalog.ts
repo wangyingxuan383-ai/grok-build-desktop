@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
+import { pathWithin as sharedPathWithin, samePath as sharedSamePath, normalizeComparablePath } from "../../shared/path-utils";
 import type { ClaudeSessionDetail, ClaudeSessionSummary, ClaudeTurn } from "../../shared/types";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
@@ -198,7 +199,7 @@ async function scanClaudeJsonl(path: string, fallbackCreatedAt: string, fallback
     try {
       const value = JSON.parse(line) as Record<string, unknown>;
       if (typeof value.sessionId === "string" && value.sessionId) state.id = value.sessionId;
-      if (typeof value.cwd === "string" && value.cwd) state.cwd = normalizeWindowsPath(value.cwd);
+      if (typeof value.cwd === "string" && value.cwd) state.cwd = normalizeComparablePath(value.cwd);
       if (typeof value.timestamp === "string" && value.timestamp) {
         if (!state.createdAt || value.timestamp < state.createdAt) state.createdAt = value.timestamp;
         if (!state.updatedAt || value.timestamp > state.updatedAt) state.updatedAt = value.timestamp;
@@ -324,18 +325,14 @@ function extractId(path: string): string {
 }
 
 export function pathWithin(candidate: string, root: string): boolean {
-  const rel = relative(resolve(normalizeWindowsPath(root)), resolve(normalizeWindowsPath(candidate)));
-  return !rel || (!rel.startsWith("..") && !isAbsolute(rel));
+  return sharedPathWithin(candidate, root);
 }
 
 function assertClaudePath(path: string, claudeHome: string): void {
   const projectsRoot = join(claudeHome, "projects");
-  const rel = relative(resolve(normalizeWindowsPath(projectsRoot)), resolve(normalizeWindowsPath(path)));
-  if (!rel || rel.startsWith("..") || isAbsolute(rel) || !path.toLocaleLowerCase().endsWith(".jsonl")) throw new Error("非法 Claude 会话路径");
-}
-
-function normalizeWindowsPath(value: string): string {
-  return value.replace(/^\\\\\?\\/, "");
+  if (!sharedPathWithin(path, projectsRoot) || !path.toLocaleLowerCase().endsWith(".jsonl")) throw new Error("非法 Claude 会话路径");
+  // pathWithin treats root itself as inside; session files must be strict descendants.
+  if (sharedSamePath(path, projectsRoot)) throw new Error("非法 Claude 会话路径");
 }
 
 function sha256File(path: string): Promise<string> {

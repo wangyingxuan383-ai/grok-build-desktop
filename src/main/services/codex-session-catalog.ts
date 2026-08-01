@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
+import nodePath from "node:path";
+import { pathWithin as sharedPathWithin, samePath as sharedSamePath, normalizeComparablePath } from "../../shared/path-utils";
 import type { CodexSessionDetail, CodexSessionSummary, CodexTurn } from "../../shared/types";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
@@ -161,11 +163,11 @@ export class CodexSessionCatalog {
     const output = await runFile("python", ["-c", code, ...databases]);
     const values = JSON.parse(output) as Array<Record<string, unknown>>;
     return values.flatMap((value): CodexSessionSummary[] => {
-      const path = normalizeWindowsPath(String(value.path || ""));
-      const cwd = normalizeWindowsPath(String(value.cwd || ""));
-      if (!path || !cwd || !isAbsolute(path)) return [];
+      const sessionPath = normalizeComparablePath(String(value.path || ""));
+      const cwd = normalizeComparablePath(String(value.cwd || ""));
+      if (!sessionPath || !cwd || !(nodePath.win32.isAbsolute(sessionPath) || nodePath.posix.isAbsolute(sessionPath))) return [];
       return [{
-        id: String(value.id), path, cwd,
+        id: String(value.id), path: sessionPath, cwd,
         title: String(value.title || "Codex 会话"),
         createdAt: epochToIso(value.created), updatedAt: epochToIso(value.updated),
         archived: Boolean(value.archived), hidden: false,
@@ -294,17 +296,12 @@ function extractId(path: string): string {
 }
 
 function pathWithin(candidate: string, root: string): boolean {
-  const rel = relative(resolve(normalizeWindowsPath(root)), resolve(normalizeWindowsPath(candidate)));
-  return !rel || (!rel.startsWith("..") && !isAbsolute(rel));
+  return sharedPathWithin(candidate, root);
 }
 
-function assertCodexPath(path: string, codexHome: string): void {
-  const rel = relative(resolve(normalizeWindowsPath(codexHome)), resolve(normalizeWindowsPath(path)));
-  if (!rel || rel.startsWith("..") || isAbsolute(rel) || !path.toLowerCase().endsWith(".jsonl")) throw new Error("非法 Codex 会话路径");
-}
-
-function normalizeWindowsPath(value: string): string {
-  return value.replace(/^\\\\\?\\/, "");
+function assertCodexPath(pathValue: string, codexHome: string): void {
+  if (!sharedPathWithin(pathValue, codexHome) || !pathValue.toLowerCase().endsWith(".jsonl")) throw new Error("非法 Codex 会话路径");
+  if (sharedSamePath(pathValue, codexHome)) throw new Error("非法 Codex 会话路径");
 }
 
 function epochToIso(value: unknown): string {
