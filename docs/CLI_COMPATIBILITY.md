@@ -1,5 +1,10 @@
 # Grok CLI Compatibility
 
+## Unlimited interactive-turn note (post-Desktop 0.6.22)
+
+- Desktop no longer places a 30-minute wall-clock timer around `session/prompt` or queued follow-up Prompt requests. This does not require a new ACP method and does not change the CLI's own completion/cancellation behavior.
+- Explicit user Stop, process exit and real transport errors still terminate a turn. Managed Provider `inference_idle_timeout_secs` remains the independent no-data timeout and is not a total-turn ceiling.
+
 ## 0.2.117 media transport and interject note (Desktop 0.6.22)
 
 - `grok --single --session-id <UUID>` stores relative media artifacts below that transient Grok session rather than necessarily below the execution `cwd`. Desktop now treats only that exact transient session directory as an additional job root, copies validated assets into its conversation cache, and removes the temporary session afterward.

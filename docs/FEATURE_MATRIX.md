@@ -1,5 +1,12 @@
 # Feature Matrix
 
+## Post-v0.6.22 unlimited interactive-turn hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Interactive turn lifetime | Focused/source verified | Ordinary and queued ACP prompts use no Desktop wall-clock timer. They end on CLI completion, explicit Stop/cancel, process exit or a real transport/provider failure; Provider idle silence detection remains independent. |
+| Delivery | Source-only GitHub update | Focused adapter tests, TypeScript and public scan are the intended gate. The published `v0.6.22` assets/tag remain unchanged and no Release is created for this small patch. |
+
 ## v0.6.22 local media transport and interject lifecycle hotfix
 
 | Area | Status | Evidence / boundary |

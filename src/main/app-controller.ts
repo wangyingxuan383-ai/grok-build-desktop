@@ -139,6 +139,7 @@ import { AuthService } from "./services/auth-service";
 import { locateGrokCli } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
+import { INTERACTIVE_PROMPT_TIMEOUT_MS } from "./services/grok-acp-adapter";
 import { JsonStore } from "./services/json-store";
 import { AgentChangeService } from "./services/agent-change-service";
 import { TokenActivityService } from "./services/token-activity-service";
@@ -1193,7 +1194,7 @@ export class AppController {
     const prepared = await this.attachmentCache.prepare(sessionId, attachments);
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
     try {
-      await this.processes.get(sessionId).prompt(text, prepared.attachments, 1_800_000, { clientMessageId, attachments: prepared.previews });
+      await this.processes.get(sessionId).prompt(text, prepared.attachments, INTERACTIVE_PROMPT_TIMEOUT_MS, { clientMessageId, attachments: prepared.previews });
       await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent");
     } catch (error) {
       await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed");

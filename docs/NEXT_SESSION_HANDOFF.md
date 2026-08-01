@@ -1,5 +1,7 @@
 # Grok Build Desktop 下一会话完整交接（2026-08-01，0.6.22 已正式发布）
 
+> **发布后交互超时热修：** 普通 Prompt 与排队后续 Prompt 原先都由 Desktop 在 1800 秒后强制 `cancel`。该总时长上限已移除；长回合现在只会因 CLI 正常完成、用户主动停止、进程退出或真实传输/Provider 失败而结束。Provider 的 `inference_idle_timeout_secs` 仍是独立的无数据超时，不是总回合上限。此项仅作为发布后源码小改动提交 GitHub，不移动 `v0.6.22` 标签，不创建新 Release。
+
 > **0.6.22 公开发布状态：** PR #19 将 v0.6.7-v0.6.22 的已验收源码合并到 `main`；Windows、Gitleaks、CodeQL 和代码扫描通过。首次 Release workflow 在创建草稿前因 Windows PowerShell 5.1 破坏中文脚本字面量而失败，没有产生 Release；PR #20 将该步骤切换到 PowerShell 7。workflow `30693283048` 随后重新构建、公开扫描、生成 attestations、下载并校验 SHA-256/来源证明，已将 `v0.6.22` 发布为 Latest。发布页使用版本专属中文说明，不再展示整份累计英文 Changelog。
 
 > **0.6.22 当前工作状态：** 用户在 0.6.21 验收中再次看到“图片文件不可用”、媒体任务误报工作区外、ZDR 视频错误和插话状态紊乱。只读核验确认生成图片文件仍存在，破图来自 sandboxed Renderer 被 Chromium 拒绝加载 `file://`；无头媒体的实际相对产物属于显式 `--session-id` 的临时 Grok 会话，旧缓存边界只信任 cwd；视频失败是团队启用 Zero Data Retention 后 API 强制要求 `output.upload_url`，当前 CLI 工具没有该参数；插话不是独立 Agent，而是同一 ACP 会话的已提交高优先级后续回合，旧适配器没有给它建立本地队列/turn 边界，叉号只删除了错误的本地表现，不能撤回已接受请求。源码已增加受限 `grok-media:` 协议、精确临时会话信任根、首次媒体失败即停止和 ZDR 分类；插话提交后标为不可撤回，在上一回合收束后建立独立 turn/user-message/status，迟到的上一回合 Promise 不会结算新回合。最终 80 文件/465 项离线测试通过，5 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、Computer Host 自检、公开源码/资产扫描、diff check、Fuses、打包版/Portable UI、任务调度、安装版主进程/About/诊断/File/Product/快捷方式均通过。现有历史图在安装版 `grok-media:` 中实际解码为 1024x1024。0.6.22 已 per-user 安装并正式发布；没有发送新的图片/视频或付费模型请求，真实新媒体和插话顺序仍是用户验收边界。
