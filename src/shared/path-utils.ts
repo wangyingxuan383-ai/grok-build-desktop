@@ -16,7 +16,9 @@ export function isWindowsStylePath(value: string): boolean {
   return WIN_ABS.test(value) || WIN_UNC.test(value) || value.includes("\\");
 }
 
-function apiFor(...values: string[]): path.PlatformPath {
+type PathApi = typeof path.posix | typeof path.win32;
+
+function apiFor(...values: string[]): PathApi {
   if (process.platform === "win32") return path.win32;
   if (values.some((value) => WIN_ABS.test(value) || WIN_UNC.test(value) || (value.includes("\\") && !value.startsWith("/")))) {
     return path.win32;
