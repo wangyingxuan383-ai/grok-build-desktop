@@ -584,3 +584,149 @@ describe("ProviderGatewayService", () => {
     }
   });
 });
+
+describe("ProviderGatewayService cross-protocol routing", () => {
+  it("uses a model-level client protocol's native upstream instead of the Provider default", async () => {
+    let upstreamPath = "";
+    const upstream = createServer(async (request, response) => {
+      upstreamPath = request.url ?? "";
+      for await (const _chunk of request) { /* consume request */ }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ id: "resp_native", object: "response", status: "completed", model: "grok-4.5", output: [] }));
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-model-protocol-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "mixed", name: "Mixed", baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      protocol: "chat_completions", upstreamProtocol: "openai_chat", schemaProfile: "standard",
+      authScheme: "bearer", credentialMode: "none", proxyMode: "direct", extraHeaders: {},
+      models: [{ id: "mixed-grok", model: "grok-4.5", name: "Grok", protocol: "responses" }],
+      owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: (input, init) => fetch(input, init),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "grok-4.5", input: "Hi", stream: false }),
+      });
+      expect(response.status).toBe(200);
+      expect(upstreamPath).toBe("/v1/responses");
+      expect((await response.json() as any).object).toBe("response");
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("routes a Chat client through a Responses-only upstream and converts the answer", async () => {
+    let upstreamPath = "";
+    let upstreamBody: any;
+    const upstream = createServer(async (request, response) => {
+      upstreamPath = request.url ?? "";
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      upstreamBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        id: "resp_fixture",
+        object: "response",
+        status: "completed",
+        model: "grok-4.5",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "OK" }] }],
+        usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+      }));
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-translate-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "translate", name: "Translate", baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      protocol: "chat_completions", upstreamProtocol: "openai_responses", schemaProfile: "standard",
+      authScheme: "bearer", credentialMode: "none", proxyMode: "direct", extraHeaders: {},
+      models: [{ id: "translate-grok", model: "grok-4.5", name: "Grok" }],
+      owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: (input, init) => fetch(input, init),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "grok-4.5", messages: [{ role: "user", content: "Hi" }], stream: false, reasoning_effort: "high" }),
+      });
+      expect(response.status).toBe(200);
+      expect(upstreamPath).toBe("/v1/responses");
+      expect(upstreamBody).toMatchObject({ model: "grok-4.5", input: [{ role: "user" }], reasoning: { effort: "high" } });
+      const body = await response.json() as any;
+      expect(body.object).toBe("chat.completion");
+      expect(body.choices[0].message.content).toBe("OK");
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it("flushes a downstream SSE bridge before a delayed cross-protocol stream completes", async () => {
+    const upstream = createServer(async (request, response) => {
+      for await (const _chunk of request) { /* consume request */ }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.flushHeaders();
+      setTimeout(() => {
+        response.write(`data: ${JSON.stringify({ id: "chat_1", model: "remote", choices: [{ delta: { content: "OK" }, finish_reason: null }] })}\n\n`);
+        response.write(`data: ${JSON.stringify({ id: "chat_1", model: "remote", choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
+        response.end("data: [DONE]\n\n");
+      }, 80);
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-sse-bridge-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "sse-bridge", name: "SSE bridge", baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      protocol: "responses", upstreamProtocol: "openai_chat", schemaProfile: "standard",
+      authScheme: "bearer", credentialMode: "none", proxyMode: "direct", extraHeaders: {},
+      models: [{ id: "bridge-model", model: "remote", name: "Remote" }],
+      owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: (input, init) => fetch(input, init),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "remote", input: "Hi", stream: true }),
+      });
+      const reader = response.body!.getReader();
+      const first = await reader.read();
+      expect(new TextDecoder().decode(first.value)).toContain("grok-desktop protocol bridge");
+      let rest = "";
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        rest += new TextDecoder().decode(next.value);
+      }
+      expect(rest).toContain("response.output_text.delta");
+      expect(rest).toContain("response.completed");
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+});

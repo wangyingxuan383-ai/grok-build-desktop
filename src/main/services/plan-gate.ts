@@ -34,3 +34,41 @@ export function isReadOnlyCommand(command: string): boolean {
     || SAFE_NPM_QUERY.test(value)
     || SAFE_GROK_QUERY.test(value);
 }
+
+/**
+ * Plan mode may inspect the workspace without interrupting for every read.
+ * This is intentionally narrower than "always approve": ACP read/search/fetch
+ * tools and commands already accepted by the read-only shell gate are allowed;
+ * edits, deletes, moves, mode switches and unknown tools still require a
+ * decision (and workspace writes remain blocked by shouldBlockWrite).
+ */
+export function isPlanSafeToolCall(toolCall: unknown): boolean {
+  if (!toolCall || typeof toolCall !== "object") return false;
+  const value = toolCall as Record<string, unknown>;
+  const raw = value.rawInput && typeof value.rawInput === "object" ? value.rawInput as Record<string, unknown> : undefined;
+  const kind = String(value.kind || raw?.kind || "").trim().toLowerCase();
+  const descriptor = `${kind} ${String(value.title || "")} ${String(raw?.name || raw?.tool || "")}`.toLowerCase();
+  if (/\b(?:edit|write|create|delete|remove|move|rename|patch|apply|execute|terminal|shell|switch_mode)\b/.test(descriptor) && kind !== "execute") return false;
+  if (["read", "search", "think", "fetch"].includes(kind)) return true;
+  if (kind === "execute") {
+    const command = firstCommand(value, raw);
+    return command ? isReadOnlyCommand(command) : false;
+  }
+  return /\b(?:read|search|list|glob|grep|find|inspect|fetch|think)\b/.test(descriptor);
+}
+
+function firstCommand(toolCall: Record<string, unknown>, raw?: Record<string, unknown>): string | undefined {
+  for (const candidate of [raw?.command, raw?.cmd, raw?.script, toolCall.command]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  const content = Array.isArray(toolCall.content) ? toolCall.content : [];
+  for (const item of content) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const nested = record.content && typeof record.content === "object" ? record.content as Record<string, unknown> : undefined;
+    for (const candidate of [record.command, nested?.command, nested?.text]) {
+      if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    }
+  }
+  return undefined;
+}

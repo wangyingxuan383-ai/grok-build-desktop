@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+
 const endpoint = process.argv[2];
 if (!endpoint) throw new Error("CDP endpoint is required");
+const expectedVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) {
@@ -43,9 +46,9 @@ try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(window.grokDesktop && document.querySelector('.app-shell'))"), "Application shell did not render");
   const bootstrap = await evaluate("window.grokDesktop.bootstrap().then(value => ({ appVersion: value.appVersion, channel: value.buildInfo?.channel }))");
-  if (bootstrap.appVersion !== "0.6.6") throw new Error(`Main process reported ${bootstrap.appVersion}`);
+  if (bootstrap.appVersion !== expectedVersion) throw new Error(`Main process reported ${bootstrap.appVersion}; expected ${expectedVersion}`);
   await evaluate("document.querySelector('.sidebar-footer button[title=\"版本与更新\"]')?.click(); true");
-  await waitFor(() => evaluate("document.querySelector('.control-panel .about')?.innerText.includes('Grok Build Desktop 0.6.6')"), "About panel did not report 0.6.6");
+  await waitFor(() => evaluate(`document.querySelector('.control-panel .about')?.innerText.includes('Grok Build Desktop ${expectedVersion}')`), `About panel did not report ${expectedVersion}`);
   await evaluate(`(() => { [...document.querySelectorAll('.control-panel button')].find(node => node.textContent?.trim() === '兼容诊断中心')?.click(); return true; })()`);
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostics-panel'))"), "Diagnostics panel did not open");
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostic-overall:not(.checking)'))"), "Diagnostics did not complete", 45_000);
@@ -55,7 +58,7 @@ try {
   console.log(JSON.stringify({
     ok: true,
     mainProcessVersion: bootstrap.appVersion,
-    aboutVersion: "0.6.6",
+    aboutVersion: expectedVersion,
     channel: bootstrap.channel,
     diagnostics: diagnostics.overall.trim(),
     supportBundleAttachmentExclusion: true,
@@ -63,4 +66,3 @@ try {
 } finally {
   socket.close();
 }
-

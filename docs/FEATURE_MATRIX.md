@@ -1,5 +1,93 @@
 # Feature Matrix
 
+## v0.6.22 local media transport and interject lifecycle hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Historical/generated media display | Focused/source verified | Existing media is served through a bounded main-process `grok-media:` protocol rather than blocked Renderer `file://`; supported roots and a 256 MiB read ceiling remain enforced. |
+| CLI media artifact ownership | Focused verified | Only the exact transient CLI session root is added to the job allow-list; a sibling session is rejected and the artifact is copied before transient cleanup. |
+| Video ZDR diagnosis | Unit/source verified | The first `output.upload_url` error is preserved, retries stop, and the UI identifies the upstream ZDR team limitation. Desktop cannot synthesize the required upload callback for the installed CLI tool. |
+| Interject semantics | Unit/source verified | A submitted interject remains committed and non-removable, then becomes its own turn inside the same ACP session after the prior turn settles. It does not launch an independent Desktop Agent. |
+| Delivery | Installed locally for acceptance | 80 offline files/465 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resources, native self-test, 299-file scans, diff check, Fuses, packaged/Portable UI, scheduler, File/Product, shortcuts and installed main/About/diagnostics pass. An existing historical 1024x1024 image loads through installed `grok-media:`; new paid media and live interject order remain user acceptance. |
+
+## v0.6.21 local concurrent-conversation hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Renderer submission isolation | Unit/source verified | Prompt transport locks are keyed by conversation/new-draft identity; a pending turn in session A cannot disable session B. The first session-scoped working status releases the short transport lock. |
+| Main-process concurrency | Unit/source verified | Separate sessions remain separate live adapters and Provider scopes. Two working adapters coexist; the existing resident cap is eight and does not reap working/waiting sessions. |
+| Background navigation safety | Source verified | A background rejection persists its own draft but restores UI state, focus and scrolling only when that conversation is still active. |
+| Concurrent visibility | Renderer regression verified | Session rows expose running/waiting/completed/failed labels and the project header reports live-session count. |
+| Delivery | Installed locally for acceptance | 80 offline files/462 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resource build, native self-test, 299-file public scan, diff check, Fuses, formal assets, File/Product, shortcuts and installed main/About/diagnostics pass. Real two-session turns remain user acceptance; no GitHub release. |
+
+## v0.6.20 local media/session/Plan hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Media artifact paths | Focused verified | Ordinary relative paths including `images/1.jpg` remain rooted in the execution workspace and pass the existing canonical-path boundary before cache copy. |
+| Media session ownership | Source/focused verified | Active Grok sessions are reused even while working/waiting. CLI media uses a transient explicit session ID that is cleaned only after cache materialization; no-session creation is disclosed in the studio. |
+| Multi-media presentation | Renderer regression verified | Results are aggregated into a bounded two-column gallery, initially limited to four with expand/collapse and internal scrolling. |
+| Empty-turn semantics | Renderer regression verified | Working and waiting turns use live-state text; only terminal/history cases use missing-body recovery text. |
+| Plan permissions | Unit verified | Read/search/fetch/think and allow-listed read-only commands receive one-time approval in Plan; edits, arbitrary execution and unknown tools are not auto-approved. |
+| Delivery | Installed locally for acceptance | 79 offline files/457 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resource build, 297-file public scans, diff check, Fuses, formal assets, File/Product, shortcuts and installed main/About/diagnostics pass. Real media generation and live Plan permission behavior remain user acceptance; no GitHub release. |
+
+## v0.6.19 local Codex decision-surface and Agent-diff hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Agent-change readability | Focused/source verified | The dock uses unified Diff, wrapping, bounded Monaco layout and a responsive file-list split rather than two code panes inside the remaining narrow width. |
+| Permission/plan presentation | Focused/source verified | Current Codex structure was inspected read-only: compact elevated request surface, leading scoped action, trailing reject/primary actions and narrow stacking. Grok maps only actual ACP options and the real plan response. |
+| Interaction lifecycle | Existing focused verification retained | 0.6.18 stable request IDs, main-process pending sets, `interaction-resolved`, stale-request expiry and idempotent plan receipts remain unchanged. Real user-triggered permission/plan turns remain acceptance. |
+| Delivery | Installed locally for acceptance | 2 files/32 focused Renderer tests, TypeScript, production build, native resources, 295-file public scans, Fuses, File/Product/ASAR, shortcuts and installed main/About/diagnostics probes pass. Real permission/plan turns and dock readability remain user acceptance; no GitHub push or Release. |
+
+## v0.6.18 local interaction and Agent-change hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Permission/plan lifecycle | Focused verified | Actionable RPC requests have stable IDs and explicit resolution events; read-only plan updates cannot replace them. Successful/stale cards disappear and repeated decisions do not send another response. |
+| Message delivery | Focused/source verified | `sent` is emitted after the local CLI request is written. Queue execution cannot leave the user bubble in `sending` for the duration of the model turn. |
+| ACP file changes | Focused + official-source verified | Current nested ACP Diff blocks are parsed and preserved across streamed updates. Read/search operations are excluded from write counts; additions/deletions are exact for captured text. |
+| Non-Git Agent changes | Focused verified | `kind=edit` writes feed Last turn/Session changes and rebuild from the private projection after restart. No Git staging/commit capability is fabricated. |
+| Overflow and accounts | Source/regression verified | Plan/code/table content scrolls within its card. Account collections are counted, internally scrollable, active-first and responsive rather than expanding or squeezing the dialog. |
+| Delivery | Installed locally for acceptance | 78 files/447 offline tests passed; 5 live files/8 tests skipped by design. TypeScript, production build, 295-file public scan, diff check, formal packaging, Fuses, File/Product/ASAR, both shortcuts and installed main/About/diagnostics probes passed. Real permission/plan/model turns remain user acceptance; no GitHub push or Release. |
+
+## v0.6.17 local acceptance hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Legacy Provider TOML migration | Focused verified | A markerless Desktop-owned model table is removed by private-store model ID before one managed block is written; unrelated comments/tables survive and the result parses. |
+| Manual media configuration | Focused/source verified | Explicit image transport or video endpoint is sufficient to enter the Provider media route. “Verified” still requires an actual returned media asset and is not inferred from the model name. |
+| Media-only scan and context UX | Source/type verified | One-model media checks use only that model/current protocol. Normal scans never cross the selected Provider. Automatic context probing is absent from the normal UI; metadata/manual values remain. |
+| Media presentation | Source/regression verified | Missing cached files show an unavailable state; copy/save controls remain in layout and cannot cover the preview. Existing missing files are not fabricated or recoverable. |
+| Right-file preview | Source/regression verified | Preview content has `min-width:0`, `max-width:100%`, an internal scroller and wrap toggle, preventing long lines from being clipped behind the dock edge. |
+| Delivery | Installed locally for acceptance | 78 files/436 offline tests passed; 5 live files/8 tests skipped by design. TypeScript, production build, 295-file public scan, formal packaging, Fuses, File/Product/ASAR, both shortcuts, installed main/About/diagnostics probes and read-only main/settings/Provider-manager UI inspection passed. Real Provider/media inference remains user acceptance. No GitHub push or Release before acceptance. |
+
+## v0.6.16 local reliability and UI acceptance candidate
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Provider scan jobs | Focused verified | Main-process jobs expose progress, recovery, one-model/provider scopes and generation-isolated cancellation. A late upstream response cannot persist evidence after cancellation. |
+| Context probes | Focused/source verified | Safe metadata/lower-bound and explicitly confirmed bounded exact modes are separate. Without exact usage, only character/byte evidence is reported. Exact-limit probing is never automatic. |
+| Provider/model lifecycle | Focused verified | Enabled state migrates to true, disabled entries leave routing/defaults/CLI configuration, and a zero-model Provider can remain saved as disabled. |
+| Capability application | Source/type verified | Protocol, reasoning, context, tools, continuation, usage, media, aliases and family are presented as a selectable draft; unchecked fields are unchanged. |
+| Conversation projection | Focused verified | Visible blocks and partial assistant streams persist in a main-process append log plus atomic snapshot, merge by stable IDs with replay and survive failure/cancel/reset/reopen. Original Grok history is not rewritten. |
+| Media routing | Focused/fake-CLI verified | Auto/CLI/Provider routing and streaming-json artifact parsing are covered with fixtures. Real installed CLI/provider media generation remains a user-acceptance boundary. |
+| Open/copy/long text | Focused/source verified | Typed open targets, trusted native image actions, selectable message text and 12K draft attachments are main-process constrained. |
+| Codex-style shell | Type/build verified | Shell, composer, sidebar, top bar, media dialog and layered CSS compile in production; full multi-resolution visual acceptance remains local-user work. |
+| Delivery | Installed locally for acceptance | 78 files/432 offline tests passed; 5 live files/8 tests skipped by design. TypeScript, production build, public scan, Fuses, packaged/Portable UI, Task Scheduler, File/Product/ASAR, shortcuts and installed cold start passed. Real Provider/CLI media inference remains user acceptance. No GitHub Release before acceptance. |
+
+## v0.6.15 local Provider compatibility candidate
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Protocol translator | Focused + live verified | Main-process Chat/Responses/Messages/Gemini request and response mapping covers text, images, tools, tool results, reasoning and exact usage. Same-protocol SSE remains direct; cross-protocol SSE emits keep-alive comments while preserving ordered terminal conversion. |
+| Capability discovery | Focused + live verified | Bounded scans record per-model/per-protocol non-streaming, SSE, tool call, tool continuation, usage, returned model and accepted effort evidence. Partial rescans merge; HTTP acceptance is labelled as such and is not semantic proof. |
+| Reasoning transport | Focused + live verified | Effort enum, Anthropic adaptive, token budget, model suffix, fixed and unsupported mappings are configurable per model/upstream protocol. Grok 4.5 has a five-level exact-ID migration; unknown models remain undeclared until metadata, scan or manual input exists. |
+| Provider manager | Source/type verified | UI exposes compatibility family, per-model client/upstream protocol, timeout, effort/transport mapping, capability matrix, scan/cancel and explicit application of verified levels. Models are displayed with Provider prefixes. |
+| Local grok2api | Live verified for text/tools | Grok 4.5 passed direct three-protocol scans and a full Grok CLI ACP Responses xhigh turn. Image generation currently returns HTTP 502 and is not claimed. |
+| Remote CPA | Live verified with current route limits | Grok 4.5 passed Responses scan and xhigh ACP; Gemini passed all three protocol/tool scans and Chat ACP. The current Claude route returns HTTP 502, so Claude is not claimed available merely because `/models` lists it. |
+| Delivery | Installed locally for acceptance | Source/lock, Setup and installed File/Product/ASAR report 0.6.15. Setup/Portable/SBOM/licenses match `SHA256SUMS.txt`; Fuses, compatibility markers, both shortcuts and a four-process cold start passed. Public Latest remains 0.6.6 pending user acceptance. |
+
 ## v0.6.14 local audit-fix source candidate
 
 | Area | Status | Evidence / boundary |

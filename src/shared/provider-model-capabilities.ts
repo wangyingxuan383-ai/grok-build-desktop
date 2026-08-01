@@ -4,7 +4,9 @@ import type { ReasoningEffort } from "./types";
 export const DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS = 600;
 
 export const PROVIDER_REASONING_EFFORTS: Exclude<ReasoningEffort, "">[] = [
+  "auto",
   "xhigh",
+  "max",
   "high",
   "medium",
   "low",
@@ -13,11 +15,11 @@ export const PROVIDER_REASONING_EFFORTS: Exclude<ReasoningEffort, "">[] = [
 ];
 
 const KNOWN_REASONING_EFFORTS: Record<string, Exclude<ReasoningEffort, "">[]> = {
-  // Grok CLI's bundled model catalog declares exactly these three values for
-  // grok-4.5. CPA's OpenAI-compatible /models response exposes only the ID, so
-  // this conservative exact-ID fallback restores the same capability without
-  // guessing for unrelated or future model names.
-  "grok-4.5": ["high", "medium", "low"],
+  // Both the Responses-compatible CPA route and the locally verified
+  // grok2api route accept these five levels for grok-4.5. Keep this an
+  // exact-ID fallback: unrelated/future model names are still driven by
+  // metadata, a live capability scan or an explicit user override.
+  "grok-4.5": ["xhigh", "high", "medium", "low", "minimal"],
 };
 
 export function providerReasoningEfforts(
@@ -25,11 +27,18 @@ export function providerReasoningEfforts(
   declared?: ReasoningEffort[],
 ): Exclude<ReasoningEffort, "">[] {
   const normalized = uniqueEfforts(declared);
+  const known = KNOWN_REASONING_EFFORTS[modelId.trim().toLocaleLowerCase()];
+  // 0.6.13/0.6.14 wrote this three-level fallback into providers.json. Treat
+  // that exact legacy value as generated metadata and upgrade it when the
+  // managed TOML block is next refreshed; other explicit subsets stay intact.
+  if (known && normalized.length === 3 && ["high", "medium", "low"].every((value) => normalized.includes(value as Exclude<ReasoningEffort, "">))) {
+    return [...known];
+  }
   // `undefined` means the service did not publish capability metadata, while
   // an explicit empty array is a valid user override (for example, a gateway
   // that accepts a model ID but rejects every reasoning parameter).
   if (declared !== undefined) return normalized;
-  return [...(KNOWN_REASONING_EFFORTS[modelId.trim().toLocaleLowerCase()] ?? [])];
+  return [...(known ?? [])];
 }
 
 export function uniqueEfforts(values: ReasoningEffort[] | undefined): Exclude<ReasoningEffort, "">[] {

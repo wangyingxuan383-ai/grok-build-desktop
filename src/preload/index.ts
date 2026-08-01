@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import type { AppMenuCommand, AppSettings, Attachment, AutomationRunRecord, AutomationTask, ChatEvent, ComputerTaskState, GrokDesktopApi, LoginState, ReasoningEffort, SessionMode } from "../shared/types";
+import type { AppMenuCommand, AppSettings, Attachment, AutomationRunRecord, AutomationTask, ChatEvent, ComputerTaskState, GrokDesktopApi, LoginState, MediaGenerationJob, ProviderScanProgress, ReasoningEffort, SessionMode } from "../shared/types";
 
 const droppedAttachmentListeners = new Set<(attachments: Attachment[]) => void>();
 const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string }) => void>();
 const computerStateListeners = new Set<(state: ComputerTaskState) => void>();
 const menuCommandListeners = new Set<(command: AppMenuCommand) => void>();
 const automationEventListeners = new Set<(event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask }) => void>();
+const providerScanProgressListeners = new Set<(progress: ProviderScanProgress) => void>();
+const mediaGenerationListeners = new Set<(job: MediaGenerationJob) => void>();
 
 ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cwd: string }) => {
   for (const listener of navigateSessionListeners) listener(target);
@@ -17,6 +19,12 @@ ipcRenderer.on("grok:menu-command", (_event, command: AppMenuCommand) => {
   for (const listener of menuCommandListeners) listener(command);
 });
 ipcRenderer.on("grok:automation-event", (_event, value) => { for (const listener of automationEventListeners) listener(value); });
+ipcRenderer.on("grok:provider-scan-progress", (_event, value: ProviderScanProgress) => {
+  for (const listener of providerScanProgressListeners) listener(value);
+});
+ipcRenderer.on("grok:media-progress", (_event, value: MediaGenerationJob) => {
+  for (const listener of mediaGenerationListeners) listener(value);
+});
 
 window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("dragover", (event) => event.preventDefault());
@@ -131,6 +139,13 @@ const api: GrokDesktopApi = {
   pinSession: (id, pinned) => ipcRenderer.invoke("session:pin", id, pinned),
   exportSessionMarkdown: (cwd, id) => ipcRenderer.invoke("session:export-markdown", cwd, id),
   getMediaCapabilities: (id) => ipcRenderer.invoke("session:media-capabilities", id),
+  startMediaGeneration: (request) => ipcRenderer.invoke("media:start", request),
+  getMediaGenerationJob: (jobId) => ipcRenderer.invoke("media:get", jobId),
+  cancelMediaGeneration: (jobId) => ipcRenderer.invoke("media:cancel", jobId),
+  onMediaGenerationProgress: (listener) => {
+    mediaGenerationListeners.add(listener);
+    return () => mediaGenerationListeners.delete(listener);
+  },
   sendPrompt: (input) => ipcRenderer.invoke("session:send", input.sessionId, input.text, input.attachments, input.clientMessageId),
   getOfflineUiFixture: () => ipcRenderer.invoke("ui-fixture:get"),
   enqueuePrompt: (sessionId, text, attachments, clientMessageId) => ipcRenderer.invoke("session:enqueue", sessionId, text, attachments, clientMessageId),
@@ -160,6 +175,9 @@ const api: GrokDesktopApi = {
   pickAttachmentFolders: () => ipcRenderer.invoke("attachments:pick-folders"),
   attachmentsFromPaths: (paths) => ipcRenderer.invoke("attachments:paths", paths),
   openPath: (path) => ipcRenderer.invoke("system:open-path", path),
+  openTarget: (intent) => ipcRenderer.invoke("system:open-target", intent),
+  copyImage: (source) => ipcRenderer.invoke("system:copy-image", source),
+  saveImage: (source) => ipcRenderer.invoke("system:save-image", source),
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),
@@ -191,6 +209,19 @@ const api: GrokDesktopApi = {
   pullProviderModels: (id) => ipcRenderer.invoke("providers:pull-models", id),
   probeProviderDraft: (input) => ipcRenderer.invoke("providers:probe-draft", input),
   discoverProviderModels: (input) => ipcRenderer.invoke("providers:discover-models", input),
+  getProviderCapabilities: (id) => ipcRenderer.invoke("providers:capabilities", id),
+  startProviderScan: (scope) => ipcRenderer.invoke("providers:scan:start", scope),
+  getProviderScanJob: (jobId) => ipcRenderer.invoke("providers:scan:get", jobId),
+  listProviderScanJobs: (providerId) => ipcRenderer.invoke("providers:scan:list", providerId),
+  cancelProviderScan: (jobId) => ipcRenderer.invoke("providers:scan:cancel", jobId),
+  onProviderScanProgress: (listener) => {
+    providerScanProgressListeners.add(listener);
+    return () => providerScanProgressListeners.delete(listener);
+  },
+  deepScanProvider: (id, options) => ipcRenderer.invoke("providers:deep-scan", id, options),
+  cancelProviderDeepScan: (id) => ipcRenderer.invoke("providers:cancel-scan", id),
+  getProviderCapabilityApplication: (id) => ipcRenderer.invoke("providers:capabilities:application", id),
+  applyProviderCapabilities: (id, selection) => ipcRenderer.invoke("providers:apply-capabilities", id, selection),
   setProviderDesktopDefault: (modelId) => ipcRenderer.invoke("providers:set-desktop-default", modelId),
   setProviderCliDefault: (modelId) => ipcRenderer.invoke("providers:set-cli-default", modelId),
   reloadProviders: () => ipcRenderer.invoke("providers:reload"),
@@ -209,8 +240,11 @@ const api: GrokDesktopApi = {
   checkAutomationHealth: (repair) => ipcRenderer.invoke(repair ? "automations:health:repair" : "automations:health:check"),
   clearAutomationContext: (id) => ipcRenderer.invoke("automations:clear-context", id),
   getDraft: (key) => ipcRenderer.invoke("draft:get", key),
-  setDraft: (key, text, capability) => ipcRenderer.invoke("draft:set", key, text, capability),
+  setDraft: (key, text, capability, attachments) => ipcRenderer.invoke("draft:set", key, text, capability, attachments),
   clearDraft: (key) => ipcRenderer.invoke("draft:clear", key),
+  createTextDraftAttachment: (key, text) => ipcRenderer.invoke("draft:text:create", key, text),
+  readTextDraftAttachment: (path) => ipcRenderer.invoke("draft:text:read", path),
+  deleteTextDraftAttachment: (path) => ipcRenderer.invoke("draft:text:delete", path),
   listPromptHistory: (cwd) => ipcRenderer.invoke("prompt-history:list", cwd),
   appendPromptHistory: (cwd, text) => ipcRenderer.invoke("prompt-history:append", cwd, text),
   listPlugins: (force) => ipcRenderer.invoke("extensions:plugins:list", force),

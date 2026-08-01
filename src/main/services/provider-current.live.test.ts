@@ -47,13 +47,14 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
     await mkdir(grokHome, { recursive: true });
     await mkdir(workspace, { recursive: true });
     const log = new LogService(join(root, "provider-probe.log"));
-    const protocol = process.env.GROK_CURRENT_PROVIDER_PROTOCOL === "responses"
-      ? "responses"
+    const requestedProtocol = process.env.GROK_CURRENT_PROVIDER_PROTOCOL;
+    const protocol = requestedProtocol === "responses" || requestedProtocol === "chat_completions" || requestedProtocol === "messages"
+      ? requestedProtocol
       : model.protocol ?? provider.protocol;
     const effectiveProvider: CustomProviderProfile = {
       ...provider,
       protocol,
-      upstreamProtocol: protocol === "responses" ? "openai_responses" : provider.upstreamProtocol,
+      upstreamProtocol: protocol === "responses" ? "openai_responses" : protocol === "messages" ? "anthropic_messages" : "openai_chat",
       credentialMode: allowLoopbackWithoutCredential ? "none" : provider.credentialMode,
     };
     const reasoningEfforts = providerReasoningEfforts(model.model, model.reasoningEfforts);
@@ -62,7 +63,7 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
       environment: async (name) => userEnvironment.readFresh ? userEnvironment.readFresh(name) : userEnvironment.read(name),
       fetcher: fetch,
       log,
-      requestTimeoutMs: 120_000,
+      requestTimeoutMs: 360_000,
     });
     const localBaseEnv = "GROK_DESKTOP_CURRENT_PROVIDER_BASE_URL";
     const route = await gateway.route(provider.id);
@@ -94,7 +95,7 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
     if (!cliPath) throw new Error("installed Grok CLI was not found");
     const providerHeaderEnvironment = Object.fromEntries(await Promise.all(Object.values(provider.extraHeaders ?? {}).map(async (name) => [name, await userEnvironment.read(name)] as const)));
     const requestedInitialEffort = process.env.GROK_CURRENT_PROVIDER_INITIAL_EFFORT;
-    const initialEffort: ReasoningEffort = requestedInitialEffort && ["none", "minimal", "low", "medium", "high", "xhigh"].includes(requestedInitialEffort)
+    const initialEffort: ReasoningEffort = requestedInitialEffort && ["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(requestedInitialEffort)
       ? requestedInitialEffort as ReasoningEffort
       : "";
     const adapter = new GrokAcpAdapter({
@@ -122,16 +123,16 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
         });
       }
       const nextEffort = process.env.GROK_CURRENT_PROVIDER_SWITCH_EFFORT;
-      if (nextEffort === "none" || nextEffort === "minimal" || nextEffort === "low" || nextEffort === "medium" || nextEffort === "high" || nextEffort === "xhigh") {
+      if (nextEffort === "auto" || nextEffort === "none" || nextEffort === "minimal" || nextEffort === "low" || nextEffort === "medium" || nextEffort === "high" || nextEffort === "xhigh" || nextEffort === "max") {
         await adapter.setEffort(nextEffort);
         expect(adapter.effort).toBe(nextEffort);
       }
       await adapter.prompt("Reply with exactly OK.");
-      expect(await log.read()).toMatch(/Provider gateway request \w+ completed status=2\d\d/);
+      expect(gateway.recentObservations(provider.id).some((value) => (value.status ?? 0) >= 200 && (value.status ?? 0) < 300)).toBe(true);
       expect(adapter.currentModelId).toBe("grok-desktop-current-provider-probe");
     } finally {
       await adapter.dispose();
       await gateway.dispose();
     }
-  }, 180_000);
+  }, 420_000);
 });

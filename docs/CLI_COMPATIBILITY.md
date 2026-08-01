@@ -1,5 +1,55 @@
 # Grok CLI Compatibility
 
+## 0.2.117 media transport and interject note (Desktop 0.6.22)
+
+- `grok --single --session-id <UUID>` stores relative media artifacts below that transient Grok session rather than necessarily below the execution `cwd`. Desktop now treats only that exact transient session directory as an additional job root, copies validated assets into its conversation cache, and removes the temporary session afterward.
+- Zero Data Retention video generation currently fails in the installed CLI tool when the team requires `output.upload_url`; this is an upstream team/API contract, not content moderation. Desktop preserves the first error and stops retrying, but cannot claim CLI video support for that team without a non-ZDR team or a Provider path that implements the upload callback.
+- `x.ai/interject` does not create a second Desktop ACP process. It submits a high-priority follow-up in the same session. Queue notifications may omit a state, so Desktop preserves its locally accepted `interjected` state, makes it non-removable, and creates a separate presentation turn when `runningPromptId` announces execution.
+
+## 0.2.117 concurrent-conversation note (Desktop 0.6.21)
+
+- No new ACP method is required. Each Desktop conversation continues to own an independent Grok CLI ACP process; the change removes a Renderer-global Promise lock that incorrectly serialized otherwise independent adapters.
+- `session:send` still resolves at terminal turn completion. Desktop now treats the existing session-scoped `status=working` event as request acceptance, allowing queue/interject operations while preserving the original in-flight request and its errors.
+- The process manager retains up to eight resident adapters and only reaps idle, non-focused sessions. Working and permission-waiting conversations are not evicted by the cap or the idle reaper.
+
+## 0.2.117 media-session and Plan read-only note (Desktop 0.6.20)
+
+- No new private ACP method is required. Plan mode answers the existing `session/request_permission` only for ACP kinds `read`, `search`, `fetch`, `think`, or an `execute` command accepted by Desktop's bounded read-only gate. Mutating and unknown requests are not auto-approved.
+- Fixed CLI media invocation now adds the public `--session-id <UUID>` option to `--single`. The temporary CLI session is deleted after concrete artifacts have been validated and copied to Desktop's per-conversation media cache, preventing the headless task from becoming a normal sidebar conversation.
+- Relative streaming-json artifacts such as `images/1.jpg` are resolved against the actual execution `cwd`; canonical workspace validation is still performed before the file is copied.
+
+## 0.2.117 approval presentation note (Desktop 0.6.19)
+
+- No ACP or private-method change. Permission buttons are still generated from the CLI-provided `options`, and interactive plans still answer the original `x.ai/exit_plan_mode` request exactly once.
+- Unified Agent Diff and compact Codex-style decision surfaces are Renderer presentation changes. Successful decisions continue to be removed only after the existing main-process response write and `interaction-resolved` event; restored process-local IDs remain expired.
+
+## 0.2.117 interaction and ACP Diff note (Desktop 0.6.18)
+
+- Installed CLI `0.2.117 (f1c0609308)` still uses the existing permission/question/`x.ai/exit_plan_mode` request-response boundary. Desktop adds no private method; it now keeps read-only plan notifications separate from the actionable JSON-RPC request and expires process-local request IDs after transport rebuild.
+- The current open-source Grok Build ACP conversion emits file edits as `ToolCallContent::Diff` with a path, new text and optional old text. Desktop consumes the wire `content` block directly, preserves it across sparse streamed updates and calculates presentation-only line statistics.
+- Non-Git Agent changes remain a Desktop projection of ACP tool writes. Git-only staging, commit and branch operations are not synthesized when the workspace is not a repository.
+
+## 0.2.112 Provider/media hotfix note (Desktop 0.6.17)
+
+- No ACP or CLI wire method changes. The hotfix only reconciles Desktop-owned legacy TOML model tables before emitting one current managed block.
+- Explicit Provider media configuration may be used without scan evidence, but success still requires a concrete validated image/video asset. A model name or an asynchronous job ID is never treated as generated media.
+- The normal Provider manager no longer launches automatic context-limit probes. Context values come from model-list metadata or explicit user input; the existing bounded main-process probe implementation is not part of the normal UI path.
+- The per-model media-only scan uses that model's current protocol and does not scan other models or Providers.
+
+## 0.2.112 projection/media note (Desktop 0.6.16)
+
+- Desktop 0.6.16 adds no required ACP method or private CLI wire contract. Conversation projection is local presentation persistence and never rewrites the original Grok session history.
+- Fixed CLI media invocation uses `grok --single <prompt> --output-format streaming-json --always-approve --tools <fixed allow-list>`, where the allow-list is limited to `image_gen`, `video_gen`, `image_to_video` and `reference_to_video` for the selected media operation.
+- A CLI media run is successful only when streaming JSON yields a concrete validated file or URL artifact. Command availability or a model name alone is not treated as media capability evidence.
+- Context metadata and bounded lower-bound probes are compatibility evidence only. Exact context-limit probing is explicit, single-model and user-bounded; it is not part of automatic compatibility detection.
+
+## 0.2.112 Provider translation note (Desktop 0.6.15 locally installed candidate)
+
+- The ACP method boundary is unchanged. Desktop-spawned custom models still use ordinary CLI model configuration and the existing confirmed private effort switch; filesystem, credentials, network and translation remain in the Electron main process.
+- The loopback gateway can now translate Chat Completions, Responses, Anthropic Messages and Gemini GenerateContent. Same-protocol SSE is streamed directly. Cross-protocol SSE sends legal comments during bounded ordered conversion so it does not create a silent idle interval.
+- Model effort vocabulary comes from CLI/upstream metadata, an explicit model setting or a live capability scan. Exact `grok-4.5` migrates the old generated three-level value to five locally verified selectable values; unknown/future models are not assigned a guessed universal list.
+- Current controlled live evidence: local grok2api Grok 4.5 completed a Responses xhigh ACP turn; remote CPA Grok 4.5 completed a Responses xhigh ACP turn; remote CPA Gemini completed a Chat ACP turn after strict Schema cleanup. Current CPA Claude and local image generation return HTTP 502 and remain unavailable boundaries.
+
 ## 0.2.112 audit-fix note (Desktop 0.6.14 source candidate)
 
 - The CLI/ACP method boundary is unchanged. The Desktop gateway keeps body-free terminal observations for successful and failed same-protocol routes so a CLI-side parser failure after HTTP 200 can still be attributed without exposing request/response bodies.
@@ -79,11 +129,13 @@ Local app `0.6.3` changes Windows task decoding and application navigation only.
 
 Local app `0.6.5` keeps the Renderer/ACP trust boundary unchanged. The Provider compatibility gateway is a main-process loopback transport override for Desktop-spawned CLI sessions; direct command-line use continues to see the configured upstream environment value. The isolated 0.2.112 probe completed `initialize`, `session/new` and a local-only Prompt through `${ENV}` `base_url`. The separately authorized current-Provider probe sent one minimal Prompt and recorded only the Schema-change count, status path and timing—not the credential or request/response bodies.
 
-Local app `0.6.6` does not widen that CLI requirement. It consumes an optional private retry lifecycle only when present and otherwise degrades to the existing working status; standard ACP cancel is used for an expired Prompt budget. Provider routing remains same-protocol, loopback-only and process-scoped. The planned Chat/Responses/Anthropic/Gemini translator matrix is not claimed in this release.
+Local app `0.6.6` does not widen that CLI requirement. It consumes an optional private retry lifecycle only when present and otherwise degrades to the existing working status; standard ACP cancel is used for an expired Prompt budget. Provider routing in that public release remains same-protocol, loopback-only and process-scoped.
 
 Local app `0.6.9` keeps the same protocol and CLI boundary. Authentication at the loopback edge is now authoritative: CLI-supplied bearer/API-key values are removed and only the selected Provider's main-process environment values are sent upstream. This prevents CLI xAI auth recovery from replacing a valid custom-Provider credential.
 
 Local app `0.6.10` keeps effort switching on the already documented private `session/set_model` extension and requires its `model_changed` confirmation. Capability selection is model-scoped: declared upstream metadata or an explicit user list wins, exact `grok-4.5` receives the installed CLI catalog's high/medium/low only as a missing-metadata suggestion, an explicit empty list remains empty, and unknown future models remain undeclared. The current CPA profile uses a manual five-value list and a Responses override only on its Grok 4.5 model; this is ordinary persisted Provider configuration rather than a host-specific branch.
+
+Local app `0.6.15` keeps the same ACP and effort-confirmation boundary while adding a main-process protocol translator and capability evidence store. A scan proves request/response behavior only for the tested Provider/model/protocol at that time; accepted effort parameters are not presented as proof of hidden upstream reasoning semantics.
 
 ## Private effort extension
 

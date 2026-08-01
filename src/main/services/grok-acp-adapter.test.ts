@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, resolveModelId } from "./grok-acp-adapter";
+import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, extractAcpToolDiff, normalizePromptQueue, resolveModelId } from "./grok-acp-adapter";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
@@ -63,5 +63,25 @@ describe("Grok ACP process arguments", () => {
     const pending = demuxProviderThinkingText({ pending: "", thought: false }, partial);
     expect(pending.chunks).toEqual([]);
     expect(demuxProviderThinkingText(pending.state, "", true).chunks).toEqual([{ role: "assistant", text: partial }]);
+  });
+
+  it("normalizes the nested ACP diff block used by current Grok Build", () => {
+    expect(extractAcpToolDiff({
+      kind: "edit",
+      content: [{ type: "diff", path: "C:\\work\\app.ts", oldText: "a\nb", newText: "a\nc\nd" }],
+    })).toEqual({ path: "C:\\work\\app.ts", oldText: "a\nb", newText: "a\nc\nd", additions: 2, deletions: 1 });
+  });
+
+  it("does not downgrade an accepted interjection to a removable queued item when the CLI omits state", () => {
+    const previous = [{
+      id: "interjection-1",
+      sessionId: "session-1",
+      clientMessageId: "message-1",
+      text: "安装 Docker",
+      position: 0,
+      createdAt: "2026-08-01T00:00:00.000Z",
+      state: "interjected" as const,
+    }];
+    expect(normalizePromptQueue([{ id: "interjection-1", text: "安装 Docker", position: 0 }], "session-1", previous)[0]?.state).toBe("interjected");
   });
 });

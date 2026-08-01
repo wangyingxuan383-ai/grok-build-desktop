@@ -61,4 +61,61 @@ describe("attachment cache", () => {
     const service = new AttachmentCacheService(userData);
     await expect(service.prepare("session", [{ id: "large", name: "large.png", kind: "image", mimeType: "image/png", path: source, size: oversized.length }])).rejects.toThrow("超过 20 MiB");
   });
+
+  it("copies a picked image into the trusted session cache so the message survives source removal", async () => {
+    const userData = await root();
+    const source = join(userData, "picked.png");
+    await writeFile(source, PNG);
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("picked-session", [{
+      id: "picked-image",
+      name: "picked.png",
+      kind: "image",
+      mimeType: "image/png",
+      path: source,
+      size: PNG.length,
+    }]);
+    expect(prepared.attachments[0]?.path).not.toBe(source);
+    expect(relative(join(userData, "session-attachments"), prepared.attachments[0]!.path!)).not.toMatch(/^\.\./);
+    await rm(source);
+    expect(await readFile(prepared.attachments[0]!.path!)).toEqual(PNG);
+  });
+
+  it("materializes a long pasted UTF-8 text draft exactly once as a txt attachment", async () => {
+    const userData = await root();
+    const service = new AttachmentCacheService(userData);
+    const text = "长文本🙂".repeat(3_000);
+    const prepared = await service.prepare("text-session", [{
+      id: "long-text",
+      name: "pasted-text.txt",
+      kind: "file",
+      mimeType: "text/plain; charset=utf-8",
+      size: Buffer.byteLength(text),
+      data: Buffer.from(text).toString("base64"),
+    }]);
+    expect(prepared.attachments[0]).toMatchObject({ kind: "file", data: undefined, mimeType: "text/plain" });
+    expect(await readFile(prepared.attachments[0]!.path!, "utf8")).toBe(text);
+    expect(prepared.previews[0]).toMatchObject({ kind: "file", availability: "ready" });
+  });
+
+  it("copies a path-backed composer text draft before the source draft is cleared", async () => {
+    const userData = await root();
+    const source = join(userData, "composer-draft.txt");
+    const text = "持久化长文本".repeat(2_000);
+    await writeFile(source, text, "utf8");
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("text-session", [{
+      id: "path-text",
+      name: "pasted-text.txt",
+      kind: "file",
+      mimeType: "text/plain; charset=utf-8",
+      size: Buffer.byteLength(text),
+      path: source,
+      draftText: true,
+    }]);
+    expect(prepared.attachments[0]?.path).not.toBe(source);
+    await rm(source);
+    expect(await readFile(prepared.attachments[0]!.path!, "utf8")).toBe(text);
+    expect(prepared.previews[0]).toMatchObject({ availability: "ready", isData: false });
+  });
 });

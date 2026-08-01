@@ -137,7 +137,9 @@ rl.on("line", async (line) => {
       await waitForFile(queueInterjectMarker);
       expect(JSON.parse(await readFile(queueInterjectMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/interject", params: { sessionId: "fake-session", id: queued._meta.promptId, expectedVersion: 2 } });
       const interjectReceipt = await adapter.interjectPrompt("same turn");
-      expect(interjectReceipt).toMatchObject({ state: "interjected", message: "插话已提交到当前回合" });
+      expect(interjectReceipt).toMatchObject({ state: "interjected" });
+      expect(interjectReceipt.message).toContain("同一会话的下一回合");
+      expect(interjectReceipt.message).toContain("不能撤回");
       await waitForFile(interjectMarker);
       expect(JSON.parse(await readFile(interjectMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", text: "same turn", interjectionId: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
       expect(await adapter.fork("3")).toMatchObject({ newSessionId: "forked-session" });

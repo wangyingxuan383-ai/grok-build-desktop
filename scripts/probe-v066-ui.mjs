@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+
 const endpoint = process.argv[2];
 if (!endpoint) throw new Error("Usage: node scripts/probe-v066-ui.mjs <cdp-endpoint>");
+const expectedVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(120); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
 const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer unavailable");
@@ -31,19 +34,46 @@ async function scrollToFind(selector, message, steps = 40) {
   }
   if (!(await present())) throw new Error(message);
 }
+async function collectVirtualizedText(selector, steps = 40) {
+  const scroller = "document.querySelector('.conversation')";
+  const values = new Set();
+  await evaluate(`(() => { const s=${scroller}; if (s) s.scrollTop = 0; return true; })()`);
+  await sleep(300);
+  for (let step = 0; step < steps; step += 1) {
+    const mounted = await evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).map((node) => node.textContent || '')`);
+    for (const value of mounted || []) values.add(value);
+    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); return s.scrollTop === before; })()`);
+    await sleep(220);
+    if (atEnd) break;
+  }
+  return [...values].join('\n');
+}
+async function scrollToFindText(selector, text, message, steps = 40) {
+  const scroller = "document.querySelector('.conversation')";
+  const present = () => callFunction("function (selector, text) { return Array.from(document.querySelectorAll(selector)).some((node) => (node.textContent || '').includes(text)); }", selector, text);
+  await evaluate(`(() => { const s=${scroller}; if (s) s.scrollTop = 0; return true; })()`);
+  await sleep(300);
+  for (let step = 0; step < steps; step += 1) {
+    if (await present()) return;
+    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); return s.scrollTop === before; })()`);
+    await sleep(220);
+    if (atEnd) break;
+  }
+  throw new Error(message);
+}
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))"), "Application shell did not render");
   await sleep(700);
   const initial = await evaluate(`({ version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(), composer: Boolean(document.querySelector('.composer')), turns: document.querySelectorAll('.chat-turn').length, environmentBars: document.querySelectorAll('.environment-bar').length })`);
-  if (initial.version !== "0.6.6" || !initial.composer || initial.turns < 1 || initial.environmentBars) throw new Error(`0.6.6 shell mismatch: ${JSON.stringify(initial)}`);
-  const turnMetrics = await evaluate(`Array.from(document.querySelectorAll('.turn-metrics')).map((node) => node.textContent).join('\\n')`);
+  if (initial.version !== expectedVersion || !initial.composer || initial.turns < 1 || initial.environmentBars) throw new Error(`Shell mismatch for ${expectedVersion}: ${JSON.stringify(initial)}`);
+  const turnMetrics = await collectVirtualizedText('.turn-metrics');
   if (!turnMetrics.includes("1分23秒") || !turnMetrics.includes("输入 120") || !turnMetrics.includes("输出 30")) throw new Error(`Turn metrics mismatch: ${turnMetrics}`);
   // The conversation is a virtualized list, so a card outside the restored
   // viewport is simply not mounted. Walk the scroller instead of asserting on
   // whatever happens to be on screen.
-  await scrollToFind(".structured-error", "Structured provider error did not render");
-  const errorCard = await evaluate(`(() => { const node=document.querySelector('.structured-error'); return { open: node?.open, summary: node?.querySelector('summary')?.textContent || '', detail: node?.querySelector('.error-detail')?.textContent || '' }; })()`);
+  await scrollToFindText(".structured-error", "fixture-provider", "Structured provider error did not render");
+  const errorCard = await evaluate(`(() => { const node=Array.from(document.querySelectorAll('.structured-error')).find((candidate) => (candidate.textContent || '').includes('fixture-provider')); return { open: node?.open, summary: node?.querySelector('summary')?.textContent || '', detail: node?.querySelector('.error-detail')?.textContent || '' }; })()`);
   // The summary is now built from the classified failure, not from parsing
   // prose that only the fixture ever produced.
   if (errorCard.open || !errorCard.summary.includes("工具 Schema 被拒绝") || !errorCard.summary.includes("HTTP 400") || !errorCard.summary.includes("Provider fixture-provider")) throw new Error(`Structured error mismatch: ${JSON.stringify(errorCard)}`);
@@ -141,4 +171,3 @@ try {
 
   console.log(JSON.stringify({ ok: true, version: initial.version, navigation: "dashboard→chat→file→chat→tasks→chat", rightTools: launcher.length, recentFilePreview: true, nonGitReview: "empty-state", agentChanges: "real-writes-no-git-actions", structuredError: "collapsed-with-details", turnMetrics: true, tokenActivityDays: tokenUi.cells, updateActions: 4, diagnosticsNavigation: true, responsiveComposer: true, narrowDrawerVisible: true, providerManager: true }, null, 2));
 } finally { socket.close(); }
-

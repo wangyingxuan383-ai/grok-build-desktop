@@ -1,4 +1,4 @@
-name: Draft Release
+name: 正式发布
 
 on:
   push:
@@ -62,12 +62,14 @@ jobs:
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
           subject-path: release/Grok-Build-Desktop-Portable-*.zip
-      - name: Create draft release
+      - name: 创建中文草稿 Release
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" --draft --verify-tag --title "Grok Build Desktop ${{ github.ref_name }}" --notes-file CHANGELOG.md `
+          $notesPath = "docs/releases/${{ github.ref_name }}.md"
+          if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) { throw "缺少当前版本的中文发布说明：$notesPath" }
+          gh release create "${{ github.ref_name }}" --draft --verify-tag --title "Grok Build Desktop ${{ github.ref_name }}｜正式版" --notes-file $notesPath `
             release/Grok-Build-Desktop-Setup-*.exe `
             release/Grok-Build-Desktop-Portable-*.zip `
             release/SHA256SUMS.txt `
@@ -114,7 +116,7 @@ jobs:
           $portable = Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1
           gh attestation verify $setup.FullName --repo "${{ github.repository }}"
           gh attestation verify $portable.FullName --repo "${{ github.repository }}"
-      - name: Publish verified release as Latest
+      - name: 校验后发布为 Latest
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}

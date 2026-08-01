@@ -1,6 +1,44 @@
-# Grok Build Desktop 下一会话完整交接（2026-07-30，0.6.14 审计修复候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-01，0.6.22 媒体与插话热修）
 
-> 当前工作分支为 `codex/v0.6.14-audit-fixes`。公开 Latest 仍是 **0.6.6**；0.6.7–0.6.13 是本地候选历史，0.6.14 目前只做源码与离线修复。用户明确说明当前默认模型依赖的本地上游没有运行，暂不做该 P1 或真实 Provider 验收，也不创建正式 Release。
+> **0.6.22 当前工作状态：** 用户在 0.6.21 验收中再次看到“图片文件不可用”、媒体任务误报工作区外、ZDR 视频错误和插话状态紊乱。只读核验确认生成图片文件仍存在，破图来自 sandboxed Renderer 被 Chromium 拒绝加载 `file://`；无头媒体的实际相对产物属于显式 `--session-id` 的临时 Grok 会话，旧缓存边界只信任 cwd；视频失败是团队启用 Zero Data Retention 后 API 强制要求 `output.upload_url`，当前 CLI 工具没有该参数；插话不是独立 Agent，而是同一 ACP 会话的已提交高优先级后续回合，旧适配器没有给它建立本地队列/turn 边界，叉号只删除了错误的本地表现，不能撤回已接受请求。源码已增加受限 `grok-media:` 协议、精确临时会话信任根、首次媒体失败即停止和 ZDR 分类；插话提交后标为不可撤回，在上一回合收束后建立独立 turn/user-message/status，迟到的上一回合 Promise 不会结算新回合。最终 80 文件/465 项离线测试通过，5 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、Computer Host 自检、299 文件源码/资产扫描、diff check、Fuses、打包版/Portable UI、任务调度、安装版主进程/About/诊断/File/Product/快捷方式均通过。现有历史图在安装版 `grok-media:` 中实际解码为 1024x1024。0.6.22 已 per-user 安装并打开；没有发送新的图片/视频或付费模型请求，真实新媒体和插话顺序交给用户验收，验收前不推送、不创建 GitHub Release。
+
+> 当前工作分支仍为 `codex/v0.6.14-audit-fixes`，源码/lockfile 与 per-user 安装版均为 **0.6.22**。公开 Latest 仍是 **0.6.6**，旧本地资产全部保留；用户验收前不推送、不创建 Release。
+
+> **0.6.22 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.22-x64.exe` SHA-256 `509899d6f9836e1a5f33966a2736442b0b796d9cdc3b624decfaddca17b32da0`；`release/Grok-Build-Desktop-Portable-v0.6.22-x64.zip` SHA-256 `f764ee0fb49f37f1c8fc97671d3c72e7b918ffcdf581be6920036d564f2f590b`；SBOM SHA-256 `68c2d0b4904492070f20e108605484bda923603c8a3fb0488c81f713296bb130`；许可证报告 SHA-256 `bb132d306dfff20fb1274bf7b1b13d41e1556e04cf5f89f9e00f81b044266a9f`。四项与 `release/SHA256SUMS.txt` 一致；旧资产保留。
+
+> **0.6.21 当前工作状态：** 用户在 0.6.20 验收中指出只能同时运行一个会话。主进程 `GrokProcessManager` 实际已经按会话保存独立 `GrokAcpAdapter`，最多保留 8 个，运行/等待会话不会被回收；真正限制来自 Renderer 的单个全局 `sending`：`session:send` Promise 等到整个模型回合结束，期间切换到任何任务都会禁用 Composer，也让本会话的排队/插话形同不可用。源码已改为会话/新建草稿键级提交状态，收到该会话第一条 `working` 即结算传输锁；后台失败只恢复自己的持久草稿，不覆盖当前任务的 Composer、附件、焦点或滚动。左栏加入逐会话状态文字和项目活动任务数量。聚焦 4 文件/51 项及完整 80 文件/462 项离线测试、TypeScript、生产/资源构建、Computer Host 自检、299 文件公开扫描、diff check、Fuses、正式资产与安装版主进程/About/诊断/快捷方式检查已通过；5 个 live 文件/8 项按设计跳过。0.6.21 已 per-user 安装并打开，真实双会话并行留给用户验收；不推送、不创建 GitHub Release。
+
+> **0.6.20 当前工作状态：** 用户在 0.6.19 验收中复现 CLI 生图返回 `images/1.jpg` 后被误判为工作区外、图片卡不可用、媒体任务另开会话、多图纵向占用过大、运行中回合误报“没有可见正文”、Composer 回执无法关闭，以及 Plan 只读过程持续询问权限。根因已分别定位为媒体路径表达式允许零点前缀并截断到 `/1.jpg`、Renderer 在活动会话为 working/needs-user 时主动放弃原会话、`grok --single` 默认持久化无头会话、媒体卡未聚合、TurnCard 未区分 live/terminal、回执无生命周期，以及 Plan 权限层未识别 ACP 安全只读工具。源码已修复：普通相对路径保持在真实 cwd；媒体复用当前 Grok 会话并用临时 UUID 隔离/清理 CLI 会话；结果四项折叠双列画廊；live 无正文文案与终态分离；提示可关闭且 5 秒自动消失；Plan 默认一次允许明确只读工具/查询命令，写操作和未知工具仍不放行。最终 79 文件/457 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、297 文件公开扫描、diff check、Fuses、正式资产与安装版探针通过。0.6.20 已 per-user 安装并打开供验收；没有发送媒体/付费请求，没有推送 GitHub 或创建 Release。
+
+> **0.6.19 当前工作状态：** 用户在 0.6.18 验收中确认右侧 `Agent 改动` 虽已有真实文件与增删行，但窄 Dock 仍显示不可读的左右并排 Monaco Diff；同时指出权限/计划仍不像 Codex。Renderer 已改为默认 unified Diff、自动换行、紧凑文件操作和 620px 容器级响应式布局。权限/计划按本机当前 Codex 安装包的只读结构核对改为临时抬升决策面：作用域操作在左、拒绝和主操作在右、窄容器堆叠；可选计划说明默认收起。0.6.18 的一次请求、提交成功立即移除和陈旧请求收起语义保持不变。聚焦 Renderer 2 文件/32 项、TypeScript、生产构建、native resources、295 文件公开扫描、Fuses 与资产扫描通过；唯一一次 0.6.19 正式打包、per-user 安装、File/Product/ASAR、快捷方式及安装版主进程/About/诊断夹具通过。应用已打开交给用户实机权限/计划验收。未推送 GitHub，未创建 Release。
+
+> **0.6.18 当前工作状态：** 用户在 0.6.17 验收中复现的权限/计划卡不消失、陈旧计划响应报错、长代码裁切、真实文件写入无增删行且非 Git Agent 改动为空、消息“发送中”不结算及多账号拥挤风险已修复。只读计划通知不再覆盖可响应 RPC；决策成功发出 `interaction-resolved`；CLI stdin 写入即结算消息；当前 Grok Build ACP 的嵌套 `ToolCallContent::Diff` 被正确解析、持久化和恢复；真实写入才计入文件改动。最终门槛为 78 文件/447 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建、295 文件公开扫描、diff check、正式打包、Fuses 和安装版探针通过。0.6.18 已 per-user 安装并打开供用户验收；未发送付费提示词，未推送 GitHub，未创建 Release。
+
+> **CLI/接口结论：** 本机 CLI 已是 `0.2.117 (f1c0609308)`。官方开源 Grok Build 的 ACP 转换确实把 Search/Replace 编辑发布为 Diff 内容，包含路径、新文本和可选旧文本；之前空白不是 CLI 没开放接口，而是 Desktop 只读取了非标准顶层字段且没有接受当前 `kind="edit"`。非 Git 改动仍不伪造 staged/commit/branch。
+
+> **0.6.17 当前工作状态：** 用户在 0.6.16 验收中复现了历史生成图破图/悬浮操作遮挡、右栏文件预览越界、手工 Gemini 图片传输保存时 TOML 重复表失败，以及上下文探测慢且无实际价值。工作树已修复旧无标记 Desktop 模型表迁移、显式媒体配置无需扫描、单模型媒体快速检测、图片不可用回退/内联操作和文件预览换行边界；普通 UI 已移除自动上下文探测。最终源码门槛为 78 文件/436 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建、295 文件公开扫描与 diff check 通过。唯一一次正式打包、per-user 安装、File/Product/ASAR/Fuses/快捷方式、安装版主进程/About/诊断探针及只读 Computer Use 主界面/设置/Provider 管理界面检查均已通过；应用保持打开供用户验收。
+
+> **重要纠正：** 0.6.16 所称“UI 重构”主要完成了组件/样式分层和可靠性基础，视觉变化不足，用户的批评成立。0.6.17 只完成本次已复现的可见热修，不将其夸大为整体 Codex 视觉重做。用户验收前仍不推送、不创建 GitHub Release，并保留 0.6.15/0.6.16 资产。
+
+> 当前工作分支为 `codex/v0.6.14-audit-fixes`，源码/lockfile 与 per-user 安装版均为 **0.6.22**。公开 Latest 仍是 **0.6.6**，0.6.15–0.6.21 本地资产已保留。用户验收前不推送、不创建正式 Release、不覆盖旧资产。
+
+> **0.6.21 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.21-x64.exe` SHA-256 `1cbcab6028a1f80da889c0ade45afe4e2be31aa4a24756091abaf35a1cf9d566`；`release/Grok-Build-Desktop-Portable-v0.6.21-x64.zip` SHA-256 `705804618834e8a9d223e047c49983a5423e1e94d8719697c16d988cbe0ff6e2`；SBOM SHA-256 `e6da6af4ab4e619cf9c593f38c1c5849e8d50bb732bb89908af1efe084c99f95`；许可证报告 SHA-256 `a069226c1c5fb645aa3ac4a34c445bacb70d7eb41704cfbe7006894fabd6a4e6`。四项与 `release/SHA256SUMS.txt` 一致；旧版本资产保留。
+
+> **0.6.20 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.20-x64.exe` SHA-256 `d9e6cb8112ac57650f510614019c2fcbf6e5768282b9f3f89774ff9ae9506e26`；`release/Grok-Build-Desktop-Portable-v0.6.20-x64.zip` SHA-256 `2c6c88afa1b12a279c33d1f796d80773c4beab449ff4571ca433c8b4b3becdc5`；SBOM SHA-256 `a67a3820e87da1a4a97bd8ba054301a85e698081b44b761dc8f0a6152c691773`；许可证报告 SHA-256 `bfd207e11936e3ca0379187c5593a3405886750fe2afaa5befb47b5e973bb8db`。四项与 `release/SHA256SUMS.txt` 一致；0.6.15–0.6.19 资产保留。
+
+> **0.6.19 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.19-x64.exe` SHA-256 `704f6f7800bed7a3b85613a7cbe056edef420051f3c318c9b8c912481d56f114`；`release/Grok-Build-Desktop-Portable-v0.6.19-x64.zip` SHA-256 `f247e8db88c8f18ae91991f8e04321b3ad91eababc76975a30bae21ea08cf9b5`；SBOM SHA-256 `39826d4bdb70ea1048057685ec14bb2cb0e7ad70aa7a4d925e3ee6219cf4ace1`；许可证报告 SHA-256 `8b9a103b47d318eee02349ad396dc7e662bb19bd3c44006a6b383c41f2018787`。四项与 `release/SHA256SUMS.txt` 一致，0.6.15–0.6.18 资产保留。
+
+> **0.6.18 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.18-x64.exe` SHA-256 `964a1bd8147dff0a9f4ab88de66a9b0e223ec5610d51f4e9803226c6a9c6c6dd`；`release/Grok-Build-Desktop-Portable-v0.6.18-x64.zip` SHA-256 `fe866130abdafdaffda6946487436def2c34ebe88b71852ee08eba6c1955030e`；SBOM SHA-256 `53488ed37063c5017751c2c02a56a855bff464aa87d8fda522eb055d8429ebe6`；许可证报告 SHA-256 `0eedf4138938b59a9be06db056dbb372fa91e04cc31a21ad87010abd517044e4`。四项与 `release/SHA256SUMS.txt` 一致，0.6.15–0.6.17 资产保留。
+
+> **0.6.17 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.17-x64.exe` SHA-256 `248b8951e3e6140597e7207aee32163e40dde3ebba83e438bc3d28a8e980a790`；`release/Grok-Build-Desktop-Portable-v0.6.17-x64.zip` SHA-256 `ba0a3ff5e62de2e4be91b294b39f712c346264e176c2bee722c099741f97af7c`；SBOM SHA-256 `8d33ce062366fa31545513f997fef68d14b8b59a3f39c1194deda0f1bddbf46a`；许可证报告 SHA-256 `240dd504f521b61874a9011d127f24d2b58b0bc632086fa3d5d654a9e7b3e8d8`。四项与 `release/SHA256SUMS.txt` 一致，0.6.15/0.6.16 资产保留。
+
+> **2026-07-31 0.6.16 当前状态：** 已实现可恢复 Provider 扫描 Job、逐子阶段进度、单模型入口、generation 隔离取消、安全/精确上下文探测、Provider/模型启停、零模型保存和选择性应用扫描结果；新增会话可见块投影持久化，失败、取消、重置和重开保留已显示的部分回答；媒体支持 Auto/CLI/Provider 路由、固定 CLI 工具白名单和 streaming-json 产物解析；目录/文件/图片打开、原生右键与可信图片操作、12K 长文本附件化及 Renderer 壳层拆分已完成。最终门槛为 78 文件/432 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、Computer Host 0.3.1、自检资源、生产构建、295 文件公开扫描、Fuses、打包版/Portable UI 和任务调度探针通过。0.6.16 已 per-user 安装，File/Product/ASAR、桌面/开始菜单快捷方式及冷启动的主进程/About/诊断均通过；真实 Provider/CLI 媒体推理留给用户验收。未推送、未创建 GitHub Release。
+
+> **0.6.16 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.16-x64.exe` SHA-256 `240a40edf380462039ae215952e2b86465afe87165e567faed9141f95c0b56b4`；`release/Grok-Build-Desktop-Portable-v0.6.16-x64.zip` SHA-256 `5a33b6f6f7516706bf03607c7181cdfda9482a774692617a7ed4addad5664036`；SBOM SHA-256 `a045e91512b2ad588ce5a526c804360c3c054d060b8578ce1e13b460c50792b9`；许可证报告 SHA-256 `627fbd0405980ce8e85dbb220cd889ca698c737589b145c69b6625dac3d4981f`。四项与 `release/SHA256SUMS.txt` 一致；0.6.15 资产保留。
+
+> **2026-07-31 0.6.15 当前状态：** 已实现 Chat/Responses/Messages/Gemini 主进程协议转换、逐模型客户端/上游协议、兼容家族、六种思考传输、能力扫描/取消/合并/应用、协议矩阵与五档 Grok 4.5 迁移。真实证据：本机 grok2api Grok 4.5 三协议扫描及 Responses+xhigh ACP 通过；远程 CPA Grok 4.5 Responses 扫描及 xhigh ACP 通过；CPA Gemini 三协议/工具续写扫描及 Chat ACP 通过。CPA Claude 当前直返 HTTP 502，本机图片生成当前也为 HTTP 502，不能声称可用。离线门槛为 74 文件/406 项通过，5 live 文件/8 项按设计跳过；TypeScript、生产构建、278 文件公开扫描和 diff check 通过。唯一一次正式本地打包已生成 Setup、Portable、SBOM、许可证与 SHA-256，并完成 per-user 覆盖安装；File/Product/ASAR、Fuses、兼容标记、桌面/开始菜单快捷方式和四进程冷启动均通过。应用已关闭等待用户验收；不要推送或创建 GitHub Release。
+
+> **0.6.15 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.15-x64.exe` SHA-256 `101441bca66cda47cd6914602cf7f76e2a4a394dd520368d6b328d769f847327`；`release/Grok-Build-Desktop-Portable-v0.6.15-x64.zip` SHA-256 `8c486be2973bf11fdf11cad4f97f0d408f9e03feb5968f7daaede8d0cbaeeeff`；SBOM `064427a935658859b2bc2a941ea264449cb75dd1fb08467b02487d562f0ac032`；许可证 `1a97400171dbb383bf5dc7403d229e568e3e970b29b348d671e75aec709c5464`。四项均已重新计算并与 `release/SHA256SUMS.txt` 一致。
 
 > **2026-07-30 0.6.14 当前状态：** 工作树已修正 Provider 下游关闭误报、成功 HTTP 路由后的 `Internal error` Provider 归因、无签名 Anthropic thinking 的 ACP 思考语义、Windows 缺失 `HOME`、持久日志写盘前脱敏/8 MiB 轮转、JsonStore 损坏备份/陈旧临时文件清理、空能力列表迁移及终端 shell 弃用路径。完整离线结果为 72 文件/391 项通过，4 live 文件/7 项按设计跳过；TypeScript、Computer Host 0.3.1 自检/资源、生产构建、273 文件公开扫描、diff check 和 npm audit 通过。生产构建仍明确报告 Monaco/Shiki/Mermaid 大型依赖 chunk，列为后续性能事项。源码已推送到 `origin/codex/v0.6.14-audit-fixes`；不要启动本地上游，不发送真实或付费请求，不打包/安装/发布，除非用户另行要求。
 
@@ -63,10 +101,10 @@ sandbox: true
 - 开发分支：`codex/v0.6.14-audit-fixes`
 - 分支创建前 HEAD / `origin/main`：`05734cf4bdfef51988197b46d7249fed568696da`
 - 分支创建前已有 0.6.7–0.6.13 本地候选的未提交实现；不得丢弃或从公开 0.6.6 重新制作。
-- `package.json` / lockfile 已提升为 `0.6.14`。
-- 本机 CLI 兼容基准：`0.2.112 (9bbd559437)`。
-- 本机安装版仍是此前验证过的 0.6.13；本轮不覆盖安装。
-- GitHub `v0.6.6` 仍为正式 Latest；0.6.14 不得在仅离线验证后发布。
+- `package.json` / lockfile 已提升为 `0.6.22`。
+- 本机 CLI 兼容基准：`0.2.117 (f1c0609308)`。
+- 本机 per-user 安装版已覆盖为 0.6.22；File/Product/ASAR、Fuses、桌面/开始菜单快捷方式以及主进程/About/诊断探针通过。
+- GitHub `v0.6.6` 仍为正式 Latest；0.6.22 在用户验收前不得推送或发布。
 
 ## 3. 0.6.5/0.6.6 已实现范围
 
@@ -81,7 +119,7 @@ sandbox: true
 ### Provider 与结构化失败
 
 - 主进程回环网关使用随机端口、不可猜路由和进程级 scope；Renderer 不接触密钥。
-- 当前正式能力是**同协议透传**、流式响应、取消、大小/超时边界、选定 Trace 头和 Gemini/strict Schema 清理。
+- 0.6.15 当前能力是同协议 SSE 直通，以及 Chat/Responses/Messages/Gemini 的主进程协议转换；取消、大小/超时边界、Trace 头和 Gemini/strict Schema 清理继续保留。
 - Gemini/Antigravity 空枚举 HTTP 400 已真实复现；相同请求经 Gemini 档清理后通过。
 - `TurnFailure` 保留 HTTP、JSON-RPC、进程退出、取消、模型、Provider、Trace、retry-after、网关阶段和清理计数。
 - 故障关联要求同 Provider、同 CLI 进程 scope，且网关记录时间不晚于回合错误、差值小于 60 秒。
@@ -135,7 +173,7 @@ Claude 的并行复审原始结果保存在：
 
 明确延期/已知边界：
 
-- 跨协议 Chat/Responses/Anthropic/Gemini Translator 未做，用户决定暂缓；不能在功能矩阵或 Release Notes 中宣称支持。
+- 跨协议 Chat/Responses/Anthropic/Gemini Translator 已在 0.6.15 实现并有聚焦测试；同协议流为逐块直通，跨协议流目前以 SSE 保活维持连接并在终端有序转换，尚不是逐 token 翻译。
 - 非 Git before/after 快照当前只覆盖本次应用进程捕获到的真实写入；旧会话没有基线时只读降级。
 - Computer Use UIA 树仍是有界扁平交互元素列表；未实现完整父子语义树。
 - 原生动作后仍采用有界短等待和重新截图，尚未实现通用像素稳定检测。
