@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, extractAcpToolDiff, normalizePromptQueue, resolveModelId } from "./grok-acp-adapter";
+import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, extractAcpToolDiff, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizePromptQueue, resolveModelId } from "./grok-acp-adapter";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
+  it("does not impose a Desktop wall-clock ceiling on interactive turns", () => {
+    expect(INTERACTIVE_PROMPT_TIMEOUT_MS).toBeNull();
+  });
+
   it.each(["none", "minimal", "low", "medium", "high", "xhigh"] as const)(
     "places reasoning effort before stdio for %s",
     (effort) => expect(buildGrokAgentArgs(effort)).toEqual(["agent", "--reasoning-effort", effort, "stdio"]),
