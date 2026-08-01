@@ -342,11 +342,21 @@ export class WindowsTaskScheduler implements TaskSchedulerAdapter {
  * Labels: io.github.grokbuilddesktop.automation.<taskId>
  */
 export class LaunchdTaskScheduler implements TaskSchedulerAdapter {
+  private readonly agentsDir: string;
+  private readonly runLaunchctl: (args: string[]) => Promise<void>;
+  private readonly uid: number;
+
   constructor(
-    private readonly agentsDir = join(process.env.HOME || "", "Library", "LaunchAgents"),
-    private readonly runLaunchctl: (args: string[]) => Promise<void> = runLaunchctl,
-    private readonly uid = typeof process.getuid === "function" ? process.getuid() : 501,
-  ) {}
+    agentsDir?: string,
+    // Avoid default-param self-reference (`t = t`) after minification — that
+    // throws ReferenceError TDZ and leaves the app running with zero windows.
+    launchctlRunner?: (args: string[]) => Promise<void>,
+    uid?: number,
+  ) {
+    this.agentsDir = agentsDir ?? join(process.env.HOME || "", "Library", "LaunchAgents");
+    this.runLaunchctl = launchctlRunner ?? runLaunchctl;
+    this.uid = uid ?? (typeof process.getuid === "function" ? process.getuid() : 501);
+  }
 
   supported(): boolean { return process.platform === "darwin" && Boolean(process.env.HOME); }
 
