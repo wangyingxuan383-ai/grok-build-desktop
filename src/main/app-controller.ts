@@ -1,8 +1,10 @@
-import { app, desktopCapturer, dialog, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow } from "electron";
+import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { copyFile, cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { copyFile, cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { extname, isAbsolute, join } from "node:path";
+import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AppSettings,
   Attachment,
@@ -15,8 +17,13 @@ import type {
   WorkspaceSummary,
   CodexSessionDetail,
   CodexSessionSummary,
+  ClaudeSessionDetail,
+  ClaudeSessionSummary,
   GrokQuotaSnapshot,
   MediaCapabilities,
+  MediaCreationRequest,
+  MediaGenerationJob,
+  MediaArtifact,
   ComposerDraftState,
   PluginSummary,
   PluginDetails,
@@ -34,6 +41,8 @@ import type {
   ComputerCapability,
   BuildInfo,
   OnboardingState,
+  OpenTargetIntent,
+  OpenTargetResult,
   SystemCompatibilityReport,
   SupportBundlePreview,
   AppReleaseStatus,
@@ -47,6 +56,13 @@ import type {
   ProviderConnectionDraft,
   ProviderDraftProbeResult,
   ProviderModelCandidate,
+  ProviderCapabilitySnapshot,
+  ProviderDeepScanOptions,
+  ProviderDeepScanResult,
+  ProviderScanScope,
+  ProviderScanJob,
+  CapabilityApplicationDraft,
+  CapabilityApplicationSelection,
   AutomationTask,
   AutomationTaskInput,
   AutomationRunRecord,
@@ -126,9 +142,11 @@ import { GrokProcessManager } from "./services/grok-process-manager";
 import { JsonStore } from "./services/json-store";
 import { AgentChangeService } from "./services/agent-change-service";
 import { TokenActivityService } from "./services/token-activity-service";
+import { ConversationProjectionService } from "./services/conversation-projection-service";
 import { LogService, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
+import { ClaudeSessionCatalog } from "./services/claude-session-catalog";
 import { WorkspaceCatalog } from "./services/workspace-catalog";
 import { GrokQuotaService } from "./services/grok-quota-service";
 import { UiStateService } from "./services/ui-state-service";
@@ -162,6 +180,8 @@ import { checkAutomationHealth } from "./services/automation-health-service";
 import { resolveExistingWorkspacePath } from "./services/workspace-path-policy";
 import { AttachmentCacheService } from "./services/attachment-cache-service";
 import { TurnPresentationService } from "./services/turn-presentation-service";
+import { buildCliMediaArgs, runCliMediaProcess } from "./services/media-cli-runner";
+import { resolveTrustedMediaArtifactSource, sweepSessionMediaCache } from "./services/media-cache-service";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   cliPath: "",
@@ -177,7 +197,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   recentWorkspaces: [],
   activeWorkspace: "",
   codexGroupCollapsed: true,
-  sessionGroupCollapsed: { normal: false, fork: false, worktree: false, automation: true, "codex-continuation": true, other: true },
+  claudeGroupCollapsed: true,
+  sessionGroupCollapsed: { normal: false, fork: false, worktree: false, automation: true, "codex-continuation": true, "claude-continuation": true, other: true },
   showArchivedCodex: false,
   theme: structuredClone(DEFAULT_THEME),
 };
@@ -191,6 +212,7 @@ export class AppController {
   private readonly auth: AuthService;
   private readonly updater: CliUpdateService;
   private readonly codex: CodexSessionCatalog;
+  private readonly claude: ClaudeSessionCatalog;
   private readonly workspaces: WorkspaceCatalog;
   private readonly quota: GrokQuotaService;
   private readonly uiState: UiStateService;
@@ -219,12 +241,20 @@ export class AppController {
   private readonly dashboard: AgentDashboardService;
   private readonly attachmentCache: AttachmentCacheService;
   private readonly turnPresentations: TurnPresentationService;
+  private readonly conversationProjections: ConversationProjectionService;
   private window?: BrowserWindow;
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
   private readonly agentChanges = new AgentChangeService();
   private readonly tokenActivity: TokenActivityService;
   private readonly runningSessions = new Set<string>();
+  private readonly projectionReplaying = new Set<string>();
+  private readonly projectionOpenSessions = new Set<string>();
+  private readonly projectionReplayBuffers = new Map<string, ChatEvent[]>();
+  private readonly projectionReplayTimers = new Map<string, NodeJS.Timeout>();
+  private readonly mediaJobs = new Map<string, MediaGenerationJob>();
+  private readonly mediaJobControls = new Map<string, { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string } }>();
+  private readonly trustedPickedPaths = new Set<string>();
 
   constructor(private readonly userDataPath: string) {
     this.appConfig = loadAppConfig();
@@ -238,8 +268,10 @@ export class AppController {
     this.catalog = new SessionCatalog(userDataPath);
     this.attachmentCache = new AttachmentCacheService(userDataPath);
     this.turnPresentations = new TurnPresentationService(userDataPath);
+    this.conversationProjections = new ConversationProjectionService(userDataPath);
     this.codex = new CodexSessionCatalog(userDataPath, this.log);
-    this.workspaces = new WorkspaceCatalog(userDataPath, this.codex);
+    this.claude = new ClaudeSessionCatalog(userDataPath, this.log);
+    this.workspaces = new WorkspaceCatalog(userDataPath, this.codex, this.claude);
     this.uiState = new UiStateService(userDataPath);
     this.onboarding = new OnboardingService(userDataPath);
     const resourcesRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
@@ -346,11 +378,22 @@ export class AppController {
       },
     });
     this.providers = new ProviderService(userDataPath, this.log, {
-      fetcher: async (input, init) => {
+      fetcher: async (input, init, proxyMode = "inherit") => {
         const settings = await this.settingsStore.get();
-        const network = session.fromPartition("grok-provider", { cache: false });
+        // Separate partitions prevent concurrent direct/proxied providers from
+        // racing over one mutable Electron proxy configuration.
+        const network = session.fromPartition(
+          proxyMode === "direct" ? "grok-provider-direct" : "grok-provider-inherit",
+          { cache: false },
+        );
         const proxy = settings.httpsProxy || settings.httpProxy;
-        await network.setProxy(proxy ? { proxyRules: proxy } : { mode: "system" });
+        await network.setProxy(
+          proxyMode === "direct"
+            ? { mode: "direct" }
+            : proxy
+              ? { proxyRules: proxy }
+              : { mode: "system" },
+        );
         const target = input instanceof URL ? input.toString() : input;
         return network.fetch(target, init);
       },
@@ -365,6 +408,7 @@ export class AppController {
         if (!result) await this.processes.reloadIdleExtensions();
       },
       references: async (providerId) => this.providerReferences(providerId),
+      onScanProgress: (progress) => this.window?.webContents.send("grok:provider-scan-progress", progress),
     });
     this.tokenActivity = new TokenActivityService(userDataPath);
     this.diagnostics = new DiagnosticsService(userDataPath, this.buildInfo, () => this.settingsStore.get(), () => this.auth.activeApiKey(), () => this.getComputerCapability(), this.log, this.appConfig.mockCliPath, { providers: () => this.providers.list(), automations: () => this.automations.list(), quota: () => this.quota.get() });
@@ -372,6 +416,118 @@ export class AppController {
 
   setWindow(window: BrowserWindow): void {
     this.window = window;
+  }
+
+  showContextMenu(params: ContextMenuParams): void {
+    if (!this.window) return;
+    const template: MenuItemConstructorOptions[] = [];
+    if (params.selectionText) template.push({ label: "复制选中文本", role: "copy", enabled: params.editFlags.canCopy });
+    if (params.isEditable) {
+      template.push(
+        { label: "剪切", role: "cut", enabled: params.editFlags.canCut },
+        { label: "复制", role: "copy", enabled: params.editFlags.canCopy },
+        { label: "粘贴", role: "paste", enabled: params.editFlags.canPaste },
+      );
+    }
+    if (params.linkURL) {
+      if (template.length) template.push({ type: "separator" });
+      template.push({ label: "复制链接", click: () => clipboard.writeText(params.linkURL) });
+      if (isAllowedExternalUrl(params.linkURL)) {
+        template.push({ label: "在浏览器中打开", click: () => void shell.openExternal(params.linkURL) });
+      }
+    }
+    const imageSource = params.mediaType === "image" ? params.srcURL : "";
+    if (imageSource) {
+      if (template.length) template.push({ type: "separator" });
+      template.push(
+        { label: "复制图片", click: () => void this.copyImage(imageSource).catch((error) => this.log.log(`复制图片失败：${error instanceof Error ? error.message : String(error)}`)) },
+        { label: "图片另存为…", click: () => void this.saveImage(imageSource).catch((error) => this.log.log(`保存图片失败：${error instanceof Error ? error.message : String(error)}`)) },
+      );
+      if (imageSource.startsWith("file:") || imageSource.startsWith("grok-media:")) {
+        template.push({
+          label: "打开原文件",
+          click: () => void this.resolveTrustedImagePath(imageSource)
+            .then((path) => shell.openPath(path))
+            .catch((error) => this.log.log(`打开图片失败：${error instanceof Error ? error.message : String(error)}`)),
+        });
+      }
+    }
+    if (!params.isEditable && !params.selectionText) {
+      if (template.length) template.push({ type: "separator" });
+      template.push({ label: "全选", role: "selectAll" });
+    }
+    if (!template.length) return;
+    Menu.buildFromTemplate(template).popup({ window: this.window });
+  }
+
+  async copyImage(source: string): Promise<void> {
+    const image = await this.loadTrustedImage(source);
+    if (image.isEmpty()) throw new Error("无法读取图片");
+    clipboard.writeImage(image);
+  }
+
+  async saveImage(source: string): Promise<string | null> {
+    if (!this.window) return null;
+    const image = await this.loadTrustedImage(source);
+    if (image.isEmpty()) throw new Error("无法读取图片");
+    const result = await dialog.showSaveDialog(this.window, {
+      title: "图片另存为",
+      defaultPath: `grok-image-${Date.now()}.png`,
+      filters: [{ name: "PNG 图片", extensions: ["png"] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    await writeFile(result.filePath, image.toPNG());
+    return result.filePath;
+  }
+
+  async readTrustedMedia(source: string): Promise<{ body: ArrayBuffer; mimeType: string }> {
+    const path = await this.resolveTrustedMediaPath(source);
+    const info = await stat(path);
+    if (!info.isFile() || info.size > 256 * 1024 * 1024) throw new Error("媒体文件不存在或超过读取限制");
+    const mimeType = localMediaMimeType(path);
+    if (!mimeType) throw new Error("媒体文件类型不受支持");
+    return { body: Uint8Array.from(await readFile(path)).buffer as ArrayBuffer, mimeType };
+  }
+
+  private async loadTrustedImage(source: string): Promise<Electron.NativeImage> {
+    if (source.startsWith("data:image/")) {
+      if (source.length > 28 * 1024 * 1024) throw new Error("图片数据超过复制限制");
+      return nativeImage.createFromDataURL(source);
+    }
+    const path = await this.resolveTrustedImagePath(source);
+    return nativeImage.createFromPath(path);
+  }
+
+  private async resolveTrustedImagePath(source: string): Promise<string> {
+    const path = await this.resolveTrustedMediaPath(source);
+    if (!localMediaMimeType(path)?.startsWith("image/")) throw new Error("图片文件类型不受支持");
+    return path;
+  }
+
+  private async resolveTrustedMediaPath(source: string): Promise<string> {
+    let requested: string;
+    try {
+      if (source.startsWith("grok-media:")) {
+        requested = new URL(source).searchParams.get("path") || "";
+      } else if (source.startsWith("file:")) requested = fileURLToPath(source);
+      else if (isAbsolute(source)) requested = source;
+      else throw new Error("媒体来源不是本地文件");
+    } catch { throw new Error("媒体来源地址无效"); }
+    let path: string;
+    try { path = await realpath(requested); } catch { throw new Error("媒体文件不存在或无法读取"); }
+    const roots = [
+      join(this.userDataPath, "session-attachments"),
+      join(this.userDataPath, "session-media"),
+      join(homedir(), ".grok", "sessions"),
+    ];
+    const executionRoot = this.focusedSessionId ? this.processes.snapshot(this.focusedSessionId)?.cwd : undefined;
+    if (executionRoot) roots.push(executionRoot);
+    if (this.trustedPickedPaths.has(path)) return path;
+    for (const root of roots) {
+      const canonicalRoot = await realpath(root).catch(() => undefined);
+      if (canonicalRoot && pathWithin(path, canonicalRoot)) return path;
+    }
+    throw new Error("媒体来源不在会话缓存、Grok 会话或受信任工作区");
   }
 
   async prepareAppearance(): Promise<ThemeSettings> {
@@ -387,7 +543,11 @@ export class AppController {
     // Finish orphan cleanup before the renderer can restore or materialize
     // attachments. Running this in the background allowed sweep() to remove a
     // freshly-created session directory during a fast renderer reload.
-    await this.catalog.allSessionIds().then((ids) => this.attachmentCache.sweep(ids)).catch(() => this.log.log("附件缓存清理失败"));
+    const existingSessionIds = await this.catalog.allSessionIds().catch(() => new Set<string>());
+    await this.attachmentCache.sweep(existingSessionIds).catch(() => this.log.log("附件缓存清理失败"));
+    await sweepSessionMediaCache(join(this.userDataPath, "session-media"), existingSessionIds)
+      .catch(() => this.log.log("媒体缓存清理失败"));
+    await this.uiState.sweepDraftAttachments().catch(() => this.log.log("输入框文本草稿缓存清理失败"));
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1") await this.auth.importCurrentIfNeeded().catch((error) => this.log.log(error));
     let settings = await this.settingsStore.get();
     if (settings.fontScale < 85) {
@@ -412,6 +572,7 @@ export class AppController {
       changelog,
       workspaces: [],
       codexSessions: [],
+      claudeSessions: [],
       buildInfo: this.buildInfo,
       onboarding: await this.onboarding.get(),
     };
@@ -465,8 +626,9 @@ export class AppController {
   }
 
   private async syncSessionOrigins(cwd: string): Promise<void> {
-    const [continuations, tasks, runs] = await Promise.all([
+    const [continuations, claudeContinuations, tasks, runs] = await Promise.all([
       this.codex.listContinuations(cwd).catch(() => []),
+      this.claude.listContinuations(cwd).catch(() => []),
       this.automations.list().catch(() => []),
       this.automations.listRuns().catch(() => []),
     ]);
@@ -478,6 +640,13 @@ export class AppController {
       title: "Codex 接力",
       suggestedTitle: value.title,
     }));
+    values.push(...claudeContinuations.map((value) => ({
+      sessionId: value.sessionId,
+      kind: "claude-continuation" as const,
+      id: value.claudeId,
+      title: "Claude 接力",
+      suggestedTitle: value.title,
+    })));
     for (const task of tasks) {
       if (task.sessionId) values.push({ sessionId: task.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name });
     }
@@ -676,16 +845,58 @@ export class AppController {
     await this.catalog.markRead(sessionId);
     const assignment = await this.profiles.assignment(sessionId);
     const targetCwd = assignment?.cwd ?? cwd;
-    const result = assignment
-      ? await this.openAssignedSession(assignment)
-      : await this.processes.open(cwd, sessionId);
-    const attachmentEntries = await this.attachmentCache.restore(sessionId);
-    if (attachmentEntries.length) await this.handleEvent({ type: "user-attachments-restore", sessionId, entries: attachmentEntries });
-    const presentations = await this.turnPresentations.list(sessionId);
-    this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
-    await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
-    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize"]).catch((error) => this.log.log(error));
-    return result;
+    this.projectionOpenSessions.add(sessionId);
+    this.projectionReplaying.add(sessionId);
+    this.projectionReplayBuffers.set(sessionId, []);
+    let result: { sessionId: string };
+    try {
+      result = assignment
+        ? await this.openAssignedSession(assignment)
+        : await this.processes.open(cwd, sessionId);
+      const presentations = await this.turnPresentations.list(sessionId);
+      let projection = await this.conversationProjections.restore(sessionId);
+      let recoveryMessage = "";
+      if (!projection && presentations.length) {
+        const recovery = await this.conversationProjections.recoverLegacy(sessionId, targetCwd);
+        projection = recovery.projection;
+        if (recovery.status !== "recovered") recoveryMessage = recovery.message;
+      }
+      if (projection) {
+        this.window?.webContents.send("grok:event", { type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent);
+      } else {
+        // A pre-0.6.16 session may have no local projection yet. Do not discard
+        // the ACP replay merely because the new projection layer is active:
+        // deliver the buffered replay once, then seed the durable projection so
+        // second and third reopens no longer depend on CLI replay completeness.
+        const replayed = this.projectionReplayBuffers.get(sessionId) ?? [];
+        for (const event of replayed) {
+          this.window?.webContents.send("grok:event", event);
+          await this.conversationProjections.record(event)
+            .catch((error) => this.log.log(`会话回放投影失败：${error instanceof Error ? error.message : String(error)}`));
+        }
+        if (!replayed.length && recoveryMessage) {
+          this.window?.webContents.send("grok:event", {
+            type: "history-recovery",
+            sessionId,
+            status: "unavailable",
+            message: recoveryMessage,
+          } satisfies ChatEvent);
+        }
+      }
+      // ACP replay reconciliation is complete. The attachment and presentation
+      // restores below are Desktop-owned events and must reach the renderer
+      // normally rather than being mistaken for late CLI replay.
+      this.finishProjectionReplay(sessionId);
+      const attachmentEntries = await this.attachmentCache.restore(sessionId);
+      if (attachmentEntries.length) await this.handleEvent({ type: "user-attachments-restore", sessionId, entries: attachmentEntries });
+      this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
+      await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
+      void this.cliCapabilities.recordRuntimeSupport(["acp.initialize"]).catch((error) => this.log.log(error));
+      return result;
+    } finally {
+      this.finishProjectionReplay(sessionId);
+      this.projectionOpenSessions.delete(sessionId);
+    }
   }
 
   async renameSession(sessionId: string, title: string): Promise<void> {
@@ -720,7 +931,18 @@ export class AppController {
     this.agentChanges.clear(sessionId);
     await this.dashboard.clear(`session:${sessionId}`);
     await this.attachmentCache.cleanupSession(sessionId);
+    await rm(join(this.userDataPath, "session-media", createHashForPath(sessionId)), { recursive: true, force: true })
+      .catch((error) => this.log.log(`会话媒体缓存清理失败：${error instanceof Error ? error.message : String(error)}`));
+    for (const [jobId, job] of this.mediaJobs) {
+      if (job.sessionId !== sessionId) continue;
+      const control = this.mediaJobControls.get(jobId);
+      control?.abort.abort(new Error("会话已删除"));
+      control?.child?.kill();
+      this.mediaJobControls.delete(jobId);
+      this.mediaJobs.delete(jobId);
+    }
     await this.turnPresentations.delete(sessionId);
+    await this.conversationProjections.delete(sessionId);
     if (this.focusedSessionId === sessionId) this.focusedSessionId = "";
   }
 
@@ -735,7 +957,235 @@ export class AppController {
   }
 
   async getMediaCapabilities(sessionId: string): Promise<MediaCapabilities> {
-    return detectMediaCapabilities(await this.processes.waitForCommands(sessionId));
+    const commands = await this.processes.waitForCommands(sessionId).catch(() => []);
+    const advertised = detectMediaCapabilities(commands);
+    const settings = await this.settingsStore.get();
+    const cliPath = await locateGrokCli(settings.cliPath);
+    return cliPath
+      ? { ...advertised, image: true, video: true, diagnostic: "主进程可通过固定 image_gen / video_gen 工具白名单启动媒体任务；不再依赖 ACP 斜杠命令清单。" }
+      : advertised;
+  }
+
+  async startMediaGeneration(request: MediaCreationRequest & { sessionId: string }): Promise<MediaGenerationJob> {
+    const session = this.processes.snapshot(request.sessionId);
+    if (!session) throw new Error("媒体任务需要一个已加载的 Grok 会话");
+    if (request.referencePaths?.length) {
+      const root = await realpath(session.cwd).catch(() => resolve(session.cwd));
+      const normalized: string[] = [];
+      for (const path of request.referencePaths.slice(0, 8)) {
+        const target = await realpath(path).catch(() => undefined);
+        if (!target || (!pathWithin(target, root) && !this.trustedPickedPaths.has(target))) {
+          throw new Error("参考图必须位于当前会话目录，或由“添加参考图”文件选择器明确选取");
+        }
+        if (!mimeForExtension(extname(target).toLowerCase())) throw new Error("参考图必须是 PNG、JPEG、WebP 或 GIF");
+        normalized.push(target);
+        this.trustedPickedPaths.delete(target);
+      }
+      request = { ...request, referencePaths: normalized };
+    }
+    const route = request.route === "provider" ? "provider" : "cli";
+    if (route === "provider" && (!request.providerId || !request.modelId)) throw new Error("请选择自定义 Provider 和模型");
+    const now = new Date().toISOString();
+    const job: MediaGenerationJob = {
+      jobId: crypto.randomUUID(),
+      sessionId: request.sessionId,
+      status: "queued",
+      route,
+      kind: request.kind,
+      progress: 0,
+      message: route === "provider" ? "正在准备 Provider 媒体请求" : "正在准备 Grok CLI 媒体工具",
+      artifacts: [],
+      startedAt: now,
+      updatedAt: now,
+    };
+    this.mediaJobs.set(job.jobId, job);
+    const control = { abort: new AbortController() };
+    this.mediaJobControls.set(job.jobId, control);
+    this.publishMediaJob(job);
+    void this.runMediaJob(job.jobId, request);
+    return structuredClone(job);
+  }
+
+  getMediaGenerationJob(jobId: string): MediaGenerationJob | undefined {
+    const job = this.mediaJobs.get(jobId);
+    return job ? structuredClone(job) : undefined;
+  }
+
+  cancelMediaGeneration(jobId: string): MediaGenerationJob {
+    const job = this.mediaJobs.get(jobId);
+    if (!job) throw new Error("媒体任务不存在");
+    if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") return structuredClone(job);
+    job.status = "cancelling";
+    job.message = "正在取消媒体任务";
+    job.updatedAt = new Date().toISOString();
+    this.publishMediaJob(job);
+    const control = this.mediaJobControls.get(jobId);
+    control?.abort.abort(new Error("用户取消媒体任务"));
+    control?.child?.kill();
+    setTimeout(() => {
+      const current = this.mediaJobs.get(jobId);
+      if (!current || current.status !== "cancelling") return;
+      current.status = "cancelled";
+      current.message = "媒体任务已取消；迟到结果将被忽略";
+      current.completedAt = new Date().toISOString();
+      current.updatedAt = current.completedAt;
+      this.mediaJobControls.delete(jobId);
+      this.publishMediaJob(current);
+    }, 2_000).unref?.();
+    return structuredClone(job);
+  }
+
+  private async runMediaJob(jobId: string, request: MediaCreationRequest & { sessionId: string }): Promise<void> {
+    const job = this.mediaJobs.get(jobId);
+    const control = this.mediaJobControls.get(jobId);
+    if (!job || !control) return;
+    job.status = "running";
+    job.progress = 5;
+    job.updatedAt = new Date().toISOString();
+    this.publishMediaJob(job);
+    try {
+      const artifacts = job.route === "provider"
+        ? request.kind === "image"
+          ? await this.providers.generateImage({ providerId: request.providerId!, modelId: request.modelId!, prompt: request.prompt, aspectRatio: request.aspectRatio, signal: control.abort.signal })
+          : await this.providers.generateVideo({
+            providerId: request.providerId!,
+            modelId: request.modelId!,
+            prompt: request.prompt,
+            aspectRatio: request.aspectRatio,
+            duration: request.duration ?? 6,
+            resolution: request.resolution ?? "480p",
+            referencePaths: request.referencePaths,
+            signal: control.abort.signal,
+          })
+        : await this.runCliMedia(jobId, request, control);
+      if (control.abort.signal.aborted) throw control.abort.signal.reason;
+      job.message = "正在保存媒体结果";
+      job.progress = 90;
+      job.updatedAt = new Date().toISOString();
+      this.publishMediaJob(job);
+      job.artifacts = [];
+      const artifactRoots: string[] = [];
+      if (control.transientSession) {
+        const transientWorkspaceRoot = await this.catalog.resolveSessionRoot(control.transientSession.cwd);
+        artifactRoots.push(join(transientWorkspaceRoot, control.transientSession.sessionId));
+      }
+      for (const artifact of artifacts) {
+        const cached = await this.cacheMediaArtifact(request.sessionId, artifact, artifactRoots);
+        job.artifacts.push(cached);
+        await this.handleEvent({ type: "media", sessionId: request.sessionId, media: cached.media, source: cached.source, isData: cached.isData, mimeType: cached.mimeType });
+      }
+      job.status = "completed";
+      job.progress = 100;
+      job.message = `已生成 ${job.artifacts.length} 个媒体结果`;
+    } catch (error) {
+      const cancelled = control.abort.signal.aborted || this.mediaJobs.get(jobId)?.status === "cancelling";
+      job.status = cancelled ? "cancelled" : "failed";
+      job.error = cancelled ? undefined : normalizeMediaJobError(error);
+      job.message = cancelled ? "媒体任务已取消" : `媒体任务失败：${job.error}`;
+    } finally {
+      job.completedAt = new Date().toISOString();
+      job.updatedAt = job.completedAt;
+      if (control.transientSession) {
+        await this.catalog.delete(control.transientSession.cwd, control.transientSession.sessionId).catch(async (error) => {
+          await this.log.log(`清理媒体临时会话失败：${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+      this.mediaJobControls.delete(jobId);
+      this.publishMediaJob(job);
+    }
+  }
+
+  private async runCliMedia(jobId: string, request: MediaCreationRequest & { sessionId: string }, control: { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string } }): Promise<MediaArtifact[]> {
+    const settings = await this.settingsStore.get();
+    const cliPath = await locateGrokCli(settings.cliPath);
+    if (!cliPath) throw new Error("未找到 Grok CLI");
+    const session = this.processes.snapshot(request.sessionId);
+    if (!session) throw new Error("会话当前未加载");
+    const toolList = request.kind === "image" ? "image_gen" : "video_gen,image_to_video,reference_to_video";
+    const prompt = mediaToolPrompt(request);
+    const providerEnvironment = await this.providerLaunchEnvironment(`media-${crypto.randomUUID()}`);
+    const apiKey = await this.auth.activeApiKey();
+    // `grok --single` still writes a normal CLI session. Give it an isolated
+    // UUID and remove that transient catalog entry only after its artifacts
+    // have been copied into the Desktop session cache.
+    const transientSessionId = crypto.randomUUID();
+    control.transientSession = { cwd: session.cwd, sessionId: transientSessionId };
+    const cliArgs = buildCliMediaArgs(prompt, transientSessionId, toolList);
+    const batch = /\.(?:cmd|bat)$/i.test(cliPath);
+    const executable = batch ? (process.env.ComSpec || "cmd.exe") : cliPath;
+    return runCliMediaProcess({
+      executable,
+      args: batch ? ["/d", "/s", "/c", windowsBatchCommand(cliPath, cliArgs)] : cliArgs,
+      cwd: session.cwd,
+      env: { ...process.env, ...providerEnvironment, ...(apiKey ? { XAI_API_KEY: apiKey } : {}) },
+      media: request.kind,
+      signal: control.abort.signal,
+      timeoutMs: 600_000,
+      windowsVerbatimArguments: batch,
+      onSpawn: (child) => { control.child = child; },
+      onProgress: () => {
+        const job = this.mediaJobs.get(jobId);
+        if (job) {
+          job.progress = Math.min(85, (job.progress ?? 5) + 1);
+          job.message = "Grok CLI 正在执行媒体工具";
+          job.updatedAt = new Date().toISOString();
+          this.publishMediaJob(job);
+        }
+      },
+    });
+  }
+
+  private async cacheMediaArtifact(sessionId: string, artifact: MediaArtifact, additionalTrustedRoots: readonly string[] = []): Promise<MediaArtifact> {
+    const directory = join(this.userDataPath, "session-media", createHashForPath(sessionId));
+    await mkdir(directory, { recursive: true });
+    if (!artifact.isData) {
+      if (/^https?:\/\//i.test(artifact.source)) {
+        const response = await session.defaultSession.fetch(artifact.source, {
+          method: "GET",
+          redirect: "manual",
+          signal: AbortSignal.timeout(120_000),
+        });
+        if (!response.ok) throw new Error(`媒体产物下载返回 HTTP ${response.status}`);
+        const mimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+        if (artifact.media === "image" ? !mimeType?.startsWith("image/") : !mimeType?.startsWith("video/")) {
+          throw new Error("媒体产物 URL 返回了不匹配的内容类型");
+        }
+        const buffer = await readBoundedResponseBuffer(response, artifact.media === "video" ? 256 * 1024 * 1024 : 24 * 1024 * 1024);
+        if (artifact.media === "video" && !isSupportedVideoBuffer(buffer)) throw new Error("媒体 URL 返回的视频文件无效或容器不受支持");
+        const extension = artifact.media === "video"
+          ? mimeType === "video/webm" ? ".webm" : mimeType === "video/quicktime" ? ".mov" : ".mp4"
+          : mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/webp" ? ".webp" : mimeType === "image/gif" ? ".gif" : ".png";
+        const target = join(directory, `${artifact.id}${extension}`);
+        await writeFile(target, buffer);
+        if (artifact.media === "image" && nativeImage.createFromBuffer(buffer).isEmpty()) throw new Error("媒体 URL 返回的图片文件无效");
+        return { ...artifact, source: target, mimeType, isData: false, name: artifact.name || `${artifact.id}${extension}` };
+      }
+      const sessionRoot = this.processes.snapshot(sessionId)?.cwd;
+      const trustedRoots = [...additionalTrustedRoots];
+      if (sessionRoot) trustedRoots.push(sessionRoot);
+      const source = await resolveTrustedMediaArtifactSource(artifact.source, trustedRoots);
+      if (!source) {
+        throw new Error("媒体工具返回了会话工作区之外的文件");
+      }
+      const extension = extname(source) || (artifact.media === "video" ? ".mp4" : ".png");
+      const target = join(directory, `${artifact.id}${extension}`);
+      await copyFile(source, target);
+      if (artifact.media === "image" && nativeImage.createFromPath(target).isEmpty()) throw new Error("媒体工具返回的图片文件无效");
+      if (artifact.media === "video" && !isSupportedVideoBuffer(await readFile(target))) throw new Error("媒体工具返回的视频文件无效或容器不受支持");
+      return { ...artifact, source: target, isData: false };
+    }
+    const buffer = Buffer.from(artifact.source, "base64");
+    const image = nativeImage.createFromBuffer(buffer);
+    if (artifact.media === "image" && image.isEmpty()) throw new Error("Provider 返回的图片数据无效");
+    if (artifact.media === "video" && !isSupportedVideoBuffer(buffer)) throw new Error("Provider 返回的视频数据无效或容器不受支持");
+    const extension = artifact.media === "video" ? ".mp4" : artifact.mimeType === "image/jpeg" ? ".jpg" : ".png";
+    const target = join(directory, `${artifact.id}${extension}`);
+    await writeFile(target, buffer);
+    return { ...artifact, source: target, isData: false };
+  }
+
+  private publishMediaJob(job: MediaGenerationJob): void {
+    this.window?.webContents.send("grok:media-progress", structuredClone(job));
   }
 
   async sendPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
@@ -754,7 +1204,7 @@ export class AppController {
 
   async getOfflineUiFixture(): Promise<OfflineUiFixture | null> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1" || process.env.GROK_DESKTOP_UI_FIXTURE !== "1") return null;
-    const sessionId = "offline-ui-fixture-v062";
+    const sessionId = "offline-ui-fixture-v0616";
     const workspace = (await this.settingsStore.get()).activeWorkspace || process.cwd();
     const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlWQAAAAASUVORK5CYII=";
     const imageAttachments: Attachment[] = ["architecture.png", "result.png", "detail.png"].map((name, index) => ({ id: `fixture-image-${index + 1}`, name, kind: "image", mimeType: "image/png", size: 68, data: png }));
@@ -763,7 +1213,7 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.6 能力完善验收", createdAt: now, updatedAt: now, messageCount: 35, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.18 交互与改动验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -775,7 +1225,7 @@ export class AppController {
       { type: "user-message", sessionId, id: "fixture-client-images", clientMessageId: "fixture-client-images", text: "请检查这些界面截图。", attachments: prepared.previews, delivery: "sent" },
       { type: "thought-chunk", sessionId, text: "正在核对布局、交互状态和附件可见性。" },
       { type: "tool-call", sessionId, tool: { toolCallId: "fixture-read", title: "读取界面结构", kind: "read_file", status: "completed", output: "已读取会话壳层。", locations: [{ path: "src/renderer/src/App.tsx", line: 1 }] } },
-      { type: "tool-call", sessionId, tool: { toolCallId: "fixture-edit", title: "修改会话样式", kind: "edit_file", status: "completed", output: "已更新消息与附件布局。", oldText: ".message { width: 100%; }", newText: ".message { width: min(760px, 100%); }", locations: [{ path: "src/renderer/src/styles.css", line: 1 }] } },
+      { type: "tool-call", sessionId, tool: { toolCallId: "fixture-edit", title: "修改会话样式", kind: "edit", status: "completed", output: "已更新消息与附件布局。", content: [{ type: "diff", path: "src/renderer/src/styles.css", oldText: ".message { width: 100%; }", newText: ".message { width: min(760px, 100%); }" }], oldText: ".message { width: 100%; }", newText: ".message { width: min(760px, 100%); }", additions: 1, deletions: 1, locations: [{ path: "src/renderer/src/styles.css", line: 1 }] } },
       { type: "message-chunk", sessionId, text: "界面结构已按任务流收敛，图片在发送后保留于用户消息中。" },
       { type: "media", sessionId, media: "image", source: png, isData: true, mimeType: "image/png" },
       { type: "turn-completed", sessionId, presentation: { turnId: "fixture-client-images", clientMessageId: "fixture-client-images", ordinal: 0, startedAt: "2026-07-22T07:00:00.000Z", completedAt: "2026-07-22T07:01:23.000Z", durationMs: 83_000, outcome: "completed", usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150, modelId: "fixture-model", source: "prompt-result", exact: true } } },
@@ -790,6 +1240,15 @@ export class AppController {
       { type: "plan", sessionId, text: "1. 验证左右侧栏。\n2. 验证消息与文件卡。\n3. 验证输入框和底部环境栏。" },
       { type: "message-chunk", sessionId, text: "计划已完成，所有入口均映射到真实功能。" },
       { type: "turn-completed", sessionId, presentation: { turnId: "fixture-plan", clientMessageId: "fixture-plan", ordinal: 1, startedAt: "2026-07-22T07:02:00.000Z", completedAt: "2026-07-22T07:03:23.000Z", durationMs: 83_000, outcome: "completed", usage: { inputTokens: 120, outputTokens: 30, totalTokens: 150, modelId: "fixture-model", source: "prompt-result", exact: true } } },
+      { type: "user-message", sessionId, id: "fixture-partial", clientMessageId: "fixture-partial", text: "演示中断后仍保留半段回答。", delivery: "sent" },
+      { type: "thought-chunk", sessionId, text: "正在生成一个会被中断的长回答。" },
+      { type: "message-chunk", sessionId, text: "这是已经显示给用户的部分回答。即使进程重建或请求失败，这段可见正文也必须在第二次、第三次打开会话时保留。" },
+      { type: "error", sessionId, message: "fixture provider stream closed", failure: {
+        failureId: "fixture-partial-failure", at: now, classification: "network",
+        message: "Provider stream closed after partial output", sessionId, modelId: "fixture-model",
+        nextActions: ["保留部分回答", "检查网络后重试"],
+      } },
+      { type: "turn-completed", sessionId, presentation: { turnId: "fixture-partial", clientMessageId: "fixture-partial", ordinal: 2, startedAt: "2026-07-22T07:04:00.000Z", completedAt: "2026-07-22T07:13:13.000Z", durationMs: 553_000, outcome: "failed", usage: { inputTokens: 356_400, outputTokens: 34, cachedReadTokens: 352_300, reasoningTokens: 25, totalTokens: 356_459, modelId: "fixture-model", source: "prompt-result", exact: true } } },
       { type: "user-message", sessionId, id: "fixture-client-failed", clientMessageId: "fixture-client-failed", text: "这条消息用于测试失败恢复。", attachments: failed.previews, delivery: "failed" },
       { type: "status", sessionId, status: "idle", text: "离线夹具" },
     ];
@@ -820,7 +1279,14 @@ export class AppController {
   async pickAttachments(): Promise<Attachment[]> {
     const result = await dialog.showOpenDialog(this.window!, { title: "添加文件或图片", properties: ["openFile", "multiSelections"] });
     if (result.canceled) return [];
-    return this.attachmentsFromPaths(result.filePaths);
+    const attachments = await this.attachmentsFromPaths(result.filePaths);
+    if (this.trustedPickedPaths.size > 256) this.trustedPickedPaths.clear();
+    for (const attachment of attachments) {
+      if (!attachment.path || attachment.kind === "folder") continue;
+      const target = await realpath(attachment.path).catch(() => undefined);
+      if (target) this.trustedPickedPaths.add(target);
+    }
+    return attachments;
   }
 
   async pickAttachmentFolders(): Promise<Attachment[]> {
@@ -904,25 +1370,84 @@ export class AppController {
     return { sessionId: result.sessionId, cwd: detail.cwd };
   }
 
+  listClaudeSessions(cwd: string, force = false): Promise<ClaudeSessionSummary[]> {
+    return this.claude.list(cwd, force);
+  }
+
+  openClaudeSession(id: string): Promise<ClaudeSessionDetail> { return this.claude.open(id); }
+  refreshClaudeSession(id: string): Promise<ClaudeSessionDetail> { return this.claude.refresh(id); }
+  hideClaudeSession(id: string, hidden = true): Promise<void> { return this.claude.hide(id, hidden); }
+
+  async continueClaudeSession(id: string): Promise<{ sessionId: string; cwd: string }> {
+    const detail = await this.claude.open(id, true);
+    const before = detail.contentHash;
+    const result = await this.processes.create(detail.cwd);
+    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew", "claudeReader"]).catch((error) => this.log.log(error));
+    this.focusedSessionId = result.sessionId;
+    await this.catalog.markRead(result.sessionId);
+    await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "claude-continuation", id, title: "Claude 接力", suggestedTitle: detail.title }]);
+    await this.catalog.rename(result.sessionId, detail.title);
+    await this.claude.recordContinuation(id, result.sessionId);
+    void (async () => {
+      try {
+        await this.processes.get(result.sessionId).prompt(`/resume-claude ${JSON.stringify(detail.path)}`, []);
+      } catch (error) {
+        await this.handleEvent({ type: "error", sessionId: result.sessionId, message: `Claude 接力失败：${error instanceof Error ? error.message : String(error)}` });
+      } finally {
+        const after = await this.claude.contentHash(id).catch(() => "");
+        if (after !== before) {
+          await this.log.log(`Claude read-only hash mismatch: ${id}`);
+          await this.handleEvent({ type: "error", sessionId: result.sessionId, message: "Claude 原会话哈希发生变化；已记录只读约束诊断" });
+        }
+      }
+    })();
+    return { sessionId: result.sessionId, cwd: detail.cwd };
+  }
+
   getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
   listProviders(): Promise<CustomProviderProfile[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
     return this.providers.list();
   }
-  upsertProvider(input: CustomProviderInput): Promise<CustomProviderProfile[]> { return this.providers.upsert(input); }
-  removeProvider(id: string): Promise<CustomProviderProfile[]> { return this.providers.remove(id); }
+  async upsertProvider(input: CustomProviderInput): Promise<CustomProviderProfile[]> {
+    const values = await this.providers.upsert(input);
+    await this.reconcileProviderDesktopDefault(values);
+    return values;
+  }
+  async removeProvider(id: string): Promise<CustomProviderProfile[]> {
+    const values = await this.providers.remove(id);
+    await this.reconcileProviderDesktopDefault(values);
+    return values;
+  }
   testProvider(id: string): Promise<ProviderConnectivityResult> { return this.providers.test(id); }
   pullProviderModels(id: string): Promise<Array<{ id: string; name?: string }>> { return this.providers.pullModels(id); }
   probeProviderDraft(input: ProviderConnectionDraft): Promise<ProviderDraftProbeResult> { return this.providers.probeDraft(input); }
   discoverProviderModels(input: ProviderConnectionDraft): Promise<ProviderModelCandidate[]> { return this.providers.discoverDraftModels(input); }
-  async setProviderDesktopDefault(modelId: string): Promise<AppSettings> { return this.settingsStore.patch({ defaultModel: modelId }); }
+  getProviderCapabilities(id: string): Promise<ProviderCapabilitySnapshot | undefined> { return this.providers.getCapabilities(id); }
+  deepScanProvider(id: string, options?: ProviderDeepScanOptions): Promise<ProviderDeepScanResult> { return this.providers.deepScan(id, options); }
+  cancelProviderDeepScan(id: string): boolean { return this.providers.cancelDeepScan(id); }
+  startProviderScan(scope: ProviderScanScope): Promise<ProviderScanJob> { return this.providers.startScan(scope); }
+  getProviderScanJob(jobId: string): ProviderScanJob | undefined { return this.providers.getScanJob(jobId); }
+  listProviderScanJobs(providerId?: string): ProviderScanJob[] { return this.providers.listScanJobs(providerId); }
+  cancelProviderScan(jobId: string): ProviderScanJob { return this.providers.cancelScan(jobId); }
+  getProviderCapabilityApplication(id: string): Promise<CapabilityApplicationDraft> { return this.providers.getCapabilityApplication(id); }
+  applyProviderCapabilities(id: string, selection?: CapabilityApplicationSelection): Promise<CustomProviderProfile[]> { return this.providers.applyCapabilities(id, selection); }
+  async setProviderDesktopDefault(modelId: string): Promise<AppSettings> {
+    const providers = await this.providers.list();
+    const available = providers.some((provider) => provider.enabled !== false
+      && provider.models.some((model) => model.enabled !== false && model.id === modelId));
+    if (!available) throw new Error("只能选择已启用的 Provider 模型作为桌面默认值");
+    return this.settingsStore.patch({ defaultModel: modelId });
+  }
   setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]> { return this.providers.setCliDefault(modelId); }
   reloadProviders(): Promise<void> { return this.providers.reload(); }
   async listAutomations(): Promise<AutomationTask[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const [tasks, accounts, providers] = await Promise.all([this.automations.list(), this.vault.list(), this.providers.list()]);
     const accountIds = new Set(accounts.map((value) => value.id));
-    const providerModels = new Map(providers.map((value) => [value.id, new Set(value.models.map((model) => model.id))]));
+    const providerModels = new Map(providers
+      .filter((value) => value.enabled !== false)
+      .map((value) => [value.id, new Set(value.models.filter((model) => model.enabled !== false).map((model) => model.id))]));
     return tasks.map((task) => {
       const accountMissing = Boolean(task.profile.accountId && !accountIds.has(task.profile.accountId));
       const providerMissing = Boolean(task.profile.providerId && (!providerModels.has(task.profile.providerId) || !providerModels.get(task.profile.providerId)!.has(task.profile.modelId)));
@@ -1132,8 +1657,11 @@ export class AppController {
   markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]> { return this.inbox.markRead(id, read); }
   clearInbox(): Promise<NotificationInboxItem[]> { return this.inbox.clear(); }
   getDraft(key: string): Promise<ComposerDraftState | null> { return this.uiState.getDraft(key); }
-  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection): Promise<void> { return this.uiState.setDraft(key, text, capability); }
+  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]): Promise<void> { return this.uiState.setDraft(key, text, capability, attachments); }
   clearDraft(key: string): Promise<void> { return this.uiState.clearDraft(key); }
+  createTextDraftAttachment(key: string, text: string): Promise<Attachment> { return this.uiState.createTextDraftAttachment(key, text); }
+  readTextDraftAttachment(path: string): Promise<string> { return this.uiState.readTextDraftAttachment(path); }
+  deleteTextDraftAttachment(path: string): Promise<void> { return this.uiState.deleteTextDraftAttachment(path); }
   listPromptHistory(cwd: string): Promise<string[]> { return this.uiState.listPromptHistory(cwd); }
   appendPromptHistory(cwd: string, text: string): Promise<void> { return this.uiState.appendPromptHistory(cwd, text); }
 
@@ -1211,14 +1739,52 @@ export class AppController {
   applyCliUpdate() { return this.updater.apply(); }
   getCliUpdateHistory() { return this.updater.history(); }
   async openPath(path: string): Promise<void> {
-    const extension = extname(path).toLowerCase();
-    if (!isAbsolute(path) || ![".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".mp4", ".webm", ".mov", ".mkv"].includes(extension)) {
-      throw new Error("仅允许打开 Grok 生成的图片或视频文件");
+    const result = await this.openTarget({ target: path, sessionId: this.focusedSessionId || undefined });
+    if (!result.ok) throw new Error(result.message);
+  }
+  async openTarget(intent: OpenTargetIntent): Promise<OpenTargetResult> {
+    const action = intent.action ?? "open";
+    const roots = [join(this.userDataPath, "session-attachments"), join(this.userDataPath, "session-media")];
+    const sessionRoot = intent.sessionId ? this.processes.snapshot(intent.sessionId)?.cwd ?? (await this.profiles.assignment(intent.sessionId))?.cwd : undefined;
+    if (sessionRoot) roots.push(sessionRoot);
+    const configuredWorkspace = (await this.settingsStore.get()).activeWorkspace;
+    if (configuredWorkspace) roots.push(configuredWorkspace);
+    const requestedRoot = intent.executionRoot;
+    if (requestedRoot && roots.some((root) => samePath(root, requestedRoot))) roots.push(requestedRoot);
+    const relativeBase = sessionRoot ?? (requestedRoot && roots.some((root) => samePath(root, requestedRoot)) ? requestedRoot : undefined) ?? configuredWorkspace;
+    if (!isAbsolute(intent.target) && !relativeBase) {
+      return { ok: false, target: intent.target, kind: "missing", action, message: "相对目标缺少会话或 Worktree 执行根目录" };
     }
-    const info = await stat(path);
-    if (!info.isFile()) throw new Error("媒体路径不是文件");
-    const error = await shell.openPath(path);
-    if (error) throw new Error(error);
+    const target = resolve(relativeBase ?? "", intent.target);
+    const canonicalTarget = await realpath(target).catch(() => undefined);
+    if (!canonicalTarget) return { ok: false, target, kind: "missing", action, message: `目标不存在：${target}` };
+    const trusted = await Promise.all(roots.map(async (root) => realpath(root).catch(() => resolve(root))));
+    if (!trusted.some((root) => pathWithin(canonicalTarget, root))) {
+      return { ok: false, target: canonicalTarget, kind: "missing", action, message: "目标超出当前会话、工作区或应用缓存范围" };
+    }
+    const info = await stat(canonicalTarget);
+    const extension = extname(canonicalTarget).toLowerCase();
+    const kind: OpenTargetResult["kind"] = info.isDirectory()
+      ? "directory"
+      : [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)
+        ? "image"
+        : [".mp4", ".webm", ".mov", ".mkv"].includes(extension)
+          ? "video"
+          : "file";
+    if (action === "copy-path") {
+      clipboard.writeText(canonicalTarget);
+      return { ok: true, target: canonicalTarget, kind, action, message: "路径已复制" };
+    }
+    if (action === "reveal") {
+      if (info.isDirectory()) {
+        const error = await shell.openPath(canonicalTarget);
+        return { ok: !error, target: canonicalTarget, kind, action, message: error || "已在资源管理器中打开目录" };
+      }
+      shell.showItemInFolder(canonicalTarget);
+      return { ok: true, target: canonicalTarget, kind, action, message: "已在资源管理器中定位文件" };
+    }
+    const error = await shell.openPath(canonicalTarget);
+    return { ok: !error, target: canonicalTarget, kind, action, message: error || (info.isDirectory() ? "已打开执行目录" : "已打开目标文件") };
   }
   openExternal(url: string) {
     if (!isAllowedExternalUrl(url)) throw new Error("仅允许打开 HTTP/HTTPS 链接");
@@ -1254,7 +1820,25 @@ export class AppController {
     return this.processes.openConfigured(assignment.cwd, assignment.sessionId, compiled.effort || settings.defaultEffort, compiled.mode, compiled.modelId || settings.defaultModel, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
   }
 
+  private async reconcileProviderDesktopDefault(providers: CustomProviderProfile[]): Promise<void> {
+    const settings = await this.settingsStore.get();
+    if (!settings.defaultModel) return;
+    const stillAvailable = providers.some((provider) => provider.enabled !== false
+      && provider.models.some((model) => model.enabled !== false && model.id === settings.defaultModel));
+    if (!stillAvailable) await this.settingsStore.patch({ defaultModel: "" });
+  }
+
   async dispose(): Promise<void> {
+    for (const timer of this.projectionReplayTimers.values()) clearTimeout(timer);
+    this.projectionReplayTimers.clear();
+    for (const [jobId, control] of this.mediaJobControls) {
+      control.abort.abort(new Error("应用正在退出"));
+      control.child?.kill();
+      if (control.transientSession) void this.catalog.delete(control.transientSession.cwd, control.transientSession.sessionId).catch(() => undefined);
+      const job = this.mediaJobs.get(jobId);
+      if (job) { job.status = "cancelled"; job.message = "应用退出，媒体任务已取消"; }
+    }
+    await this.conversationProjections.dispose();
     await this.auth.dispose();
     await this.processes.dispose();
     await this.providers.dispose();
@@ -1274,27 +1858,45 @@ export class AppController {
       failure.message = redactSecrets(failure.message).slice(0, 8_000);
       const provider = await this.providers?.providerForModel(failure.modelId);
       if (!provider) { failure.nextActions = turnFailureActions(failure.classification); return; }
-      failure.providerId = provider.id;
       // Match only a recent observation: an older one describes a different turn.
-      const observed = this.providers?.gatewayFailures(provider.id, gatewayScopeId)
+      const observedFailure = this.providers?.gatewayFailures(provider.id, gatewayScopeId)
         .find((record) => {
           const delta = Date.parse(failure.at) - Date.parse(record.at);
           return delta >= 0 && delta < 60_000;
         });
-      if (observed) {
-        failure.httpStatus ??= observed.status;
-        failure.traceId ??= observed.traceId;
-        failure.retryAfter ??= observed.retryAfter;
-        failure.gatewayPhase ??= observed.phase;
-        failure.sanitizedCount ??= observed.sanitizedCount;
-        failure.classification = classifyTurnFailure({
-          message: failure.message,
-          httpStatus: failure.httpStatus,
-          jsonRpcCode: failure.jsonRpcCode,
-          processExitCode: failure.processExitCode,
-          cancelled: failure.cancelled,
+      const observed = observedFailure ?? this.providers?.gatewayObservations(provider.id, gatewayScopeId)
+        .find((record) => {
+          const delta = Date.parse(failure.at) - Date.parse(record.at);
+          return delta >= 0 && delta < 60_000;
         });
+      if (!observed) {
+        // A requested local model id is not proof that the custom provider
+        // handled the turn. Older persisted sessions can expose only the
+        // upstream alias and remain on the official route. Do not label an
+        // official quota error as a Provider failure without gateway evidence.
+        failure.nextActions = [
+          `本回合没有观察到「${provider.name}」兼容网关请求；应用将重新应用自定义模型路由后再发送`,
+          ...turnFailureActions(failure.classification),
+        ];
+        return;
       }
+      failure.providerId = provider.id;
+      if (observed.status !== undefined && observed.status >= 400) failure.httpStatus ??= observed.status;
+      failure.traceId ??= observed.traceId;
+      failure.retryAfter ??= observed.retryAfter;
+      failure.gatewayPhase ??= observed.phase;
+      if (observed.reason) failure.gatewayReason ??= observed.reason;
+      failure.gatewayProxyMode ??= observed.proxyMode;
+      failure.gatewayRequestId ??= observed.requestId;
+      failure.gatewayElapsedMs ??= observed.elapsedMs;
+      failure.sanitizedCount ??= observed.sanitizedCount;
+      failure.classification = classifyTurnFailure({
+        message: failure.message,
+        httpStatus: failure.httpStatus,
+        jsonRpcCode: failure.jsonRpcCode,
+        processExitCode: failure.processExitCode,
+        cancelled: failure.cancelled,
+      });
       // A Gemini-family upstream on the pass-through profile is the single most
       // actionable case: the remedy is one setting, not a retry.
       if (failure.classification === "schema-rejected" && (provider.schemaProfile ?? "standard") === "standard") {
@@ -1312,9 +1914,25 @@ export class AppController {
     this.agentChanges.record(sessionId, snapshot?.cwd ?? "", this.processes.get(sessionId)?.activeTurnId, tool);
   }
 
-  /** Real agent writes for this session; empty when the agent has not written anything. */
-  getAgentChanges(sessionId: string, scope: "last-turn" | "session"): AgentChangeIndex {
-    return this.agentChanges.index(sessionId, scope);
+  /** Real agent writes for this session; rebuilt from the private projection after restart. */
+  async getAgentChanges(sessionId: string, scope: "last-turn" | "session"): Promise<AgentChangeIndex> {
+    let index = this.agentChanges.index(sessionId, scope);
+    if (index.files.length) return index;
+    const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+    if (!projection) return index;
+    const cwd = this.processes.snapshot(sessionId)?.cwd ?? "";
+    let turnId: string | undefined;
+    for (const raw of projection.events) {
+      const event = raw as ChatEvent;
+      if (event.type === "turn-started") {
+        turnId = event.presentation.turnId;
+        this.agentChanges.beginTurn(sessionId, cwd, turnId);
+      } else if (event.type === "tool-call") {
+        this.agentChanges.record(sessionId, cwd, turnId, event.tool);
+      } else if (event.type === "turn-completed") turnId = undefined;
+    }
+    index = this.agentChanges.index(sessionId, scope);
+    return index;
   }
 
   /**
@@ -1347,10 +1965,49 @@ export class AppController {
       this.captureQuotaSignal(event.message, event.sessionId ? this.processes.snapshot(event.sessionId)?.modelId : undefined);
       if (event.failure) await this.enrichFailure(event.failure);
     }
-    this.window?.webContents.send("grok:event", event);
+    const sessionId = event.sessionId ?? "";
+    if (event.type === "session-reset" && sessionId) {
+      this.projectionReplaying.add(sessionId);
+      this.projectionReplayBuffers.set(sessionId, []);
+      this.armProjectionReplayWatchdog(sessionId);
+      this.window?.webContents.send("grok:event", event);
+      const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+      if (projection) {
+        this.window?.webContents.send("grok:event", {
+          type: "conversation-projection-restore",
+          sessionId,
+          projection,
+        } satisfies ChatEvent);
+      }
+    } else {
+      const replayingVisibleEvent = sessionId
+        && this.projectionReplaying.has(sessionId)
+        && !["session-ready", "commands", "mode", "meta", "status"].includes(event.type);
+      if (replayingVisibleEvent) {
+        const buffered = this.projectionReplayBuffers.get(sessionId);
+        if (buffered && buffered.length < 20_000) buffered.push(sanitizeProjectionReplayEvent(event));
+      } else {
+        this.window?.webContents.send("grok:event", event);
+      }
+      if (event.type === "session-ready" && sessionId && this.projectionReplaying.has(sessionId)) {
+        const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+        if (projection) {
+          this.window?.webContents.send("grok:event", {
+            type: "conversation-projection-restore",
+            sessionId,
+            projection,
+          } satisfies ChatEvent);
+        }
+        if (!this.projectionOpenSessions.has(sessionId)) this.finishProjectionReplay(sessionId);
+      }
+    }
 
     // Everything below is a secondary projection. A full disk, stale cache or
     // optional dashboard must never suppress the primary chat event.
+    if (!this.projectionReplaying.has(sessionId)) {
+      await this.conversationProjections.record(event)
+        .catch((error) => this.log.log(`会话可见内容投影失败：${error instanceof Error ? error.message : String(error)}`));
+    }
     await this.dashboard.record(event).catch((error) => this.log.log(`Agent Dashboard 记录失败：${error instanceof Error ? error.message : String(error)}`));
     if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
       await this.turnPresentations.recordForSession(event.sessionId, event.presentation)
@@ -1363,6 +2020,10 @@ export class AppController {
     if (event.type === "tool-call") {
       try { this.recordAgentChange(event.sessionId, event.tool); }
       catch (error) { await this.log.log(`Agent 改动记录失败：${error instanceof Error ? error.message : String(error)}`); }
+    }
+    if (event.type === "turn-started") {
+      const cwd = this.processes.snapshot(event.sessionId)?.cwd ?? "";
+      this.agentChanges.beginTurn(event.sessionId, cwd, event.presentation.turnId);
     }
     if (event.type === "user-message-status") {
       await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery)
@@ -1378,6 +2039,47 @@ export class AppController {
       if (this.runningSessions.has(event.sessionId)) await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "后台会话失败" : "后台会话已完成", detail: event.text, sessionId: event.sessionId });
       if (this.runningSessions.delete(event.sessionId)) this.showSessionNotification(event.sessionId, event.status === "error");
     }
+  }
+
+  private finishProjectionReplay(sessionId: string): void {
+    this.projectionReplaying.delete(sessionId);
+    this.projectionReplayBuffers.delete(sessionId);
+    const timer = this.projectionReplayTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.projectionReplayTimers.delete(sessionId);
+  }
+
+  private armProjectionReplayWatchdog(sessionId: string): void {
+    const previous = this.projectionReplayTimers.get(sessionId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => void this.releaseStalledProjectionReplay(sessionId), 10_000);
+    timer.unref?.();
+    this.projectionReplayTimers.set(sessionId, timer);
+  }
+
+  /**
+   * A transport reset normally ends with session-ready. If an older or broken
+   * CLI never emits it, keeping replay mode forever would silently discard all
+   * later visible events. Prefer the already-restored local projection; only
+   * when no projection exists do we release and seed the bounded replay buffer.
+   */
+  private async releaseStalledProjectionReplay(sessionId: string): Promise<void> {
+    if (!this.projectionReplaying.has(sessionId)) return;
+    if (this.projectionOpenSessions.has(sessionId)) {
+      this.armProjectionReplayWatchdog(sessionId);
+      return;
+    }
+    const buffered = [...(this.projectionReplayBuffers.get(sessionId) ?? [])];
+    const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+    this.finishProjectionReplay(sessionId);
+    if (!projection) {
+      for (const event of buffered) {
+        this.window?.webContents.send("grok:event", event);
+        await this.conversationProjections.record(event)
+          .catch((error) => this.log.log(`会话重建回放投影失败：${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+    await this.log.log(`会话传输重建未收到 session-ready，已在 10 秒后解除回放保护：${sessionId.slice(0, 12)}`);
   }
 
   private async finalizeMemorySession(_sessionId: string, session: import("./services/grok-acp-adapter").GrokAcpAdapter): Promise<void> {
@@ -1471,8 +2173,6 @@ export class AppController {
     const providers = await this.providers.list();
     const modelIds = new Set(providers.find((value) => value.id === providerId)?.models.map((value) => value.id) ?? []);
     const references: string[] = [];
-    const settings = await this.settingsStore.get();
-    if (modelIds.has(settings.defaultModel)) references.push("桌面默认模型");
     for (const snapshot of this.processes.snapshots()) if (snapshot.modelId && modelIds.has(snapshot.modelId)) references.push(`实时会话 ${snapshot.sessionId.slice(0, 8)}`);
     for (const task of await this.automations.list()) if (modelIds.has(task.profile.modelId)) references.push(`定时任务 ${task.name}`);
     return references;
@@ -1529,6 +2229,103 @@ export class AppController {
 function normalizeBackgroundStatus(value: unknown): BackgroundTaskSummary["status"] { const text = String(value ?? "running").toLowerCase(); return /fail|error/.test(text) ? "failed" : /complete|success|done/.test(text) ? "completed" : /cancel|kill|stop/.test(text) ? "cancelled" : /wait|permission/.test(text) ? "needs-user" : /queue|pending/.test(text) ? "queued" : "running"; }
 
 function samePath(left: string, right: string): boolean { return left.replace(/[\\/]+$/, "").toLocaleLowerCase() === right.replace(/[\\/]+$/, "").toLocaleLowerCase(); }
+function pathWithin(target: string, root: string): boolean {
+  const value = relative(resolve(root), resolve(target));
+  return value === "" || (!value.startsWith("..") && !isAbsolute(value));
+}
+function createHashForPath(value: string): string { return createHash("sha256").update(value).digest("hex").slice(0, 32); }
+function windowsBatchCommand(executable: string, args: string[]): string {
+  const values = [executable, ...args];
+  if (values.some((value) => /[\r\n"&|<>^%!]/.test(value))) {
+    throw new Error("批处理 CLI 路径或媒体提示包含不安全的 cmd.exe 元字符；请安装原生 Grok CLI 可执行文件");
+  }
+  return `call ${values.map((value) => `"${value}"`).join(" ")}`;
+}
+function mediaToolPrompt(request: MediaCreationRequest): string {
+  const aspect = request.aspectRatio === "auto" ? "" : `，画面比例 ${request.aspectRatio}`;
+  const once = "只调用一次媒体工具；成功时返回实际产物路径，失败时原样返回第一次错误并立即停止，不要重试或改用其它媒体工具。";
+  if (request.kind === "image") return `${request.prompt.trim()}${aspect}。使用 image_gen 生成图片。${once}`;
+  const references = (request.referencePaths ?? []).map((path) => `@${path}`).join("\n");
+  return `${request.prompt.trim()}${aspect}，时长 ${request.duration ?? 6} 秒，分辨率 ${request.resolution ?? "480p"}。${references ? `参考图：\n${references}\n` : ""}无参考图时使用 video_gen；有一张参考图时使用 image_to_video，多张参考图时使用 reference_to_video。${once}`;
+}
+
+export function normalizeMediaJobError(error: unknown): string {
+  const raw = (error instanceof Error ? error.message : String(error))
+    .replace(/\u001b\[[0-9;]*m/g, "")
+    .trim();
+  if (/Zero Data Retention teams must provide output\.upload_url/i.test(raw)) {
+    return "当前 Grok 团队启用了 Zero Data Retention，但已安装的 CLI 视频工具无法提供 output.upload_url。这不是内容审核或桌面路径配置错误；请改用非 ZDR 团队，或使用已配置上传回调的视频 Provider。";
+  }
+  return raw || "媒体任务失败";
+}
+
+function localMediaMimeType(path: string): string | undefined {
+  switch (extname(path).toLowerCase()) {
+    case ".png": return "image/png";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".webp": return "image/webp";
+    case ".gif": return "image/gif";
+    case ".bmp": return "image/bmp";
+    case ".mp4": return "video/mp4";
+    case ".webm": return "video/webm";
+    case ".mov": return "video/quicktime";
+    default: return undefined;
+  }
+}
+
+function sanitizeProjectionReplayEvent(event: ChatEvent): ChatEvent {
+  // Replay buffers live only for the duration of session/open. Keep an
+  // immutable copy so later adapter mutations cannot alter the recovered
+  // conversation. Oversized tool screenshots are intentionally omitted here;
+  // durable media blocks and attachment caches remain the canonical image
+  // surfaces.
+  if (event.type !== "tool-call") return structuredClone(event);
+  return {
+    ...structuredClone(event),
+    tool: {
+      ...structuredClone(event.tool),
+      content: event.tool.content?.map((item) => {
+        if (!item || typeof item !== "object") return item;
+        const value = item as Record<string, unknown>;
+        return value.type === "image" && typeof value.data === "string" && value.data.length > 512 * 1024
+          ? { ...value, data: "" }
+          : item;
+      }),
+    },
+  };
+}
+
+async function readBoundedResponseBuffer(response: Response, maxBytes: number): Promise<Buffer> {
+  const declared = Number(response.headers.get("content-length") ?? 0);
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("媒体产物超过缓存大小限制");
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("media artifact too large").catch(() => undefined);
+        throw new Error("媒体产物超过缓存大小限制");
+      }
+      chunks.push(Buffer.from(next.value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function isSupportedVideoBuffer(buffer: Buffer): boolean {
+  return buffer.subarray(4, 8).toString("ascii") === "ftyp"
+    || buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
+    || buffer.subarray(0, 4).toString("ascii") === "OggS";
+}
+
 function profileSlug(value: string): string { return value.normalize("NFKC").toLocaleLowerCase().replace(/[^a-z0-9\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 32) || "session"; }
 
 function mimeForExtension(extension: string): string | undefined {

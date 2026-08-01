@@ -23,7 +23,8 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
     return <div className="retry-state-card"><span className="process-dot running" /><strong>上游请求正在重试</strong><span>{[count, wait, message.reason].filter(Boolean).join(" · ")}</span></div>;
   }
   if (message.kind === "error") return <ErrorCard text={message.text} failure={message.failure} onDiagnose={onDiagnose} />;
-  if (message.kind === "media") return <GeneratedMediaCard message={message} />;
+  if (message.kind === "media") return <GeneratedMediaGallery messages={[message]} />;
+  if (message.kind === "recovery") return <div className={`history-recovery-card ${message.status}`}><strong>{message.status === "recovered" ? "历史内容已恢复" : "历史内容无法可靠恢复"}</strong><span>{message.text}</span></div>;
   if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;
   if (message.kind === "permission") return <PermissionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "question") return <QuestionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
@@ -31,10 +32,37 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   return null;
 });
 
-function GeneratedMediaCard({ message }: { message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
+export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<UiMessage, { kind: "media" }>> }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? messages : messages.slice(0, 4);
+  const images = messages.filter((message) => message.media === "image").length;
+  const videos = messages.length - images;
+  const label = [images ? `${images} 张图片` : "", videos ? `${videos} 个视频` : ""].filter(Boolean).join("、");
+  return <div className={`media-card result-media media-gallery ${messages.length === 1 ? "single" : "multiple"}`}>
+    <header><strong>{messages.length === 1 ? messages[0]?.media === "image" ? "生成图片" : "生成视频" : `媒体结果 · ${label}`}</strong><span>最终结果</span></header>
+    <div className="media-result-grid">{visible.map((message) => <GeneratedMediaItem key={message.id} message={message} />)}</div>
+    {messages.length > 4 && <button type="button" className="media-gallery-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "收起媒体结果" : `再显示 ${messages.length - 4} 项`}</button>}
+  </div>;
+}
+
+function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
   const [preview, setPreview] = useState(false);
+  const [unavailable, setUnavailable] = useState(false);
   const src = message.isData ? `data:${message.mimeType || "image/png"};base64,${message.source}` : toFileUrl(message.source);
-  return <div className="media-card result-media"><header><strong>{message.media === "image" ? "生成图片" : "生成视频"}</strong><span>最终结果</span></header>{message.media === "image" ? <button className="generated-image-button" onClick={() => setPreview(true)}><img src={src} alt="Grok 生成图片" /></button> : <video src={src} controls />}{!message.isData && <div className="button-row"><button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button><button onClick={() => void navigator.clipboard.writeText(message.source)}>复制路径</button></div>}{preview && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onClick={(event) => event.stopPropagation()}/><span>生成图片</span></div>, document.body)}</div>;
+  useEffect(() => { setUnavailable(false); setPreview(false); }, [src]);
+  const pathActions = !message.isData && <><button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button><button onClick={() => void navigator.clipboard.writeText(message.source)}>复制路径</button></>;
+  return <div className="media-result-item">
+    {unavailable
+      ? <div className="media-unavailable"><strong>{message.media === "image" ? "图片文件不可用" : "视频文件不可用"}</strong><span>历史缓存可能已被清理或原文件已移动。不会再显示损坏的图片占位。</span></div>
+      : message.media === "image"
+        ? <button className="generated-image-button" onClick={() => setPreview(true)}><img src={src} alt="Grok 生成图片" onLoad={() => setUnavailable(false)} onError={() => setUnavailable(true)} /></button>
+        : <video src={src} controls onError={() => setUnavailable(true)} />}
+    <div className="media-inline-actions">
+      {!unavailable && message.media === "image" && <><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button></>}
+      {pathActions}
+    </div>
+    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
+  </div>;
 }
 
 function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { kind: "user" }>; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void }): React.JSX.Element {
@@ -46,10 +74,7 @@ function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { k
     <div className="bubble user-bubble">
       {images.length > 0 && <div className={`user-attachment-grid count-${Math.min(4, images.length)}`}>{images.map((attachment) => {
         const src = attachment.source ? (attachment.isData ? `data:${attachment.mimeType || "image/png"};base64,${attachment.source}` : toFileUrl(attachment.source)) : "";
-        const missing = attachment.availability === "missing" || !src;
-        return <button type="button" className={`user-image-preview ${missing ? "missing" : ""}`} key={attachment.id} disabled={missing} title={attachment.name} onClick={() => setPreview({ src, name: attachment.name })}>
-          {missing ? <span><strong>{attachment.name}</strong><small>源文件不可用</small></span> : <img src={src} alt={attachment.name} onError={(event) => { event.currentTarget.hidden = true; event.currentTarget.parentElement?.classList.add("missing"); }} />}
-        </button>;
+        return <UserImageAttachmentPreview key={attachment.id} attachment={attachment} src={src} onPreview={() => setPreview({ src, name: attachment.name })}/>;
       })}</div>}
       {files.length > 0 && <div className="user-file-previews">{files.map((attachment) => <div className="user-file-preview" key={attachment.id}><span aria-hidden="true">{attachment.kind === "folder" ? "▣" : "▤"}</span><span><strong>{attachment.name}</strong><small>{attachment.availability === "missing" ? "源文件不可用" : formatBytes(attachment.size)}</small></span></div>)}</div>}
       {message.text && <LazyMarkdownView text={message.text} />}
@@ -59,7 +84,22 @@ function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { k
         {message.text && <button type="button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard.writeText(message.text)}>复制</button>}
       </div>
     </div>
-    {preview && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onClick={() => setPreview(undefined)}><button type="button" aria-label="关闭大图" onClick={() => setPreview(undefined)}>×</button><img src={preview.src} alt={preview.name} onClick={(event) => event.stopPropagation()} /><span>{preview.name}</span></div>, document.body)}
+    {preview && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onClick={() => setPreview(undefined)}><button type="button" aria-label="关闭大图" onClick={() => setPreview(undefined)}>×</button><img src={preview.src} alt={preview.name} onClick={(event) => event.stopPropagation()} /><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(preview.src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(preview.src)}>另存为</button></div><span>{preview.name}</span></div>, document.body)}
+  </div>;
+}
+
+function UserImageAttachmentPreview({ attachment, src, onPreview }: {
+  attachment: NonNullable<Extract<UiMessage, { kind: "user" }>["attachments"]>[number];
+  src: string;
+  onPreview(): void;
+}): React.JSX.Element {
+  const [unavailable, setUnavailable] = useState(attachment.availability === "missing" || !src);
+  useEffect(() => setUnavailable(attachment.availability === "missing" || !src), [attachment.availability, src]);
+  return <div className="image-action-surface">
+    <button type="button" className={`user-image-preview ${unavailable ? "missing" : ""}`} disabled={unavailable} title={attachment.name} onClick={onPreview}>
+      {unavailable ? <span><strong>{attachment.name}</strong><small>源文件不可用</small></span> : <img src={src} alt={attachment.name} onLoad={() => setUnavailable(false)} onError={() => setUnavailable(true)} />}
+    </button>
+    {!unavailable && <div className="media-inline-actions compact"><button onClick={() => void window.grokDesktop.copyImage(src)}>复制</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存</button></div>}
   </div>;
 }
 
@@ -107,20 +147,64 @@ function ToolCard({ message, open, sessionId, navigationRoot, onNavigate }: { me
 }
 
 function PermissionCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "permission" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
-  const [answered, setAnswered] = useState(false);
-  const respond = async (id: string): Promise<void> => { await window.grokDesktop.respondPermission(sessionId, message.request.requestId, id); setAnswered(true); onResolved?.(message.id); };
-  return <div className="action-card"><strong>需要权限</strong><p>Grok 请求执行一项受保护操作。</p><div className="button-row">{message.request.options.map((option) => <button key={option.optionId} className={/reject|deny/i.test(option.kind || "") ? "danger" : ""} disabled={answered} onClick={() => void respond(option.optionId)}>{option.name || permissionLabel(option.kind)}</button>)}</div></div>;
+  const [state, setState] = useState<{ value: "idle" | "submitting" | "failed"; message?: string; optionId?: string }>({ value: "idle" });
+  const respond = async (id: string): Promise<void> => {
+    if (state.value === "submitting") return;
+    setState({ value: "submitting", message: "正在提交决定…", optionId: id });
+    try {
+      await window.grokDesktop.respondPermission(sessionId, message.request.requestId, id);
+      onResolved?.(message.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (isExpiredInteractionError(detail)) { onResolved?.(message.id); return; }
+      setState({ value: "failed", message: detail });
+    }
+  };
+  const detail = protectedActionSummary(message.request.toolCall);
+  const denyOptions = message.request.options.filter((option) => isDenyPermission(option.name, option.kind));
+  const allowOptions = message.request.options.filter((option) => !isDenyPermission(option.name, option.kind));
+  const primaryOption = allowOptions.find((option) => option.kind === "allow_once") ?? allowOptions.at(-1);
+  const scopedOptions = allowOptions.filter((option) => option.optionId !== primaryOption?.optionId);
+  const optionButton = (option: typeof message.request.options[number], className = "") => <button
+    key={option.optionId}
+    type="button"
+    className={className}
+    disabled={state.value === "submitting"}
+    onClick={() => void respond(option.optionId)}
+  >{state.value === "submitting" && state.optionId === option.optionId ? "提交中…" : localizedPermissionName(option.name, option.kind)}</button>;
+  return <section className="action-card decision-card codex-request-card" aria-label="权限确认">
+    <div className="request-card-body"><span className="request-card-eyebrow">需要批准</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝不会创建新的用户消息。</p></div>
+    {state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}
+    <footer className="request-card-actions">
+      <div className="request-leading-actions">{scopedOptions.map((option) => optionButton(option))}</div>
+      <div className="request-primary-actions">{denyOptions.map((option) => optionButton(option))}{primaryOption ? optionButton(primaryOption, "primary") : null}</div>
+    </footer>
+  </section>;
 }
 
 function QuestionCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "question" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const submit = async (): Promise<void> => { await window.grokDesktop.respondQuestion(sessionId, message.requestId, answers); onResolved?.(message.id); };
-  return <div className="action-card"><strong>Grok 需要你的回答</strong>{message.questions.map((question) => <label key={question.question}><span>{question.question}</span>{question.options?.length ? <select value={answers[question.question] || ""} onChange={(event) => setAnswers({ ...answers, [question.question]: event.target.value })}><option value="">请选择</option>{question.options.map((option) => <option key={option.label}>{option.label}</option>)}</select> : <input value={answers[question.question] || ""} onChange={(event) => setAnswers({ ...answers, [question.question]: event.target.value })} />}</label>)}<button onClick={() => void submit()}>提交回答</button></div>;
+  const [state, setState] = useState<{ value: "idle" | "submitting" | "failed"; message?: string }>({ value: "idle" });
+  const submit = async (): Promise<void> => {
+    if (state.value === "submitting") return;
+    setState({ value: "submitting", message: "正在提交回答…" });
+    try { await window.grokDesktop.respondQuestion(sessionId, message.requestId, answers); onResolved?.(message.id); }
+    catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (isExpiredInteractionError(detail)) { onResolved?.(message.id); return; }
+      setState({ value: "failed", message: detail });
+    }
+  };
+  return <section className="action-card decision-card"><header><span className="decision-icon" aria-hidden="true">?</span><div><strong>Grok 需要你的回答</strong><p>回答后原回合会继续，不会额外发送一条用户消息。</p></div></header>{message.questions.map((question) => <label key={question.question}><span>{question.question}</span>{question.options?.length ? <select disabled={state.value === "submitting"} value={answers[question.question] || ""} onChange={(event) => setAnswers({ ...answers, [question.question]: event.target.value })}><option value="">请选择</option>{question.options.map((option) => <option key={option.label}>{option.label}</option>)}</select> : <input disabled={state.value === "submitting"} value={answers[question.question] || ""} onChange={(event) => setAnswers({ ...answers, [question.question]: event.target.value })} />}</label>)}{state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}<button disabled={state.value === "submitting"} onClick={() => void submit()}>{state.value === "submitting" ? "提交中…" : "提交回答"}</button></section>;
 }
 
 function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "plan" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
   const [comment, setComment] = useState("");
+  const [showComment, setShowComment] = useState(false);
   const [decision, setDecision] = useState<{ state: "idle" | "submitting" | "accepted" | "failed"; message?: string }>({ state: message.resolved ? "accepted" : "idle" });
+  if (!message.interactive || message.requestId === undefined || message.requestId === "") {
+    return <details className="plan-card plan-document" open><summary>实施计划</summary><LazyMarkdownView text={message.text || "计划正在生成。"} /></details>;
+  }
   const answer = async (verdict: "approved" | "rejected" | "cancelled"): Promise<void> => {
     if (decision.state !== "idle" && decision.state !== "failed") return;
     setDecision({ state: "submitting", message: "正在提交计划决策…" });
@@ -129,11 +213,22 @@ function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessa
       setDecision({ state: "accepted", message: receipt.message });
       onResolved?.(message.id);
     } catch (error) {
-      setDecision({ state: "failed", message: error instanceof Error ? error.message : String(error) });
+      const detail = error instanceof Error ? error.message : String(error);
+      if (isExpiredInteractionError(detail)) { onResolved?.(message.id); return; }
+      setDecision({ state: "failed", message: detail });
     }
   };
   const locked = decision.state === "submitting" || decision.state === "accepted";
-  return <div className="plan-card"><header>实施计划</header><LazyMarkdownView text={message.text || "计划已生成，请选择下一步。"} /><textarea disabled={locked} placeholder="可选备注（随本次计划决策提交）" value={comment} onChange={(event) => setComment(event.target.value)} />{decision.message && <div className={`plan-decision-status ${decision.state}`}>{decision.message}</div>}<div className="button-row"><button disabled={locked} className="primary" onClick={() => void answer("approved")}>{decision.state === "submitting" ? "提交中…" : "批准并执行"}</button><button disabled={locked} onClick={() => void answer("rejected")}>继续规划</button><button disabled={locked} className="danger" onClick={() => void answer("cancelled")}>取消</button></div></div>;
+  return <section className="plan-card decision-card codex-request-card codex-plan-request">
+    <div className="request-card-body"><span className="request-card-eyebrow">计划</span><strong>准备实施以下计划</strong><p>实施、继续规划或取消只会响应当前计划请求一次。</p></div>
+    <div className="plan-content"><LazyMarkdownView text={message.text || "计划已生成，请选择下一步。"} /></div>
+    {showComment && <div className="plan-feedback"><textarea autoFocus disabled={locked} placeholder="补充要求（可选，随本次决定提交）" value={comment} onChange={(event) => setComment(event.target.value)} /></div>}
+    {decision.message && <div className={`plan-decision-status ${decision.state}`}>{decision.message}</div>}
+    <footer className="request-card-actions">
+      <div className="request-leading-actions"><button type="button" disabled={locked} aria-expanded={showComment} onClick={() => setShowComment((value) => !value)}>{showComment ? "收起说明" : "添加说明"}</button></div>
+      <div className="request-primary-actions"><button type="button" disabled={locked} onClick={() => void answer("rejected")}>继续规划</button><button type="button" disabled={locked} onClick={() => void answer("cancelled")}>取消</button><button type="button" disabled={locked} className="primary" onClick={() => void answer("approved")}>{decision.state === "submitting" ? "提交中…" : "实施计划"}</button></div>
+    </footer>
+  </section>;
 }
 
 function ErrorCard({ text, failure, onDiagnose }: { text: string; failure?: TurnFailure; onDiagnose?(failure: TurnFailure): void }): React.JSX.Element {
@@ -147,6 +242,11 @@ function ErrorCard({ text, failure, onDiagnose }: { text: string; failure?: Turn
     ["模型", failure.modelId ?? ""],
     ["Trace", failure.traceId ?? ""],
     ["重试于", failure.retryAfter ?? ""],
+    ["网关阶段", failure.gatewayPhase ?? ""],
+    ["断开来源", failure.gatewayReason ?? ""],
+    ["网络路由", failure.gatewayProxyMode === "direct" ? "直连" : failure.gatewayProxyMode === "inherit" ? "继承应用代理" : ""],
+    ["网关请求", failure.gatewayRequestId ?? ""],
+    ["网关耗时", failure.gatewayElapsedMs === undefined ? "" : `${failure.gatewayElapsedMs} ms`],
     ["Schema 清理", failure.sanitizedCount ? `${failure.sanitizedCount} 处` : ""],
   ].filter(([, value]) => value) as Array<[string, string]>) : [];
   return <details className={`error-card structured-error ${failure ? failure.classification : ""}`}>
@@ -183,7 +283,22 @@ export function redactErrorText(value: string): string {
 
 function statusLabel(status: string): string { return status === "completed" ? "完成" : status === "failed" ? "失败" : status === "in_progress" ? "运行中" : "等待"; }
 function permissionLabel(kind?: string): string { return kind === "allow_always" ? "始终允许" : kind === "allow_once" ? "仅本次允许" : /reject|deny/.test(kind || "") ? "拒绝" : "确认"; }
-function toFileUrl(path: string): string { return `file:///${path.replace(/^\\\\\?\\/, "").replace(/\\/g, "/")}`; }
+function localizedPermissionName(name?: string, kind?: string): string {
+  if (/^(?:yes|allow|proceed)/i.test(name || "") || /allow/.test(kind || "")) return permissionLabel(kind || "allow_once");
+  if (/^(?:no|deny|reject)/i.test(name || "") || /reject|deny/.test(kind || "")) return "拒绝并说明原因";
+  return name?.trim() || permissionLabel(kind);
+}
+function isDenyPermission(name?: string, kind?: string): boolean { return /^(?:no|deny|reject)/i.test(name || "") || /reject|deny/.test(kind || ""); }
+function isExpiredInteractionError(value: string): boolean {
+  return /已经结束|已被响应|已被回答|没有可响应|request.*(?:ended|closed|expired|not found)|invalid request/i.test(value);
+}
+function protectedActionSummary(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const tool = value as Record<string, unknown>;
+  const title = [tool.title, tool.name, tool.description].find((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  return title?.trim().slice(0, 240) ?? "";
+}
+function toFileUrl(path: string): string { return `grok-media://local/?path=${encodeURIComponent(path.replace(/^\\\\\?\\/, ""))}`; }
 function formatBytes(size?: number): string { return typeof size !== "number" ? "附件" : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`; }
 
 export function toolLocationCandidates(tool: Extract<UiMessage, { kind: "tool" }>["tool"]): Array<{ path: string; line?: number }> {

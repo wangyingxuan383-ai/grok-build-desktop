@@ -5,6 +5,7 @@ import type { Attachment, UserMessageAttachmentPreview, UserMessageAttachmentRes
 import { JsonStore } from "./json-store";
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 const MAX_CACHE_BYTES = 512 * 1024 * 1024;
 const MAX_CACHE_AGE_MS = 30 * 24 * 60 * 60_000;
 
@@ -98,25 +99,47 @@ export class AttachmentCacheService {
 
   private async materialize(sessionId: string, attachment: Attachment): Promise<Attachment> {
     if (!attachment.data) {
-      if (attachment.kind !== "image" || !attachment.path) return attachment;
+      if (!attachment.path) return attachment;
+      if (attachment.kind === "file" && attachment.draftText && normalizeTextMime(attachment.mimeType) === "text/plain") {
+        const info = await stat(attachment.path);
+        if (!info.isFile() || info.size > MAX_TEXT_BYTES) throw new Error(`${attachment.name || "文本附件"} 不存在或超过 5 MiB 文本限制`);
+        const buffer = await readFile(attachment.path);
+        const target = await this.writeCachedFile(sessionId, attachment.id, ".txt", buffer);
+        return { ...attachment, data: undefined, path: target, mimeType: "text/plain", size: buffer.length };
+      }
+      if (attachment.kind !== "image") return attachment;
       const info = await stat(attachment.path);
-      if (info.size > MAX_IMAGE_BYTES) throw new Error(`${attachment.name || "图片"} 超过 20 MiB 图片限制`);
+      if (!info.isFile() || info.size > MAX_IMAGE_BYTES) throw new Error(`${attachment.name || "图片"} 不存在或超过 20 MiB 图片限制`);
       const buffer = await readFile(attachment.path);
       const mimeType = detectImageMime(buffer);
       if (!mimeType) throw new Error(`${attachment.name || "图片"} 不是受支持的 PNG、JPEG、WebP 或 GIF 图片`);
       if (attachment.mimeType?.startsWith("image/") && normalizeMime(attachment.mimeType) !== mimeType) throw new Error(`${attachment.name || "图片"} 的图片类型与内容不一致`);
-      return { ...attachment, mimeType, size: info.size };
+      // Copy even an explicitly picked image into the session cache. The
+      // source may move after the turn, and native image copy/save is allowed
+      // only from the trusted workspace or these application-owned caches.
+      const target = await this.writeCachedFile(sessionId, attachment.id, extensionForMime(mimeType), buffer);
+      return { ...attachment, data: undefined, path: target, mimeType, size: buffer.length };
     }
-    if (attachment.kind !== "image") throw new Error("只有图片附件可以使用内嵌数据");
     const buffer = decodeBase64(attachment.data);
+    if (attachment.kind === "file" && normalizeTextMime(attachment.mimeType) === "text/plain") {
+      if (buffer.length > MAX_TEXT_BYTES) throw new Error(`${attachment.name || "文本附件"} 超过 5 MiB 文本限制`);
+      const target = await this.writeCachedFile(sessionId, attachment.id, ".txt", buffer);
+      return { ...attachment, data: undefined, path: target, mimeType: "text/plain", size: buffer.length };
+    }
+    if (attachment.kind !== "image") throw new Error("只有图片或纯文本附件可以使用内嵌数据");
     if (buffer.length > MAX_IMAGE_BYTES) throw new Error(`${attachment.name || "粘贴的图片"} 超过 20 MiB 图片限制`);
     const mimeType = detectImageMime(buffer);
     if (!mimeType) throw new Error(`${attachment.name || "粘贴的图片"} 不是受支持的 PNG、JPEG、WebP 或 GIF 图片`);
     if (attachment.mimeType?.startsWith("image/") && normalizeMime(attachment.mimeType) !== mimeType) throw new Error(`${attachment.name || "粘贴的图片"} 的图片类型与内容不一致`);
     const extension = extensionForMime(mimeType);
+    const target = await this.writeCachedFile(sessionId, attachment.id, extension, buffer);
+    return { ...attachment, data: undefined, path: target, mimeType, size: buffer.length };
+  }
+
+  private async writeCachedFile(sessionId: string, attachmentId: string, extension: string, buffer: Buffer): Promise<string> {
     const directory = this.sessionRoot(sessionId);
     await mkdir(directory, { recursive: true });
-    const stem = createHash("sha256").update(attachment.id).digest("hex").slice(0, 24);
+    const stem = createHash("sha256").update(attachmentId).digest("hex").slice(0, 24);
     const target = join(directory, `${stem}${extension}`);
     const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(temporary, buffer, { flag: "wx" });
@@ -124,7 +147,7 @@ export class AttachmentCacheService {
       await rm(temporary, { force: true });
       if (!(await exists(target))) throw error;
     });
-    return { ...attachment, data: undefined, path: target, mimeType, size: buffer.length };
+    return target;
   }
 
   private async preview(attachment: Attachment): Promise<UserMessageAttachmentPreview> {
@@ -156,13 +179,17 @@ export function detectImageMime(buffer: Buffer): string | undefined {
 
 function decodeBase64(value: string): Buffer {
   const normalized = value.replace(/\s+/g, "");
-  if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 === 1) throw new Error("图片数据不是有效的 Base64");
+  if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized) || normalized.length % 4 === 1) throw new Error("附件数据不是有效的 Base64");
   return Buffer.from(normalized, "base64");
 }
 
 function normalizeMime(value: string): string {
   const mime = value.toLowerCase().split(";", 1)[0];
   return mime === "image/jpg" ? "image/jpeg" : mime || "image/png";
+}
+
+function normalizeTextMime(value: string | undefined): string {
+  return (value ?? "").toLowerCase().split(";", 1)[0]?.trim() || "";
 }
 
 function extensionForMime(mimeType: string): string {

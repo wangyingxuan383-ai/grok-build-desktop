@@ -232,30 +232,27 @@ export class GrokProcessManager {
     const current = this.get(sessionId);
     if (current.effort === effort) return;
     if (current.working || current.needsUser) throw new Error("当前会话正在运行或等待操作，完成后再更改推理强度");
+    if (!effort) throw new Error("已存在会话不能切回 CLI 默认强度；请把它设为新会话默认值后新建会话");
 
-    // An empty value means "use the CLI default" and cannot be represented by
-    // the private live API. Non-empty values are hot-switched on current CLIs.
-    if (effort) {
-      this.onEvent({ type: "status", sessionId, status: "working", text: "正在切换推理强度…" });
-      try {
-        await current.setEffort(effort);
-        this.onEvent({ type: "status", sessionId, status: "idle", text: "推理强度已更新" });
-        return;
-      } catch (error) {
-        await this.log.log(`live reasoning effort failed; falling back to restart: ${error instanceof Error ? error.message : String(error)}`);
-        // Method-not-found, ignored private metadata and absent model_changed
-        // are expected compatibility paths for older CLI versions. A dead
-        // process is also recoverable through the same restart path.
-        if (!(error instanceof LiveEffortUnsupportedError)) {
-          await this.log.log("live effort failure was not an explicit compatibility error; attempting one controlled recovery restart");
-        }
-        if (current.effort === effort) {
-          this.onEvent({ type: "status", sessionId, status: "idle", text: "推理强度已更新" });
-          return;
-        }
-      }
+    const model = current.models.find((item) => item.modelId === current.currentModelId);
+    const supported = model?.reasoningEfforts?.map((item) => item.value) ?? [];
+    if (!model?.supportsReasoningEffort || !supported.includes(effort)) {
+      const declared = supported.length ? supported.join("、") : "未声明";
+      throw new Error(`当前模型不支持热切换到 ${effort}（可用档位：${declared}）。可在提供商模型配置中声明上游实际支持的档位`);
     }
-    await this.restartWithEffort(sessionId, effort);
+
+    this.onEvent({ type: "status", sessionId, status: "working", text: "正在切换推理强度…" });
+    try {
+      await current.setEffort(effort);
+      this.onEvent({ type: "status", sessionId, status: "idle", text: "推理强度已更新" });
+    } catch (error) {
+      await this.log.log(`live reasoning effort failed without restarting the persisted session: ${error instanceof Error ? error.message : String(error)}`);
+      this.onEvent({ type: "status", sessionId, status: "idle", text: "推理强度未更改" });
+      const detail = error instanceof LiveEffortUnsupportedError
+        ? "当前 CLI 没有确认这次热切换"
+        : error instanceof Error ? error.message : String(error);
+      throw new Error(`推理强度未更改：${detail}。为避免恢复历史会话时串到错误模型，应用没有重启该会话`);
+    }
   }
 
   async restartWithEffort(sessionId: string, effort: ReasoningEffort): Promise<void> {

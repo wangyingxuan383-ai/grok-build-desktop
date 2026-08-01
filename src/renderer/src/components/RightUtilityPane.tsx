@@ -65,6 +65,7 @@ function DocumentTool({ turn, onExpand }: { turn?: UiChatTurn; onExpand(): void 
 function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string; sessionId?: string; paths: string[]; onNavigate(intent: NavigationIntent): void; onError(message: string): void }): React.JSX.Element {
   const [selected, setSelected] = useState(paths[0] ?? "");
   const [document, setDocument] = useState<EditorDocument>();
+  const [wrap, setWrap] = useState(true);
   const [externalPath, setExternalPath] = useState("");
   const [loading, setLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
@@ -80,7 +81,7 @@ function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string
   }, [cwd, onError, selected]);
   return <div className="right-files-tool">
     <aside>{paths.map((path) => <button className={selected === path ? "active" : ""} key={path} title={path} onClick={() => setSelected(path)}><UiIcon name="file"/><span>{relativeDisplayPath(path, cwd)}</span></button>)}{!paths.length && <p className="right-tool-empty">最近回合没有可确认的写入文件。</p>}</aside>
-    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre>{document.content}</pre></> : selected ? <div className="right-tool-empty"><strong>无法预览此文件</strong><p>{previewError || "文件不存在、已移动或不在当前会话的受信任执行目录内。"}</p>{externalPath && <button onClick={() => void window.grokDesktop.openPath(externalPath).catch((error) => onError(message(error)))}>用系统默认应用打开</button>}</div> : null}</main>
+    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button aria-pressed={wrap} onClick={() => setWrap((value) => !value)}>{wrap ? "不换行" : "自动换行"}</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre className={wrap ? "wrap" : ""}>{document.content}</pre></> : selected ? <div className="right-tool-empty"><strong>无法预览此文件</strong><p>{previewError || "文件不存在、已移动或不在当前会话的受信任执行目录内。"}</p>{externalPath && <button onClick={() => void window.grokDesktop.openPath(externalPath).catch((error) => onError(message(error)))}>用系统默认应用打开</button>}</div> : null}</main>
   </div>;
 }
 

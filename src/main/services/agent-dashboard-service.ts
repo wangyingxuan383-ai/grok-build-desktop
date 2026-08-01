@@ -214,7 +214,7 @@ function statusLabel(status: AgentDashboardNode["status"]): string { return ({ q
 function rootNodeId(sessionId: string): string { return `session:${sessionId}`; }
 function subagentNodeId(sessionId: string, subagentId: string): string { return `session:${sessionId}:subagent:${subagentId}`; }
 function sameWorkspace(left: string, right: string): boolean { return left.replace(/[\\/]+$/, "").toLocaleLowerCase() === right.replace(/[\\/]+$/, "").toLocaleLowerCase(); }
-function normalizeEffort(value: unknown): ReasoningEffort | undefined { const item = String(value ?? ""); return ["", "none", "minimal", "low", "medium", "high", "xhigh"].includes(item) ? item as ReasoningEffort : undefined; }
+function normalizeEffort(value: unknown): ReasoningEffort | undefined { const item = String(value ?? ""); return ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(item) ? item as ReasoningEffort : undefined; }
 function textValue(value: unknown): string | undefined { return typeof value === "string" && value.trim() ? value.trim() : undefined; }
 function numberValue(value: unknown): number | undefined { return typeof value === "number" && Number.isFinite(value) ? value : undefined; }
 function duration(start?: string, end?: string): number | undefined { if (!start || !end) return undefined; const value = new Date(end).getTime() - new Date(start).getTime(); return Number.isFinite(value) && value >= 0 ? value : undefined; }

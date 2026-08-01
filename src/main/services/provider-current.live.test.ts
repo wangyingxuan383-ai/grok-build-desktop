@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "smol-toml";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CustomProviderProfile } from "../../shared/types";
+import type { CustomProviderProfile, ReasoningEffort } from "../../shared/types";
+import { DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS, providerReasoningEfforts } from "../../shared/provider-model-capabilities";
 import { locateGrokCli } from "./cli-locator";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
 import { LogService } from "./log-service";
@@ -23,25 +24,46 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
     const appData = process.env.APPDATA;
     if (!appData) throw new Error("APPDATA is unavailable");
     const stored = JSON.parse(await readFile(join(appData, "Grok Build Desktop", "providers.json"), "utf8")) as { providers?: CustomProviderProfile[] };
-    const provider = stored.providers?.find((value) => value.owned);
+    const requestedModel = process.env.GROK_CURRENT_PROVIDER_MODEL;
+    const provider = requestedModel
+      ? stored.providers?.find((value) => value.owned && value.models.some((model) => model.id === requestedModel || model.model === requestedModel))
+      : stored.providers?.find((value) => value.owned);
     if (!provider) throw new Error("No managed provider is configured");
-    const model = provider.models.find((value) => /gemini/i.test(value.model)) ?? provider.models[0];
+    const model = (requestedModel
+      ? provider.models.find((value) => value.id === requestedModel || value.model === requestedModel)
+      : provider.models.find((value) => /gemini/i.test(value.model))) ?? provider.models[0];
     if (!model) throw new Error("The managed provider has no model");
     if (!provider.credentialEnv) throw new Error("The managed provider has no credential environment");
     const userEnvironment = new WindowsUserEnvironment();
-    const credential = await userEnvironment.read(provider.credentialEnv);
-    if (!credential) throw new Error("The managed provider credential is unavailable");
+    const storedCredential = await userEnvironment.read(provider.credentialEnv);
+    const providerHost = new URL(provider.baseUrl).hostname;
+    const allowLoopbackWithoutCredential = process.env.GROK_CURRENT_PROVIDER_ALLOW_NO_CREDENTIAL === "1"
+      && (providerHost === "127.0.0.1" || providerHost === "localhost" || providerHost === "::1");
+    if (!storedCredential && !allowLoopbackWithoutCredential) throw new Error("The managed provider credential is unavailable");
+    const credential = storedCredential ?? "loopback-probe-placeholder";
     const root = await mkdtemp(join(tmpdir(), "grok-current-provider-")); roots.push(root);
     const grokHome = join(root, ".grok");
     const workspace = join(root, "workspace");
     await mkdir(grokHome, { recursive: true });
     await mkdir(workspace, { recursive: true });
     const log = new LogService(join(root, "provider-probe.log"));
+    const requestedProtocol = process.env.GROK_CURRENT_PROVIDER_PROTOCOL;
+    const protocol = requestedProtocol === "responses" || requestedProtocol === "chat_completions" || requestedProtocol === "messages"
+      ? requestedProtocol
+      : model.protocol ?? provider.protocol;
+    const effectiveProvider: CustomProviderProfile = {
+      ...provider,
+      protocol,
+      upstreamProtocol: protocol === "responses" ? "openai_responses" : protocol === "messages" ? "anthropic_messages" : "openai_chat",
+      credentialMode: allowLoopbackWithoutCredential ? "none" : provider.credentialMode,
+    };
+    const reasoningEfforts = providerReasoningEfforts(model.model, model.reasoningEfforts);
     const gateway = new ProviderGatewayService({
-      providers: async () => [{ ...provider, schemaProfile: provider.schemaProfile ?? "standard" }],
+      providers: async () => [{ ...effectiveProvider, schemaProfile: effectiveProvider.schemaProfile ?? "standard" }],
+      environment: async (name) => userEnvironment.readFresh ? userEnvironment.readFresh(name) : userEnvironment.read(name),
       fetcher: fetch,
       log,
-      requestTimeoutMs: 120_000,
+      requestTimeoutMs: 360_000,
     });
     const localBaseEnv = "GROK_DESKTOP_CURRENT_PROVIDER_BASE_URL";
     const route = await gateway.route(provider.id);
@@ -60,9 +82,11 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
           base_url: `\${${localBaseEnv}}`,
           name: "Current provider compatibility probe",
           env_key: provider.credentialEnv,
-          api_backend: provider.protocol,
+          api_backend: protocol,
           context_window: model.contextWindow ?? 128_000,
           max_completion_tokens: Math.min(model.maxCompletionTokens ?? 1024, 1024),
+          inference_idle_timeout_secs: model.inferenceIdleTimeoutSeconds ?? DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS,
+          reasoning_efforts: reasoningEfforts.map((value) => ({ value, label: value })),
           extra_headers: Object.fromEntries(Object.entries(extraHeaders).filter(([, value]) => value)),
         },
       },
@@ -70,6 +94,10 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
     const cliPath = await locateGrokCli("");
     if (!cliPath) throw new Error("installed Grok CLI was not found");
     const providerHeaderEnvironment = Object.fromEntries(await Promise.all(Object.values(provider.extraHeaders ?? {}).map(async (name) => [name, await userEnvironment.read(name)] as const)));
+    const requestedInitialEffort = process.env.GROK_CURRENT_PROVIDER_INITIAL_EFFORT;
+    const initialEffort: ReasoningEffort = requestedInitialEffort && ["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(requestedInitialEffort)
+      ? requestedInitialEffort as ReasoningEffort
+      : "";
     const adapter = new GrokAcpAdapter({
       cliPath,
       cwd: workspace,
@@ -80,18 +108,31 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
         [localBaseEnv]: route,
         [provider.credentialEnv]: credential,
       },
-      effort: "",
+      effort: initialEffort,
       mode: "agent",
       modelId: "grok-desktop-current-provider-probe",
       log,
     });
     try {
       await adapter.start();
+      const active = adapter.models.find((value) => value.modelId === "grok-desktop-current-provider-probe");
+      if (reasoningEfforts.length) {
+        expect(active).toMatchObject({
+          supportsReasoningEffort: true,
+          reasoningEfforts: reasoningEfforts.map((value) => expect.objectContaining({ value })),
+        });
+      }
+      const nextEffort = process.env.GROK_CURRENT_PROVIDER_SWITCH_EFFORT;
+      if (nextEffort === "auto" || nextEffort === "none" || nextEffort === "minimal" || nextEffort === "low" || nextEffort === "medium" || nextEffort === "high" || nextEffort === "xhigh" || nextEffort === "max") {
+        await adapter.setEffort(nextEffort);
+        expect(adapter.effort).toBe(nextEffort);
+      }
       await adapter.prompt("Reply with exactly OK.");
-      expect(await log.read()).toMatch(/Provider gateway sanitized [1-9]\d* schema value/);
+      expect(gateway.recentObservations(provider.id).some((value) => (value.status ?? 0) >= 200 && (value.status ?? 0) < 300)).toBe(true);
+      expect(adapter.currentModelId).toBe("grok-desktop-current-provider-probe");
     } finally {
       await adapter.dispose();
       await gateway.dispose();
     }
-  }, 180_000);
+  }, 420_000);
 });

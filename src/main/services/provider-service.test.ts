@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import type { CustomProviderInput, ProviderConnectionDraft } from "../../shared/types";
 import { LogService } from "./log-service";
 import { managedBaseUrlEnvironmentName, ProviderService, providerModelLocalId, type ProviderEnvironment } from "./provider-service";
@@ -15,6 +15,11 @@ class FakeEnvironment implements ProviderEnvironment {
   values = new Map<string, string>();
   async read(name: string) { return this.values.get(name); }
   async write(name: string, value: string | undefined) { if (value === undefined) this.values.delete(name); else this.values.set(name, value); }
+}
+
+class RefreshingEnvironment extends FakeEnvironment {
+  fresh = new Map<string, string>();
+  async readFresh(name: string) { return this.fresh.get(name) ?? this.values.get(name); }
 }
 
 async function fixture(config = "# 用户注释\n[ui]\nsimple_mode = true\n") {
@@ -34,9 +39,240 @@ describe("ProviderService", () => {
     const config = await readFile(join(grokHome, "config.toml"), "utf8");
     expect(config).toContain("# 用户注释"); expect(config).toContain("[ui]"); expect(config).toContain("Grok Build Desktop managed models"); expect(config).toContain("sample-model");
     expect((parse(config).model as Record<string, any>)["sample-model"].base_url).toBe("${GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL}");
+    expect((parse(config).model as Record<string, any>)["sample-model"].inference_idle_timeout_secs).toBe(600);
     expect(config).not.toContain("test-secret-value"); expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_KEY")).toBe("test-secret-value");
     expect(environment.values.get("GROK_DESKTOP_PROVIDER_SAMPLE_BASE_URL")).toBe("https://api.example.test/v1");
     expect(values.find((value) => value.id === "sample")?.hasCredential).toBe(true);
+  });
+
+  it("migrates markerless Desktop-owned model tables without duplicating TOML definitions", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
+      const configPath = join(grokHome, "config.toml");
+      const current = await readFile(configPath, "utf8");
+      const legacy = current
+        .replace("# >>> Grok Build Desktop managed models >>>\n", "")
+        .replace("# <<< Grok Build Desktop managed models <<<\n", "");
+      await writeFile(configPath, legacy, "utf8");
+
+      await service.upsert(input({
+        credentialMode: "none",
+        credentialValue: undefined,
+        models: [{
+          id: "sample-model",
+          model: "upstream/model",
+          name: "示例模型",
+          media: { image: { transport: "openai_images" } },
+        }],
+      }));
+
+      const migrated = await readFile(configPath, "utf8");
+      expect(migrated.match(/\[model\.sample-model\]/g)).toHaveLength(1);
+      expect(migrated.match(/Grok Build Desktop managed models/g)).toHaveLength(2);
+      expect(migrated).toContain("# 用户注释");
+      expect((parse(migrated).model as Record<string, any>)["sample-model"].model).toBe("upstream/model");
+      expect((await service.list())[0]?.models[0]?.media?.image?.transport).toBe("openai_images");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("saves zero-model providers as disabled and excludes disabled models from the managed CLI block", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      let values = await service.upsert(input({ credentialMode: "none", credentialValue: undefined, models: [] }));
+      expect(values[0]).toMatchObject({ enabled: false, models: [] });
+      expect(await readFile(join(grokHome, "config.toml"), "utf8")).not.toContain("sample-model");
+      values = await service.upsert(input({
+        credentialMode: "none",
+        credentialValue: undefined,
+        models: [
+          { id: "enabled-model", enabled: true, model: "enabled", name: "Enabled" },
+          { id: "disabled-model", enabled: false, model: "disabled", name: "Disabled" },
+        ],
+      }));
+      expect(values[0]?.models.find((value) => value.id === "disabled-model")?.enabled).toBe(false);
+      const config = await readFile(join(grokHome, "config.toml"), "utf8");
+      expect(config).toContain("enabled-model");
+      expect(config).not.toContain("disabled-model");
+      await expect(service.setCliDefault("disabled-model")).rejects.toThrow("已启用");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("clears a removed managed CLI default instead of silently switching to an official model", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
+      await service.setCliDefault("sample-model");
+      await service.upsert(input({ credentialMode: "none", credentialValue: undefined, models: [] }));
+      const config = await readFile(join(grokHome, "config.toml"), "utf8");
+      expect(config).toContain("[models]");
+      expect(config).not.toContain('default = "sample-model"');
+      expect(config).not.toContain('default = "grok-4.5"');
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("rejects cross-origin media endpoints before credentials can be routed to them", async () => {
+    const { service } = await fixture();
+    try {
+      await expect(service.upsert(input({
+        models: [{
+          id: "unsafe-media",
+          model: "unsafe-media",
+          name: "Unsafe media",
+          media: { image: { transport: "openai_images", endpoint: "https://other.example.test/images" } },
+        }],
+      }))).rejects.toThrow("必须与 Provider 基础地址同源");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("uses explicit Gemini image and compatible video transports only after actual media evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-media-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlWQAAAAASUVORK5CYII=";
+    const mp4 = Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]).toString("base64");
+    const seen: string[] = [];
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "media.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (input, init) => {
+        const url = String(input); seen.push(url);
+        const body = JSON.parse(String(init?.body || "{}")) as any;
+        if (url.endsWith("/video")) {
+          return new Response(JSON.stringify({ videos: [{ data: mp4, mime_type: "video/mp4" }] }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        if (url.includes(":generateContent")) {
+          return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: png } }] } }] }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        if (body.stream) {
+          return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "OK" }, finish_reason: "stop" }], usage: { total_tokens: 2 } })}\n\ndata: [DONE]\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }], usage: { total_tokens: 2 } }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      await service.upsert(input({
+        id: "media",
+        name: "Media",
+        baseUrl: "https://media.example.test/v1",
+        protocol: "chat_completions",
+        credentialMode: "none",
+        credentialValue: undefined,
+        models: [{
+          id: "media-model",
+          model: "gemini-media",
+          name: "Gemini Media",
+          media: {
+            image: { transport: "gemini_generate_content" },
+            video: { transport: "compatible_video", endpoint: "/video" },
+          },
+        }],
+      }));
+      const configuredImage = await service.generateImage({ providerId: "media", modelId: "media-model", prompt: "manual route", aspectRatio: "1:1", signal: new AbortController().signal });
+      expect(configuredImage[0]).toMatchObject({ media: "image", isData: true, mimeType: "image/png" });
+      const scan = await service.deepScan("media", {
+        modelIds: ["media-model"],
+        protocols: ["chat_completions"],
+        includeReasoning: false,
+        includeTools: false,
+        includeImages: true,
+      });
+      expect(scan.snapshot.models[0]?.protocols.chat_completions).toMatchObject({
+        imageGeneration: true,
+        videoGeneration: true,
+      });
+      const image = await service.generateImage({ providerId: "media", modelId: "media-model", prompt: "blue dot", aspectRatio: "1:1", signal: new AbortController().signal });
+      const video = await service.generateVideo({ providerId: "media", modelId: "media-model", prompt: "moving dot", aspectRatio: "16:9", duration: 6, resolution: "480p", signal: new AbortController().signal });
+      expect(image[0]).toMatchObject({ media: "image", isData: true, mimeType: "image/png" });
+      expect(video[0]).toMatchObject({ media: "video", isData: true, mimeType: "video/mp4" });
+      expect(seen.some((value) => value.includes("models/gemini-media:generateContent"))).toBe(true);
+      expect(seen.some((value) => value.endsWith("/video"))).toBe(true);
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("does not classify async video job ids or ordinary result text as completed media", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-media-job-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlWQAAAAASUVORK5CYII=";
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "media-job.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (input, init) => {
+        const url = String(input);
+        const body = JSON.parse(String(init?.body || "{}")) as any;
+        if (url.endsWith("/video")) return new Response(JSON.stringify({ id: "job-1", result: "queued" }), { status: 200, headers: { "content-type": "application/json" } });
+        if (url.endsWith("/images/generations")) return new Response(JSON.stringify({ data: [{ b64_json: png }] }), { status: 200, headers: { "content-type": "application/json" } });
+        if (body.stream) return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "OK" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+        return new Response(JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      await service.upsert(input({
+        id: "async-video",
+        name: "Async video",
+        baseUrl: "https://media.example.test/v1",
+        protocol: "chat_completions",
+        credentialMode: "none",
+        credentialValue: undefined,
+        models: [{
+          id: "async-model",
+          model: "async-model",
+          name: "Async",
+          media: {
+            image: { transport: "openai_images" },
+            video: { transport: "compatible_video", endpoint: "/video" },
+          },
+        }],
+      }));
+      const scan = await service.deepScan("async-video", {
+        modelIds: ["async-model"],
+        protocols: ["chat_completions"],
+        includeReasoning: false,
+        includeTools: false,
+        includeImages: true,
+      });
+      expect(scan.snapshot.models[0]?.protocols.chat_completions).toMatchObject({
+        imageGeneration: true,
+        videoGeneration: false,
+      });
+      await expect(service.generateVideo({ providerId: "async-video", modelId: "async-model", prompt: "test", aspectRatio: "16:9", duration: 6, resolution: "480p", signal: new AbortController().signal }))
+        .rejects.toThrow("没有返回实际视频资产");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("uses the provider draft network route for model-list probes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-proxy-route-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    let route = "";
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "gateway.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (_input, _init, proxyMode) => {
+        route = proxyMode ?? "";
+        return new Response(JSON.stringify({ data: [{ id: "fixture-model" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    try {
+      const result = await service.probeDraft(draft("https://provider.example.test/v1", { proxyMode: "direct" }));
+      expect(result.ok).toBe(true);
+      expect(route).toBe("direct");
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("keeps the upstream URL in the user environment and gives desktop CLI processes only an opaque loopback route", async () => {
@@ -48,6 +284,26 @@ describe("ProviderService", () => {
       expect(environment.values.get(variable)).toBe("https://api.example.test/v1");
       expect(desktop[variable]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/session-scope$/);
       expect(desktop[variable]).not.toContain("api.example.test");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("refreshes provider credentials and header variables for each desktop CLI launch", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-refresh-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const environment = new RefreshingEnvironment();
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "logs", "app.log")), { grokHome, environment });
+    await service.upsert(input({ extraHeaders: { "x-route": "GROK_PROVIDER_ROUTE" } }));
+    environment.values.set("GROK_DESKTOP_PROVIDER_SAMPLE_KEY", "stale-secret");
+    environment.values.set("GROK_PROVIDER_ROUTE", "stale-route");
+    environment.fresh.set("GROK_DESKTOP_PROVIDER_SAMPLE_KEY", "rotated-secret");
+    environment.fresh.set("GROK_PROVIDER_ROUTE", "rotated-route");
+    try {
+      const desktop = await service.desktopEnvironment("fresh-scope");
+      expect(desktop.GROK_DESKTOP_PROVIDER_SAMPLE_KEY).toBe("rotated-secret");
+      expect(desktop.GROK_PROVIDER_ROUTE).toBe("rotated-route");
+      expect(desktop[managedBaseUrlEnvironmentName("sample")]).toMatch(/^http:\/\/127\.0\.0\.1:/);
     } finally {
       await service.dispose();
     }
@@ -108,6 +364,70 @@ describe("ProviderService", () => {
     expect(model.extra_headers["x-api-key"]).toBe("${GROK_DESKTOP_PROVIDER_SAMPLE_KEY}");
     expect(model.extra_headers.Authorization).toBe("");
     expect(raw).not.toContain("test-secret-value");
+  });
+
+  it("restores missing model protocol and the CLI-catalog effort menu without locking manual values", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      await service.upsert(input({
+        protocol: "chat_completions",
+        models: [{ id: "sample-grok-4.5", model: "grok-4.5", name: "Grok 4.5", protocol: "responses", contextWindow: 500_000 }],
+      }));
+      expect((await service.list())[0]?.models[0]?.reasoningEfforts).toEqual(["xhigh", "high", "medium", "low", "minimal"]);
+      const configPath = join(grokHome, "config.toml");
+      const legacy = parse(await readFile(configPath, "utf8")) as any;
+      delete legacy.model["sample-grok-4.5"].reasoning_efforts;
+      delete legacy.model["sample-grok-4.5"].inference_idle_timeout_secs;
+      legacy.model["sample-grok-4.5"].api_backend = "chat_completions";
+      await writeFile(configPath, `# >>> Grok Build Desktop managed models >>>\n${stringify(legacy).trim()}\n# <<< Grok Build Desktop managed models <<<\n`, "utf8");
+      await service.desktopEnvironment();
+      const refreshed = parse(await readFile(configPath, "utf8")) as any;
+      expect(refreshed.model["sample-grok-4.5"].api_backend).toBe("responses");
+      expect(refreshed.model["sample-grok-4.5"].inference_idle_timeout_secs).toBe(600);
+      expect(refreshed.model["sample-grok-4.5"].reasoning_efforts).toEqual([
+        { value: "xhigh", label: "xhigh" },
+        { value: "high", label: "high" },
+        { value: "medium", label: "medium" },
+        { value: "low", label: "low" },
+        { value: "minimal", label: "minimal" },
+      ]);
+
+      await service.upsert(input({
+        protocol: "chat_completions",
+        models: [{
+          id: "sample-grok-4.5",
+          model: "grok-4.5",
+          name: "Grok 4.5",
+          protocol: "responses",
+          contextWindow: 500_000,
+          inferenceIdleTimeoutSeconds: 720,
+          reasoningEfforts: ["xhigh", "high", "medium", "low", "minimal"],
+        }],
+      }));
+      expect((await service.list())[0]?.models[0]).toMatchObject({
+        protocol: "responses",
+        inferenceIdleTimeoutSeconds: 720,
+        reasoningEfforts: ["xhigh", "high", "medium", "low", "minimal"],
+      });
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("removes stale managed reasoning options when the model no longer declares any", async () => {
+    const { service, grokHome } = await fixture();
+    try {
+      await service.upsert(input({ models: [{ id: "sample-model", model: "upstream/model", name: "Unknown capabilities" }] }));
+      const configPath = join(grokHome, "config.toml");
+      const legacy = parse(await readFile(configPath, "utf8")) as any;
+      legacy.model["sample-model"].reasoning_efforts = [{ value: "high", label: "high" }];
+      await writeFile(configPath, `# >>> Grok Build Desktop managed models >>>\n${stringify(legacy).trim()}\n# <<< Grok Build Desktop managed models <<<\n`, "utf8");
+      await service.desktopEnvironment();
+      const refreshed = parse(await readFile(configPath, "utf8")) as any;
+      expect(refreshed.model["sample-model"].reasoning_efforts).toEqual([]);
+    } finally {
+      await service.dispose();
+    }
   });
 
   it("rejects collisions with externally managed model ids", async () => {
@@ -209,7 +529,7 @@ describe("ProviderService", () => {
   it("probes unsaved drafts across OpenAI, Ollama and Anthropic model-list shapes", async () => {
     const server = createServer((request, response) => {
       response.setHeader("content-type", "application/json");
-      if (request.url === "/openai") response.end(JSON.stringify({ data: [{ id: "gpt-test", name: "GPT Test", owned_by: "test" }] }));
+      if (request.url === "/openai") response.end(JSON.stringify({ data: [{ id: "gpt-test", name: "GPT Test", owned_by: "test", supported_reasoning_efforts: ["minimal", "high"] }] }));
       else if (request.url === "/ollama") response.end(JSON.stringify({ models: [{ name: "qwen:test", model: "qwen:test" }] }));
       else response.end(JSON.stringify([{ id: "claude-test", display_name: "Claude Test", context_window: 200_000 }]));
     });
@@ -222,7 +542,7 @@ describe("ProviderService", () => {
       const openai = await service.probeDraft(draft(base, { modelListUrl: `${base}/openai` }));
       const ollama = await service.discoverDraftModels(draft(base, { id: "ollama", modelListUrl: `${base}/ollama` }));
       const anthropic = await service.probeDraft(draft(base, { id: "anthropic", protocol: "messages", modelListUrl: `${base}/anthropic` }));
-      expect(openai).toMatchObject({ ok: true, candidates: [{ remoteId: "gpt-test", name: "GPT Test", ownedBy: "test", alreadyConfigured: false }] });
+      expect(openai).toMatchObject({ ok: true, candidates: [{ remoteId: "gpt-test", name: "GPT Test", ownedBy: "test", reasoningEfforts: ["minimal", "high"], alreadyConfigured: false }] });
       expect(ollama[0]).toMatchObject({ remoteId: "qwen:test", name: "qwen:test" });
       expect(anthropic.candidates[0]).toMatchObject({ remoteId: "claude-test", name: "Claude Test", contextWindow: 200_000 });
     } finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
@@ -253,5 +573,226 @@ describe("ProviderService", () => {
     expect(first).toMatch(/^[a-z0-9][a-z0-9._-]{0,63}$/);
     expect(second).toMatch(/-[0-9a-f]{8}$/);
     expect(second).not.toBe(first);
+  });
+});
+
+describe("ProviderService deep compatibility scan", () => {
+  it("runs one model as an observable job and keeps its explicit three-protocol scope", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-scan-job-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const progress: string[] = [];
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "scan.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      onScanProgress: (value) => progress.push(`${value.status}:${value.stage}:${value.completed}`),
+      fetcher: async (_url, init) => {
+        if (init?.method === "GET") return new Response(JSON.stringify({ data: [{ id: "remote-one" }] }), { status: 200, headers: { "content-type": "application/json" } });
+        const body = JSON.parse(String(init?.body || "{}")) as any;
+        if (body.stream) {
+          return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: "OK" }, finish_reason: "stop" }], model: "remote-one", usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } })}\n\ndata: [DONE]\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }], model: "remote-one", usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      await service.upsert(input({ id: "job", name: "Job", credentialMode: "none", credentialValue: undefined, models: [
+        { id: "remote-one", model: "remote-one", name: "One" },
+        { id: "remote-two", model: "remote-two", name: "Two" },
+      ] }));
+      const started = await service.startScan({
+        providerId: "job",
+        modelIds: ["remote-one"],
+        protocols: ["chat_completions"],
+        includeReasoning: false,
+        includeTools: false,
+        includeImages: false,
+        context: { mode: "off" },
+      });
+      expect(["queued", "running"]).toContain(started.status);
+      expect(started).toMatchObject({ generation: 1, scope: { modelIds: ["remote-one"], protocols: ["chat_completions"] } });
+      let completed = service.getScanJob(started.jobId);
+      for (let attempt = 0; attempt < 50 && completed?.status !== "completed"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        completed = service.getScanJob(started.jobId);
+      }
+      expect(completed).toMatchObject({ status: "completed", completed: completed?.total, failed: 0 });
+      expect(progress.some((value) => value.includes(":baseline:"))).toBe(true);
+      expect(progress.some((value) => value.includes(":stream:"))).toBe(true);
+      expect(progress.some((value) => value.includes(":usage:"))).toBe(true);
+      expect((await service.getCapabilities("job"))?.models.map((value) => value.modelId)).toContain("remote-one");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("acknowledges cancellation within the bounded window and rejects exact context scans without cost confirmation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-scan-cancel-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "scan.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (_url, init) => {
+        if (init?.method === "GET") return new Response(JSON.stringify({ data: [{ id: "remote" }] }), { status: 200, headers: { "content-type": "application/json" } });
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted")), { once: true });
+        });
+      },
+    });
+    try {
+      await service.upsert(input({ id: "cancel", name: "Cancel", credentialMode: "none", credentialValue: undefined, models: [{ id: "remote", model: "remote", name: "Remote" }] }));
+      await expect(service.startScan({
+        providerId: "cancel",
+        modelIds: ["remote"],
+        protocols: ["responses"],
+        context: { mode: "exact", targetTokens: 32_768, maxRequests: 4 },
+      })).rejects.toThrow("明确确认请求成本");
+      await expect(service.startScan({
+        providerId: "cancel",
+        modelIds: ["remote"],
+        protocols: ["chat_completions", "responses", "messages"],
+        context: { mode: "exact", targetTokens: 32_768, maxRequests: 4, confirmedCost: true },
+      })).rejects.toThrow("单模型、单协议");
+      const started = await service.startScan({ providerId: "cancel", modelIds: ["remote"], protocols: ["responses"], includeReasoning: false, includeTools: false, context: { mode: "off" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(service.cancelScan(started.jobId).status).toBe("cancelling");
+      let cancelled = service.getScanJob(started.jobId);
+      for (let attempt = 0; attempt < 80 && cancelled?.status !== "cancelled"; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        cancelled = service.getScanJob(started.jobId);
+      }
+      expect(cancelled?.status).toBe("cancelled");
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("discards a late inference response after cancellation instead of persisting evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-scan-late-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    let resolveInference: ((response: Response) => void) | undefined;
+    let inferenceRequests = 0;
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "scan.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (_url, init) => {
+        if (init?.method === "GET") {
+          return new Response(JSON.stringify({ data: [{ id: "remote" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        inferenceRequests += 1;
+        return new Promise<Response>((resolve) => { resolveInference = resolve; });
+      },
+    });
+    try {
+      await service.upsert(input({
+        id: "late",
+        name: "Late",
+        credentialMode: "none",
+        credentialValue: undefined,
+        models: [{ id: "remote", model: "remote", name: "Remote" }],
+      }));
+      const started = await service.startScan({
+        providerId: "late",
+        modelIds: ["remote"],
+        protocols: ["chat_completions"],
+        includeReasoning: false,
+        includeTools: false,
+        context: { mode: "off" },
+      });
+      for (let attempt = 0; attempt < 50 && !resolveInference; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(resolveInference).toBeTypeOf("function");
+      expect(service.cancelScan(started.jobId).status).toBe("cancelling");
+      resolveInference!(new Response(JSON.stringify({
+        choices: [{ message: { content: "late" }, finish_reason: "stop" }],
+        model: "remote",
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      }), { status: 200, headers: { "content-type": "application/json" } }));
+      let cancelled = service.getScanJob(started.jobId);
+      for (let attempt = 0; attempt < 80 && cancelled?.status !== "cancelled"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        cancelled = service.getScanJob(started.jobId);
+      }
+      expect(cancelled?.status).toBe("cancelled");
+      expect(inferenceRequests).toBe(1);
+      expect(await service.getCapabilities("late")).toBeUndefined();
+    } finally {
+      await service.dispose();
+    }
+  });
+
+  it("stores protocol, streaming, tool and accepted reasoning evidence without response bodies", async () => {
+    const server = createServer(async (request, response) => {
+      if (request.method === "GET" && request.url === "/models") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ data: [{ id: "remote-model", owned_by: "grok2api" }] }));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as any;
+      if (body.reasoning?.effort === "none") {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "unsupported effort" } }));
+        return;
+      }
+      if (body.stream) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        if (body.tools) response.write(`event: response.output_item.added\ndata: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "call_1", call_id: "call_1", name: "lookup_value", arguments: "{}" } })}\n\n`);
+        response.write(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { id: "resp_1", model: "remote-model", status: "completed", usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } } })}\n\n`);
+        response.end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({
+        id: "resp_1",
+        object: "response",
+        status: "completed",
+        model: "remote-model",
+        output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }],
+        usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
+      }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("fake provider did not bind");
+    const { service } = await fixture();
+    try {
+      await service.upsert(input({
+        id: "scan",
+        name: "Scan",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        protocol: "responses",
+        upstreamProtocol: "openai_responses",
+        credentialMode: "none",
+        credentialValue: undefined,
+        models: [{ id: "scan-model", model: "remote-model", name: "Remote" }],
+      }));
+      const result = await service.deepScan("scan", { protocols: ["responses"], includeReasoning: true, includeTools: true });
+      const capability = result.snapshot.models[0]?.protocols.responses;
+      expect(result).toMatchObject({ cancelled: false, completed: 1, total: 1, snapshot: { serverFlavor: "grok2api" } });
+      expect(capability).toMatchObject({ available: true, nonStreaming: true, streaming: true, tools: true, toolContinuation: true, usage: true, returnedModel: "remote-model" });
+      expect(capability?.reasoning?.efforts).toContain("xhigh");
+      expect(capability?.reasoning?.efforts).not.toContain("none");
+      await expect(service.getCapabilities("scan")).resolves.toMatchObject({ providerId: "scan", models: [{ modelId: "scan-model" }] });
+      const application = await service.getCapabilityApplication("scan");
+      expect(application.changes.every((change) => change.evidenceSource && change.checkedAt && change.expired === false)).toBe(true);
+      const applied = await service.applyCapabilities("scan");
+      expect(applied[0]?.models[0]).toMatchObject({
+        reasoningEfforts: expect.arrayContaining(["minimal", "low", "medium", "high", "xhigh"]),
+        reasoning: {
+          openai_responses: {
+            mode: "effort_enum",
+            source: "live_probe",
+          },
+        },
+      });
+    } finally {
+      await service.dispose();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

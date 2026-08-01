@@ -1,6 +1,6 @@
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { AppController } from "./app-controller";
-import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, PersonaDefinitionSaveInput, ProviderConnectionDraft, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TokenActivityQuery, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
+import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, CapabilityApplicationSelection, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MediaCreationRequest, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, OpenTargetIntent, PersonaDefinitionSaveInput, ProviderConnectionDraft, ProviderDeepScanOptions, ProviderScanScope, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TokenActivityQuery, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
 import { isTrustedRendererFrame, type RendererTrustPolicy } from "./security-policy";
 
 export function registerIpc(controller: AppController, window: BrowserWindow, policy: RendererTrustPolicy): void {
@@ -111,6 +111,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:pin", (id: string, pinned: boolean) => controller.pinSession(id, pinned));
   handle("session:export-markdown", (cwd: string, id: string) => controller.exportSessionMarkdown(cwd, id));
   handle("session:media-capabilities", (id: string) => controller.getMediaCapabilities(id));
+  handle("media:start", (request: MediaCreationRequest & { sessionId: string }) => controller.startMediaGeneration(request));
+  handle("media:get", (jobId: string) => controller.getMediaGenerationJob(jobId));
+  handle("media:cancel", (jobId: string) => controller.cancelMediaGeneration(jobId));
   handle("session:send", (id: string, text: string, attachments: Attachment[], clientMessageId?: string) => controller.sendPrompt(id, text, attachments, clientMessageId));
   handle("ui-fixture:get", () => controller.getOfflineUiFixture());
   handle("session:enqueue", (id: string, text: string, attachments: Attachment[], clientMessageId?: string) => controller.enqueuePrompt(id, text, attachments, clientMessageId));
@@ -140,6 +143,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("attachments:pick-folders", () => controller.pickAttachmentFolders());
   handle("attachments:paths", (paths: string[]) => controller.attachmentsFromPaths(paths));
   handle("system:open-path", (path: string) => controller.openPath(path));
+  handle("system:open-target", (intent: OpenTargetIntent) => controller.openTarget(intent));
+  handle("system:copy-image", (source: string) => controller.copyImage(source));
+  handle("system:save-image", (source: string) => controller.saveImage(source));
   handle("system:open-external", (url: string) => controller.openExternal(url));
   handle("settings:get", () => controller.getSettings());
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
@@ -158,6 +164,11 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("codex:refresh", (id: string) => controller.refreshCodexSession(id));
   handle("codex:hide", (id: string, hidden?: boolean) => controller.hideCodexSession(id, hidden));
   handle("codex:continue", (id: string) => controller.continueCodexSession(id));
+  handle("claude:list", (cwd: string, force?: boolean) => controller.listClaudeSessions(cwd, force));
+  handle("claude:open", (id: string) => controller.openClaudeSession(id));
+  handle("claude:refresh", (id: string) => controller.refreshClaudeSession(id));
+  handle("claude:hide", (id: string, hidden?: boolean) => controller.hideClaudeSession(id, hidden));
+  handle("claude:continue", (id: string) => controller.continueClaudeSession(id));
   handle("quota:get", (force?: boolean) => controller.getQuota(force));
   handle("providers:list", () => controller.listProviders());
   handle("providers:upsert", (input: CustomProviderInput) => controller.upsertProvider(input));
@@ -166,6 +177,15 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("providers:pull-models", (id: string) => controller.pullProviderModels(id));
   handle("providers:probe-draft", (input: ProviderConnectionDraft) => controller.probeProviderDraft(input));
   handle("providers:discover-models", (input: ProviderConnectionDraft) => controller.discoverProviderModels(input));
+  handle("providers:capabilities", (id: string) => controller.getProviderCapabilities(id));
+  handle("providers:scan:start", (scope: ProviderScanScope) => controller.startProviderScan(scope));
+  handle("providers:scan:get", (jobId: string) => controller.getProviderScanJob(jobId));
+  handle("providers:scan:list", (providerId?: string) => controller.listProviderScanJobs(providerId));
+  handle("providers:scan:cancel", (jobId: string) => controller.cancelProviderScan(jobId));
+  handle("providers:deep-scan", (id: string, options?: ProviderDeepScanOptions) => controller.deepScanProvider(id, options));
+  handle("providers:cancel-scan", (id: string) => controller.cancelProviderDeepScan(id));
+  handle("providers:capabilities:application", (id: string) => controller.getProviderCapabilityApplication(id));
+  handle("providers:apply-capabilities", (id: string, selection?: CapabilityApplicationSelection) => controller.applyProviderCapabilities(id, selection));
   handle("providers:set-desktop-default", (modelId: string) => controller.setProviderDesktopDefault(modelId));
   handle("providers:set-cli-default", (modelId: string) => controller.setProviderCliDefault(modelId));
   handle("providers:reload", () => controller.reloadProviders());
@@ -185,8 +205,11 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:health:repair", () => controller.checkAutomationHealth(true));
   handle("automations:clear-context", (id: string) => controller.clearAutomationContext(id));
   handle("draft:get", (key: string) => controller.getDraft(key));
-  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection) => controller.setDraft(key, text, capability));
+  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]) => controller.setDraft(key, text, capability, attachments));
   handle("draft:clear", (key: string) => controller.clearDraft(key));
+  handle("draft:text:create", (key: string, text: string) => controller.createTextDraftAttachment(key, text));
+  handle("draft:text:read", (path: string) => controller.readTextDraftAttachment(path));
+  handle("draft:text:delete", (path: string) => controller.deleteTextDraftAttachment(path));
   handle("prompt-history:list", (cwd: string) => controller.listPromptHistory(cwd));
   handle("prompt-history:append", (cwd: string, text: string) => controller.appendPromptHistory(cwd, text));
   handle("extensions:plugins:list", (force?: boolean) => controller.listPlugins(force));
