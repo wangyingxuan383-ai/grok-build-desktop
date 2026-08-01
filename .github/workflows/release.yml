@@ -63,7 +63,10 @@ jobs:
         with:
           subject-path: release/Grok-Build-Desktop-Portable-*.zip
       - name: 创建中文草稿 Release
-        shell: powershell
+        # Windows PowerShell 5.1 reads generated runner scripts using the local
+        # code page and corrupts UTF-8 Chinese literals. PowerShell 7 (pwsh)
+        # keeps the version-specific Chinese title and diagnostics intact.
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
