@@ -1,7 +1,8 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { realpath } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import path, { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { normalizeComparablePath, pathWithin, samePath as sharedSamePath } from "../../shared/path-utils";
 import type {
   GitBranchSummary,
   GitCommitDetails,
@@ -556,31 +557,39 @@ function normalizePathList(repositoryRoot: string, paths?: string[]): string[] {
   return [...new Set(paths.map((path) => normalizeRepoPath(repositoryRoot, path)))];
 }
 
-function normalizeRepoPath(repositoryRoot: string, path: string): string {
-  if (!path || path.includes("\0")) throw new Error("Git 文件路径无效");
-  const absolute = isAbsolute(path) ? resolve(path) : resolve(repositoryRoot, path);
-  const rel = relative(repositoryRoot, absolute);
+function normalizeRepoPath(repositoryRoot: string, filePath: string): string {
+  if (!filePath || filePath.includes("\0")) throw new Error("Git 文件路径无效");
+  const api = pathApiFor(repositoryRoot, filePath);
+  const absolute = api.isAbsolute(filePath) ? api.resolve(filePath) : api.resolve(repositoryRoot, filePath);
+  const rel = api.relative(repositoryRoot, absolute);
   if (!rel || rel === ".") throw new Error("请选择仓库中的具体文件");
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Git 文件路径超出仓库范围");
-  return rel.split(sep).join("/");
+  if (rel === ".." || rel.startsWith(`..${api.sep}`) || api.isAbsolute(rel)) throw new Error("Git 文件路径超出仓库范围");
+  return rel.split(api.sep).join("/");
 }
 
-function literalPathspec(path: string): string {
-  return `:(literal)${path}`;
+function pathApiFor(...values: string[]): typeof path.win32 {
+  if (process.platform === "win32") return path.win32;
+  if (values.some((value) => /^[A-Za-z]:[\\/]/.test(value) || value.includes("\\"))) return path.win32;
+  return path.posix as typeof path.win32;
+}
+
+function literalPathspec(pathValue: string): string {
+  return `:(literal)${pathValue}`;
 }
 
 function isWithin(root: string, target: string): boolean {
-  const rel = relative(root, target);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  return pathWithin(target, root);
 }
 
 function samePath(left: string, right: string): boolean {
-  return pathKey(left) === pathKey(right);
+  return sharedSamePath(left, right);
 }
 
-function pathKey(path: string): string {
-  const normalized = resolve(path).replace(/[\\/]+$/, "");
-  return process.platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+function pathKey(value: string): string {
+  const normalized = normalizeComparablePath(value).replace(/[\\/]+$/, "");
+  return process.platform === "win32" || /^[A-Za-z]:[\\/]/.test(value)
+    ? normalized.toLocaleLowerCase("en-US")
+    : normalized;
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
