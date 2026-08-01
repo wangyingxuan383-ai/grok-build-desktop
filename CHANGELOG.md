@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Post-0.6.22 unlimited interactive turns
+
+- Removed the Desktop's 30-minute wall-clock ceiling from ordinary prompts and queued follow-up prompts. Long-running interactive turns now continue until the CLI/upstream completes, the user presses Stop, the process exits or a real transport/provider failure occurs.
+- Provider `inference_idle_timeout_secs` remains a separate silence detector (600 seconds by default and configurable per managed model); bounded maintenance, media and scheduled-task policies are unchanged. This source-only hotfix is pushed for review and does not create or replace the `v0.6.22` Release.
+
 ### 0.6.22 local media transport and interject lifecycle hotfix
 
 - Fixed generated images that existed on disk but rendered as “file unavailable”. Sandboxed Renderer media no longer uses blocked `file://` URLs; a main-process `grok-media:` protocol now serves only bounded, supported media inside the per-session caches, Grok session store, active execution root or an explicitly trusted path.

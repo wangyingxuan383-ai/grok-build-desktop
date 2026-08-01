@@ -32,10 +32,15 @@ import { TerminalService, type TerminalCreateParams } from "./terminal-service";
 import type { LogService } from "./log-service";
 
 type JsonRpcId = string | number;
+// Interactive turns intentionally have no Desktop wall-clock ceiling. Users
+// retain explicit Stop/cancel controls, while Provider idle timeouts continue
+// to detect a genuinely silent upstream connection.
+export const INTERACTIVE_PROMPT_TIMEOUT_MS: null = null;
+
 interface PendingRequest {
   resolve(value: unknown): void;
   reject(error: Error & { data?: unknown }): void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
 }
 
 interface PendingEffortChange {
@@ -415,7 +420,7 @@ export class GrokAcpAdapter extends EventEmitter {
     return this.request(method, { sessionId: this.sessionId, ...params }) as Promise<Record<string, unknown>>;
   }
 
-  async prompt(text: string, attachments: Attachment[] = [], timeoutMs = 1_800_000, presentation: UserPromptPresentation = {}): Promise<void> {
+  async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const clientMessageId = presentation.clientMessageId || crypto.randomUUID();
     this.lastTouched = Date.now();
@@ -475,7 +480,7 @@ export class GrokAcpAdapter extends EventEmitter {
       sessionId: this.sessionId,
       prompt,
       _meta: { promptId: id, sendNow, clientIdentifier: "grok-build-desktop" },
-    }, 1_800_000).catch((error) => {
+    }, INTERACTIVE_PROMPT_TIMEOUT_MS).catch((error) => {
       this.promptQueue = this.promptQueue.filter((value) => value.id !== id);
       this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
       this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "failed" });
@@ -815,7 +820,7 @@ export class GrokAcpAdapter extends EventEmitter {
       const pending = this.pending.get(id);
       if (!pending) return;
       this.pending.delete(id);
-      clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       if (message.error) {
         const errorObject = message.error as { code?: number; message?: string; data?: unknown };
         // `code` used to be dropped here, leaving the renderer with a bare
@@ -1281,17 +1286,17 @@ export class GrokAcpAdapter extends EventEmitter {
     this.providerThinking = { pending: "", thought: false };
   }
 
-  private request(method: string, params: unknown, timeoutMs = 120_000, onWritten?: () => void): Promise<unknown> {
+  private request(method: string, params: unknown, timeoutMs: number | null = 120_000, onWritten?: () => void): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const timer = timeoutMs === null ? undefined : setTimeout(() => {
         this.pending.delete(id);
         if (method === acpMethods.agent.session.prompt) this.cancel();
         reject(new Error(`ACP 请求超时：${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       if (!this.write({ jsonrpc: "2.0", id, method, params })) {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         this.pending.delete(id);
         reject(new Error(`Grok 进程不可用：${method}`));
       } else onWritten?.();
@@ -1328,7 +1333,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private failAll(error: Error): void {
     this.finishEffortChange(false);
     for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
