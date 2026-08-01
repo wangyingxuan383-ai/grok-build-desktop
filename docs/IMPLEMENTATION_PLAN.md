@@ -11,7 +11,7 @@
 - [x] 聚焦媒体、路径、队列和 Store 回归、TypeScript与生产构建通过。
 - [x] 完整离线套件通过：80 文件/465 项通过，5 个 live 文件/8 项按设计跳过；公开源码/资产扫描、diff check、资源构建、Fuses、打包版/Portable UI 与 Task Scheduler 通过。
 - [x] 生成唯一一套 0.6.22 Setup/Portable/SBOM/许可证资产并 per-user 安装；主进程/About/诊断、File/Product、快捷方式及现有 1024x1024 历史图的安装版 `grok-media:` 实际加载通过。
-- [ ] 真实图片/视频与插话顺序由用户验收；不发送付费请求，不推送 GitHub、不创建 Release。
+- [x] PR #19/#20 通过 Windows、Gitleaks、CodeQL 与代码扫描门槛；Release workflow `30693283048` 重建并验证云端资产后，将带版本专属中文说明的 `v0.6.22` 发布为 Latest。真实图片/视频与插话顺序仍由用户验收，本轮未发送付费请求。
 
 ## v0.6.21 多会话并行运行热修
 

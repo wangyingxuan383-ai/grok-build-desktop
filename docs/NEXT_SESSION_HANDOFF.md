@@ -1,8 +1,10 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-01，0.6.22 媒体与插话热修）
+# Grok Build Desktop 下一会话完整交接（2026-08-01，0.6.22 已正式发布）
 
-> **0.6.22 当前工作状态：** 用户在 0.6.21 验收中再次看到“图片文件不可用”、媒体任务误报工作区外、ZDR 视频错误和插话状态紊乱。只读核验确认生成图片文件仍存在，破图来自 sandboxed Renderer 被 Chromium 拒绝加载 `file://`；无头媒体的实际相对产物属于显式 `--session-id` 的临时 Grok 会话，旧缓存边界只信任 cwd；视频失败是团队启用 Zero Data Retention 后 API 强制要求 `output.upload_url`，当前 CLI 工具没有该参数；插话不是独立 Agent，而是同一 ACP 会话的已提交高优先级后续回合，旧适配器没有给它建立本地队列/turn 边界，叉号只删除了错误的本地表现，不能撤回已接受请求。源码已增加受限 `grok-media:` 协议、精确临时会话信任根、首次媒体失败即停止和 ZDR 分类；插话提交后标为不可撤回，在上一回合收束后建立独立 turn/user-message/status，迟到的上一回合 Promise 不会结算新回合。最终 80 文件/465 项离线测试通过，5 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、Computer Host 自检、299 文件源码/资产扫描、diff check、Fuses、打包版/Portable UI、任务调度、安装版主进程/About/诊断/File/Product/快捷方式均通过。现有历史图在安装版 `grok-media:` 中实际解码为 1024x1024。0.6.22 已 per-user 安装并打开；没有发送新的图片/视频或付费模型请求，真实新媒体和插话顺序交给用户验收，验收前不推送、不创建 GitHub Release。
+> **0.6.22 公开发布状态：** PR #19 将 v0.6.7-v0.6.22 的已验收源码合并到 `main`；Windows、Gitleaks、CodeQL 和代码扫描通过。首次 Release workflow 在创建草稿前因 Windows PowerShell 5.1 破坏中文脚本字面量而失败，没有产生 Release；PR #20 将该步骤切换到 PowerShell 7。workflow `30693283048` 随后重新构建、公开扫描、生成 attestations、下载并校验 SHA-256/来源证明，已将 `v0.6.22` 发布为 Latest。发布页使用版本专属中文说明，不再展示整份累计英文 Changelog。
 
-> 当前工作分支仍为 `codex/v0.6.14-audit-fixes`，源码/lockfile 与 per-user 安装版均为 **0.6.22**。公开 Latest 仍是 **0.6.6**，旧本地资产全部保留；用户验收前不推送、不创建 Release。
+> **0.6.22 当前工作状态：** 用户在 0.6.21 验收中再次看到“图片文件不可用”、媒体任务误报工作区外、ZDR 视频错误和插话状态紊乱。只读核验确认生成图片文件仍存在，破图来自 sandboxed Renderer 被 Chromium 拒绝加载 `file://`；无头媒体的实际相对产物属于显式 `--session-id` 的临时 Grok 会话，旧缓存边界只信任 cwd；视频失败是团队启用 Zero Data Retention 后 API 强制要求 `output.upload_url`，当前 CLI 工具没有该参数；插话不是独立 Agent，而是同一 ACP 会话的已提交高优先级后续回合，旧适配器没有给它建立本地队列/turn 边界，叉号只删除了错误的本地表现，不能撤回已接受请求。源码已增加受限 `grok-media:` 协议、精确临时会话信任根、首次媒体失败即停止和 ZDR 分类；插话提交后标为不可撤回，在上一回合收束后建立独立 turn/user-message/status，迟到的上一回合 Promise 不会结算新回合。最终 80 文件/465 项离线测试通过，5 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、Computer Host 自检、公开源码/资产扫描、diff check、Fuses、打包版/Portable UI、任务调度、安装版主进程/About/诊断/File/Product/快捷方式均通过。现有历史图在安装版 `grok-media:` 中实际解码为 1024x1024。0.6.22 已 per-user 安装并正式发布；没有发送新的图片/视频或付费模型请求，真实新媒体和插话顺序仍是用户验收边界。
+
+> 当前正式分支为 `main`，源码/lockfile 与 per-user 安装版均为 **0.6.22**。公开 Latest 是 **v0.6.22**，旧本地和公开资产全部保留。
 
 > **0.6.22 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.22-x64.exe` SHA-256 `509899d6f9836e1a5f33966a2736442b0b796d9cdc3b624decfaddca17b32da0`；`release/Grok-Build-Desktop-Portable-v0.6.22-x64.zip` SHA-256 `f764ee0fb49f37f1c8fc97671d3c72e7b918ffcdf581be6920036d564f2f590b`；SBOM SHA-256 `68c2d0b4904492070f20e108605484bda923603c8a3fb0488c81f713296bb130`；许可证报告 SHA-256 `bb132d306dfff20fb1274bf7b1b13d41e1556e04cf5f89f9e00f81b044266a9f`。四项与 `release/SHA256SUMS.txt` 一致；旧资产保留。
 
@@ -98,13 +100,13 @@ sandbox: true
 ## 2. 仓库与版本状态
 
 - 仓库：当前 `<repository-root>`（本机绝对路径不写入公开文档）
-- 开发分支：`codex/v0.6.14-audit-fixes`
+- 正式分支：`main`；发布后证据记录使用独立短分支合并，不移动 `v0.6.22` 标签。
 - 分支创建前 HEAD / `origin/main`：`05734cf4bdfef51988197b46d7249fed568696da`
 - 分支创建前已有 0.6.7–0.6.13 本地候选的未提交实现；不得丢弃或从公开 0.6.6 重新制作。
 - `package.json` / lockfile 已提升为 `0.6.22`。
 - 本机 CLI 兼容基准：`0.2.117 (f1c0609308)`。
 - 本机 per-user 安装版已覆盖为 0.6.22；File/Product/ASAR、Fuses、桌面/开始菜单快捷方式以及主进程/About/诊断探针通过。
-- GitHub `v0.6.6` 仍为正式 Latest；0.6.22 在用户验收前不得推送或发布。
+- GitHub `v0.6.22` 已是正式 Latest；Release workflow `30693283048` 与远端 SHA-256/attestation 校验通过。
 
 ## 3. 0.6.5/0.6.6 已实现范围
 
