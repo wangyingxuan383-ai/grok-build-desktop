@@ -1,6 +1,6 @@
 import type { App } from "electron";
 import { copyFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { joinPath } from "../shared/path-utils";
 
 type PathApp = Pick<App, "getPath" | "setPath">;
 type StorageFileOps = Pick<typeof import("node:fs"), "copyFileSync" | "mkdirSync">;
@@ -16,10 +16,10 @@ export interface AutomationWorkerStorage {
  * remaining browser/session files isolated so it can run beside the GUI.
  */
 export function configureAutomationWorkerStorage(electronApp: PathApp, pid = process.pid, fileOps: StorageFileOps = { copyFileSync, mkdirSync }): AutomationWorkerStorage {
-  const canonicalUserData = join(electronApp.getPath("appData"), "Grok Build Desktop");
-  const workerSessionData = join(electronApp.getPath("temp"), `grok-build-desktop-worker-${pid}`);
+  const canonicalUserData = joinPath(electronApp.getPath("appData"), "Grok Build Desktop");
+  const workerSessionData = joinPath(electronApp.getPath("temp"), `grok-build-desktop-worker-${pid}`);
   fileOps.mkdirSync(workerSessionData, { recursive: true });
-  fileOps.copyFileSync(join(canonicalUserData, "Local State"), join(workerSessionData, "Local State"));
+  fileOps.copyFileSync(joinPath(canonicalUserData, "Local State"), joinPath(workerSessionData, "Local State"));
   electronApp.setPath("userData", canonicalUserData);
   electronApp.setPath("sessionData", workerSessionData);
   return { canonicalUserData, workerSessionData };

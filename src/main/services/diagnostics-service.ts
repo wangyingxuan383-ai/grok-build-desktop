@@ -8,6 +8,7 @@ import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sd
 import { strToU8, zipSync } from "fflate";
 import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, FailureDiagnosisReport, GrokQuotaSnapshot, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem, TurnFailure } from "../../shared/types";
 import { turnFailureActions, turnFailureLabel } from "../../shared/turn-failure";
+import { credentialBackendLabel } from "../../shared/platform";
 import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
 import { redactLogText, redactSecrets, type LogService } from "./log-service";
 
@@ -133,9 +134,9 @@ export class DiagnosticsService {
 
   async run(): Promise<SystemCompatibilityReport> {
     const items: SystemDiagnosticItem[] = [];
-    const windows = windowsStatus();
-    items.push(windows);
-    items.push({ id: "dpapi", label: "凭据加密", status: safeStorage.isEncryptionAvailable() ? "ok" : "error", summary: safeStorage.isEncryptionAvailable() ? "Windows DPAPI 可用" : "当前系统无法安全加密账号凭据" });
+    const platform = platformStatus();
+    items.push(platform);
+    items.push({ id: "dpapi", label: "凭据加密", status: safeStorage.isEncryptionAvailable() ? "ok" : "error", summary: safeStorage.isEncryptionAvailable() ? `${credentialBackendLabel()} 可用` : "当前系统无法安全加密账号凭据" });
     items.push(await writableStatus(this.userDataPath));
 
     const settings = await this.getSettings();
@@ -159,7 +160,7 @@ export class DiagnosticsService {
     const reader = join(homedir(), ".grok", "bundled", "skills", "shared", "resume-session", "session_reader.py");
     items.push({ id: "codex-reader", label: "Codex 只读桥接", status: await access(reader).then(() => "ok" as const).catch(() => "warning" as const), summary: await access(reader).then(() => "Grok 自带读取器可用").catch(() => "将使用内置 JSONL 兼容解析器") });
     const computer = await this.getComputerCapability().catch((error) => ({ available: false, diagnostics: [String(error)] } as ComputerCapability));
-    items.push({ id: "computer", label: "Computer Use", status: computer.available ? "ok" : "warning", summary: computer.available ? `Windows Harness 可用${computer.helperVersion ? `（${computer.helperVersion}）` : ""}` : "Computer Use 不可用", details: computer.diagnostics.map(redactDiagnosticText) });
+    items.push({ id: "computer", label: "Computer Use", status: computer.available ? "ok" : "warning", summary: computer.available ? `Computer Use Harness 可用${computer.helperVersion ? `（${computer.helperVersion}）` : ""}` : process.platform === "win32" ? "Computer Use 不可用" : "Computer Use 目前仅 Windows 原生宿主可用", details: computer.diagnostics.map(redactDiagnosticText) });
     items.push({ id: "quota", label: "额度", status: "info", summary: "OAuth 账号额度在账号面板按需查询；诊断不会访问真实账单接口" });
     if (this.optional.providers) {
       const providers = await this.optional.providers().catch(() => []);
@@ -173,7 +174,7 @@ export class DiagnosticsService {
       items.push({ id: "automations", label: "持久自动化", status: problems ? "warning" : "ok", summary: `${tasks.length} 个任务；${problems} 个需要处理` });
     }
 
-    const overall = items.some((item) => item.status === "error" && ["windows", "dpapi", "cli", "acp"].includes(item.id)) ? "blocked" : items.some((item) => item.status === "warning" || item.status === "error") ? "limited" : "ready";
+    const overall = items.some((item) => item.status === "error" && ["windows", "platform", "dpapi", "cli", "acp"].includes(item.id)) ? "blocked" : items.some((item) => item.status === "warning" || item.status === "error") ? "limited" : "ready";
     return { checkedAt: new Date().toISOString(), overall, items, cliPath: cliPath ? redactDiagnosticPath(cliPath) : undefined, cliVersion, effortFlag };
   }
 
@@ -184,7 +185,7 @@ export class DiagnosticsService {
         { name: "app.log", description: "经过 Token、路径、邮箱和代理脱敏的应用日志" },
         { name: "README.txt", description: "支持包范围和隐私说明" },
       ],
-      fields: ["应用版本/构建提交", "Windows 版本和架构", "CLI 版本和能力", "代理是否配置", "Computer Use 自检", "提供商数量/协议/凭据状态", "定时任务数量/注册状态"],
+      fields: ["应用版本/构建提交", "操作系统版本和架构", "CLI 版本和能力", "代理是否配置", "Computer Use 自检", "提供商数量/协议/凭据状态", "定时任务数量/注册状态"],
       excluded: ["OAuth/API Key/Token", "提供商端点和环境变量值", "任务提示词/任务工作区和会话", "会话附件正文、Base64、缓存文件和完整路径", "Memory 内容、文件路径和索引", "文件内容、截图和主题背景图片", "主题背景原始路径或本地副本", "完整工作区/用户目录", "代理地址和认证"],
       redacted: true,
     };
@@ -204,9 +205,29 @@ export class DiagnosticsService {
   }
 }
 
-function windowsStatus(): SystemDiagnosticItem {
-  const build = Number(osRelease().split(".").at(-1));
-  if (process.platform !== "win32") return { id: "windows", label: "Windows", status: "error", summary: "公开版仅支持 Windows" };
+function platformStatus(): SystemDiagnosticItem {
+  const release = osRelease();
+  if (process.platform === "darwin") {
+    return {
+      id: "platform",
+      label: "macOS",
+      status: "ok",
+      summary: `macOS ${release}（${process.arch}）· 社区移植版`,
+      details: ["Computer Use 与 launchd 定时任务尚未移植；核心会话与 CLI 可用"],
+    };
+  }
+  if (process.platform === "linux") {
+    return {
+      id: "platform",
+      label: "Linux",
+      status: "warning",
+      summary: `Linux ${release}（${process.arch}）· 实验性社区移植`,
+    };
+  }
+  if (process.platform !== "win32") {
+    return { id: "platform", label: "系统", status: "error", summary: `当前平台 ${process.platform} 不受支持` };
+  }
+  const build = Number(release.split(".").at(-1));
   if (process.arch !== "x64") return { id: "windows", label: "Windows", status: "error", summary: `当前架构 ${process.arch} 不受支持；需要 x64` };
   const supported = build >= 19045;
   return { id: "windows", label: "Windows", status: supported ? "ok" : "warning", summary: supported ? `Windows x64（系统构建 ${build}）` : `系统构建 ${build} 低于正式测试基线 19045` };
@@ -258,9 +279,11 @@ async function probeAcpInitialize(cliPath: string, env: NodeJS.ProcessEnv): Prom
 
 export function redactDiagnosticPath(path: string): string {
   const home = homedir();
-  if (path.toLowerCase().startsWith(home.toLowerCase())) return `%USERPROFILE%${path.slice(home.length)}`;
+  const placeholder = process.platform === "win32" ? "%USERPROFILE%" : "$HOME";
+  if (path.toLowerCase().startsWith(home.toLowerCase())) return `${placeholder}${path.slice(home.length)}`;
   if (/^[A-Za-z]:\\/.test(path)) return `<LOCAL_PATH>\\${path.split(/[\\/]/).at(-1) || "…"}`;
   if (/^\\\\/.test(path)) return `<NETWORK_PATH>\\${path.split(/[\\/]/).at(-1) || "…"}`;
+  if (path.startsWith("/") && path !== "/") return `<LOCAL_PATH>/${path.split("/").at(-1) || "…"}`;
   return path;
 }
 

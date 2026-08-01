@@ -77,6 +77,7 @@ else {
 
   app.whenReady().then(async () => {
     app.setAppUserModelId("io.github.grokbuilddesktop.community");
+    try {
     controller = new AppController(app.getPath("userData"));
     const startupTheme = await controller.prepareAppearance();
     protocol.handle("grok-theme", async (request) => {
@@ -174,11 +175,23 @@ else {
         mainWindow?.webContents.focus();
       }
     });
+    // Show as soon as possible; also force-show if ready-to-show never fires
+    // (slow asar / GPU path on first macOS launch).
     mainWindow.once("ready-to-show", () => mainWindow?.show());
+    setTimeout(() => { if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show(); }, 2_500);
     await loadRenderer().catch((error) => showStartupError(error instanceof Error ? error.message : String(error)));
     if (openTaskCenterOnReady && !showingStartupError) {
       setTimeout(() => mainWindow?.webContents.send("grok:menu-command", "open-task-center"), 500);
     }
+    } catch (error) {
+      const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
+      dialog.showErrorBox("Grok Build Desktop 启动失败", message.slice(0, 2_000));
+      app.quit();
+    }
+  }).catch((error) => {
+    const message = error instanceof Error ? `${error.message}\n${error.stack || ""}` : String(error);
+    dialog.showErrorBox("Grok Build Desktop 启动失败", message.slice(0, 2_000));
+    app.quit();
   });
 
   app.on("before-quit", (event) => {

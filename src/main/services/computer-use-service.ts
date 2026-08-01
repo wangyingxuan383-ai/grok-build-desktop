@@ -69,8 +69,11 @@ export class ComputerUseService {
     const helper = await stat(this.helperPath).then((value) => value.isFile()).catch(() => false);
     const plugin = await stat(join(this.pluginPath, "plugin.json")).then((value) => value.isFile()).catch(() => false);
     let helperVersion: string | undefined;
-    if (!helper) diagnostics.push("未找到 GrokComputerHost.exe；运行 build-computer-host.ps1");
-    else {
+    if (process.platform !== "win32") {
+      diagnostics.push(`Computer Use 原生宿主尚未移植到 ${process.platform}（当前仅 Windows x64）`);
+    } else if (!helper) {
+      diagnostics.push("未找到 GrokComputerHost.exe；运行 build-computer-host.ps1");
+    } else {
       try { const result = await this.getHost().call("self_test", {}) as Record<string, unknown>; helperVersion = String(result.version || "unknown"); }
       catch (error) { diagnostics.push(`辅助程序自检失败：${message(error)}`); }
     }

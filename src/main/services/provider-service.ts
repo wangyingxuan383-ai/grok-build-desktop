@@ -1,3 +1,4 @@
+import { safeStorage } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -87,7 +88,7 @@ export class ProviderService {
     this.store = new JsonStore(join(userDataPath, "providers.json"), { providers: [] });
     this.capabilityStore = new JsonStore(join(userDataPath, "provider-capabilities.json"), { snapshots: [] });
     this.fetcher = options.fetcher ?? fetch;
-    this.environment = options.environment ?? new WindowsUserEnvironment();
+    this.environment = options.environment ?? createDefaultProviderEnvironment(userDataPath);
     this.gateway = new ProviderGatewayService({
       providers: async () => (await this.store.get()).providers,
       environment: async (name) => this.environment.readFresh ? this.environment.readFresh(name) : this.environment.read(name),
@@ -1109,7 +1110,95 @@ export class ProviderService {
   }
 }
 
-export class WindowsUserEnvironment implements ProviderEnvironment {
+export function createDefaultProviderEnvironment(userDataPath: string): ProviderEnvironment {
+  if (process.platform === "win32") return new WindowsUserEnvironment();
+  return new PersistentUserEnvironment(userDataPath);
+}
+
+/**
+ * macOS / Linux: persist provider secrets with Electron safeStorage (Keychain /
+ * libsecret) inside an encrypted JSON vault under userData. process.env is
+ * mirrored for the current process so child CLI/ACP sessions inherit values.
+ */
+export class PersistentUserEnvironment implements ProviderEnvironment {
+  private readonly store: JsonStore<Record<string, string>>;
+  private readonly memory = new Map<string, string>();
+  private loaded = false;
+
+  constructor(
+    userDataPath: string,
+    private readonly cipher: { encrypt(value: string): string; decrypt(value: string): string } = new SafeStorageEnvCipher(),
+  ) {
+    this.store = new JsonStore(join(userDataPath, "provider-env.vault.json"), {});
+  }
+
+  async read(name: string): Promise<string | undefined> {
+    const inherited = process.env[name];
+    if (inherited !== undefined && inherited !== "") return inherited;
+    await this.ensureLoaded();
+    return this.memory.get(name);
+  }
+
+  async readFresh(name: string): Promise<string | undefined> {
+    this.loaded = false;
+    await this.ensureLoaded();
+    const value = this.memory.get(name);
+    if (value !== undefined) {
+      process.env[name] = value;
+      return value;
+    }
+    delete process.env[name];
+    return undefined;
+  }
+
+  async write(name: string, value: string | undefined): Promise<void> {
+    await this.ensureLoaded();
+    if (value === undefined || value === "") {
+      this.memory.delete(name);
+      delete process.env[name];
+    } else {
+      this.memory.set(name, value);
+      process.env[name] = value;
+    }
+    await this.persist();
+  }
+
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+    const raw = await this.store.get();
+    this.memory.clear();
+    for (const [key, encrypted] of Object.entries(raw)) {
+      try {
+        const plain = this.cipher.decrypt(encrypted);
+        this.memory.set(key, plain);
+        if (process.env[key] === undefined) process.env[key] = plain;
+      } catch {
+        // Skip undecryptable entries (e.g. vault from another machine/user).
+      }
+    }
+    this.loaded = true;
+  }
+
+  private async persist(): Promise<void> {
+    const encrypted: Record<string, string> = {};
+    for (const [key, value] of this.memory.entries()) encrypted[key] = this.cipher.encrypt(value);
+    await this.store.set(encrypted);
+  }
+}
+
+class SafeStorageEnvCipher {
+  encrypt(value: string): string {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据加密当前不可用，无法保存提供商密钥");
+    return safeStorage.encryptString(value).toString("base64");
+  }
+  decrypt(value: string): string {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据解密当前不可用");
+    return safeStorage.decryptString(Buffer.from(value, "base64"));
+  }
+}
+
+/** Prefer this name in new code. Alias kept for existing tests/imports. */
+export class DesktopUserEnvironment implements ProviderEnvironment {
   async read(name: string): Promise<string | undefined> {
     const inherited = process.env[name];
     if (inherited !== undefined) return inherited;
@@ -1150,6 +1239,9 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
 }
+
+/** @deprecated Use DesktopUserEnvironment / PersistentUserEnvironment */
+export class WindowsUserEnvironment extends DesktopUserEnvironment {}
 
 export async function validateGrokConfig(cliPath: string, cwd = process.cwd()): Promise<void> {
   await exec(cliPath, ["inspect", "--json"], cwd);

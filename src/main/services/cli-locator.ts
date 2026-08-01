@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
+import { grokCliBinaryName } from "../../shared/platform";
 import type { AppSettings, CliVersionStatus } from "../../shared/types";
 
 const execFileAsync = promisify(execFile);
@@ -13,9 +14,14 @@ async function exists(path: string): Promise<boolean> {
 }
 
 export async function locateGrokCli(configured = ""): Promise<string | undefined> {
-  const candidates = [configured, join(homedir(), ".grok", "bin", process.platform === "win32" ? "grok.exe" : "grok")].filter(Boolean);
+  const binary = grokCliBinaryName();
+  const candidates = [configured, join(homedir(), ".grok", "bin", binary)].filter(Boolean);
+  // Homebrew and user-local installs are common on macOS.
+  if (process.platform === "darwin") {
+    candidates.push("/opt/homebrew/bin/grok", "/usr/local/bin/grok");
+  }
   const pathNames = process.env.PATH?.split(delimiter) ?? [];
-  for (const dir of pathNames) candidates.push(join(dir, process.platform === "win32" ? "grok.exe" : "grok"));
+  for (const dir of pathNames) candidates.push(join(dir, binary));
   for (const candidate of candidates) if (await exists(candidate)) return candidate;
   return undefined;
 }

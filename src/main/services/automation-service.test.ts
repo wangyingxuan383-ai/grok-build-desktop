@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AutomationTask, AutomationTaskInput } from "../../shared/types";
 import iconv from "iconv-lite";
-import { AutomationService, buildTaskXml, calculateNextRun, classifyScheduledRisk, decodeWindowsCommandOutput, normalizeRegistrationError, type AutomationCipher, type TaskSchedulerAdapter } from "./automation-service";
+import { AutomationService, buildLaunchdPlist, buildTaskXml, calculateNextRun, classifyScheduledRisk, decodeWindowsCommandOutput, launchdLabel, LaunchdTaskScheduler, normalizeRegistrationError, type AutomationCipher, type TaskSchedulerAdapter } from "./automation-service";
 import { LogService } from "./log-service";
 
 const roots: string[] = [];
@@ -74,5 +74,47 @@ describe("AutomationService", () => {
     expect(run.status).toBe("failed");
     expect(run.error).toContain("DPAPI decrypt failed");
     expect((await service.listRuns()).find((value) => value.id === run.id)?.status).toBe("failed");
+  });
+
+  it("builds a launchd plist for daily, weekly, interval and once schedules", () => {
+    const base = { ...input(), id: "task-id", promptPresent: true, registrationStatus: "registered" as const, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" };
+    const daily = buildLaunchdPlist({ ...base, schedule: { kind: "daily", time: "09:30" }, workspace: "/Users/demo/Project" }, "/Apps/Grok.app/Contents/MacOS/Grok", ["--scheduler-worker", "task-id", "scheduled"]);
+    expect(daily).toContain(launchdLabel("task-id"));
+    expect(daily).toContain("<key>Hour</key>");
+    expect(daily).toContain("<integer>9</integer>");
+    expect(daily).toContain("<integer>30</integer>");
+    expect(daily).toContain("/Users/demo/Project");
+    expect(daily).toContain("LimitLoadToSessionType");
+    expect(daily).toContain("Aqua");
+
+    const weekly = buildLaunchdPlist({ ...base, schedule: { kind: "weekly", time: "11:00", days: [1, 3] } }, "/bin/electron", []);
+    expect(weekly).toContain("<key>Weekday</key>");
+    expect(weekly).toContain("<array>");
+
+    const interval = buildLaunchdPlist({ ...base, schedule: { kind: "interval", minutes: 15 } }, "/bin/electron", []);
+    expect(interval).toContain("<key>StartInterval</key>");
+    expect(interval).toContain("<integer>900</integer>");
+
+    const once = buildLaunchdPlist({ ...base, schedule: { kind: "once", at: "2026-08-15T14:05:00" } }, "/bin/electron", []);
+    expect(once).toContain("<key>Month</key>");
+    expect(once).toContain("<key>Day</key>");
+  });
+
+  it("registers and unregisters launchd agents through the adapter seam", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-launchd-"));
+    roots.push(root);
+    const agents = join(root, "LaunchAgents");
+    const calls: string[][] = [];
+    const scheduler = new LaunchdTaskScheduler(agents, async (args) => { calls.push(args); }, 501);
+    // Force supported() path by stubbing platform check via direct register when HOME exists.
+    const task = { ...input(), id: "abc-123", promptPresent: true, registrationStatus: "registered" as const, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z", workspace: root };
+    // supported() requires darwin — call register internals via writing when we mock supported.
+    Object.defineProperty(scheduler, "supported", { value: () => true });
+    await scheduler.register(task, "/Apps/Grok.app/Contents/MacOS/Grok", ["app.asar"]);
+    const plist = await readFile(join(agents, `${launchdLabel("abc-123")}.plist`), "utf8");
+    expect(plist).toContain("--scheduler-worker");
+    expect(calls.some((args) => args[0] === "bootstrap")).toBe(true);
+    await scheduler.unregister("abc-123");
+    await expect(readFile(join(agents, `${launchdLabel("abc-123")}.plist`), "utf8")).rejects.toThrow();
   });
 });

@@ -59,7 +59,7 @@ export class AutomationService {
     this.pendingRoot = join(this.root, "pending");
     this.policyStore = new JsonStore(join(this.root, "policy.json"), DEFAULT_POLICY);
     this.cipher = options.cipher ?? new SafeStorageCipher();
-    this.scheduler = options.scheduler ?? new WindowsTaskScheduler();
+    this.scheduler = options.scheduler ?? createDefaultTaskScheduler();
     this.now = options.now ?? (() => new Date());
   }
 
@@ -306,12 +306,24 @@ export class AutomationService {
 }
 
 export class SafeStorageCipher implements AutomationCipher {
-  encrypt(value: string): string { if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows DPAPI 当前不可用"); return safeStorage.encryptString(value).toString("base64"); }
+  encrypt(value: string): string { if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据加密当前不可用"); return safeStorage.encryptString(value).toString("base64"); }
   decrypt(value: string): string {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows DPAPI 当前不可用");
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据解密当前不可用");
     try { return safeStorage.decryptString(Buffer.from(value, "base64")); }
     catch { throw new Error("任务指令解密失败，请编辑任务并重新输入任务指令后保存"); }
   }
+}
+
+export function createDefaultTaskScheduler(): TaskSchedulerAdapter {
+  if (process.platform === "win32") return new WindowsTaskScheduler();
+  if (process.platform === "darwin") return new LaunchdTaskScheduler();
+  return new UnsupportedTaskScheduler();
+}
+
+export class UnsupportedTaskScheduler implements TaskSchedulerAdapter {
+  supported(): boolean { return false; }
+  async register(): Promise<void> { throw new Error("当前平台不支持持久自动化调度"); }
+  async unregister(): Promise<void> { /* no-op */ }
 }
 
 export class WindowsTaskScheduler implements TaskSchedulerAdapter {
@@ -322,6 +334,171 @@ export class WindowsTaskScheduler implements TaskSchedulerAdapter {
     try { await runSchtasks(["/Create", "/TN", taskName(task.id), "/XML", temp, "/F"], "register"); } finally { await rm(temp, { force: true }); }
   }
   async unregister(taskId: string): Promise<void> { await runSchtasks(["/Delete", "/TN", taskName(taskId), "/F"], "unregister").catch((error) => { if (!/cannot find|找不到/i.test(String(error))) throw error; }); }
+}
+
+/**
+ * macOS LaunchAgents scheduler. Jobs run in the current GUI session
+ * (`gui/$UID`) so Computer Use / notifications remain interactive.
+ * Labels: io.github.grokbuilddesktop.automation.<taskId>
+ */
+export class LaunchdTaskScheduler implements TaskSchedulerAdapter {
+  private readonly agentsDir: string;
+  private readonly runLaunchctl: (args: string[]) => Promise<void>;
+  private readonly uid: number;
+
+  constructor(
+    agentsDir?: string,
+    // Avoid default-param self-reference (`t = t`) after minification — that
+    // throws ReferenceError TDZ and leaves the app running with zero windows.
+    launchctlRunner?: (args: string[]) => Promise<void>,
+    uid?: number,
+  ) {
+    this.agentsDir = agentsDir ?? join(process.env.HOME || "", "Library", "LaunchAgents");
+    this.runLaunchctl = launchctlRunner ?? runLaunchctl;
+    this.uid = uid ?? (typeof process.getuid === "function" ? process.getuid() : 501);
+  }
+
+  supported(): boolean { return process.platform === "darwin" && Boolean(process.env.HOME); }
+
+  async register(task: AutomationTask, executable: string, baseArgs: string[]): Promise<void> {
+    if (!this.supported()) throw new Error("launchd 调度仅在 macOS 用户会话中可用");
+    await mkdir(this.agentsDir, { recursive: true });
+    const label = launchdLabel(task.id);
+    const plistPath = join(this.agentsDir, `${label}.plist`);
+    const args = [...baseArgs, "--scheduler-worker", task.id, "scheduled"];
+    // Always boot out first so calendar/interval changes replace cleanly.
+    await this.bootout(label).catch(() => undefined);
+    if (!task.enabled) {
+      await rm(plistPath, { force: true });
+      return;
+    }
+    await writeFile(plistPath, buildLaunchdPlist(task, executable, args, label), "utf8");
+    await this.runLaunchctl(["bootstrap", `gui/${this.uid}`, plistPath]);
+    await this.runLaunchctl(["enable", `gui/${this.uid}/${label}`]).catch(() => undefined);
+  }
+
+  async unregister(taskId: string): Promise<void> {
+    const label = launchdLabel(taskId);
+    const plistPath = join(this.agentsDir, `${label}.plist`);
+    await this.bootout(label).catch(() => undefined);
+    await rm(plistPath, { force: true });
+  }
+
+  private async bootout(label: string): Promise<void> {
+    await this.runLaunchctl(["bootout", `gui/${this.uid}/${label}`]);
+  }
+}
+
+export function launchdLabel(taskId: string): string {
+  return `io.github.grokbuilddesktop.automation.${safeId(taskId)}`;
+}
+
+/** Pure plist builder — unit-tested without touching launchctl. */
+export function buildLaunchdPlist(task: AutomationTask, executable: string, args: string[], label = launchdLabel(task.id)): string {
+  const programArguments = [executable, ...args].map((value) => `    <string>${xml(value)}</string>`).join("\n");
+  const calendar = launchdCalendar(task.schedule);
+  const lines = [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+    `<plist version="1.0">`,
+    `<dict>`,
+    `  <key>Label</key>`,
+    `  <string>${xml(label)}</string>`,
+    `  <key>ProgramArguments</key>`,
+    `  <array>`,
+    programArguments,
+    `  </array>`,
+    `  <key>WorkingDirectory</key>`,
+    `  <string>${xml(task.workspace)}</string>`,
+    `  <key>RunAtLoad</key>`,
+    `  <false/>`,
+    `  <key>LimitLoadToSessionType</key>`,
+    `  <string>Aqua</string>`,
+    `  <key>ProcessType</key>`,
+    `  <string>Interactive</string>`,
+    `  <key>StandardOutPath</key>`,
+    `  <string>/tmp/${xml(label)}.out.log</string>`,
+    `  <key>StandardErrorPath</key>`,
+    `  <string>/tmp/${xml(label)}.err.log</string>`,
+  ];
+  if (calendar.kind === "interval") {
+    lines.push(`  <key>StartInterval</key>`, `  <integer>${calendar.seconds}</integer>`);
+  } else if (calendar.kind === "calendar") {
+    lines.push(`  <key>StartCalendarInterval</key>`);
+    if (calendar.entries.length === 1) {
+      lines.push(formatCalendarDict(calendar.entries[0]!, "  "));
+    } else {
+      lines.push(`  <array>`);
+      for (const entry of calendar.entries) lines.push(formatCalendarDict(entry, "    "));
+      lines.push(`  </array>`);
+    }
+  }
+  lines.push(`</dict>`, `</plist>`, ``);
+  return lines.join("\n");
+}
+
+interface LaunchdCalendarEntry { hour?: number; minute?: number; weekday?: number; month?: number; day?: number; }
+
+function launchdCalendar(schedule: AutomationTask["schedule"]): { kind: "interval"; seconds: number } | { kind: "calendar"; entries: LaunchdCalendarEntry[] } | { kind: "none" } {
+  if (schedule.kind === "interval") {
+    return { kind: "interval", seconds: Math.max(60, Math.floor(schedule.minutes) * 60) };
+  }
+  if (schedule.kind === "daily") {
+    const [hour, minute] = schedule.time.split(":").map(Number);
+    return { kind: "calendar", entries: [{ hour: hour!, minute: minute! }] };
+  }
+  if (schedule.kind === "weekly") {
+    const [hour, minute] = schedule.time.split(":").map(Number);
+    // launchd Weekday: 0 and 7 = Sunday; JS getDay() uses the same 0–6 mapping.
+    return { kind: "calendar", entries: [...new Set(schedule.days)].sort((a, b) => a - b).map((weekday) => ({ weekday, hour: hour!, minute: minute! })) };
+  }
+  if (schedule.kind === "once") {
+    const at = new Date(schedule.at);
+    if (!Number.isFinite(at.getTime())) return { kind: "none" };
+    return {
+      kind: "calendar",
+      entries: [{
+        month: at.getMonth() + 1,
+        day: at.getDate(),
+        hour: at.getHours(),
+        minute: at.getMinutes(),
+      }],
+    };
+  }
+  return { kind: "none" };
+}
+
+function formatCalendarDict(entry: LaunchdCalendarEntry, indent: string): string {
+  const rows = [`${indent}<dict>`];
+  if (entry.month !== undefined) rows.push(`${indent}  <key>Month</key>`, `${indent}  <integer>${entry.month}</integer>`);
+  if (entry.day !== undefined) rows.push(`${indent}  <key>Day</key>`, `${indent}  <integer>${entry.day}</integer>`);
+  if (entry.weekday !== undefined) rows.push(`${indent}  <key>Weekday</key>`, `${indent}  <integer>${entry.weekday}</integer>`);
+  if (entry.hour !== undefined) rows.push(`${indent}  <key>Hour</key>`, `${indent}  <integer>${entry.hour}</integer>`);
+  if (entry.minute !== undefined) rows.push(`${indent}  <key>Minute</key>`, `${indent}  <integer>${entry.minute}</integer>`);
+  rows.push(`${indent}</dict>`);
+  return rows.join("\n");
+}
+
+function runLaunchctl(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("launchctl", args, { shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const collect = (chunk: Buffer) => { if (size < 256 * 1024) { chunks.push(Buffer.from(chunk)); size += chunk.length; } };
+    child.stdout.on("data", collect);
+    child.stderr.on("data", collect);
+    const timer = setTimeout(() => child.kill(), 20_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(new SchedulerCommandError(error.message, "register")); });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      // bootout returns non-zero when the job is not loaded — treat as success for unregister.
+      if (code === 0 || (args[0] === "bootout" && code === 3)) { resolve(); return; }
+      const message = Buffer.concat(chunks).toString("utf8").trim() || `launchctl ${args[0]} 失败（${code ?? -1}）`;
+      // "No such process" / already unloaded is fine for unregister paths.
+      if (/no such|could not find|not found|输入\/输出错误|ESRCH/i.test(message) && args[0] === "bootout") { resolve(); return; }
+      reject(new SchedulerCommandError(message, args[0] === "bootout" ? "unregister" : "register", code ?? undefined));
+    });
+  });
 }
 
 export function buildTaskXml(task: AutomationTask, executable: string, args: string[]): string {
@@ -382,7 +559,8 @@ export function normalizeRegistrationError(value: string | undefined): string | 
 }
 
 function registrationDiagnostic(error: unknown, operation: "register" | "unregister"): AutomationRegistrationDiagnostic {
-  const message = normalizeRegistrationError(sanitizeError(error)) ?? "Windows 任务计划程序操作失败";
+  const fallback = process.platform === "darwin" ? "launchd 任务注册失败" : process.platform === "win32" ? "Windows 任务计划程序操作失败" : "任务调度注册失败";
+  const message = normalizeRegistrationError(sanitizeError(error)) ?? fallback;
   return { operation: error instanceof SchedulerCommandError ? error.operation : operation, exitCode: error instanceof SchedulerCommandError ? error.exitCode : undefined, code: message.includes("历史任务注册错误文本编码损坏") ? "historical-encoding-damaged" : "scheduler-command-failed", message, repairable: true };
 }
 function quoteArg(value: string): string { return `"${value.replace(/"/g, '\\"')}"`; }

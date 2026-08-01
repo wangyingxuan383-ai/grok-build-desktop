@@ -9,4 +9,4 @@ Before changing this repository:
 5. Keep the implementation-plan checklist and changelog current with every completed milestone.
 6. Do not claim a feature works until its automated test or documented live verification passes.
 
-The application is a Windows-first Electron GUI for the locally installed Grok Build CLI. Keep the renderer sandboxed (`nodeIntegration: false`, `contextIsolation: true`) and put filesystem, process, credential, and ACP work in the Electron main process.
+The application is a Windows-first Electron GUI for the locally installed Grok Build CLI, with an in-progress community macOS port on `port/macos`. Keep the renderer sandboxed (`nodeIntegration: false`, `contextIsolation: true`) and put filesystem, process, credential, and ACP work in the Electron main process. See `docs/MACOS_PORT.md` for platform gaps (Computer Use, launchd automations, provider env persistence).
