@@ -1,5 +1,7 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
+
+const STALE_TEMP_MS = 24 * 60 * 60 * 1_000;
 
 export class JsonStore<T extends object> {
   private value: T | undefined;
@@ -50,10 +52,23 @@ export class JsonStore<T extends object> {
 
   private async load(): Promise<T> {
     if (this.value) return structuredClone(this.value);
+    await this.cleanupStaleTemps();
+    let raw: string;
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as Partial<T>;
+      raw = await readFile(this.filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      this.value = structuredClone(this.defaults);
+      return structuredClone(this.value);
+    }
+    try {
+      const parsed = JSON.parse(raw) as Partial<T>;
       this.value = { ...this.defaults, ...parsed };
-    } catch {
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      await mkdir(dirname(this.filePath), { recursive: true });
+      const backup = `${this.filePath}.corrupt-${Date.now()}-${crypto.randomUUID()}.bak`;
+      await rename(this.filePath, backup);
       this.value = structuredClone(this.defaults);
     }
     return structuredClone(this.value);
@@ -75,5 +90,22 @@ export class JsonStore<T extends object> {
     const result = this.queue.then(operation, operation);
     this.queue = result.then(() => undefined, () => undefined);
     return result;
+  }
+
+  private async cleanupStaleTemps(): Promise<void> {
+    const directory = dirname(this.filePath);
+    const prefix = `${basename(this.filePath)}.`;
+    const entries = await readdir(directory).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [] as string[];
+      throw error;
+    });
+    const now = Date.now();
+    await Promise.all(entries
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".tmp"))
+      .map(async (name) => {
+        const path = join(directory, name);
+        const info = await stat(path).catch(() => undefined);
+        if (info && now - info.mtimeMs >= STALE_TEMP_MS) await rm(path, { force: true });
+      }));
   }
 }

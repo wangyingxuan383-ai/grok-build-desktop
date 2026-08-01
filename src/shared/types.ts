@@ -1,4 +1,4 @@
-export const REASONING_EFFORTS = ["", "none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const REASONING_EFFORTS = ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 export type SessionMode = "agent" | "plan" | "auto";
 export type UiDensity = "compact" | "balanced" | "comfortable";
@@ -86,6 +86,9 @@ export interface AgentFileChange {
   after?: string;
   beforeTruncated?: boolean;
   afterTruncated?: boolean;
+  /** Exact when derived from an ACP diff block; otherwise omitted. */
+  additions?: number;
+  deletions?: number;
   /** `missing-before` and `none` must be shown as such rather than diffed against "". */
   baseline?: "captured" | "missing-before" | "none";
 }
@@ -219,6 +222,7 @@ export interface AppSettings {
   recentWorkspaces: string[];
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
+  claudeGroupCollapsed?: boolean;
   /** The 开发工具 section resets to collapsed on every launch without this. */
   projectToolsOpen?: boolean;
   sessionGroupCollapsed?: Partial<Record<SessionOriginKind, boolean>>;
@@ -230,15 +234,214 @@ export type ProviderProtocol = "chat_completions" | "responses" | "messages";
 export type ProviderUpstreamProtocol = "openai_chat" | "openai_responses" | "anthropic_messages" | "gemini_generate_content" | "compatible_passthrough";
 export type ProviderSchemaProfile = "standard" | "gemini" | "strict";
 export type ProviderAuthScheme = "bearer" | "x_api_key";
+export type ProviderProxyMode = "inherit" | "direct";
+export type ProviderCompatibilityFlavor = "auto" | "cliproxyapi" | "grok2api" | "sub2api" | "new-api" | "generic";
+export type ProviderCapabilityEvidenceSource = "manual" | "model_metadata" | "live_probe" | "compatibility_profile";
+export type ProviderCapabilityVerification = "unknown" | "request_accepted" | "response_confirmed" | "mapped" | "capped" | "rejected";
+export type ProviderReasoningMode = "effort_enum" | "budget_tokens" | "adaptive" | "model_suffix" | "fixed" | "unsupported";
+
+export interface ProviderReasoningTransport {
+  mode: ProviderReasoningMode;
+  efforts: Exclude<ReasoningEffort, "">[];
+  budgetByEffort?: Partial<Record<Exclude<ReasoningEffort, "">, number>>;
+  suffixByEffort?: Partial<Record<Exclude<ReasoningEffort, "">, string>>;
+  fixedEffort?: Exclude<ReasoningEffort, "">;
+  source: ProviderCapabilityEvidenceSource;
+}
+
+export interface ProviderProtocolCapability {
+  protocol: ProviderProtocol;
+  available: boolean;
+  nonStreaming: boolean;
+  streaming: boolean;
+  tools: boolean;
+  toolContinuation: boolean;
+  imageInput: boolean;
+  imageGeneration: boolean;
+  imageEditing: boolean;
+  videoGeneration?: boolean;
+  usage: boolean;
+  verification: ProviderCapabilityVerification;
+  checkedAt?: string;
+  latencyMs?: number;
+  status?: number;
+  returnedModel?: string;
+  message?: string;
+  reasoning?: ProviderReasoningTransport;
+  context?: ProviderContextProbeResult;
+}
+
+export interface ProviderModelCapabilityProfile {
+  modelId: string;
+  protocols: Partial<Record<ProviderProtocol, ProviderProtocolCapability>>;
+  returnedModelIds?: string[];
+  checkedAt?: string;
+  source: ProviderCapabilityEvidenceSource;
+}
+
+export interface ProviderCapabilitySnapshot {
+  providerId: string;
+  checkedAt: string;
+  modelListHash: string;
+  serverFlavor: ProviderCompatibilityFlavor;
+  models: ProviderModelCapabilityProfile[];
+  expired: boolean;
+}
+
+export interface ProviderDeepScanOptions {
+  modelIds?: string[];
+  protocols?: ProviderProtocol[];
+  includeReasoning?: boolean;
+  includeTools?: boolean;
+  includeImages?: boolean;
+  context?: ProviderContextProbeOptions;
+}
+
+export type ProviderContextProbeMode = "off" | "safe" | "exact";
+
+export interface ProviderContextProbeOptions {
+  mode: ProviderContextProbeMode;
+  /** Requested lower bound for safe mode, or the search ceiling for exact mode. */
+  targetTokens?: number;
+  maxRequests?: number;
+  confirmedCost?: boolean;
+}
+
+export interface ProviderContextProbeResult {
+  mode: Exclude<ProviderContextProbeMode, "off">;
+  verification: ProviderCapabilityVerification;
+  declaredTokens?: number;
+  verifiedAtLeastTokens?: number;
+  acceptedTokens?: number;
+  rejectedTokens?: number;
+  acceptedCharacters?: number;
+  rejectedCharacters?: number;
+  verifiedCharacters?: number;
+  exactUsage: boolean;
+  requests: number;
+  checkedAt: string;
+  message?: string;
+}
+
+export type ProviderScanStage =
+  | "preparing"
+  | "metadata"
+  | "baseline"
+  | "stream"
+  | "usage"
+  | "tool"
+  | "tool-continuation"
+  | "image"
+  | "video"
+  | "reasoning"
+  | "context"
+  | "saving"
+  | "complete";
+
+export type ProviderScanJobStatus = "queued" | "running" | "cancelling" | "completed" | "cancelled" | "failed";
+
+export interface ProviderScanScope extends ProviderDeepScanOptions {
+  providerId: string;
+}
+
+export interface ProviderScanProgress {
+  jobId: string;
+  providerId: string;
+  status: ProviderScanJobStatus;
+  stage: ProviderScanStage;
+  completed: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  modelId?: string;
+  protocol?: ProviderProtocol;
+  effort?: Exclude<ReasoningEffort, "">;
+  message: string;
+  startedAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderScanJob extends ProviderScanProgress {
+  /** Monotonic per-provider generation used to reject late responses from cancelled jobs. */
+  generation: number;
+  scope: ProviderScanScope;
+  completedAt?: string;
+  result?: ProviderDeepScanResult;
+  error?: string;
+}
+
+export interface CapabilityApplicationSelection {
+  reasoning?: boolean;
+  context?: boolean;
+  capabilities?: boolean;
+  aliases?: boolean;
+  compatibilityFlavor?: boolean;
+  protocolsByModel?: Record<string, ProviderProtocol>;
+}
+
+export interface CapabilityApplicationDraft {
+  providerId: string;
+  checkedAt: string;
+  expired: boolean;
+  changes: Array<{
+    id: string;
+    modelId?: string;
+    kind: "protocol" | "reasoning" | "context" | "capabilities" | "aliases" | "compatibility";
+    label: string;
+    before?: string;
+    after: string;
+    selectedByDefault: boolean;
+    evidenceSource: ProviderCapabilityEvidenceSource;
+    checkedAt?: string;
+    expired: boolean;
+  }>;
+}
+
+export interface ProviderDeepScanResult {
+  providerId: string;
+  startedAt: string;
+  completedAt: string;
+  cancelled: boolean;
+  completed: number;
+  total: number;
+  snapshot: ProviderCapabilitySnapshot;
+  warnings: string[];
+}
 
 export interface ProviderModelDefinition {
+  enabled?: boolean;
   id: string;
   model: string;
   name: string;
   description?: string;
+  protocol?: ProviderProtocol;
   contextWindow?: number;
   maxCompletionTokens?: number;
+  /** Seconds without an inference stream event before Grok CLI cancels it. */
+  inferenceIdleTimeoutSeconds?: number;
   reasoningEfforts?: ReasoningEffort[];
+  upstreamProtocol?: ProviderUpstreamProtocol;
+  reasoning?: Partial<Record<ProviderProtocol | ProviderUpstreamProtocol, ProviderReasoningTransport>>;
+  /** User-applied aliases observed in live responses; kept as local evidence, not sent upstream. */
+  returnedModelAliases?: string[];
+  media?: ProviderModelMediaConfiguration;
+  capabilities?: ProviderModelCapabilityProfile;
+}
+
+export type ProviderImageTransport = "openai_images" | "openai_responses_image" | "gemini_generate_content";
+export type ProviderVideoTransport = "compatible_video";
+
+export interface ProviderModelMediaConfiguration {
+  image?: {
+    transport: ProviderImageTransport;
+    /** Relative to Provider baseUrl, or an absolute URL on the same origin. */
+    endpoint?: string;
+  };
+  video?: {
+    transport: ProviderVideoTransport;
+    /** Required explicit endpoint; the Desktop never guesses a video route. */
+    endpoint: string;
+  };
 }
 
 export interface ProviderHeaderInput {
@@ -248,6 +451,7 @@ export interface ProviderHeaderInput {
 }
 
 export interface CustomProviderProfile {
+  enabled?: boolean;
   id: string;
   name: string;
   baseUrl: string;
@@ -255,6 +459,9 @@ export interface CustomProviderProfile {
   protocol: ProviderProtocol;
   upstreamProtocol?: ProviderUpstreamProtocol;
   schemaProfile?: ProviderSchemaProfile;
+  compatibilityFlavor?: ProviderCompatibilityFlavor;
+  /** Whether desktop requests inherit the app proxy or bypass it. */
+  proxyMode?: ProviderProxyMode;
   authScheme: ProviderAuthScheme;
   credentialMode: "managed" | "existing" | "none";
   credentialEnv?: string;
@@ -285,6 +492,8 @@ export interface ProviderModelCandidate {
   description?: string;
   ownedBy?: string;
   contextWindow?: number;
+  reasoningEfforts?: ReasoningEffort[];
+  capabilities?: ProviderModelCapabilityProfile;
   alreadyConfigured: boolean;
 }
 
@@ -466,7 +675,7 @@ export interface AccountProfile {
 }
 
 export type LiveStatus = "idle" | "working" | "needs-user" | "unread" | "error" | "cold";
-export type SessionOriginKind = "normal" | "fork" | "worktree" | "codex-continuation" | "automation" | "other";
+export type SessionOriginKind = "normal" | "fork" | "worktree" | "codex-continuation" | "claude-continuation" | "automation" | "other";
 
 export interface SessionSummary {
   id: string;
@@ -488,7 +697,7 @@ export interface SessionSummary {
   worktreeId?: string;
 }
 
-export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex";
+export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex" | "claude";
 
 export interface WorkspaceSummary {
   cwd: string;
@@ -499,6 +708,7 @@ export interface WorkspaceSummary {
   lastUsedAt?: string;
   grokSessions: number;
   codexSessions: number;
+  claudeSessions: number;
 }
 
 export interface CodexSessionSummary {
@@ -530,6 +740,35 @@ export interface CodexSessionDetail extends CodexSessionSummary {
   contentHash: string;
 }
 
+export interface ClaudeSessionSummary {
+  id: string;
+  path: string;
+  cwd: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  hidden: boolean;
+  source?: string;
+  origin?: string;
+  model?: string;
+}
+
+export interface ClaudeTurn {
+  role: "user" | "assistant" | "tool" | "thought";
+  text: string;
+  toolCalls?: unknown[];
+  toolResults?: unknown[];
+  inert?: boolean;
+}
+
+export interface ClaudeSessionDetail extends ClaudeSessionSummary {
+  turns: ClaudeTurn[];
+  warnings: string[];
+  lastUserRequest?: string;
+  lastAssistantAction?: string;
+  contentHash: string;
+}
+
 export interface TurnActivityGroup {
   kind: "progress" | "files" | "commands" | "subagents" | "computer" | "other";
   label: string;
@@ -542,7 +781,7 @@ export interface ChatTurnState {
   completed: boolean;
   running: boolean;
   activityGroups: TurnActivityGroup[];
-  summary: { files: number; commands: number; tools: number; subagents: number; failed: number };
+  summary: { files: number; additions: number; deletions: number; commands: number; tools: number; subagents: number; failed: number };
 }
 
 export interface QuotaWindow {
@@ -579,6 +818,7 @@ export interface ComposerDraftState {
   key: string;
   text: string;
   capability?: ComposerCapabilitySelection;
+  attachments?: Attachment[];
   updatedAt: string;
 }
 
@@ -864,6 +1104,13 @@ export interface ModelInfo {
   name: string;
   description?: string;
   totalContextTokens?: number;
+  supportsReasoningEffort?: boolean;
+  reasoningEfforts?: Array<{
+    value: Exclude<ReasoningEffort, "">;
+    label: string;
+    description?: string;
+    default?: boolean;
+  }>;
 }
 
 export interface CommandInfo {
@@ -873,6 +1120,7 @@ export interface CommandInfo {
 }
 
 export type MediaCreationKind = "image" | "video";
+export type MediaRouteKind = "auto" | "cli" | "provider";
 export type MediaAspectRatio = "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
 export type MediaVideoDuration = 6 | 10;
 export type MediaVideoResolution = "480p" | "720p";
@@ -892,6 +1140,50 @@ export interface MediaCreationRequest {
   aspectRatio: MediaAspectRatio;
   duration?: MediaVideoDuration;
   resolution?: MediaVideoResolution;
+  sessionId?: string;
+  route?: MediaRouteKind;
+  providerId?: string;
+  modelId?: string;
+  referencePaths?: string[];
+}
+
+export interface MediaArtifact {
+  id: string;
+  media: MediaCreationKind;
+  source: string;
+  mimeType?: string;
+  isData?: boolean;
+  name?: string;
+}
+
+export interface MediaGenerationJob {
+  jobId: string;
+  sessionId: string;
+  status: "queued" | "running" | "cancelling" | "completed" | "cancelled" | "failed";
+  route: Exclude<MediaRouteKind, "auto">;
+  kind: MediaCreationKind;
+  progress?: number;
+  message: string;
+  artifacts: MediaArtifact[];
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  error?: string;
+}
+
+export interface OpenTargetIntent {
+  target: string;
+  sessionId?: string;
+  executionRoot?: string;
+  action?: "open" | "reveal" | "copy-path";
+}
+
+export interface OpenTargetResult {
+  ok: boolean;
+  target: string;
+  kind: "directory" | "file" | "image" | "video" | "missing";
+  action: NonNullable<OpenTargetIntent["action"]>;
+  message: string;
 }
 
 export interface PromptMeta {
@@ -911,6 +1203,9 @@ export interface Attachment {
   data?: string;
   size?: number;
   kind: "file" | "image" | "folder";
+  /** Local-only composer draft metadata; never interpreted by the Provider. */
+  draftText?: boolean;
+  previewText?: string;
 }
 
 export type UserMessageDeliveryState = "sending" | "queued" | "sent" | "failed";
@@ -947,6 +1242,8 @@ export interface ToolCallState {
   exitCode?: number | null;
   oldText?: string;
   newText?: string;
+  additions?: number;
+  deletions?: number;
   error?: string;
 }
 
@@ -1005,6 +1302,10 @@ export interface TurnFailure {
   traceId?: string;
   retryAfter?: string;
   gatewayPhase?: "pre-send" | "upstream" | "response";
+  gatewayReason?: "gateway-timeout" | "downstream-request-aborted" | "downstream-response-closed" | "upstream-connect" | "upstream-stream" | "request-validation" | "upstream-http";
+  gatewayProxyMode?: ProviderProxyMode;
+  gatewayRequestId?: string;
+  gatewayElapsedMs?: number;
   /** How many tool-schema values the compatibility gateway rewrote for this provider. */
   sanitizedCount?: number;
   processExitCode?: number;
@@ -1035,8 +1336,18 @@ export interface QuestionItem {
   multiSelect?: boolean;
 }
 
+export interface ConversationProjection {
+  version: 1;
+  sessionId: string;
+  updatedAt: string;
+  /** Persisted ChatEvent records. Kept structurally loose to avoid a recursive union. */
+  events: Array<Record<string, unknown>>;
+}
+
 export type ChatEvent =
   | { type: "session-reset"; sessionId: string }
+  | { type: "conversation-projection-restore"; sessionId: string; projection: ConversationProjection }
+  | { type: "history-recovery"; sessionId: string; status: "recovered" | "unavailable"; message: string }
   | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[] }
   | { type: "user-message"; sessionId: string; text: string; id?: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
   | { type: "user-message-status"; sessionId: string; clientMessageId: string; delivery: UserMessageDeliveryState }
@@ -1047,6 +1358,7 @@ export type ChatEvent =
   | { type: "permission"; sessionId: string; request: PermissionRequest }
   | { type: "question"; sessionId: string; requestId: string | number; questions: QuestionItem[] }
   | { type: "plan"; sessionId: string; requestId?: string | number; text: string }
+  | { type: "interaction-resolved"; sessionId: string; interaction: "permission" | "question" | "plan"; requestId: string | number; outcome?: string }
   | { type: "media"; sessionId: string; media: "image" | "video"; source: string; isData?: boolean; mimeType?: string }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "mode"; sessionId: string; mode: SessionMode | string }
@@ -1101,6 +1413,7 @@ export interface BootstrapData {
   changelog: string;
   workspaces: WorkspaceSummary[];
   codexSessions: CodexSessionSummary[];
+  claudeSessions: ClaudeSessionSummary[];
   buildInfo: BuildInfo;
   onboarding: OnboardingState;
 }
@@ -1218,6 +1531,10 @@ export interface GrokDesktopApi {
   pinSession(sessionId: string, pinned: boolean): Promise<void>;
   exportSessionMarkdown(cwd: string, sessionId: string): Promise<string | null>;
   getMediaCapabilities(sessionId: string): Promise<MediaCapabilities>;
+  startMediaGeneration(request: MediaCreationRequest & { sessionId: string }): Promise<MediaGenerationJob>;
+  getMediaGenerationJob(jobId: string): Promise<MediaGenerationJob | undefined>;
+  cancelMediaGeneration(jobId: string): Promise<MediaGenerationJob>;
+  onMediaGenerationProgress(listener: (job: MediaGenerationJob) => void): () => void;
   sendPrompt(input: SendPromptInput): Promise<void>;
   getOfflineUiFixture(): Promise<OfflineUiFixture | null>;
   cancelSession(sessionId: string): Promise<void>;
@@ -1231,6 +1548,9 @@ export interface GrokDesktopApi {
   pickAttachmentFolders(): Promise<Attachment[]>;
   attachmentsFromPaths(paths: string[]): Promise<Attachment[]>;
   openPath(path: string): Promise<void>;
+  openTarget(intent: OpenTargetIntent): Promise<OpenTargetResult>;
+  copyImage(source: string): Promise<void>;
+  saveImage(source: string): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
@@ -1249,6 +1569,11 @@ export interface GrokDesktopApi {
   refreshCodexSession(id: string): Promise<CodexSessionDetail>;
   hideCodexSession(id: string, hidden?: boolean): Promise<void>;
   continueCodexSession(id: string): Promise<{ sessionId: string; cwd: string }>;
+  listClaudeSessions(cwd: string, force?: boolean): Promise<ClaudeSessionSummary[]>;
+  openClaudeSession(id: string): Promise<ClaudeSessionDetail>;
+  refreshClaudeSession(id: string): Promise<ClaudeSessionDetail>;
+  hideClaudeSession(id: string, hidden?: boolean): Promise<void>;
+  continueClaudeSession(id: string): Promise<{ sessionId: string; cwd: string }>;
   getQuota(force?: boolean): Promise<GrokQuotaSnapshot>;
   listProviders(): Promise<CustomProviderProfile[]>;
   upsertProvider(input: CustomProviderInput): Promise<CustomProviderProfile[]>;
@@ -1257,6 +1582,16 @@ export interface GrokDesktopApi {
   pullProviderModels(id: string): Promise<Array<{ id: string; name?: string }>>;
   probeProviderDraft(input: ProviderConnectionDraft): Promise<ProviderDraftProbeResult>;
   discoverProviderModels(input: ProviderConnectionDraft): Promise<ProviderModelCandidate[]>;
+  getProviderCapabilities(id: string): Promise<ProviderCapabilitySnapshot | undefined>;
+  startProviderScan(scope: ProviderScanScope): Promise<ProviderScanJob>;
+  getProviderScanJob(jobId: string): Promise<ProviderScanJob | undefined>;
+  listProviderScanJobs(providerId?: string): Promise<ProviderScanJob[]>;
+  cancelProviderScan(jobId: string): Promise<ProviderScanJob>;
+  onProviderScanProgress(listener: (progress: ProviderScanProgress) => void): () => void;
+  deepScanProvider(id: string, options?: ProviderDeepScanOptions): Promise<ProviderDeepScanResult>;
+  cancelProviderDeepScan(id: string): Promise<boolean>;
+  getProviderCapabilityApplication(id: string): Promise<CapabilityApplicationDraft>;
+  applyProviderCapabilities(id: string, selection?: CapabilityApplicationSelection): Promise<CustomProviderProfile[]>;
   setProviderDesktopDefault(modelId: string): Promise<AppSettings>;
   setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]>;
   reloadProviders(): Promise<void>;
@@ -1291,8 +1626,11 @@ export interface GrokDesktopApi {
   markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]>;
   clearInbox(): Promise<NotificationInboxItem[]>;
   getDraft(key: string): Promise<ComposerDraftState | null>;
-  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection): Promise<void>;
+  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]): Promise<void>;
   clearDraft(key: string): Promise<void>;
+  createTextDraftAttachment(key: string, text: string): Promise<Attachment>;
+  readTextDraftAttachment(path: string): Promise<string>;
+  deleteTextDraftAttachment(path: string): Promise<void>;
   listPromptHistory(cwd: string): Promise<string[]>;
   appendPromptHistory(cwd: string, text: string): Promise<void>;
   listPlugins(force?: boolean): Promise<PluginSummary[]>;

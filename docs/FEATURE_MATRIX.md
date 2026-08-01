@@ -1,5 +1,165 @@
 # Feature Matrix
 
+## v0.6.22 local media transport and interject lifecycle hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Historical/generated media display | Focused/source verified | Existing media is served through a bounded main-process `grok-media:` protocol rather than blocked Renderer `file://`; supported roots and a 256 MiB read ceiling remain enforced. |
+| CLI media artifact ownership | Focused verified | Only the exact transient CLI session root is added to the job allow-list; a sibling session is rejected and the artifact is copied before transient cleanup. |
+| Video ZDR diagnosis | Unit/source verified | The first `output.upload_url` error is preserved, retries stop, and the UI identifies the upstream ZDR team limitation. Desktop cannot synthesize the required upload callback for the installed CLI tool. |
+| Interject semantics | Unit/source verified | A submitted interject remains committed and non-removable, then becomes its own turn inside the same ACP session after the prior turn settles. It does not launch an independent Desktop Agent. |
+| Delivery | Installed locally for acceptance | 80 offline files/465 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resources, native self-test, 299-file scans, diff check, Fuses, packaged/Portable UI, scheduler, File/Product, shortcuts and installed main/About/diagnostics pass. An existing historical 1024x1024 image loads through installed `grok-media:`; new paid media and live interject order remain user acceptance. |
+
+## v0.6.21 local concurrent-conversation hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Renderer submission isolation | Unit/source verified | Prompt transport locks are keyed by conversation/new-draft identity; a pending turn in session A cannot disable session B. The first session-scoped working status releases the short transport lock. |
+| Main-process concurrency | Unit/source verified | Separate sessions remain separate live adapters and Provider scopes. Two working adapters coexist; the existing resident cap is eight and does not reap working/waiting sessions. |
+| Background navigation safety | Source verified | A background rejection persists its own draft but restores UI state, focus and scrolling only when that conversation is still active. |
+| Concurrent visibility | Renderer regression verified | Session rows expose running/waiting/completed/failed labels and the project header reports live-session count. |
+| Delivery | Installed locally for acceptance | 80 offline files/462 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resource build, native self-test, 299-file public scan, diff check, Fuses, formal assets, File/Product, shortcuts and installed main/About/diagnostics pass. Real two-session turns remain user acceptance; no GitHub release. |
+
+## v0.6.20 local media/session/Plan hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Media artifact paths | Focused verified | Ordinary relative paths including `images/1.jpg` remain rooted in the execution workspace and pass the existing canonical-path boundary before cache copy. |
+| Media session ownership | Source/focused verified | Active Grok sessions are reused even while working/waiting. CLI media uses a transient explicit session ID that is cleaned only after cache materialization; no-session creation is disclosed in the studio. |
+| Multi-media presentation | Renderer regression verified | Results are aggregated into a bounded two-column gallery, initially limited to four with expand/collapse and internal scrolling. |
+| Empty-turn semantics | Renderer regression verified | Working and waiting turns use live-state text; only terminal/history cases use missing-body recovery text. |
+| Plan permissions | Unit verified | Read/search/fetch/think and allow-listed read-only commands receive one-time approval in Plan; edits, arbitrary execution and unknown tools are not auto-approved. |
+| Delivery | Installed locally for acceptance | 79 offline files/457 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resource build, 297-file public scans, diff check, Fuses, formal assets, File/Product, shortcuts and installed main/About/diagnostics pass. Real media generation and live Plan permission behavior remain user acceptance; no GitHub release. |
+
+## v0.6.19 local Codex decision-surface and Agent-diff hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Agent-change readability | Focused/source verified | The dock uses unified Diff, wrapping, bounded Monaco layout and a responsive file-list split rather than two code panes inside the remaining narrow width. |
+| Permission/plan presentation | Focused/source verified | Current Codex structure was inspected read-only: compact elevated request surface, leading scoped action, trailing reject/primary actions and narrow stacking. Grok maps only actual ACP options and the real plan response. |
+| Interaction lifecycle | Existing focused verification retained | 0.6.18 stable request IDs, main-process pending sets, `interaction-resolved`, stale-request expiry and idempotent plan receipts remain unchanged. Real user-triggered permission/plan turns remain acceptance. |
+| Delivery | Installed locally for acceptance | 2 files/32 focused Renderer tests, TypeScript, production build, native resources, 295-file public scans, Fuses, File/Product/ASAR, shortcuts and installed main/About/diagnostics probes pass. Real permission/plan turns and dock readability remain user acceptance; no GitHub push or Release. |
+
+## v0.6.18 local interaction and Agent-change hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Permission/plan lifecycle | Focused verified | Actionable RPC requests have stable IDs and explicit resolution events; read-only plan updates cannot replace them. Successful/stale cards disappear and repeated decisions do not send another response. |
+| Message delivery | Focused/source verified | `sent` is emitted after the local CLI request is written. Queue execution cannot leave the user bubble in `sending` for the duration of the model turn. |
+| ACP file changes | Focused + official-source verified | Current nested ACP Diff blocks are parsed and preserved across streamed updates. Read/search operations are excluded from write counts; additions/deletions are exact for captured text. |
+| Non-Git Agent changes | Focused verified | `kind=edit` writes feed Last turn/Session changes and rebuild from the private projection after restart. No Git staging/commit capability is fabricated. |
+| Overflow and accounts | Source/regression verified | Plan/code/table content scrolls within its card. Account collections are counted, internally scrollable, active-first and responsive rather than expanding or squeezing the dialog. |
+| Delivery | Installed locally for acceptance | 78 files/447 offline tests passed; 5 live files/8 tests skipped by design. TypeScript, production build, 295-file public scan, diff check, formal packaging, Fuses, File/Product/ASAR, both shortcuts and installed main/About/diagnostics probes passed. Real permission/plan/model turns remain user acceptance; no GitHub push or Release. |
+
+## v0.6.17 local acceptance hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Legacy Provider TOML migration | Focused verified | A markerless Desktop-owned model table is removed by private-store model ID before one managed block is written; unrelated comments/tables survive and the result parses. |
+| Manual media configuration | Focused/source verified | Explicit image transport or video endpoint is sufficient to enter the Provider media route. “Verified” still requires an actual returned media asset and is not inferred from the model name. |
+| Media-only scan and context UX | Source/type verified | One-model media checks use only that model/current protocol. Normal scans never cross the selected Provider. Automatic context probing is absent from the normal UI; metadata/manual values remain. |
+| Media presentation | Source/regression verified | Missing cached files show an unavailable state; copy/save controls remain in layout and cannot cover the preview. Existing missing files are not fabricated or recoverable. |
+| Right-file preview | Source/regression verified | Preview content has `min-width:0`, `max-width:100%`, an internal scroller and wrap toggle, preventing long lines from being clipped behind the dock edge. |
+| Delivery | Installed locally for acceptance | 78 files/436 offline tests passed; 5 live files/8 tests skipped by design. TypeScript, production build, 295-file public scan, formal packaging, Fuses, File/Product/ASAR, both shortcuts, installed main/About/diagnostics probes and read-only main/settings/Provider-manager UI inspection passed. Real Provider/media inference remains user acceptance. No GitHub push or Release before acceptance. |
+
+## v0.6.16 local reliability and UI acceptance candidate
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Provider scan jobs | Focused verified | Main-process jobs expose progress, recovery, one-model/provider scopes and generation-isolated cancellation. A late upstream response cannot persist evidence after cancellation. |
+| Context probes | Focused/source verified | Safe metadata/lower-bound and explicitly confirmed bounded exact modes are separate. Without exact usage, only character/byte evidence is reported. Exact-limit probing is never automatic. |
+| Provider/model lifecycle | Focused verified | Enabled state migrates to true, disabled entries leave routing/defaults/CLI configuration, and a zero-model Provider can remain saved as disabled. |
+| Capability application | Source/type verified | Protocol, reasoning, context, tools, continuation, usage, media, aliases and family are presented as a selectable draft; unchecked fields are unchanged. |
+| Conversation projection | Focused verified | Visible blocks and partial assistant streams persist in a main-process append log plus atomic snapshot, merge by stable IDs with replay and survive failure/cancel/reset/reopen. Original Grok history is not rewritten. |
+| Media routing | Focused/fake-CLI verified | Auto/CLI/Provider routing and streaming-json artifact parsing are covered with fixtures. Real installed CLI/provider media generation remains a user-acceptance boundary. |
+| Open/copy/long text | Focused/source verified | Typed open targets, trusted native image actions, selectable message text and 12K draft attachments are main-process constrained. |
+| Codex-style shell | Type/build verified | Shell, composer, sidebar, top bar, media dialog and layered CSS compile in production; full multi-resolution visual acceptance remains local-user work. |
+| Delivery | Installed locally for acceptance | 78 files/432 offline tests passed; 5 live files/8 tests skipped by design. TypeScript, production build, public scan, Fuses, packaged/Portable UI, Task Scheduler, File/Product/ASAR, shortcuts and installed cold start passed. Real Provider/CLI media inference remains user acceptance. No GitHub Release before acceptance. |
+
+## v0.6.15 local Provider compatibility candidate
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Protocol translator | Focused + live verified | Main-process Chat/Responses/Messages/Gemini request and response mapping covers text, images, tools, tool results, reasoning and exact usage. Same-protocol SSE remains direct; cross-protocol SSE emits keep-alive comments while preserving ordered terminal conversion. |
+| Capability discovery | Focused + live verified | Bounded scans record per-model/per-protocol non-streaming, SSE, tool call, tool continuation, usage, returned model and accepted effort evidence. Partial rescans merge; HTTP acceptance is labelled as such and is not semantic proof. |
+| Reasoning transport | Focused + live verified | Effort enum, Anthropic adaptive, token budget, model suffix, fixed and unsupported mappings are configurable per model/upstream protocol. Grok 4.5 has a five-level exact-ID migration; unknown models remain undeclared until metadata, scan or manual input exists. |
+| Provider manager | Source/type verified | UI exposes compatibility family, per-model client/upstream protocol, timeout, effort/transport mapping, capability matrix, scan/cancel and explicit application of verified levels. Models are displayed with Provider prefixes. |
+| Local grok2api | Live verified for text/tools | Grok 4.5 passed direct three-protocol scans and a full Grok CLI ACP Responses xhigh turn. Image generation currently returns HTTP 502 and is not claimed. |
+| Remote CPA | Live verified with current route limits | Grok 4.5 passed Responses scan and xhigh ACP; Gemini passed all three protocol/tool scans and Chat ACP. The current Claude route returns HTTP 502, so Claude is not claimed available merely because `/models` lists it. |
+| Delivery | Installed locally for acceptance | Source/lock, Setup and installed File/Product/ASAR report 0.6.15. Setup/Portable/SBOM/licenses match `SHA256SUMS.txt`; Fuses, compatibility markers, both shortcuts and a four-process cold start passed. Public Latest remains 0.6.6 pending user acceptance. |
+
+## v0.6.14 local audit-fix source candidate
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Gateway completion attribution | Focused verified | Successful, failed and downstream-closed requests have bounded body-free process-scope observations. Caller-side stream closes are no longer counted as Provider failures; HTTP 200 routes can still identify a later CLI parser failure. |
+| Anthropic unsigned thinking semantics | Focused verified | Only malformed unsigned thinking is marker-carried through the CLI and incrementally restored to ACP `thought`; valid signed SSE remains byte-for-byte pass-through. No signature is forged. |
+| Windows CLI home | Focused/type verified | Missing `HOME` is synthesized from `USERPROFILE`/OS home without overriding explicit `HOME` or changing `GROK_HOME`. |
+| Persistent log privacy | Focused verified | AppData logs redact secrets, URL details, email, local/UNC paths before persistence, sanitize an existing file, cap entries and keep one 8 MiB rotation backup. |
+| JSON recovery | Focused verified | Malformed stores are preserved as recovery backups; non-ENOENT read failures propagate; stale same-store atomic temps older than 24 hours are removed. |
+| 0.6.14 delivery | Offline-verified source candidate | Version/lockfile are 0.6.14. 72 files/391 tests, TypeScript, native resource self-test, production build, 273-file public scan, diff check and npm audit pass. The current default model's local upstream is intentionally excluded from live acceptance; packaging, installation and GitHub Release are not claimed. |
+| Renderer dependency chunks | Known performance follow-up | Monaco/Shiki/Mermaid are already lazy surfaces, but their generated dependency chunks still exceed Vite's 500 KiB warning. The warning remains visible; this candidate does not disguise it by raising the limit. |
+
+## v0.6.12 local Provider transport-routing candidate
+
+| Area | Status | Evidence |
+|---|---|---|
+| Timeout ownership | Source/live-log verified | Installed CLI reference declares a 600s inference-idle default. ACP total turn is 1800s and gateway response-header timeout is 600s; the observed 58/88s failures were `ERR_CONNECTION_CLOSED`, not either timer. |
+| Provider network route | Focused verified | Each managed Provider can inherit the app proxy or use a direct Electron partition. Discovery and inference receive the same mode; missing historical values safely inherit. |
+| Gateway transport diagnosis | Focused verified | Safe request IDs distinguish header timeout, downstream request/response cancellation, upstream connect failure, upstream stream truncation and HTTP failure without logging URLs, credentials or bodies. A synthetic post-header stream truncation is covered. |
+| Current CPA | Reachability only | `/models` returned HTTP 200 both direct and via the configured local proxy; current long inference was still running under 0.6.11 during source work. A completed long-stream result is deliberately not claimed. |
+| Delivery | Installed locally | 5 files/41 focused tests, TypeScript, public scan, production/resources, Fuses, installed-ASAR markers, current CPA direct/600s migration, CLI inspect, shortcuts and cold start passed. Setup SHA-256 is `78729332967a5c51d1203d3fc7c8a36ca72c256161be196ba1462591b69d575b`; app is closed and public Latest remains 0.6.6. |
+
+## v0.6.11 local installed inference idle-timeout hotfix
+
+| Area | Status | Evidence |
+|---|---|---|
+| Timeout ownership | Historical/corrected in 0.6.12 | Interactive ACP prompt is 1800s and Provider gateway header ceiling is 600s. CLI accepted 360, but its native default was later verified as 600; 360 did not explain the observed early disconnect. |
+| Managed Provider models | Historical | 0.6.11 resolved missing values to 360s and migrated the managed block. 0.6.12 restores 600 while retaining explicit 30–3600s values. |
+| Provider manager | Focused/packaged verified | Each managed model exposes the idle-stream timeout and effective details value without changing the longer total turn ceiling; installed ASAR markers and validation tests passed. |
+| Delivery | Installed locally | Source/lock/File/Product are 0.6.11. 6 files/47 tests, TypeScript, production/resources, Fuses, shortcuts, installed ASAR and cold start passed. Setup SHA-256 is `cf8f4f6a97e120c82ef243c35eb701a32da8bf779e45b4b16e9263886e3e9475`; public Latest remains 0.6.6. |
+
+## v0.6.10 local per-model Provider capabilities candidate
+
+| Area | Status | Evidence |
+|---|---|---|
+| CPA Responses | Live verified | Current CPA returned HTTP 200 SSE for default and none/minimal/low/medium/high/xhigh Responses requests. One isolated full ACP Responses turn also passed; HTTP acceptance alone is not treated as proof that upstream honored the value. |
+| Capability resolution | Focused/live verified | Upstream metadata and explicit per-model settings override exact-ID suggestions; explicit empty lists remain empty and unknown models are not guessed. Common direct, supported-* and nested capability field shapes are parsed. |
+| Effort hot switch | Live verified | Custom ACP metadata exposed high/medium/low; one session changed low → high through the private confirmation event and completed a real turn without restart. |
+| Per-model protocol/effort | Focused verified | Every managed model can override the Provider protocol and select any subset of six vocabulary values. Config generation and launch-time migration preserve the per-model protocol and manual effort list. |
+| Current CPA profile | Locally migrated | Only `openai-compatible-grok-4.5` now overrides to Responses with xhigh/high/medium/low/minimal; sibling models keep the Provider's Chat default. Credential ownership is unchanged and a TOML backup exists. |
+| Delivery | Local acceptance installed | Source/lock/File/Product are 0.6.10. 47 focused tests, TypeScript, production build, native resource self-test, Fuses, shortcuts, installed ASAR markers and cold start passed. Setup SHA-256 is `2ae08474303b0f5a0d3b44c9f689f03618c4a17c0f6a8fee020f6d36763b2057`; the app is closed and public Latest remains 0.6.6. |
+
+## v0.6.9 local Provider authentication hotfix candidate
+
+| Area | Status | Evidence |
+|---|---|---|
+| Gateway credential boundary | Focused + live verified | Incoming CLI `Authorization`, `x-api-key` and managed extra-header values are discarded. The main process freshly reads and injects only the selected Provider's environment values; missing credentials stop before upstream. |
+| Current CPA direct request | Live verified | The configured credential returned HTTP 200 for `/models` (11 entries including `grok-4.5`) and for a minimal streaming `/chat/completions` request. No credential or response body was recorded. |
+| Current CPA ACP request | Live verified | One isolated Grok CLI → loopback gateway → current Provider → `grok-4.5` minimal turn completed successfully after the fix. |
+| Delivery | Local acceptance installed | Source/lock/File/Product are 0.6.9. 43 focused tests, TypeScript, production build, native resource self-test and Fuse verification passed. Setup SHA-256 is `2a0cc83d69c6cfe2053f23e2d224986f057b28af1c2086d015bfe6f71259c70c`; per-user install, both shortcuts and installed-ASAR marker checks passed. Public Latest remains 0.6.6. |
+
+## v0.6.8 local routing hotfix candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Resumed custom-model routing | Focused verified | A resumed session whose persisted ACP model is the upstream `grok-4.5` now sends a real `session/set_model` for `openai-compatible-grok-4.5`; alias preservation no longer skips the route change. |
+| Reasoning effort capability | Focused/type verified | ACP-declared effort values drive the composer. Provider models without `reasoning_efforts` keep their startup value and expose no fake hot-switch choices. |
+| Non-destructive effort failure | Focused verified | Missing/unsupported private effort confirmation leaves the existing process and session intact instead of restarting into the historical effort/model. |
+| Provider failure attribution | Source verified | Provider name/status/trace enrichment requires a recent gateway record from the same process scope. A local selector ID alone is no longer treated as proof that CPA received the turn. |
+| Delivery | Local acceptance installed | Source/lock/File/Product are 0.6.8. 28 focused tests, TypeScript, production build and native resource self-test passed. Setup SHA-256 is `c0cff8253878d2c794b79a12370e677ad06a3315eab68ba12896c861a4353bd6`; per-user installation and both shortcut targets passed. The app remains closed for user acceptance; public Latest remains 0.6.6. |
+
+## v0.6.7 local acceptance candidate
+
+| Area | Status | Notes |
+|---|---|---|
+| Provider launch credentials | Focused + live verified | Desktop session launch refreshes credential and custom-header environment variables from the Windows user scope before spawning CLI. The current Provider returned HTTP 200 for a minimal `grok-4.5` ACP turn through the loopback gateway. |
+| Custom model identity | Focused + live verified | The explicitly selected local ID survives ACP updates that publish only the upstream route ID, preventing `openai-compatible-grok-4.5` from becoming the official `grok-4.5` after a turn. |
+| Prompt error details | Contract verified | Normal Prompt rejection emits one structured failure; snake-case `http_status` is retained and the unstructured duplicate status card is suppressed. |
+| Claude session catalog | Focused verified | Main-process-only read-only indexing covers primary Claude Code JSONL sessions, title/model/workspace metadata, sidechain/subagent exclusion, fallback parsing, continuation mapping and source hash stability. |
+| Claude mirror and relay | Source/type verified | Sidebar and workspace discovery expose Claude sessions separately; the mirror reuses the Codex review layout and continuation invokes Grok CLI's bundled `/resume-claude` skill. No transcript is copied into a synthetic approval prompt. |
+| Delivery | Local acceptance installed | Source/lock/display and the installed executable are 0.6.7. The 36 affected tests, TypeScript, production build and packaging resource self-test passed. The app remains closed for user acceptance; expanded tests, app-driven live acceptance, formal Portable/SBOM/license reports and GitHub upload wait for that feedback. Public Latest remains 0.6.6. |
+
 ## v0.6.6 public stable release / installed local build
 
 | Area | Status | Notes |
@@ -13,7 +173,8 @@
 | Plan decision idempotency | Focused/ACP-contract verified | One `sessionId + requestId` decision answers the original server request once. Duplicate clicks return a duplicate receipt and no synthetic approval prompt is created. |
 | Queue/interjection | Focused/contract verified | Queue and mutation receipts are visible; Enter queues, Ctrl+Enter interjects, unsupported same-turn input visibly falls back to the queue head, and only queued entries are editable. |
 | Update/diagnostics actions | Packaged/installed UI verified | App/CLI checks, diagnostics navigation and redacted-log export expose running/success/error/cancelled state, re-entry protection, timestamp and copyable result. The installed probe opened diagnostics and received “可以使用”. |
-| Provider gateway | Focused + two live probes verified | Loopback-only opaque routing, bounded same-protocol streaming, cancellation/timeouts, selected Trace headers and Gemini/strict Schema cleaning. Isolated CLI 0.2.112 local ACP and one authorized current-Provider minimal turn both passed. |
+| Provider gateway | Focused + three live probes verified | Loopback-only opaque routing, bounded same-protocol streaming, cancellation/timeouts, selected Trace headers and Gemini/strict Schema cleaning. Anthropic Messages additionally preserves valid signed thinking byte-for-byte and downgrades only malformed unsigned thinking to ordinary text without forging a signature. Isolated CLI 0.2.112 local ACP, current CPA and current Kiro Claude 4.8 thinking minimal turns passed. |
+| 0.6.13 local delivery | Installed candidate | File/Product and installed ASAR report 0.6.13; the ASAR contains the unsigned-thinking adapter, Fuses and both shortcut targets passed, and Kiro-Go remained running across installation. Setup SHA-256 is `7172de9ee614afb4afea471703cc5106aa294cbe93ec2471f996716675311a1f`. The app is open for user acceptance; broad UI/full-suite and GitHub publication are intentionally not claimed. |
 | Provider isolation | Focused verified | Credentials/upstream remain main-process environment values; Desktop CLI sees only the loopback override. Literal managed blocks migrate atomically; config, secret and URL rollback/remove tests pass. |
 | Errors and quota | Focused/source verified | Provider errors default collapsed with redacted details. Rolling 24h Token limits are separate from weekly/monthly billing, persisted per account and marked expired. |
 | Auth and Computer Use | Focused verified | Device login has one browser owner. Ordinary Codex is allowed while self/terminal/UAC/security and Windows integrity boundaries remain enforced. |
@@ -195,6 +356,7 @@
 | Streaming/thinking/tool calls | Implemented | Official ACP constants plus isolated Grok `x.ai/*` adapter |
 | Codex-style folded turns | Implemented | Per-user-turn virtualization, running-open/completed-collapsed execution groups and final answer outside process details |
 | Codex project bridge | Implemented | Read-only SQLite/JSONL discovery, bundled-reader fallback, hide/refresh and independent `/resume-codex` handoff with SHA-256 guard |
+| Claude Code project bridge | 0.6.7 local candidate | Read-only primary-JSONL discovery, bundled-reader/fallback parsing, sidechain/subagent exclusion, hide/refresh and independent `/resume-claude` handoff with SHA-256 guard |
 | Codex mirror scrolling | Implemented | Bounded internal scroller keeps the read-only toolbar visible and supports wheel, touchpad, scrollbar and keyboard navigation |
 | Workspace discovery | Implemented | Merges pinned/recent, Grok history and Codex projects; missing paths are disabled and labelled |
 | Agent/Plan/Auto accept | Implemented | Client-side Plan write/command gate |

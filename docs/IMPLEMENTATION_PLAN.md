@@ -1,6 +1,208 @@
 # Grok Build Desktop 实施计划
 
+## v0.6.22 媒体传输与插话生命周期热修
+
+- [x] 复核用户失败会话与本机文件，确认历史生成图仍存在；根因是 sandboxed Renderer 无法加载 `file://`，不是图片被删除。
+- [x] 增加主进程受信任 `grok-media:` 协议；仅允许会话缓存、Grok 会话库、当前执行根或显式选择路径中的受支持媒体，并限制读取大小。
+- [x] 将媒体无头任务的精确临时 Grok 会话目录加入单任务信任范围，在删除临时会话前复制并验证产物；相邻会话目录继续拒绝。
+- [x] 媒体工具只调用一次并在首次失败后停止；保留并解释 ZDR 团队要求 `output.upload_url` 的真实上游错误。
+- [x] 将已接收插话建模为同一 ACP 会话的高优先级后续回合；提交后不可再显示叉号撤回，CLI 省略状态时不得降回 queued。
+- [x] CLI 宣布跟进开始时创建独立 turn/user-message 边界；上一回合的迟到 Promise 完成不得结算新回合。
+- [x] 聚焦媒体、路径、队列和 Store 回归、TypeScript与生产构建通过。
+- [x] 完整离线套件通过：80 文件/465 项通过，5 个 live 文件/8 项按设计跳过；公开源码/资产扫描、diff check、资源构建、Fuses、打包版/Portable UI 与 Task Scheduler 通过。
+- [x] 生成唯一一套 0.6.22 Setup/Portable/SBOM/许可证资产并 per-user 安装；主进程/About/诊断、File/Product、快捷方式及现有 1024x1024 历史图的安装版 `grok-media:` 实际加载通过。
+- [ ] 真实图片/视频与插话顺序由用户验收；不发送付费请求，不推送 GitHub、不创建 Release。
+
+## v0.6.21 多会话并行运行热修
+
+- [x] 定位 Renderer 全局 `sending` 状态会一直等待整轮 `session:send` Promise，并错误禁用所有会话 Composer；主进程的独立 ACP Adapter 映射本身支持并发。
+- [x] 将提交锁改为按 `sessionId` / 新会话草稿键隔离；第一条 `working` 状态作为传输接收回执，只释放短提交锁而不改变真实回合运行状态。
+- [x] 后台会话完成或失败不得覆盖当前会话的正文草稿、附件、焦点与滚动；失败内容仍保存回原会话草稿。
+- [x] 当前会话运行时继续允许真实排队和插话；切换到第二个会话后可立即独立发送、停止或处理其权限请求。
+- [x] 左栏显示各会话运行/等待/完成/失败文本，并汇总当前项目正在运行的会话数。
+- [x] 聚焦 4 文件/51 项和完整 80 文件/462 项离线测试、TypeScript、生产构建、299 文件公开扫描与 diff check 通过。
+- [x] 完成唯一一次正式成功打包、per-user 安装与 0.6.21 冷启动主进程/About/诊断/快捷方式检查，交给用户实机双会话验收；首次打包调用在产物生成前被调用超时中止，不计为候选资产。
+
+## v0.6.20 媒体归属、回合状态与 Plan 只读授权热修
+
+- [x] 复现 `images/1.jpg` 被截断为 `/1.jpg` 后触发“会话工作区之外”的路径边界错误，并加入普通相对媒体路径回归。
+- [x] 忙碌或等待中的活动 Grok 会话继续作为媒体结果目标；CLI 媒体子任务使用显式临时 UUID，缓存复制结束后清理其临时会话。
+- [x] 无活动 Grok 会话时在媒体中心明确说明会新建会话，不再静默改变会话归属。
+- [x] 将同回合多个媒体结果聚合为有界双列画廊，默认四项、可展开/收起、内部滚动，保留各图片/视频操作。
+- [x] 运行中无正文区分“正在生成回答”和“等待你的操作”；仅终态或历史恢复才显示无正文/恢复说明。
+- [x] Composer 操作提示增加关闭按钮并在 5 秒后自动消失。
+- [x] Plan 模式默认放行 ACP 明确的只读/搜索/获取/思考工具及安全查询命令；写入、修改、未知工具继续阻止或请求确认，不提供全权限绕过。
+- [x] 受影响 7 文件/81 项及最终 79 文件/457 项离线测试、TypeScript、生产构建、公开扫描与 diff check 通过；5 个 live 文件/8 项按设计跳过。
+- [x] 生成并安装唯一一次 0.6.20 Setup/Portable/SBOM/许可证候选；Fuses、File/Product、快捷方式及安装版主进程/About/诊断冷启动检查通过，交由用户实机媒体与 Plan 验收。
+
+## v0.6.19 Codex 决策面与 Agent Diff 本地热修
+
+- [x] 复现右侧 Agent 改动在窄 Dock 中仍用左右并排 Diff，文件列表和大按钮进一步压缩正文的问题。
+- [x] 改为默认 unified Diff 与自动换行，限制 Monaco/选中文件尺寸；小宽度时文件列表移到上方，并加入紧凑的换行和打开文件操作。
+- [x] 只读核对本机当前 Codex 桌面的批准面结构；权限和可交互计划改为紧凑临时决策面，作用域操作位于左侧，拒绝和主操作位于右侧，窄宽度自动堆叠。
+- [x] 可选计划说明默认收起；保留 0.6.18 的一次性请求、成功立即移除、陈旧请求本地收起及防重复响应语义。
+- [x] Renderer 聚焦测试 2 文件/32 项、TypeScript、生产构建和 `git diff --check` 通过。
+- [x] 仅打包一次并 per-user 安装 0.6.19；File/Product/ASAR、Fuses、桌面/开始菜单快捷方式和安装版主进程/About/诊断夹具通过，应用已打开交给用户实机验收。
+- [ ] 用户验收前不推送 GitHub、不创建 Release，并保留 0.6.15–0.6.18 资产。
+
+## v0.6.18 交互与 Agent 改动本地验收热修
+
+- [x] 将计划正文与可响应的 `x.ai/exit_plan_mode` 请求分离；权限、问题和计划决定使用显式 `interaction-resolved` 生命周期，成功后立即移除，历史进程请求恢复时自动失效。
+- [x] 计划响应校验当前活动请求并保留幂等回执；陈旧卡片只在本地收起，不再产生第二次 ACP 决策或全局错误。
+- [x] 消息写入 CLI stdin 后即结算为已发送；队列消息开始执行时不再重新显示永久“发送中”。
+- [x] 对齐当前 Grok Build ACP `edit` 的嵌套 Diff 内容，计算逐文件增删行并在过程卡和非 Git Agent 改动中展示；读/搜索不再计为修改。
+- [x] 非 Git Agent 改动支持从会话投影恢复，流式 Diff 后的稀疏完成更新不会覆盖已捕获基线和统计。
+- [x] 修复长计划表格/代码横向越界；账号列表有数量、活动账号置顶、内部滚动和窄窗动作换行策略。
+- [x] 聚焦测试 5 文件/61 项、TypeScript 和生产构建通过。
+- [x] 最终完整离线套件通过：78 文件/447 项通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建、295 文件公开扫描和 diff check 通过；仅打包一次并生成 0.6.18 Setup/Portable/SBOM/许可证/SHA-256。
+- [x] per-user 安装 0.6.18，File/Product/ASAR、Fuses、桌面/开始菜单快捷方式及安装版主进程/About/诊断夹具通过。
+- [ ] 用户验收前不推送 GitHub、不创建 Release，并保留 0.6.15–0.6.17 资产。
+
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
+
+## v0.6.17 用户验收热修
+
+- [x] 复现旧无标记 Desktop 模型表与新管理块重复定义导致的 Provider TOML 保存失败；仅迁移私有 Provider 存储仍认领的模型 ID。
+- [x] 手工媒体传输配置无需深度扫描即可进入媒体中心并执行；真实扫描证据与“手工配置（未验证）”分开显示。
+- [x] 增加单模型“仅检测媒体”快速入口；普通扫描仍明确限定当前 Provider，不存在隐式全 Provider 扫描。
+- [x] 从日常 Provider UI 移除缓慢的自动上下文探测；上下文改用模型元数据或手工值，后端高级探针不再被普通流程触发。
+- [x] 历史图片缓存缺失显示可理解的不可用状态；复制/另存按钮移出图片悬浮层，用户图片和生成图片均不再被操作条遮挡。
+- [x] 修复右栏最近文件预览的 `max-content` 越界，加入换行/不换行切换并保留内部滚动。
+- [x] Provider/Renderer 聚焦回归 3 文件/54 项、TypeScript、生产构建和 `git diff --check` 通过。
+- [x] 最终完整离线套件通过：78 文件/436 项通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建、295 文件公开扫描和 diff check 通过。
+- [x] 运行一次正式打包并生成 Setup/Portable/SBOM/许可证/SHA-256；产物扫描与 `SHA256SUMS.txt` 一致，0.6.15/0.6.16 资产保留。
+- [x] per-user 安装 0.6.17、冷启动并核对 File/Product/ASAR、Fuses、桌面/开始菜单快捷方式；安装版主进程/About/诊断探针与只读 Computer Use 主界面、设置和 Provider 管理界面检查通过。
+- [ ] 用户验收前不推送 GitHub、不创建 Release；保留 0.6.15/0.6.16 资产。
+
+## v0.6.16 兼容扫描、会话可靠性、媒体与 Codex UI 本地验收候选
+
+- [x] 将 Provider 深度扫描改为可恢复 Job：即时返回、逐子阶段进度、弹窗重开恢复、单 Provider 串行、Job/generation 隔离和可靠取消。
+- [x] 加入单模型三协议扫描入口、Provider 批量范围确认，以及思考、工具、媒体、Usage 与可选上下文扫描开关。
+- [x] 加入安全分层与显式精确上下文探测；无精确 Usage 时只报告字符/字节证据，不伪造 Token 极限。
+- [x] Provider/模型支持独立启停；零模型 Provider 可保存但自动停用；停用项退出默认、CLI 配置、路由和选择器。
+- [x] 将“应用已验证档位”升级为选择性“应用扫描结果”，协议、思考、上下文、工具、Usage、媒体、别名和兼容家族逐项应用。
+- [x] 新增主进程 `ConversationProjectionStore`，持久化可见消息块、流式正文、过程、错误、媒体、回合状态与精确 Usage；失败、取消、重启和 `session-reset` 不再清空已显示正文。
+- [x] 媒体中心提供 Auto/CLI/Provider 路由；CLI 仅运行固定媒体工具白名单并解析 streaming-json 产物，Provider 仅列出显式或已验证媒体模型。
+- [x] 统一目录、文件、图片和资源管理器定位；恢复文字选择、原生右键、可信图片复制/另存/打开；超过 12,000 字符粘贴转换为可恢复草稿附件。
+- [x] 拆分 Renderer 壳层组件与样式模块，统一会话宽度、浮动输入框、右侧 Dock、Provider 扫描进度和离线 UI 夹具。
+- [x] 受影响测试、TypeScript 与生产构建通过。
+- [x] 最终完整离线套件通过：78 文件/432 项通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建和 295 文件公开扫描通过。
+- [x] 生成一次正式 0.6.16 Setup/Portable/SBOM/许可证/SHA-256，并完成打包版、Portable、任务调度与 Fuses 探针。
+- [x] per-user 安装、冷启动并核对主进程/About/诊断、File/Product/ASAR、Fuses 与桌面/开始菜单快捷方式。
+- [ ] 用户验收前不推送 GitHub、不创建 Release、不覆盖 0.6.15 资产。
+
+## v0.6.15 特别兼容本地验收候选
+
+- [x] 备份当前 AppData Provider、设置和 CLI 配置；不回显密钥。
+- [x] 建立 Provider/模型两级客户端协议、上游协议、兼容家族、Schema 档和思考传输配置。
+- [x] 实现 Chat Completions、Responses、Anthropic Messages、Gemini GenerateContent 的请求/响应/工具/图片/Usage 转换；同协议 SSE 继续直通，跨协议转换期间发送 SSE 保活。
+- [x] 实现逐模型/逐协议深度扫描、取消、持久化能力证据、部分结果合并和显式应用已验证档位。
+- [x] Provider 管理器加入兼容档、协议矩阵、返回模型、工具续写、思考档位、预算/后缀/固定映射。
+- [x] Grok 4.5 从历史三档迁移为五档 `xhigh/high/medium/low/minimal`；未知模型仍不推断。
+- [x] 本机 grok2api：三协议、SSE、工具续写、档位扫描通过；Responses + xhigh 的完整 ACP 最小回合通过。
+- [x] 远程 CPA：Grok 4.5 Responses 扫描与 xhigh ACP 回合通过；Gemini 三协议/工具续写扫描与 Chat ACP 回合通过。
+- [x] 明确当前失败边界：CPA Claude 路由直接返回 HTTP 502；本机 grok2api 图片生成返回 HTTP 502，不把模型列表可见误报为可用。
+- [x] 完整离线套件（74 文件/406 项通过，5 live 文件/8 项按设计跳过）、TypeScript、生产构建、278 文件公开扫描与 diff check。
+- [x] 生成单一 0.6.15 Setup/Portable/SBOM/许可证/SHA-256，执行 per-user 覆盖安装；File/Product/ASAR、Fuses、兼容代码标记、桌面/开始菜单快捷方式和四进程冷启动通过，应用已关闭交给用户验收。
+- [ ] 用户验收前不推送、不创建 GitHub Release。
+
+## v0.6.14 审计修复候选（本地上游暂不验收）
+
+- [x] 建立独立 `codex/v0.6.14-audit-fixes` 分支，保留此前 0.6.7–0.6.13 未提交工作树。
+- [x] 将下游主动关闭从 Provider 故障中分离；新增有界成功/失败/下游关闭观测，允许 HTTP 200 后的 CLI 解析错误仍关联真实 Provider。
+- [x] 将无签名 Anthropic thinking 从普通回答文本恢复为 ACP `thought` 事件，覆盖任意分块边界和未完整标记降级。
+- [x] 补齐 Windows `HOME`；清除已声明为空的旧模型推理档位。
+- [x] AppData 原始日志写入前统一脱敏、单条截断、8 MiB 单备份轮转，并对既有日志做一次原子脱敏。
+- [x] JsonStore 损坏时保留 recovery backup，不再把权限类读取错误当作“文件不存在”；清理超过 24 小时的同存储临时文件。
+- [x] 终端命令显式调用平台 shell 且 `shell: false`，消除 Node shell-string 弃用路径。
+- [x] 聚焦 8 文件 / 70 项测试及 TypeScript 通过；三个 `.cmd` ACP 合约另以 `--trace-deprecation` 验证，无 Node shell 弃用告警。
+- [x] 完整离线套件通过：72 文件 / 391 项通过，4 个 live 文件 / 7 项按设计跳过。
+- [x] TypeScript、Computer Host 0.3.1 自检/资源清单、生产 main/preload/Renderer 构建、273 文件公开扫描、`git diff --check` 和 npm audit（0 vulnerabilities）通过。
+- [x] 生产构建仍报告 Monaco/Shiki/Mermaid 等大型懒加载依赖 chunk；不通过提高 warning limit 隐藏，列为后续性能拆包事项。
+- [x] 源代码已提交并推送至 `origin/codex/v0.6.14-audit-fixes`；不创建正式 GitHub Release。
+- [ ] 用户恢复本地默认模型上游后，再执行 Provider/真实会话验收；当前按用户要求跳过。
+
+## v0.6.13 本地验收候选：Anthropic Messages 无签名 thinking 兼容
+
+- [x] 复现 Kiro Claude 4.8/5 失败的真实链路：上游 HTTP 200 且进入 SSE，CLI 因无签名 `thinking` 块报 `missing field signature` 后主动关闭。
+- [x] 在主进程 Provider Gateway 增加通用 Anthropic Messages 响应适配：合法签名流原样透传，只有缺少 `signature` 的非法 thinking 块降级为 `<think>` 文本；不伪造签名、不按 Provider/模型写死。
+- [x] 覆盖分块 SSE、CRLF 合法签名流原样透传和非流式 JSON；网关聚焦测试 15/15、TypeScript、生产构建通过。
+- [x] 使用当前 `kiro-claude-opus-4.8-thinking`、`xhigh` 和本地 `127.0.0.1:8080` 完成隔离 Grok CLI ACP 最小真实回合；未打印凭据或响应正文。
+- [x] 生成独立 0.6.13 Setup、执行 per-user 覆盖安装并核对 File/Product、快捷方式和安装 ASAR 兼容标记。
+- [x] 冷启动安装版并保持 Kiro-Go 运行；应用已打开交给用户执行真实会话验收。
+- [ ] 等待用户验收结果；不扩大为 GitHub 正式发布。
+
+## v0.6.12 本地验收候选：Provider 长流传输路由
+
+- [x] 按服务端 58/88 秒主动取消证据，关联应用日志、进程连接和 Mihomo 服务日志；确认失败请求经应用代理且 Electron 报 `ERR_CONNECTION_CLOSED`。
+- [x] 纠正 0.6.11 推断：当前 Grok CLI 内置文档声明推理空闲默认 600 秒；恢复 Desktop 默认 600 秒，不再用 360 秒覆盖。
+- [x] 提供商增加“继承应用代理 / 直连”通用设置；模型发现与推理统一使用，直连和代理使用独立 Electron partition。
+- [x] 网关增加无正文、无凭据的请求 ID、路由、端点类别、阶段、耗时与断开来源诊断；响应头后的流截断也会记录。
+- [x] 完成 5 文件/41 项 Provider、网关、诊断聚焦测试与 TypeScript。
+- [x] 完成公开扫描、生产/资源构建、单一 Setup、per-user 安装、当前 CPA 直连与六模型 600 秒迁移、安装 ASAR/Fuses/版本/快捷方式/CLI/冷启动检查。
+- [x] 保持用户既定范围：未运行付费推理和完整 UI 套件，未上传 GitHub。
+
+## v0.6.11 本地验收候选：自定义模型推理空闲超时
+
+- [x] 审计三层超时：交互 ACP 回合为 1800 秒，Provider 网关为 600 秒；没有桌面 60 秒总回合取消。
+- [x] 当时确认 CLI 接受模型级 `inference_idle_timeout_secs = 360`；后续 0.6.12 从 CLI 内置参考确认原生默认其实是 600 秒。
+- [x] 0.6.11 曾对 Desktop 管理模型写入 360 秒；0.6.12 已恢复为 600 秒，且证实 360 秒没有触发截图中的 58/88 秒断开。
+- [x] 提供商管理增加逐模型 30–3600 秒输入与详情展示，显式自定义值不被默认值覆盖。
+- [x] 完成 6 文件/47 项聚焦测试、TypeScript、生产构建和原生资源自检。
+- [x] 验证 Fuses，重建并安装单一 0.6.11 Setup；File/Product、快捷方式、安装 ASAR、当前配置迁移、CLI 读取与冷启动通过。
+- [x] 保持用户此前范围：不扩大完整 UI/付费模型测试，不上传 GitHub。
+
+## v0.6.10 本地验收候选：逐模型 Provider 能力
+
+- [x] 读取当前 CPA `/models` 的 `grok-4.5` 原始元数据：仅有 `created/id/object/owned_by`，无思考档位；模型详情端点返回 404。
+- [x] 当前凭据直连 `/responses` 默认及 none/minimal/low/medium/high/xhigh 均为 HTTP 200 并收到 SSE；只认定“参数被接受”，不推断上游一定采用该档位。
+- [x] 隔离 Grok CLI ACP 使用 Responses 后端、high/medium/low 自定义目录启动；同会话 low → high 热切换确认后真实回合完成。
+- [x] 精确 `grok-4.5` 的官方 high/medium/low 只作缺失元数据时的起始建议；上游声明和逐模型用户配置优先，显式空列表不会被自动补回，未来模型不猜测。
+- [x] 模型发现解析常见 `reasoning_efforts`、`supported_reasoning_efforts` 及 camelCase/`capabilities` 变体；提供商管理增加逐模型协议、逐模型思考档位和详情展示。
+- [x] Provider 默认协议与模型覆盖协议分离；混合 CPA 可让 `grok-4.5` 单独走 Responses，其他模型继续继承 Provider 默认协议。
+- [x] 当前本机 `CPA 兼容 · grok-4.5` 已经由通用 ProviderService 迁移为逐模型 Responses + xhigh/high/medium/low/minimal，并保留凭据与 TOML 备份。
+- [x] 6 文件/47 项聚焦测试、TypeScript、生产构建和原生资源自检通过。
+- [x] 重建并安装单一 0.6.10 Setup；旧候选已被替换。SHA-256、File/Product、Fuses、快捷方式、安装 ASAR 能力标记和冷启动通过。
+- [ ] 按用户此前决定，不扩大为完整离线/实机 UI 套件，不生成正式完整 Release 资产，不上传 GitHub。
+
+## v0.6.9 本地验收候选：Provider 鉴权边界
+
+- [x] 复现 0.6.8 用户验收的真实 401：请求已进入 CPA 回环网关并完成 Schema 清理，但上游连续四次拒绝。
+- [x] 使用同一 Windows 用户环境凭据直连验证：`/models` HTTP 200、11 个模型且包含 `grok-4.5`；最小流式 `/chat/completions` HTTP 200 并收到 SSE。
+- [x] 定位根因：回环网关原样转发 CLI 的 `Authorization`；CLI 鉴权恢复后该值可能是 xAI 会话令牌，而不是所选自定义 Provider 的密钥。
+- [x] 网关删除 CLI 传入的 bearer、`x-api-key` 和受管额外 Header，随后从 Provider 自己的 Windows 用户环境变量新鲜读取并注入。
+- [x] 缺少受管凭据时在发送上游前返回固定的“提供商凭据不可用”，不泄漏任意异常或密钥。
+- [x] Bearer、`x-api-key`、额外 Header 覆盖和缺失凭据回归测试通过。
+- [x] 当前 `CPA 兼容 · grok-4.5` 的完整 Grok CLI → 回环网关 → 上游 ACP 最小真实回合通过。
+- [x] 提升到 0.6.9；5 文件/43 项受影响测试、TypeScript、生产构建、原生资源自检和 Electron Fuse 校验通过。
+- [x] 生成单一 Setup（SHA-256 `2a0cc83d69c6cfe2053f23e2d224986f057b28af1c2086d015bfe6f71259c70c`）并 per-user 覆盖安装；File/Product 与桌面/开始菜单快捷方式通过，安装 ASAR 包含新鉴权边界。
+- [ ] 继续按用户决定，将扩大测试、Computer Use/安装版 UI 代验、完整正式资产和 GitHub 上传推迟到验收后。
+
+## v0.6.8 本地验收候选：CPA 会话路由与推理强度
+
+- [x] 复现用户截图：界面显示 `CPA 兼容 · grok-4.5`，但同一回合日志只有官方 xAI Free 额度 429，CPA 网关没有对应观测。
+- [x] 定位根因：Grok CLI 历史只保存上游 `grok-4.5`；本地别名映射掩盖了该差异并跳过真实 `session/set_model(openai-compatible-grok-4.5)`。
+- [x] 恢复会话时比较 ACP 原始模型 ID；本地 Provider ID 不一致就重新应用真实路由，同时继续在界面保留 Provider 前缀。
+- [x] 读取 ACP 模型的 `supportsReasoningEffort/reasoningEfforts`；输入框只展示当前模型声明支持的档位。
+- [x] 未声明推理强度的 Provider 模型禁用热切换并给出配置说明；热切换未确认时不再销毁、重启或回滚历史会话。
+- [x] Provider 错误标签必须有同进程 scope 的近期网关观测；没有网关证据的官方 429 不再伪标为 CPA。
+- [x] 28 项聚焦 Adapter/进程管理/Renderer 能力测试、TypeScript、生产构建和原生资源自检通过。
+- [x] 只生成一个 0.6.8 本地 Setup 并 per-user 覆盖安装；File/Product 与桌面、开始菜单快捷方式通过检查，应用保持关闭交给用户验收。
+- [ ] 继续按用户决定，将扩大测试、实机代验、完整正式资产和 GitHub 上传推迟到用户验收后。
+
+## v0.6.7 本地验收候选：Provider 热修 + Claude 接力
+
+- [x] 复现并定位：同一 Provider 密钥直连 `grok-4.5` 返回 200，但已运行的桌面进程经兼容网关调用返回 401；根因是 Provider 环境值可能在 Electron 启动后轮换，而会话启动只注入回环地址、继续沿用旧的进程环境快照。
+- [x] 每次桌面 CLI 会话启动前从 Windows 当前用户环境重新读取 Provider 凭据和结构化 Header 环境变量；Renderer 仍不接触密钥。
+- [x] 保留显式选择的本地模型 ID：ACP 回合结束只上报上游 `grok-4.5` 时，不再把 `openai-compatible-grok-4.5` 映射成官方模型。
+- [x] 普通 Prompt 失败改为单个结构化 `TurnFailure`；补充 CLI `http_status` 解析，错误详情可关联 HTTP、Provider、本地模型和网关 Schema 清理记录。
+- [x] 30 项聚焦 Adapter/Provider 测试、TypeScript、生产构建通过；用户授权的当前 Provider `grok-4.5` 最小真实回合通过，并在完成后保持本地模型 ID。
+- [x] 审计本机 Claude Code JSONL 结构和 Grok CLI 随附的 `resume-claude`/`session_reader.py claude` 官方接口；不将外部转录当作指令。
+- [x] 新增只读 Claude 会话索引、内置兼容解析、Hash 守卫、隐藏/刷新/继续映射，以及独立的 Claude 接力来源分类。
+- [x] Renderer 增加可折叠 Claude 会话组、只读镜像、刷新/隐藏/在 Grok 中继续；工作区发现和选择器显示 Claude 项目计数。
+- [x] 源码与 lockfile 提升到 0.6.7，作为用户先行验收的本地候选。
+- [x] 36 项受影响测试、TypeScript、生产构建和打包所需原生资源自检通过；0.6.7 本地 Setup 已 per-user 覆盖安装，安装文件版本为 0.6.7。应用保持关闭，留给用户自行启动验收。
+- [ ] 按用户 2026-07-27 决定，扩大回归测试、Computer Use/安装版实机验收、完整正式资产和 GitHub 上传全部推迟到用户验收反馈之后。
 
 ## v0.6.5 稳定修复 → v0.6.6 能力完善（2026-07-26）
 

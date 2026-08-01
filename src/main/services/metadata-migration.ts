@@ -7,6 +7,7 @@ const UI_METADATA = [
   "workspace-metadata.json",
   "ui-state.json",
   "codex-metadata.json",
+  "claude-metadata.json",
   "computer-use-settings.json",
   "onboarding.json",
 ];

@@ -23,7 +23,7 @@ import { buildCliEnv, locateGrokCli } from "./cli-locator";
 
 const execFileAsync = promisify(execFile);
 const MAX_DEFINITION_BYTES = 2 * 1024 * 1024;
-const EFFORTS = new Set<ReasoningEffort>(["", "none", "minimal", "low", "medium", "high", "xhigh"]);
+const EFFORTS = new Set<ReasoningEffort>(["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 interface InspectReport {
   grokVersion?: string;

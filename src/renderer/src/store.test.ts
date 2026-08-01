@@ -81,6 +81,88 @@ describe("session event reducer", () => {
     state = apply(state, { type: "turn-retry", sessionId: "session", attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "HTTP 429" });
     expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "retry", attempt: 2, maxAttempts: 3, delayMs: 1000 })]);
   });
+
+  it("restores the durable visible projection after an incomplete ACP replay", () => {
+    let state = apply(baseState(), { type: "user-message", sessionId: "session", clientMessageId: "client", text: "hello", delivery: "sent" });
+    state = apply(state, {
+      type: "conversation-projection-restore",
+      sessionId: "session",
+      projection: {
+        version: 1,
+        sessionId: "session",
+        updatedAt: "2026-07-31T00:00:00.000Z",
+        events: [
+          { type: "user-message", sessionId: "session", clientMessageId: "client", text: "hello", delivery: "sent" },
+          { type: "message-chunk", sessionId: "session", text: "visible partial answer" },
+          { type: "error", sessionId: "session", message: "cancelled" },
+        ],
+      },
+    });
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "user", text: "hello" }),
+      expect.objectContaining({ kind: "assistant", text: "visible partial answer" }),
+      expect.objectContaining({ kind: "error", text: "cancelled" }),
+      expect.objectContaining({ kind: "turn-end" }),
+    ]);
+  });
+
+  it("restores the durable projection immediately after a transport reset", () => {
+    let state = apply(baseState(), { type: "user-message", sessionId: "session", text: "before reset", delivery: "sent" });
+    state = apply(state, { type: "message-chunk", sessionId: "session", text: "partial answer" });
+    const projection = {
+      version: 1 as const,
+      sessionId: "session",
+      updatedAt: "2026-07-31T00:00:00.000Z",
+      events: [
+        { type: "user-message", sessionId: "session", text: "before reset", delivery: "sent" as const },
+        { type: "message-chunk", sessionId: "session", text: "partial answer" },
+      ],
+    };
+    state = apply(state, { type: "session-reset", sessionId: "session" });
+    expect(state.views.session.messages).toEqual([]);
+    state = apply(state, { type: "conversation-projection-restore", sessionId: "session", projection });
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "user", text: "before reset" }),
+      expect.objectContaining({ kind: "assistant", text: "partial answer" }),
+    ]);
+  });
+
+  it("shows an explicit recovery state instead of promoting it to a global error", () => {
+    const state = apply(baseState(), {
+      type: "history-recovery",
+      sessionId: "session",
+      status: "unavailable",
+      message: "历史内容无法可靠关联",
+    });
+    expect(state.error).toBe("");
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "recovery", status: "unavailable", text: "历史内容无法可靠关联" }),
+    ]);
+  });
+
+  it("keeps plan documents separate from actionable plan decisions and resolves by request id", () => {
+    let state = apply(baseState(), { type: "plan", sessionId: "session", text: "draft plan" });
+    state = apply(state, { type: "plan", sessionId: "session", requestId: 41, text: "approve this plan" });
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "plan", interactive: false, text: "draft plan" }),
+      expect.objectContaining({ kind: "plan", requestId: 41, interactive: true, text: "approve this plan" }),
+    ]);
+    state = apply(state, { type: "interaction-resolved", sessionId: "session", interaction: "plan", requestId: 41, outcome: "approved" });
+    const [turn] = buildChatTurns(state.views.session.messages, "working");
+    expect(turn?.pending).toEqual([]);
+    expect(turn?.groups.flatMap((group: any) => group.items)).toEqual([expect.objectContaining({ text: "draft plan" })]);
+  });
+
+  it("expires process-local permission requests restored from disk", () => {
+    const state = apply(baseState(), {
+      type: "conversation-projection-restore", sessionId: "session",
+      projection: { version: 1, sessionId: "session", updatedAt: "2026-08-01T00:00:00Z", events: [
+        { type: "permission", sessionId: "session", request: { requestId: 9, sessionId: "session", toolCall: {}, options: [] } },
+      ] },
+    });
+    expect(state.views.session.messages[0]).toMatchObject({ kind: "permission", resolved: true });
+    expect(buildChatTurns(state.views.session.messages, "idle")[0]?.pending).toEqual([]);
+  });
 });
 
 describe("Codex-style turn grouping", () => {
@@ -95,8 +177,25 @@ describe("Codex-style turn grouping", () => {
     const [turn] = buildChatTurns(messages, "idle");
     expect(turn?.final?.text).toBe("Done.");
     expect(turn?.groups.flatMap((group) => group.items).map((item) => item.id)).toContain("a1");
-    expect(turn?.summary).toMatchObject({ files: 1, tools: 1, failed: 0 });
+    expect(turn?.summary).toMatchObject({ files: 0, tools: 1, failed: 0 });
     expect(turn?.completed).toBe(true);
+  });
+
+  it("aggregates ACP file diff line counts into the turn summary", () => {
+    const [turn] = buildChatTurns([
+      { id: "u", kind: "user", text: "edit" },
+      { id: "t", kind: "tool", tool: { toolCallId: "t", title: "Write file", kind: "edit", status: "completed", additions: 3, deletions: 2 } },
+    ]);
+    expect(turn?.summary).toMatchObject({ files: 1, additions: 3, deletions: 2 });
+  });
+
+  it("does not replace a streamed tool title with the generic final-update label", () => {
+    let state = apply(baseState(), { type: "tool-call", sessionId: "session", tool: { toolCallId: "t", title: "编辑 src/app.ts", kind: "edit", status: "in_progress", additions: 3, deletions: 2 } });
+    state = apply(state, { type: "tool-call", sessionId: "session", tool: { toolCallId: "t", title: "工具调用", kind: "edit", status: "completed" } });
+    expect(state.views.session.messages[0]).toMatchObject({
+      kind: "tool",
+      tool: { title: "编辑 src/app.ts", additions: 3, deletions: 2, status: "completed" },
+    });
   });
 
   it("does not force failed tools into an open top-level process", () => {
@@ -127,7 +226,7 @@ describe("Codex-style turn grouping", () => {
       { id: "end-2", kind: "turn-end" },
     ]);
     expect(turns).toHaveLength(1);
-    expect(turns[0]).toMatchObject({ legacySegments: 2, summary: { files: 2, failed: 1 } });
+    expect(turns[0]).toMatchObject({ legacySegments: 2, summary: { files: 0, failed: 1 } });
   });
 
   it("binds persisted timing to the matching client user message", () => {

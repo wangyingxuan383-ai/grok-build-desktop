@@ -9,12 +9,14 @@ function session(id: string, originKind?: SessionSummary["originKind"]): Session
 describe("session origin groups", () => {
   it("keeps ordinary and fork sessions together while isolating generated sources", () => {
     const groups = groupSessionsByOrigin([
-      session("normal"), session("fork", "fork"), session("task", "automation"), session("codex", "codex-continuation"), session("other", "other"),
+      session("normal"), session("fork", "fork"), session("task", "automation"), session("codex", "codex-continuation"), session("claude", "claude-continuation"), session("other", "other"),
     ]);
     expect(groups.find((value) => value.kind === "normal")?.sessions.map((value) => value.id)).toEqual(["normal", "fork"]);
     expect(groups.find((value) => value.kind === "automation")?.sessions.map((value) => value.id)).toEqual(["task"]);
     expect(groups.find((value) => value.kind === "codex-continuation")?.sessions.map((value) => value.id)).toEqual(["codex"]);
+    expect(groups.find((value) => value.kind === "claude-continuation")?.sessions.map((value) => value.id)).toEqual(["claude"]);
     expect(sessionSourceLabel(session("task", "automation"))).toBe("任务");
     expect(sessionSourceLabel(session("codex", "codex-continuation"))).toBe("Codex 接力");
+    expect(sessionSourceLabel(session("claude", "claude-continuation"))).toBe("Claude 接力");
   });
 });

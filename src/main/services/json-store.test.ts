@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,5 +49,35 @@ describe("JsonStore", () => {
     const value = await store.get();
     expect(value.count).toBe(20);
     expect(new Set(value.items).size).toBe(20);
+  });
+
+  it("preserves malformed JSON as a recovery backup before using defaults", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-json-store-"));
+    roots.push(root);
+    const path = join(root, "settings.json");
+    await writeFile(path, '{"broken":', "utf8");
+    const store = new JsonStore(path, { enabled: true });
+    expect(await store.get()).toEqual({ enabled: true });
+    const backups = (await readdir(root)).filter((name) => name.startsWith("settings.json.corrupt-") && name.endsWith(".bak"));
+    expect(backups).toHaveLength(1);
+    expect(await readFile(join(root, backups[0]!), "utf8")).toBe('{"broken":');
+    await store.set({ enabled: false });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ enabled: false });
+  });
+
+  it("removes only stale atomic temp files for the same store", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-json-store-"));
+    roots.push(root);
+    const stale = join(root, "settings.json.1.old.tmp");
+    const recent = join(root, "settings.json.1.recent.tmp");
+    const unrelated = join(root, "other.json.1.old.tmp");
+    await Promise.all([stale, recent, unrelated].map((path) => writeFile(path, "", "utf8")));
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+    await utimes(stale, old, old);
+    await utimes(unrelated, old, old);
+    const store = new JsonStore(join(root, "settings.json"), { value: 1 });
+    await store.get();
+    expect(await readdir(root)).toEqual(expect.arrayContaining(["settings.json.1.recent.tmp", "other.json.1.old.tmp"]));
+    expect(await readdir(root)).not.toContain("settings.json.1.old.tmp");
   });
 });

@@ -34,6 +34,44 @@ describe("agent change recording", () => {
     expect(service.record("s", CWD, "turn-1", edit({ kind: "apply_patch" }))).toBe(true);
   });
 
+  it("records current ACP kind=edit nested diff blocks and exposes line counts", () => {
+    const service = new AgentChangeService();
+    service.beginTurn("s", CWD, "turn-current");
+    expect(service.record("s", CWD, "turn-current", {
+      toolCallId: "nested", title: "Write app.ts", kind: "edit", status: "completed",
+      locations: [{ path: abs("src/app.ts") }],
+      content: [{ type: "diff", path: abs("src/app.ts"), oldText: "one\ntwo", newText: "one\nthree\nfour" }],
+    })).toBe(true);
+    expect(service.index("s", "last-turn").files[0]).toMatchObject({
+      path: "src/app.ts", before: "one\ntwo", after: "one\nthree\nfour", additions: 2, deletions: 1,
+    });
+  });
+
+  it("keeps a streamed diff when the final tool update only carries status", () => {
+    const service = new AgentChangeService();
+    service.beginTurn("s", CWD, "turn-current");
+    service.record("s", CWD, "turn-current", {
+      toolCallId: "streamed", title: "Write app.ts", kind: "edit", status: "in_progress",
+      locations: [{ path: abs("src/app.ts") }],
+      content: [{ type: "diff", path: abs("src/app.ts"), oldText: "one\ntwo", newText: "one\nthree\nfour" }],
+    });
+    service.record("s", CWD, "turn-current", {
+      toolCallId: "streamed", title: "工具调用", kind: "edit", status: "completed",
+      locations: [{ path: abs("src/app.ts") }],
+    });
+    expect(service.index("s", "last-turn").files[0]).toMatchObject({
+      before: "one\ntwo", after: "one\nthree\nfour", additions: 2, deletions: 1, status: "applied",
+    });
+  });
+
+  it("returns no last-turn files when the newest turn did not write", () => {
+    const service = new AgentChangeService();
+    service.record("s", CWD, "turn-1", edit({}));
+    service.beginTurn("s", CWD, "turn-2");
+    expect(service.index("s", "last-turn").files).toEqual([]);
+    expect(service.index("s", "session").files).toHaveLength(1);
+  });
+
   it("marks a missing baseline instead of diffing against an empty string", () => {
     const service = new AgentChangeService();
     service.record("s", CWD, "turn-1", edit({ oldText: undefined }));

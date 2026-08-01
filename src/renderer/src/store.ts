@@ -22,6 +22,7 @@ import type {
   TurnActivityGroup,
   WorkspaceSummary,
   CodexSessionSummary,
+  ClaudeSessionSummary,
   BuildInfo,
   OnboardingState,
   AppReleaseStatus,
@@ -38,10 +39,11 @@ export type UiMessage =
   | { id: string; kind: "retry"; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
   | { id: string; kind: "error"; text: string; failure?: TurnFailure }
   | { id: string; kind: "tool"; tool: ToolCallState }
-  | { id: string; kind: "permission"; request: PermissionRequest; resolved?: boolean }
-  | { id: string; kind: "question"; requestId: string | number; questions: QuestionItem[]; resolved?: boolean }
-  | { id: string; kind: "plan"; requestId?: string | number; text: string; resolved?: boolean }
+  | { id: string; kind: "permission"; request: PermissionRequest; resolved?: boolean; resolution?: string }
+  | { id: string; kind: "question"; requestId: string | number; questions: QuestionItem[]; resolved?: boolean; resolution?: string }
+  | { id: string; kind: "plan"; requestId?: string | number; text: string; interactive: boolean; resolved?: boolean; resolution?: string }
   | { id: string; kind: "media"; media: "image" | "video"; source: string; isData?: boolean; mimeType?: string }
+  | { id: string; kind: "recovery"; status: "recovered" | "unavailable"; text: string }
   | { id: string; kind: "turn-end" };
 
 export interface UiTurnActivityGroup extends TurnActivityGroup {
@@ -87,6 +89,7 @@ interface AppState {
   attachments: Attachment[];
   workspaces: WorkspaceSummary[];
   codexSessions: CodexSessionSummary[];
+  claudeSessions: ClaudeSessionSummary[];
   buildInfo?: BuildInfo;
   onboarding?: OnboardingState;
   appRelease?: AppReleaseStatus;
@@ -105,6 +108,7 @@ interface AppState {
   clearAttachments(): void;
   setWorkspaces(values: WorkspaceSummary[]): void;
   setCodexSessions(values: CodexSessionSummary[]): void;
+  setClaudeSessions(values: ClaudeSessionSummary[]): void;
   setOnboarding(value: OnboardingState): void;
   setAppRelease(value: AppReleaseStatus): void;
   resolveMessage(sessionId: string, messageId: string): void;
@@ -128,6 +132,7 @@ export const useAppStore = create<AppState>((set) => ({
   attachments: [],
   workspaces: [],
   codexSessions: [],
+  claudeSessions: [],
   appRelease: undefined,
   bootstrap: (data) => set({ ...data, loading: false, error: "" }),
   setLoading: (loading) => set({ loading }),
@@ -146,6 +151,7 @@ export const useAppStore = create<AppState>((set) => ({
   clearAttachments: () => set({ attachments: [] }),
   setWorkspaces: (workspaces) => set({ workspaces }),
   setCodexSessions: (codexSessions) => set({ codexSessions }),
+  setClaudeSessions: (claudeSessions) => set({ claudeSessions }),
   setOnboarding: (onboarding) => set({ onboarding }),
   setAppRelease: (appRelease) => set({ appRelease }),
   resolveMessage: (sessionId, messageId) => set((state) => {
@@ -170,6 +176,30 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   switch (event.type) {
     case "session-reset":
       next = emptyView();
+      break;
+    case "conversation-projection-restore": {
+      let projectedState: AppState = {
+        ...state,
+        views: { ...state.views, [sessionId]: emptyView() },
+      };
+      for (const saved of event.projection.events) {
+        if (!saved || saved.type === "conversation-projection-restore" || saved.sessionId !== sessionId) continue;
+        projectedState = { ...projectedState, ...reduceEvent(projectedState, saved as unknown as ChatEvent) };
+      }
+      const projected = projectedState.views[sessionId];
+      if (projected?.messages.length) {
+        // JSON-RPC request ids are process-local. A permission/plan/question
+        // restored from disk cannot be answered after the ACP transport was
+        // rebuilt, so never resurrect it as a clickable stale card.
+        next.messages = projected.messages.map((message) => isActionMessage(message) && !message.resolved
+          ? { ...message, resolved: true, resolution: "请求已随上次连接结束" }
+          : message);
+        next.turnPresentations = mergeTurnPresentations(next.turnPresentations, projected.turnPresentations);
+      }
+      break;
+    }
+    case "history-recovery":
+      next.messages.push({ id: `history-recovery-${sessionId}`, kind: "recovery", status: event.status, text: event.message });
       break;
     case "session-ready":
       next.models = event.models;
@@ -241,26 +271,49 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
     }
     case "tool-call": {
       const index = next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === event.tool.toolCallId);
-      if (index >= 0) next.messages[index] = { id: event.tool.toolCallId, kind: "tool", tool: { ...(next.messages[index] as Extract<UiMessage, { kind: "tool" }>).tool, ...event.tool } };
+      if (index >= 0) {
+        const previous = (next.messages[index] as Extract<UiMessage, { kind: "tool" }>).tool;
+        const title = event.tool.title === "工具调用" && previous.title !== "工具调用" ? previous.title : event.tool.title;
+        next.messages[index] = { id: event.tool.toolCallId, kind: "tool", tool: { ...previous, ...event.tool, title } };
+      }
       else next.messages.push({ id: event.tool.toolCallId, kind: "tool", tool: event.tool });
       break;
     }
     case "prompt-queue":
       next.queue = event.entries;
       break;
-    case "permission":
-      next.messages.push({ id: `permission-${String(event.request.requestId)}`, kind: "permission", request: event.request });
+    case "permission": {
+      const id = `permission-${String(event.request.requestId)}`;
+      const index = next.messages.findIndex((message) => message.id === id);
+      const value: UiMessage = { id, kind: "permission", request: event.request };
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
       break;
-    case "question":
-      next.messages.push({ id: `question-${String(event.requestId)}`, kind: "question", requestId: event.requestId, questions: event.questions });
+    }
+    case "question": {
+      const id = `question-${String(event.requestId)}`;
+      const index = next.messages.findIndex((message) => message.id === id);
+      const value: UiMessage = { id, kind: "question", requestId: event.requestId, questions: event.questions };
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
       break;
+    }
     case "plan": {
-      const existing = next.messages.findIndex((message) => message.kind === "plan" && (message.requestId === event.requestId || !event.requestId));
-      const value: UiMessage = { id: `plan-${String(event.requestId || crypto.randomUUID())}`, kind: "plan", requestId: event.requestId, text: event.text };
+      const interactive = event.requestId !== undefined && event.requestId !== "";
+      const id = interactive ? `plan-${String(event.requestId)}` : `plan-document-${next.turnPresentations.at(-1)?.turnId ?? "active"}`;
+      const existing = next.messages.findIndex((message) => message.kind === "plan" && message.id === id);
+      const value: UiMessage = { id, kind: "plan", requestId: event.requestId, text: event.text, interactive };
       if (existing >= 0) next.messages[existing] = value;
       else next.messages.push(value);
       break;
     }
+    case "interaction-resolved":
+      next.messages = next.messages.map((message) => isActionMessage(message)
+        && message.kind === event.interaction
+        && String(actionRequestId(message)) === String(event.requestId)
+        ? { ...message, resolved: true, resolution: event.outcome }
+        : message);
+      break;
     case "media":
       next.messages.push({ id: crypto.randomUUID(), kind: "media", media: event.media, source: event.source, isData: event.isData, mimeType: event.mimeType });
       break;
@@ -296,7 +349,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       // authoritative: no child from that turn can still be running.
       next.messages = next.messages.map((message) => {
         if (message.kind === "tool" && (message.tool.status === "in_progress" || message.tool.status === "pending")) return { ...message, tool: { ...message.tool, status: "completed" as const } };
-        if (message.kind === "permission" || message.kind === "question" || message.kind === "plan") return { ...message, resolved: true };
+        if (message.kind === "permission" || message.kind === "question" || (message.kind === "plan" && message.interactive)) return { ...message, resolved: true };
         return message;
       });
       if (next.messages.at(-1)?.kind !== "turn-end") next.messages.push({ id: `turn-end-${crypto.randomUUID()}`, kind: "turn-end" });
@@ -411,11 +464,11 @@ function buildTurn(id: string, messages: UiMessage[], completed: boolean, runnin
   const user = messages.find((message): message is Extract<UiMessage, { kind: "user" }> => message.kind === "user");
   const assistants = messages.filter((message): message is Extract<UiMessage, { kind: "assistant" }> => message.kind === "assistant");
   const final = assistants.at(-1);
-  const pending = messages.filter((message) => (message.kind === "permission" || message.kind === "question" || message.kind === "plan") && !message.resolved);
+  const pending = messages.filter((message) => isActionMessage(message) && (message.kind !== "plan" || message.interactive) && !message.resolved);
   const trailing = messages.filter((message) => message.kind === "media" || message.kind === "error");
   const pendingIds = new Set(pending.map((message) => message.id));
   const trailingIds = new Set(trailing.map((message) => message.id));
-  const activity = messages.filter((message) => message !== user && message !== final && !pendingIds.has(message.id) && !trailingIds.has(message.id));
+  const activity = messages.filter((message) => message !== user && message !== final && !pendingIds.has(message.id) && !trailingIds.has(message.id) && !(isActionMessage(message) && message.resolved));
   const groupOrder: UiTurnActivityGroup["kind"][] = ["progress", "files", "commands", "subagents", "computer", "other"];
   const labels: Record<UiTurnActivityGroup["kind"], string> = { progress: "思考与过程说明", files: "文件操作", commands: "命令与终端", subagents: "子 Agent", computer: "Computer Use", other: "其他工具" };
   const grouped = new Map<UiTurnActivityGroup["kind"], UiMessage[]>();
@@ -429,11 +482,22 @@ function buildTurn(id: string, messages: UiMessage[], completed: boolean, runnin
     return [{ kind, label: labels[kind], count: items.length, failed: items.filter(isFailed).length, items }];
   });
   const tools = messages.filter((message): message is Extract<UiMessage, { kind: "tool" }> => message.kind === "tool");
-  const files = tools.filter((message) => classifyActivity(message) === "files").length;
+  const writes = tools.filter((message) => isFileWriteTool(message.tool));
+  const files = new Set(writes.map((message) => message.tool.locations?.find((location) => location.path)?.path || message.tool.toolCallId)).size;
+  const additions = writes.reduce((total, message) => total + (message.tool.additions ?? 0), 0);
+  const deletions = writes.reduce((total, message) => total + (message.tool.deletions ?? 0), 0);
   const commands = tools.filter((message) => classifyActivity(message) === "commands").length;
   const subagents = tools.filter((message) => classifyActivity(message) === "subagents").length;
   const failed = tools.filter(isFailed).length;
-  return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, presentation, legacySegments, summary: { files, commands, tools: tools.length, subagents, failed } };
+  return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, presentation, legacySegments, summary: { files, additions, deletions, commands, tools: tools.length, subagents, failed } };
+}
+
+function isActionMessage(message: UiMessage): message is Extract<UiMessage, { kind: "permission" | "question" | "plan" }> {
+  return message.kind === "permission" || message.kind === "question" || message.kind === "plan";
+}
+
+function actionRequestId(message: Extract<UiMessage, { kind: "permission" | "question" | "plan" }>): string | number | undefined {
+  return message.kind === "permission" ? message.request.requestId : message.requestId;
 }
 
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
@@ -445,6 +509,11 @@ function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
   if (/read|edit|write|delete|file|search|glob|grep|diff|patch/.test(value)) return "files";
   if (/command|terminal|execute|shell|bash|powershell|cmd|task|process/.test(value)) return "commands";
   return "other";
+}
+
+function isFileWriteTool(tool: ToolCallState): boolean {
+  const value = `${tool.kind || ""} ${tool.title}`.toLowerCase();
+  return tool.oldText !== undefined || tool.newText !== undefined || /\b(?:edit|write|create|delete|patch|apply_patch)(?:_file)?\b/.test(value);
 }
 
 function isFailed(message: UiMessage): boolean {
@@ -476,4 +545,10 @@ function mergeTurnPresentation(current: TurnPresentation[], incoming: TurnPresen
   if (index >= 0) next[index] = { ...next[index], ...incoming };
   else next.push(incoming);
   return next.sort((a, b) => a.ordinal - b.ordinal);
+}
+
+function mergeTurnPresentations(current: TurnPresentation[], incoming: TurnPresentation[]): TurnPresentation[] {
+  let next = [...current];
+  for (const value of incoming) next = mergeTurnPresentation(next, value);
+  return next;
 }

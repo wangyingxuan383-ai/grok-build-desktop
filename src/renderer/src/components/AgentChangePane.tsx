@@ -70,7 +70,7 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
         onClick={() => setSelectedId(file.id)}
       >
         <span className="agent-change-path">{file.path}</span>
-        <span className="agent-change-tag">{baselineLabel(file)}</span>
+        <span className="agent-change-tag">{file.additions !== undefined || file.deletions !== undefined ? <><i>+{file.additions ?? 0}</i> <b>-{file.deletions ?? 0}</b></> : baselineLabel(file)}</span>
       </button>)}</nav>
       <main className="review-selected-file">{selected ? <AgentChangeDetail file={selected} light={light} onNavigate={onNavigate} cwd={index?.cwd ?? ""} sessionId={sessionId}/> : null}</main>
     </div>}
@@ -80,12 +80,15 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
 function AgentChangeDetail({ file, light, cwd, sessionId, onNavigate }: {
   file: AgentFileChange; light: boolean; cwd: string; sessionId?: string; onNavigate(intent: NavigationIntent): void;
 }): React.JSX.Element {
+  const [wrap, setWrap] = useState(true);
   const noBaseline = file.baseline !== "captured";
   return <>
     <header className="agent-change-header">
-      <strong>{file.path}</strong>
-      <span>
-        <button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: file.path, surface: "editor" })}>在编辑器打开</button>
+      <strong title={file.path}>{file.path}</strong>
+      <span className="agent-change-actions">
+        {(file.additions !== undefined || file.deletions !== undefined) && <em className="agent-change-stats"><i>+{file.additions ?? 0}</i><b>-{file.deletions ?? 0}</b></em>}
+        <button type="button" aria-pressed={wrap} onClick={() => setWrap((value) => !value)}>{wrap ? "取消换行" : "自动换行"}</button>
+        <button type="button" onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: file.path, surface: "editor" })}>打开文件</button>
       </span>
     </header>
     {file.status === "failed" && <p className="agent-change-note failed">这次写入被记录为失败，下面的内容是 Agent 当时尝试写入的结果。</p>}
@@ -105,7 +108,18 @@ function AgentChangeDetail({ file, light, cwd, sessionId, onNavigate }: {
             original={file.before}
             modified={file.after ?? ""}
             theme={light ? "vs" : "vs-dark"}
-            options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true }}
+            options={{
+              readOnly: true,
+              renderSideBySide: false,
+              wordWrap: wrap ? "on" : "off",
+              diffWordWrap: wrap ? "on" : "off",
+              minimap: { enabled: false },
+              automaticLayout: true,
+              scrollBeyondLastLine: false,
+              lineNumbersMinChars: 3,
+              overviewRulerLanes: 0,
+              scrollbar: { horizontalScrollbarSize: 8, verticalScrollbarSize: 8 },
+            }}
           />
         </Suspense>}
   </>;

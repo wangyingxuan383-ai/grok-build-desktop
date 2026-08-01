@@ -26,6 +26,13 @@ function fixture(effort: ReasoningEffort, setEffort = vi.fn().mockResolvedValue(
     effort,
     working: false,
     needsUser: false,
+    currentModelId: "grok-test",
+    models: [{
+      modelId: "grok-test",
+      name: "Grok Test",
+      supportsReasoningEffort: true,
+      reasoningEfforts: [{ value: "low", label: "Low" }, { value: "high", label: "High" }],
+    }],
     setEffort,
     dispose: vi.fn().mockResolvedValue(undefined),
   };
@@ -46,25 +53,39 @@ describe("Grok process reasoning effort switching", () => {
     }
   });
 
-  it("falls back to a controlled restart when the live extension is unavailable", async () => {
+  it("keeps the persisted session intact when the live extension is unavailable", async () => {
     const live = vi.fn().mockRejectedValue(new Error("Method not found"));
-    const { manager } = fixture("high", live);
+    const { manager, adapter } = fixture("high", live);
     const restart = vi.spyOn(manager, "restartWithEffort").mockResolvedValue(undefined);
     try {
-      await manager.setEffort("session", "low");
-      expect(restart).toHaveBeenCalledWith("session", "low");
+      await expect(manager.setEffort("session", "low")).rejects.toThrow("应用没有重启该会话");
+      expect(restart).not.toHaveBeenCalled();
+      expect(adapter.dispose).not.toHaveBeenCalled();
     } finally {
       await manager.dispose();
     }
   });
 
-  it("uses restart for the empty CLI-default effort", async () => {
+  it("does not restart an existing session to restore the empty CLI-default effort", async () => {
     const { manager, setEffort } = fixture("high");
     const restart = vi.spyOn(manager, "restartWithEffort").mockResolvedValue(undefined);
     try {
-      await manager.setEffort("session", "");
+      await expect(manager.setEffort("session", "")).rejects.toThrow("已存在会话不能切回 CLI 默认强度");
       expect(setEffort).not.toHaveBeenCalled();
-      expect(restart).toHaveBeenCalledWith("session", "");
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("rejects effort values that the active provider model did not declare", async () => {
+    const { manager, adapter, setEffort } = fixture("high");
+    adapter.currentModelId = "provider-model";
+    adapter.models = [{ modelId: "provider-model", name: "Provider", supportsReasoningEffort: false, reasoningEfforts: [] }];
+    try {
+      await expect(manager.setEffort("session", "xhigh")).rejects.toThrow("可用档位：未声明");
+      expect(setEffort).not.toHaveBeenCalled();
+      expect(adapter.dispose).not.toHaveBeenCalled();
     } finally {
       await manager.dispose();
     }
@@ -104,6 +125,37 @@ describe("configured session restoration", () => {
       expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" }, undefined);
       expect(adapter.start).toHaveBeenCalledWith("task-session");
     } finally { await manager.dispose(); }
+  });
+
+  it("keeps multiple live adapters resident so separate conversations can run concurrently", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapters = ["session-a", "session-b"].map((sessionId, index) => ({
+      sessionId,
+      cwd: `C:\\workspace-${index}`,
+      effort: "high",
+      mode: "agent",
+      currentModelId: "grok-test",
+      processOptions: undefined,
+      working: true,
+      needsUser: false,
+      extensionLeaseId: undefined,
+      start: vi.fn().mockResolvedValue({ sessionId }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.spyOn(manager as any, "spawn").mockResolvedValueOnce(adapters[0]).mockResolvedValueOnce(adapters[1]);
+    try {
+      await Promise.all([
+        manager.createConfigured(adapters[0]!.cwd, "high", "agent", "grok-test"),
+        manager.createConfigured(adapters[1]!.cwd, "high", "agent", "grok-test"),
+      ]);
+      expect(manager.snapshots().map((value) => value.sessionId).sort()).toEqual(["session-a", "session-b"]);
+      expect(manager.liveStatuses()).toEqual(new Map([["session-a", "working"], ["session-b", "working"]]));
+      expect(manager.get("session-a")).toBe(adapters[0]);
+      expect(manager.get("session-b")).toBe(adapters[1]);
+    } finally {
+      await manager.dispose();
+    }
   });
 });
 

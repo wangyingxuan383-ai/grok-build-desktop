@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from "react";
 import type { NavigationIntent, TurnFailure, TurnOutcome } from "../../../shared/types";
 import type { UiChatTurn, UiMessage } from "../store";
 import { LazyMarkdownView } from "./LazyMarkdownView";
-import { MessageCard } from "./MessageCard";
+import { GeneratedMediaGallery, MessageCard } from "./MessageCard";
 
 export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot, showThinking, expandTools, onResolved, onDiagnose, onRetry, onNavigate, onOpenReview, onFork }: {
   turn: UiChatTurn;
@@ -26,6 +26,8 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
   }, [storageKey, turn.completed, turn.running]);
   const groups = useMemo(() => turn.groups.map((group) => ({ ...group, items: showThinking ? group.items : collapseHiddenThoughts(group.items) })).filter((group) => group.items.length), [showThinking, turn.groups]);
   const hasActivity = groups.length > 0;
+  const mediaResults = turn.trailing.filter((message): message is Extract<UiMessage, { kind: "media" }> => message.kind === "media");
+  const nonMediaTrailing = turn.trailing.filter((message) => message.kind !== "media");
   const processTitle = turn.legacySegments && turn.legacySegments > 1
     ? `历史执行记录（${turn.legacySegments} 段）`
     : turn.running ? `正在处理${elapsed ? ` · ${elapsed}` : ""}` : `已处理${elapsed ? ` ${elapsed}` : ""}`;
@@ -35,16 +37,27 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
     {hasActivity && <details className="execution-process" open={open} onToggle={(event) => { const next = event.currentTarget.open; setOpen(next); if (!turn.running) localStorage.setItem(storageKey, next ? "open" : "closed"); }}>
       <summary><span className={`process-dot ${turn.running ? "running" : ""}`} /><strong>{processTitle}</strong><span className="process-summary">{summaryText(turn)}</span></summary>
       <div className="activity-groups">{groups.map((group) => <details key={group.kind} className={`activity-group ${group.failed ? "has-failure" : ""}`} open={turn.running && group.kind === "progress"}>
-        <summary><span>{group.kind === "files" ? `修改了 ${turn.summary.files} 个文件` : group.label}</span><span>{group.kind === "files" && onOpenReview && <button type="button" className="review-inline-action" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenReview(); }}>在 Review 中查看</button>}{group.kind !== "files" && <>{group.count} 项{group.failed ? ` · ${group.failed} 失败` : ""}</>}</span></summary>
+        <summary><span>{group.kind === "files" ? turn.summary.files ? <>{`修改了 ${turn.summary.files} 个文件`}<FileLineStats additions={turn.summary.additions} deletions={turn.summary.deletions}/></> : "文件读取与搜索" : group.label}</span><span>{group.kind === "files" && turn.summary.files > 0 && onOpenReview && <button type="button" className="review-inline-action" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpenReview(); }}>查看改动</button>}{group.kind === "files" && turn.summary.files === 0 && <>{group.count} 项</>}{group.kind !== "files" && <>{group.count} 项{group.failed ? ` · ${group.failed} 失败` : ""}</>}</span></summary>
         <div className="activity-items">{group.items.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onResolved={onResolved} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}</div>
       </details>)}</div>
     </details>}
     {turn.pending.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onResolved={onResolved} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
     {turn.final && <div className="final-answer"><div className="final-answer-toolbar"><span>{turn.running ? "正在生成" : "最终回答"}</span><div><button title="复制最终回答" onClick={() => void navigator.clipboard.writeText(turn.final!.text)}>复制</button>{onFork && <button title="从当前任务末尾创建真实分叉" onClick={onFork}>从这里分叉</button>}</div></div>{turn.running ? <pre className="streaming-answer">{turn.final.text}</pre> : <LazyMarkdownView text={turn.final.text} />}{turn.presentation && <TurnMetrics presentation={turn.presentation}/>}</div>}
-    {turn.trailing.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
-    {/* A turn that failed or was cancelled has no final answer, and those are
-        exactly the turns where the time and tokens already spent matter most. */}
-    {!turn.final && turn.presentation && <TurnMetrics presentation={turn.presentation}/>}
+    {mediaResults.length > 0 && <GeneratedMediaGallery messages={mediaResults} />}
+    {nonMediaTrailing.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
+    {/* Never leave timing/token metrics floating without a visible result.
+        Partial/failed historical turns explicitly explain why no body exists. */}
+    {!turn.final && turn.presentation && <div className={`turn-without-answer ${turn.running ? turn.pending.length ? "waiting" : "running" : turn.presentation.outcome ?? "unknown"}`}>
+      <strong>{turn.running
+        ? turn.pending.length ? "等待你的操作" : "正在生成回答"
+        : turn.presentation.outcome === "cancelled" ? "回答已取消" : turn.presentation.outcome === "failed" ? "回答未完成" : "此回合没有可见回答正文"}</strong>
+      <span>{turn.running
+        ? turn.pending.length ? "处理当前计划、权限或问题后，此回合会继续。" : "回答尚未结束；正文将在模型返回可见内容时显示。"
+        : turn.presentation.outcome === "failed" || turn.presentation.outcome === "cancelled"
+          ? "已保留能恢复的过程、错误与用量；若历史正文缺失，应用不会伪造内容。"
+          : "正在尝试从本地投影或历史更新流恢复；无法可靠关联的内容会明确标记。"}</span>
+      {turn.running ? <footer className="turn-live-status"><span className="process-dot running" />处理进行中 · Token 将在回合结算后更新</footer> : <TurnMetrics presentation={turn.presentation}/>}
+    </div>}
   </article>;
 });
 
@@ -65,6 +78,11 @@ function TurnMetrics({ presentation }: { presentation: NonNullable<UiChatTurn["p
     {!parts.length && <span>本回合未返回 Token 用量</span>}
     {usage?.modelId && <span>{usage.modelId}</span>}
   </footer>;
+}
+
+function FileLineStats({ additions, deletions }: { additions: number; deletions: number }): React.JSX.Element | null {
+  if (!additions && !deletions) return null;
+  return <span className="file-line-stats" aria-label={`增加 ${additions} 行，删除 ${deletions} 行`}><i>+{additions}</i><b>-{deletions}</b></span>;
 }
 
 /** Only non-completed outcomes are labelled; a normal turn needs no badge. */
@@ -105,6 +123,7 @@ function formatTokenCount(value: number): string {
 function summaryText(turn: UiChatTurn): string {
   const parts: string[] = [];
   if (turn.summary.files) parts.push(`${turn.summary.files} 文件`);
+  if (turn.summary.additions || turn.summary.deletions) parts.push(`+${turn.summary.additions} -${turn.summary.deletions}`);
   if (turn.summary.commands) parts.push(`${turn.summary.commands} 命令`);
   const computer = turn.groups.find((group) => group.kind === "computer")?.count ?? 0;
   if (computer) parts.push(`${computer} Computer Use`);
