@@ -1,0 +1,37 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  --bg: #0d0f12;
+  --main: #0f1115;
+  --panel: #13161a;
+  --panel-2: #181c21;
+  --panel-3: #20252b;
+  --input-bg: #0b0d10;
+  --elevated: #1b1f24;
+  --button-bg: #22272e;
+  --hover: #282e35;
+  --chip-bg: #20242a;
+  --border: #292e35;
+  --border-strong: #3b424b;
+  --muted: #9299a3;
+  --text: #e7e9ec;
+  --text-secondary: #b7bec6;
+  --text-strong: #f3f5f7;
+  --accent: #45a9df;
+  --accent-2: #247cae;
+  --accent-soft: #17232b;
+  --surface-translucent: #171a1fd8;
+  --shadow: #00000088;
+  --background-opacity: .32;
+  --background-blur: 0px;
+  --background-dim: .42;
+  --background-mask: 0 0 0;
+  --background-fit: cover;
+  --background-position: center;
+  --theme-background-image: none;
+  --danger: #ef6c72;
+  --success: #56c596;
+  --warning: #e7b75d;
+}

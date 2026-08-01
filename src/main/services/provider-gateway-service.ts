@@ -4,10 +4,17 @@ import { Readable } from "node:stream";
 import type { CustomProviderProfile, ProviderProxyMode, ProviderSchemaProfile } from "../../shared/types";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import type { LogService } from "./log-service";
+import {
+  translateProviderRequest,
+  translateProviderResponse,
+  translateProviderSseResponse,
+  type ProviderRequestTranslation,
+} from "./provider-protocol-translator";
 
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
-const REQUEST_TIMEOUT_MS = 10 * 60_000;
+/** Maximum wait for upstream response headers; stream-idle remains a CLI/model setting. */
+const REQUEST_TIMEOUT_MS = 360_000;
 const RESPONSE_HEADERS = new Set([
   "content-type", "date", "retry-after", "server-timing", "x-request-id",
   "x-trace-id", "x-cloud-trace-context", "x-cloudaicompanion-trace-id",
@@ -152,8 +159,8 @@ export class ProviderGatewayService {
     const server = this.server;
     this.server = undefined;
     this.port = 0;
-    if (!server) return;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await this.options.log.flush();
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -168,6 +175,7 @@ export class ProviderGatewayService {
     let fetchStarted = false;
     let abortReason: GatewayFailureRecord["reason"] | undefined;
     let failureRecorded = false;
+    let translation: ProviderRequestTranslation | undefined;
     let cleanupAbortHandlers = (): void => undefined;
     try {
       if (request.method !== "POST") return jsonError(response, 405, "只允许推理 POST 请求");
@@ -177,22 +185,36 @@ export class ProviderGatewayService {
       const scopeId = decodeURIComponent(match[2]!);
       failingProviderId = providerId;
       failingScopeId = scopeId;
-      const provider = (await this.options.providers()).find((value) => value.owned && value.id === providerId);
+      const provider = (await this.options.providers()).find((value) => value.owned && value.enabled !== false && value.id === providerId);
       if (!provider) return jsonError(response, 404, "提供商不存在");
       proxyMode = provider.proxyMode ?? "inherit";
       endpoint = gatewayEndpoint(match[3] || "");
       const raw = await readRequest(request, this.options.maxRequestBytes ?? MAX_REQUEST_BYTES);
       let body = raw;
       let streaming = false;
+      let upstreamSuffix = match[3] || "";
       if (/application\/json/i.test(String(request.headers["content-type"] ?? "")) && raw.length) {
         const parsed = JSON.parse(raw.toString("utf8"));
-        streaming = Boolean(parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).stream);
-        const sanitized = sanitizeProviderSchema(parsed, provider.schemaProfile ?? "standard");
+        const modelId = parsed && typeof parsed === "object" ? String((parsed as Record<string, unknown>).model ?? "") : "";
+        const model = provider.models.find((value) => value.enabled !== false && (value.model === modelId || value.id === modelId));
+        translation = translateProviderRequest({
+          path: upstreamSuffix,
+          body: parsed as Record<string, unknown>,
+          providerProtocol: model?.protocol ?? provider.protocol,
+          // A model-level client-protocol override without an explicit
+          // upstream override means the matching native upstream protocol,
+          // not the Provider's differently shaped default.
+          providerUpstreamProtocol: model?.upstreamProtocol ?? (model?.protocol ? undefined : provider.upstreamProtocol),
+          model,
+        });
+        upstreamSuffix = translation.upstreamPath;
+        streaming = translation.stream;
+        const sanitized = sanitizeProviderSchema(translation.body, provider.schemaProfile ?? "standard");
         body = Buffer.from(JSON.stringify(sanitized.value));
         changed = sanitized.changed;
       }
-      await this.options.log.log(`Provider gateway request ${requestId} started provider=${provider.id} route=${proxyMode} endpoint=${endpoint} bytes=${body.length} stream=${streaming}`);
-      const upstreamUrl = joinUrl(provider.baseUrl, match[3] || "");
+      await this.options.log.log(`Provider gateway request ${requestId} started provider=${provider.id} route=${proxyMode} endpoint=${endpoint} bytes=${body.length} stream=${streaming} translated=${Boolean(translation?.translated)}`);
+      const upstreamUrl = joinUrl(provider.baseUrl, upstreamSuffix);
       const abort = new AbortController();
       const abortWith = (reason: GatewayFailureRecord["reason"], message: string): void => {
         abortReason ??= reason;
@@ -212,6 +234,9 @@ export class ProviderGatewayService {
       };
       try {
         const headers = await this.forwardProviderHeaders(request.headers, provider);
+        if (translation?.upstreamProtocol === "anthropic_messages" && !headers["anthropic-version"]) {
+          headers["anthropic-version"] = "2023-06-01";
+        }
         fetchStarted = true;
         upstream = await this.options.fetcher(upstreamUrl, {
           method: "POST",
@@ -277,6 +302,67 @@ export class ProviderGatewayService {
       }
       const responseSource = Readable.fromWeb(upstream.body as never);
       const responseLimit = this.options.maxResponseBytes ?? MAX_RESPONSE_BYTES;
+      if (translation?.translated) {
+        const contentType = upstream.headers.get("content-type") ?? "";
+        const upstreamSse = /text\/event-stream/i.test(contentType);
+        // Cross-protocol SSE conversion currently needs the complete terminal
+        // stream to preserve tool-call ordering and usage. Flush a legal SSE
+        // comment immediately, then keep the downstream alive while collecting
+        // so a long silent reasoning phase cannot look like a dead connection.
+        let bridgeHeartbeat: ReturnType<typeof setInterval> | undefined;
+        if (upstreamSse && upstream.status < 400) {
+          response.setHeader("content-type", "text/event-stream; charset=utf-8");
+          response.setHeader("cache-control", "no-cache");
+          response.flushHeaders();
+          response.write(": grok-desktop protocol bridge\n\n");
+          bridgeHeartbeat = setInterval(() => {
+            if (!response.destroyed && !response.writableEnded) response.write(": keep-alive\n\n");
+          }, 15_000);
+          bridgeHeartbeat.unref?.();
+        }
+        const collected = await collectLimitedResponse(responseSource, responseLimit).finally(() => {
+          if (bridgeHeartbeat) clearInterval(bridgeHeartbeat);
+        });
+        const translated = /text\/event-stream/i.test(contentType)
+          ? translateProviderSseResponse({
+            clientProtocol: translation.clientProtocol,
+            upstreamProtocol: translation.upstreamProtocol,
+            body: collected,
+            status: upstream.status,
+          })
+          : translateProviderResponse({
+            clientProtocol: translation.clientProtocol,
+            upstreamProtocol: translation.upstreamProtocol,
+            body: collected,
+            status: upstream.status,
+            contentType,
+          });
+        if (!upstreamSse) {
+          response.setHeader("content-type", translated.contentType);
+          response.setHeader("content-length", translated.body.byteLength);
+        }
+        await writeResponse(response, Buffer.from(translated.body));
+        response.end();
+        cleanupAbortHandlers();
+        if (!failureRecorded) this.observe({
+          at: new Date().toISOString(),
+          requestId,
+          providerId: provider.id,
+          scopeId,
+          proxyMode,
+          endpoint,
+          elapsedMs: Date.now() - started,
+          status: upstream.status,
+          statusText: upstream.statusText,
+          traceId: traceHeader(upstream.headers),
+          retryAfter: upstream.headers.get("retry-after") ?? undefined,
+          phase: "response",
+          outcome: "completed",
+          sanitizedCount: changed,
+        });
+        await this.options.log.log(`Provider gateway request ${requestId} translated ${translation.upstreamProtocol}->${translation.clientProtocol} status=${upstream.status} elapsedMs=${Date.now() - started}`);
+        return;
+      }
       const anthropicCompatibility = upstream.status < 400
         && endpoint === "messages"
         && (provider.upstreamProtocol === "anthropic_messages" || provider.protocol === "messages");

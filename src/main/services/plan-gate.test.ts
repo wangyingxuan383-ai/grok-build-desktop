@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isReadOnlyCommand, isWithinWorkspace, shouldBlockCommand, shouldBlockWrite } from "./plan-gate";
+import { isPlanSafeToolCall, isReadOnlyCommand, isWithinWorkspace, shouldBlockCommand, shouldBlockWrite } from "./plan-gate";
 
 describe("Plan Gate", () => {
   const root = "C:\\work\\project";
@@ -68,5 +68,15 @@ describe("Plan Gate", () => {
     "grok models",
   ])("allows a single bounded read-only command: %s", (command) => {
     expect(isReadOnlyCommand(command)).toBe(true);
+  });
+
+  it("auto-approves only read-only ACP tool calls in Plan mode", () => {
+    expect(isPlanSafeToolCall({ kind: "read", title: "Read package.json" })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "search", title: "Search source" })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "execute", rawInput: { command: "git status --short" } })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "execute", content: [{ type: "content", content: { type: "text", text: "Get-Content README.md" } }] })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "execute", rawInput: { command: "npm install" } })).toBe(false);
+    expect(isPlanSafeToolCall({ kind: "edit", title: "Edit README" })).toBe(false);
+    expect(isPlanSafeToolCall({ kind: "other", title: "Unknown integration" })).toBe(false);
   });
 });

@@ -126,6 +126,37 @@ describe("configured session restoration", () => {
       expect(adapter.start).toHaveBeenCalledWith("task-session");
     } finally { await manager.dispose(); }
   });
+
+  it("keeps multiple live adapters resident so separate conversations can run concurrently", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapters = ["session-a", "session-b"].map((sessionId, index) => ({
+      sessionId,
+      cwd: `C:\\workspace-${index}`,
+      effort: "high",
+      mode: "agent",
+      currentModelId: "grok-test",
+      processOptions: undefined,
+      working: true,
+      needsUser: false,
+      extensionLeaseId: undefined,
+      start: vi.fn().mockResolvedValue({ sessionId }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    }));
+    vi.spyOn(manager as any, "spawn").mockResolvedValueOnce(adapters[0]).mockResolvedValueOnce(adapters[1]);
+    try {
+      await Promise.all([
+        manager.createConfigured(adapters[0]!.cwd, "high", "agent", "grok-test"),
+        manager.createConfigured(adapters[1]!.cwd, "high", "agent", "grok-test"),
+      ]);
+      expect(manager.snapshots().map((value) => value.sessionId).sort()).toEqual(["session-a", "session-b"]);
+      expect(manager.liveStatuses()).toEqual(new Map([["session-a", "working"], ["session-b", "working"]]));
+      expect(manager.get("session-a")).toBe(adapters[0]);
+      expect(manager.get("session-b")).toBe(adapters[1]);
+    } finally {
+      await manager.dispose();
+    }
+  });
 });
 
 describe("workspace process environment", () => {

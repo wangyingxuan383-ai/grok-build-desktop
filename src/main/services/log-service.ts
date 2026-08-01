@@ -73,6 +73,11 @@ export class LogService {
     return value;
   }
 
+  /** Waits for already-enqueued writes; used before temporary fixtures or the app dispose their storage. */
+  async flush(): Promise<void> {
+    await this.queue;
+  }
+
   private async prepare(): Promise<void> {
     if (this.prepared) return;
     await mkdir(dirname(this.filePath), { recursive: true });

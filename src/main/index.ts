@@ -16,7 +16,10 @@ let computerOverlay: ComputerUseOverlay | undefined;
 let quitting = false;
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
-protocol.registerSchemesAsPrivileged([{ scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+protocol.registerSchemesAsPrivileged([
+  { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
 
 app.setName("Grok Build Desktop");
 
@@ -83,6 +86,15 @@ else {
       const { readFile } = await import("node:fs/promises");
       return new Response(await readFile(background.path), { headers: { "Content-Type": background.mimeType, "Cache-Control": "no-store" } });
     });
+    protocol.handle("grok-media", async (request) => {
+      try {
+        const media = await controller?.readTrustedMedia(request.url);
+        if (!media) return new Response("Not found", { status: 404 });
+        return new Response(media.body, { headers: { "Content-Type": media.mimeType, "Cache-Control": "no-store" } });
+      } catch {
+        return new Response("Not found", { status: 404 });
+      }
+    });
     // Another application can already own this combination, and an overlay that
     // advertises a kill switch the OS refused is worse than one that admits it.
     const emergencyShortcutRegistered = globalShortcut.register("CommandOrControl+Alt+Esc", () => controller?.emergencyStopComputer("Ctrl+Alt+Esc"));
@@ -108,6 +120,7 @@ else {
       },
     });
     controller.setWindow(mainWindow);
+    mainWindow.webContents.on("context-menu", (_event, params) => controller?.showContextMenu(params));
     registerIpc(controller, mainWindow, rendererTrust);
     installApplicationMenu(mainWindow, !app.isPackaged);
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
