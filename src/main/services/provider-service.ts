@@ -1304,12 +1304,42 @@ function stripLegacyManagedModelTables(value: string, managedIds: ReadonlySet<st
   return kept.join("\n");
 }
 function modelTableId(path: string): string | undefined {
-  const match = /^model\.(?:"((?:\\.|[^"])*)"|'([^']*)'|([A-Za-z0-9_-]+))(?:\.|$)/.exec(path.trim());
-  if (!match) return undefined;
-  if (match[1] !== undefined) {
-    try { return JSON.parse(`"${match[1]}"`) as string; } catch { return undefined; }
+  const trimmed = path.trim();
+  if (!trimmed.startsWith("model.")) return undefined;
+  const value = trimmed.slice("model.".length);
+  if (!value) return undefined;
+
+  if (value[0] === '"') {
+    let escaped = false;
+    for (let index = 1; index < value.length; index += 1) {
+      const character = value[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (character !== '"') continue;
+      const remainder = value.slice(index + 1);
+      if (remainder !== "" && !remainder.startsWith(".")) return undefined;
+      try { return JSON.parse(value.slice(0, index + 1)) as string; } catch { return undefined; }
+    }
+    return undefined;
   }
-  return match[2] ?? match[3];
+
+  if (value[0] === "'") {
+    const end = value.indexOf("'", 1);
+    if (end < 0) return undefined;
+    const remainder = value.slice(end + 1);
+    if (remainder !== "" && !remainder.startsWith(".")) return undefined;
+    return value.slice(1, end);
+  }
+
+  const end = value.indexOf(".");
+  const bare = end < 0 ? value : value.slice(0, end);
+  return /^[A-Za-z0-9_-]+$/.test(bare) ? bare : undefined;
 }
 function escapeRegex(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function asRecord(value: unknown): Record<string, any> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {}; }

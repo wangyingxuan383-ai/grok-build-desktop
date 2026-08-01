@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -56,7 +56,7 @@ describe("sweepSessionMediaCache", () => {
     await writeFile(accepted, "accepted");
     await writeFile(rejected, "rejected");
 
-    expect(await resolveTrustedMediaArtifactSource(accepted, [transient])).toBe(accepted);
+    expect(await resolveTrustedMediaArtifactSource(accepted, [transient])).toBe(await realpath(accepted));
     expect(await resolveTrustedMediaArtifactSource(rejected, [transient])).toBeUndefined();
   });
 });
