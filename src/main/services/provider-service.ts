@@ -87,7 +87,7 @@ export class ProviderService {
     this.store = new JsonStore(join(userDataPath, "providers.json"), { providers: [] });
     this.capabilityStore = new JsonStore(join(userDataPath, "provider-capabilities.json"), { snapshots: [] });
     this.fetcher = options.fetcher ?? fetch;
-    this.environment = options.environment ?? new WindowsUserEnvironment();
+    this.environment = options.environment ?? new DesktopUserEnvironment();
     this.gateway = new ProviderGatewayService({
       providers: async () => (await this.store.get()).providers,
       environment: async (name) => this.environment.readFresh ? this.environment.readFresh(name) : this.environment.read(name),
@@ -1109,7 +1109,8 @@ export class ProviderService {
   }
 }
 
-export class WindowsUserEnvironment implements ProviderEnvironment {
+/** Prefer this name in new code. Alias kept for existing tests/imports. */
+export class DesktopUserEnvironment implements ProviderEnvironment {
   async read(name: string): Promise<string | undefined> {
     const inherited = process.env[name];
     if (inherited !== undefined) return inherited;
@@ -1139,6 +1140,7 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
     return undefined;
   }
   async write(name: string, value: string | undefined): Promise<void> {
+    // Non-Windows: process-scoped for now. Cross-restart persistence is tracked in docs/MACOS_PORT.md.
     if (process.platform !== "win32") { if (value === undefined) delete process.env[name]; else process.env[name] = value; return; }
     const script = "$payload=[Console]::In.ReadToEnd()|ConvertFrom-Json;[Environment]::SetEnvironmentVariable($payload.name,$payload.value,[EnvironmentVariableTarget]::User);$sig='[DllImport(\"user32.dll\",SetLastError=true,CharSet=CharSet.Auto)]public static extern IntPtr SendMessageTimeout(IntPtr hWnd,uint Msg,UIntPtr wParam,string lParam,uint flags,uint timeout,out UIntPtr result);';$t=Add-Type -MemberDefinition $sig -Name NativeMethods -Namespace GrokDesktop -PassThru;$r=[UIntPtr]::Zero;[void]$t::SendMessageTimeout([IntPtr]0xffff,0x1A,[UIntPtr]::Zero,'Environment',2,5000,[ref]$r)";
     await new Promise<void>((resolve, reject) => {
@@ -1150,6 +1152,9 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
     if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
 }
+
+/** @deprecated Use DesktopUserEnvironment */
+export class WindowsUserEnvironment extends DesktopUserEnvironment {}
 
 export async function validateGrokConfig(cliPath: string, cwd = process.cwd()): Promise<void> {
   await exec(cliPath, ["inspect", "--json"], cwd);

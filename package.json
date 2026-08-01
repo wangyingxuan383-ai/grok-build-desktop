@@ -2,31 +2,33 @@
   "name": "grok-build-desktop",
   "version": "0.6.22",
   "private": true,
-  "description": "Windows desktop GUI for the local Grok Build CLI",
+  "description": "Desktop GUI for the local Grok Build CLI (Windows official target; macOS community port)",
   "main": "out/main/index.js",
   "author": "Grok Build Desktop contributors",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "npm run build:resources && npm run build && electron .",
-    "dev:local": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:APP_BUILD_PROFILE='local'; npm run dev\"",
+    "dev:local": "APP_BUILD_PROFILE=local npm run dev",
     "build": "npm run build:main && npm run build:preload && npm run build:renderer",
     "build:main": "vite build --config vite.main.config.ts",
     "build:preload": "vite build --config vite.preload.config.ts",
     "build:renderer": "vite build --config vite.renderer.config.ts",
     "build:computer-host": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-computer-host.ps1 -SelfTest",
-    "build:resources": "npm run build:computer-host && node scripts/generate-resource-manifest.mjs",
+    "build:resources": "node scripts/build-resources.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:computer-acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-computer-flows.ps1",
     "test:ui-acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-v030-ui.ps1",
     "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-win.ps1",
+    "package:mac": "npm run build:resources && npm run build && electron-builder --mac --dir",
+    "package:mac:dmg": "npm run build:resources && npm run build && electron-builder --mac dmg zip",
     "package:dir": "npm run check:public && npm run build:resources && npm run build && electron-builder --win --dir --x64",
     "release:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-release-assets.ps1",
     "licenses": "license-checker-rseidelsohn --production --json --out release/THIRD_PARTY_LICENSES.json",
-    "check:public": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-public-safety.ps1",
-    "verify": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1",
+    "check:public": "node scripts/check-public-safety.mjs",
+    "verify": "npm run typecheck && npm run test && npm run build:resources && npm run build",
     "verify:live": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-live.ps1"
   },
   "dependencies": {
@@ -109,6 +111,29 @@
       "signExecutable": false,
       "verifyUpdateCodeSignature": false
     },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Grok-Build-Desktop-${version}-${arch}.${ext}",
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
     "forceCodeSigning": false,
     "electronLanguages": [
       "zh-CN"
@@ -150,8 +175,8 @@
     ]
   },
   "engines": {
-    "node": ">=24 <25",
-    "npm": "11.6.2"
+    "node": ">=22 <25",
+    "npm": ">=10"
   },
   "packageManager": "npm@11.6.2"
 }

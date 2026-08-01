@@ -48,5 +48,7 @@ export function verifyResourceManifest(resourcesRoot: string, required: boolean)
 
 function safeMessage(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);
-  return value.replace(/[A-Za-z]:\\Users\\[^\\\s]+/gi, "%USERPROFILE%");
+  return value
+    .replace(/[A-Za-z]:\\Users\\[^\\\s]+/gi, "%USERPROFILE%")
+    .replace(/\/Users\/[^/\s]+/g, "$HOME");
 }

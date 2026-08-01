@@ -306,9 +306,9 @@ export class AutomationService {
 }
 
 export class SafeStorageCipher implements AutomationCipher {
-  encrypt(value: string): string { if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows DPAPI 当前不可用"); return safeStorage.encryptString(value).toString("base64"); }
+  encrypt(value: string): string { if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据加密当前不可用"); return safeStorage.encryptString(value).toString("base64"); }
   decrypt(value: string): string {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows DPAPI 当前不可用");
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据解密当前不可用");
     try { return safeStorage.decryptString(Buffer.from(value, "base64")); }
     catch { throw new Error("任务指令解密失败，请编辑任务并重新输入任务指令后保存"); }
   }

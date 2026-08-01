@@ -142,12 +142,12 @@ export class AccountVault {
   }
 
   private encrypt(payload: VaultPayload): string {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 凭据加密当前不可用");
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据加密当前不可用（需要 OS 密钥存储）");
     return safeStorage.encryptString(JSON.stringify(payload)).toString("base64");
   }
 
   private decrypt(value: string): VaultPayload {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 凭据解密当前不可用");
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("系统凭据解密当前不可用（需要 OS 密钥存储）");
     return JSON.parse(safeStorage.decryptString(Buffer.from(value, "base64"))) as VaultPayload;
   }
 }
