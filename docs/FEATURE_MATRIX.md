@@ -1,5 +1,37 @@
 # Feature Matrix
 
+## v0.6.25 local Plan permission and terminal-recovery hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Plan command gate | Focused verified | Script blocks, subexpressions, static-call syntax, redirection, expansion and mutating pipeline stages are rejected before any read-only allowlist decision. |
+| Plan tool gate | Focused verified | Auto-approval uses explicit normalized ACP kinds or a parsed bounded command; display titles and tool names cannot turn an unknown/mutating request into a read operation. |
+| Plan filesystem gate | Focused verified | Only the exact persisted session `plan.md` can be written while Plan is active. Other workspace/external paths and an existing symlink target are denied in the main process. |
+| Permission cancellation | Contract verified | A denied request without a CLI-provided reject option receives ACP `outcome=cancelled` and clears the waiting interaction rather than returning a JSON-RPC error. |
+| Queued terminal settlement | Contract verified | A Desktop-owned queued prompt is tied to its prompt ID, so `turn_completed` clears it even if the CLI omits the Prompt response. |
+| Stop feedback | Packaged/source verified | Renderer awaits the existing bounded cancel/recovery path and exposes success or failure beside the Composer. Real stuck-CLI timing remains user acceptance. |
+| Delivery | Installed locally for acceptance | 82 offline files/488 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 303-file scans, native host, Fuses, packaged/Portable UI, scheduler, installed main/About/diagnostics, File/Product and shortcuts pass. No GitHub push or Release. |
+
+## v0.6.24 local Plan wire/state and queue-ownership hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Plan decision wire | Official-source + contract verified | Desktop maps implement/continue/abandon to the current successful `approved`/`cancelled`/`abandoned` ext-method results. Feedback is emitted only on `cancelled`; duplicate decisions remain idempotent. |
+| Plan mode authority | Contract + live handshake verified | Replayed mode updates are authoritative, failed `session/set_mode` cannot produce a false UI mode, and direct/queued Prompts pin `_meta.mode`. Installed CLI 0.2.117 accepted a real `session/set_mode=plan`. |
+| Plan permissions | Real isolated turn verified | One real read-only Plan turn produced no Renderer permission event and no workspace mutation. Read-only selection and mutation/unknown rejection still retain the independent fs/terminal main-process gates. |
+| Direct-vs-queued lifecycle | Regression + real turn verified | Server-generated internal queue IDs from ordinary Prompts are hidden from Desktop queue ownership and cannot start a phantom second turn. The reproduced live turn ends with no active turn and `working=false`. |
+| Workspace picker focus | Packaged UI verified | The close callback is stable across Sidebar rerenders, preserving the original workspace-button return-focus target. The packaged workspace-picker focus/Escape probe passes. |
+| Delivery | Installed locally for acceptance | 82 offline files/483 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 303-file public scans, Fuses, packaged/Portable UI, scheduler, File/Product, shortcuts and installed main/About/diagnostics pass. The real isolated Plan turn also ends idle without a permission card or write. Existing long-conversation Plan/Stop behavior remains user acceptance; no GitHub push or Release. |
+
+## v0.6.23 local Plan terminal-state and Stop hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Terminal turn settlement | Focused verified | A turn-scoped `_x.ai/session/update.turn_completed` settles a missing `session/prompt` response, clears `working` and cannot settle a later queued/interjected turn. |
+| Stop recovery | Unit/source verified | ACP cancel remains first choice; an unacknowledged cancel replaces only the affected session adapter after eight seconds and reloads its persisted conversation. |
+| Plan permissions | Unit/source verified | Plan shows no permission surface: recognized read-only tools/queries are selected, mutation/unknown tools are rejected, and main-process fs/terminal gates remain enforced. |
+| Delivery | Installed locally for acceptance | 5 focused files/80 tests and the final 81 offline files/478 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resources, public scans, Fuses, packaged/Portable UI, Task Scheduler, File/Product, shortcuts and installed main/About/diagnostics pass. Real “continue planning”, Stop and Plan read-only behavior remain user acceptance; no paid request, GitHub push or Release. |
+
 ## Post-v0.6.22 unlimited interactive-turn hotfix
 
 | Area | Status | Evidence / boundary |

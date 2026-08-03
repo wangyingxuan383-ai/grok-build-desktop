@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AppSettings, ClaudeSessionSummary, CodexSessionSummary, SessionOriginKind, SessionSummary, WorkspaceSummary } from "../../../shared/types";
 import { groupSessionsByOrigin, sessionSourceLabel } from "../session-groups";
 import { useAppStore } from "../store";
@@ -48,6 +48,7 @@ export function Sidebar(props: {
   onPanel(panel: SidebarPanel): void;
 }): React.JSX.Element {
   const [showRecent, setShowRecent] = useState(false);
+  const closeWorkspaceMenu = useCallback(() => setShowRecent(false), []);
   const [projectToolsOpen, setProjectToolsOpen] = useState(() => props.settings?.projectToolsOpen ?? false);
   const [openSessionMenu, setOpenSessionMenu] = useState("");
   useEffect(() => {
@@ -84,7 +85,7 @@ export function Sidebar(props: {
     <button className="new-task-button" disabled={props.busy} onClick={props.onNew}><UiIcon name="plus"/><span>新建任务</span></button>
     <div className="sidebar-context"><button className="workspace-button" onClick={() => setShowRecent(!showRecent)}><UiIcon name="folder"/><span className="workspace-name">{shortPath(props.settings?.activeWorkspace || "选择工作区")}</span><UiIcon name="chevron-down" size={13}/></button></div>
     <section className="project-tools"><button className="project-tools-heading" onClick={() => setProjectToolsOpen((value) => { const next = !value; void window.grokDesktop.updateSettings({ projectToolsOpen: next }).catch(() => undefined); return next; })} aria-expanded={projectToolsOpen}><span><UiIcon name={projectToolsOpen ? "chevron-down" : "chevron-right"} size={13}/>开发工具</span></button>{projectToolsOpen && <nav>{projectTools.map((item) => <button key={item.view} className={item.view === props.activeView ? "active" : ""} onClick={() => props.onView(item.view)}><UiIcon name={item.icon}/><span>{item.label}</span></button>)}<button onClick={() => props.onPanel("tasks")}><UiIcon name="tasks"/><span>任务</span></button><button onClick={() => props.onPanel("extensions")}><UiIcon name="extensions"/><span>扩展</span></button></nav>}</section>
-    {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onClose={() => setShowRecent(false)} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onClear={props.onClear} />}
+    {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onClose={closeWorkspaceMenu} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onClear={props.onClear} />}
     {props.activeView === "files" ? <FileExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "source-control" ? <GitExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "worktrees" ? <WorktreeExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : <>
     <div className="search"><UiIcon name="search" size={14}/><input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="搜索任务" /></div>
     <div className="session-list">

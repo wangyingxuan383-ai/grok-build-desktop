@@ -1,4 +1,28 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-01，0.6.22 已正式发布）
+# Grok Build Desktop 下一会话完整交接（2026-08-03，0.6.25 本地候选）
+
+> **0.6.25 当前工作状态：** 用户复验 0.6.24 后仍遇到 Plan 长回合持续 Stop、停止无反馈及 Plan 权限问题，并要求排查同类缺口。补充只读审计确认旧门禁仍有四类结构性漏洞：PowerShell 脚本块可藏在看似只读的管道里；工具显示标题可把未知工具伪装成读取；Plan 文件门只拦工作区写入而放过任意外部路径；没有拒绝选项时 Desktop 返回 JSON-RPC error，可能让 CLI 重试或保持等待。源码现改为拒绝优先的命令解析、显式 ACP kind、仅当前会话精确 `plan.md` 可写及标准 `cancelled` 回执。
+
+> **终态/停止修复：** Desktop 排队 Prompt 现在把 client prompt ID 绑定到待决 RPC；即使 CLI 只发 `turn_completed` 而不返回 Prompt response，也能准确清空对应回合。Renderer 的 Stop 改为等待主进程既有的八秒单会话恢复路径，并在 Composer 显示停止中、已停止/已恢复或失败，不再静默 fire-and-forget。
+
+> **0.6.25 交付验证：** 聚焦 4 文件/85 项通过；最终候选 82 文件/488 项离线测试通过，6 个 live 文件/9 项按设计跳过。TypeScript、生产/资源构建、303 文件公开扫描、Computer Host 自检、Fuses、打包版/Portable UI、Task Scheduler、per-user 安装、冷启动、File/Product、主进程/About/诊断、支持包排除和桌面/开始菜单快捷方式均通过。源码/lockfile 与安装版均为 **0.6.25**，应用已打开交给用户复验；公开 Latest 仍是 **v0.6.22**，验收前不推送、不创建 GitHub Release。
+
+> **0.6.25 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.25-x64.exe` SHA-256 `4026ce1d961a0ca7f8c66d0fca0cf48a2c5ce1ecac60174d20d838ddcdce1908`；`release/Grok-Build-Desktop-Portable-v0.6.25-x64.zip` SHA-256 `6041acb6c378cd75d1e7247b1198e45b1803a4f01c448b8deaa9f1a51d3c3477`；SBOM SHA-256 `c325145cae452395436502420ad236b02f3530875f5d1695878bd4f8d75ccd8e`；许可证报告 SHA-256 `38c0f836e6d6f7db676836cf42c2c2baf71f0411bb297718b4d48748ac453a23`。四项与 `release/SHA256SUMS.txt` 一致，旧资产保留。
+
+> **0.6.24 当前工作状态：** 用户指出 0.6.23 仍复现“继续规划后 Stop 永久存在”和 Plan 权限问题，证明此前只靠模拟分类测试的结论不足。对照当前官方 Grok Build 源码后发现三项真实根因：Desktop 把“继续规划/取消”错误地作为 JSON-RPC error 回给 `x.ai/exit_plan_mode`，恢复会话的 `current_mode_update=plan` 只改布尔值且随后可能被全局 Agent 模式覆盖，CLI 为普通 Prompt 发布的内部 `runningPromptId` 又被误当作 Desktop 排队消息，真实回合完成后创建幽灵第二回合。源码现按 `approved/cancelled/abandoned` 成功结果响应，逐 Prompt 固定 `_meta.mode`，模式设置失败不再静默成功，并只允许 Desktop 自有 queue/interject ID 启动后续回合。
+
+> **真实验证：** 本机 CLI `0.2.117 (f1c0609308)` 的 `session/set_mode=plan` 握手通过；隔离空目录的真实只读 Plan 回合在修复前复现“已有完成事件但新 activeTurn/working=true”，加入队列所有权后再次运行通过：无 Renderer 权限事件、目录零写入、计划安全退出、最终无 active turn 且 `working=false`。这是已执行的真实小模型回合，不再只是分类函数测试。
+
+> **0.6.24 交付验证：** 最终候选通过 82 文件/483 项离线测试，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、303 文件公开扫描、Fuses、打包版/Portable UI、Task Scheduler、per-user 安装、File/Product、主进程/About/诊断和桌面/开始菜单快捷方式通过。首次正式打包探针暴露工作区选择器返回焦点竞态，修复后候选完整通过。
+
+> 当前工作分支为 `main`，源码/lockfile 与 per-user 安装版均为 **0.6.24**，公开 Latest 仍是 **v0.6.22**。应用已打开交给用户复验现有长会话的“继续规划”、Stop 恢复及 Plan 无权限弹层；验收前不推送、不创建 GitHub Release。
+
+> **0.6.24 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.24-x64.exe` SHA-256 `4f2d37bb24822ef0fd83e966205041c00638fed22df5b19126eb45847e4abf92`；`release/Grok-Build-Desktop-Portable-v0.6.24-x64.zip` SHA-256 `afe51b3acbcc5510998b4c869cda1d10f39a9705f88d025952103dda180de6a8`；SBOM SHA-256 `2560a0057063baebc8e08b6a2659483ab35c40434da2567577b9dbebe8a6c2c7`；许可证报告 SHA-256 `cd012783338307b57dbd5186b079252d12494424c286e52fc7b70e5ea48dacb6`。四项与 `release/SHA256SUMS.txt` 一致，旧资产保留。
+
+> **0.6.23 当前工作状态：** 用户在 0.6.22 实机复现“继续规划”后已经出现最终回答，但 Composer 永久保留停止按钮、停止无效且退出被判定仍有任务；同时 Plan 仍弹权限卡。根因是适配器只在队列分支响应 `_x.ai/session/update.turn_completed` 清理 `working`，普通 Prompt 又可能永远收不到原始 RPC response。源码现以 turn ID 用权威终态结算对应 Prompt；Stop 八秒不确认时仅重建该会话 Adapter；Plan 只读自动允许、修改/未知自动拒绝且不再弹权限卡，并识别 underscore ACP kind 与安全 PowerShell 只读管道。聚焦 5 文件/80 项及最终 81 文件/478 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、公开扫描、Fuses、打包版/Portable UI、Task Scheduler、File/Product、快捷方式和安装版主进程/About/诊断均通过。真实“继续规划”、Stop 和 Plan 只读回合仍由用户验收。
+
+> 当前工作分支为 `main`，源码/lockfile 与 per-user 安装版均为 **0.6.23**；公开 Latest 仍为 **v0.6.22**。本地验收完成前不要推送或创建 GitHub Release。
+
+> **0.6.23 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.23-x64.exe` SHA-256 `345753b1d2ab4ade56dff41853ce8cab6c077282929debb42b99f08f73da76c4`；`release/Grok-Build-Desktop-Portable-v0.6.23-x64.zip` SHA-256 `2c5b7d388b67dc45e3622c69965fef0d24eb3b4fd9b1874ef91212f3bccbcc02`；SBOM SHA-256 `38a36fcb19cdb6a5444a23c3777538160d4055fa5c904076b2e24c6751362939`；许可证报告 SHA-256 `cac5f92371edba36011a559dd1e2424e7a0ebe7f55276b6430d7c72227f6a997`。四项与 `release/SHA256SUMS.txt` 一致，旧资产保留。
 
 > **发布后交互超时热修：** 普通 Prompt 与排队后续 Prompt 原先都由 Desktop 在 1800 秒后强制 `cancel`。该总时长上限已移除；长回合现在只会因 CLI 正常完成、用户主动停止、进程退出或真实传输/Provider 失败而结束。Provider 的 `inference_idle_timeout_secs` 仍是独立的无数据超时，不是总回合上限。此项仅作为发布后源码小改动提交 GitHub，不移动 `v0.6.22` 标签，不创建新 Release。
 
@@ -6,7 +30,7 @@
 
 > **0.6.22 当前工作状态：** 用户在 0.6.21 验收中再次看到“图片文件不可用”、媒体任务误报工作区外、ZDR 视频错误和插话状态紊乱。只读核验确认生成图片文件仍存在，破图来自 sandboxed Renderer 被 Chromium 拒绝加载 `file://`；无头媒体的实际相对产物属于显式 `--session-id` 的临时 Grok 会话，旧缓存边界只信任 cwd；视频失败是团队启用 Zero Data Retention 后 API 强制要求 `output.upload_url`，当前 CLI 工具没有该参数；插话不是独立 Agent，而是同一 ACP 会话的已提交高优先级后续回合，旧适配器没有给它建立本地队列/turn 边界，叉号只删除了错误的本地表现，不能撤回已接受请求。源码已增加受限 `grok-media:` 协议、精确临时会话信任根、首次媒体失败即停止和 ZDR 分类；插话提交后标为不可撤回，在上一回合收束后建立独立 turn/user-message/status，迟到的上一回合 Promise 不会结算新回合。最终 80 文件/465 项离线测试通过，5 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、Computer Host 自检、公开源码/资产扫描、diff check、Fuses、打包版/Portable UI、任务调度、安装版主进程/About/诊断/File/Product/快捷方式均通过。现有历史图在安装版 `grok-media:` 中实际解码为 1024x1024。0.6.22 已 per-user 安装并正式发布；没有发送新的图片/视频或付费模型请求，真实新媒体和插话顺序仍是用户验收边界。
 
-> 当前正式分支为 `main`，源码/lockfile 与 per-user 安装版均为 **0.6.22**。公开 Latest 是 **v0.6.22**，旧本地和公开资产全部保留。
+> **0.6.22 发布时状态：** 正式分支为 `main`，源码/lockfile 与 per-user 安装版当时均为 **0.6.22**。公开 Latest 是 **v0.6.22**，旧本地和公开资产全部保留。
 
 > **0.6.22 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.22-x64.exe` SHA-256 `509899d6f9836e1a5f33966a2736442b0b796d9cdc3b624decfaddca17b32da0`；`release/Grok-Build-Desktop-Portable-v0.6.22-x64.zip` SHA-256 `f764ee0fb49f37f1c8fc97671d3c72e7b918ffcdf581be6920036d564f2f590b`；SBOM SHA-256 `68c2d0b4904492070f20e108605484bda923603c8a3fb0488c81f713296bb130`；许可证报告 SHA-256 `bb132d306dfff20fb1274bf7b1b13d41e1556e04cf5f89f9e00f81b044266a9f`。四项与 `release/SHA256SUMS.txt` 一致；旧资产保留。
 
@@ -24,7 +48,7 @@
 
 > **重要纠正：** 0.6.16 所称“UI 重构”主要完成了组件/样式分层和可靠性基础，视觉变化不足，用户的批评成立。0.6.17 只完成本次已复现的可见热修，不将其夸大为整体 Codex 视觉重做。用户验收前仍不推送、不创建 GitHub Release，并保留 0.6.15/0.6.16 资产。
 
-> 当前工作分支为 `codex/v0.6.14-audit-fixes`，源码/lockfile 与 per-user 安装版均为 **0.6.22**。公开 Latest 仍是 **0.6.6**，0.6.15–0.6.21 本地资产已保留。用户验收前不推送、不创建正式 Release、不覆盖旧资产。
+> **0.6.21 合并前历史状态：** 工作分支为 `codex/v0.6.14-audit-fixes`，源码/lockfile 与 per-user 安装版当时均为 **0.6.22**，公开 Latest 当时仍为 **0.6.6**；0.6.15–0.6.21 本地资产已保留。
 
 > **0.6.21 本地产物：** `release/Grok-Build-Desktop-Setup-v0.6.21-x64.exe` SHA-256 `1cbcab6028a1f80da889c0ade45afe4e2be31aa4a24756091abaf35a1cf9d566`；`release/Grok-Build-Desktop-Portable-v0.6.21-x64.zip` SHA-256 `705804618834e8a9d223e047c49983a5423e1e94d8719697c16d988cbe0ff6e2`；SBOM SHA-256 `e6da6af4ab4e619cf9c593f38c1c5849e8d50bb732bb89908af1efe084c99f95`；许可证报告 SHA-256 `a069226c1c5fb645aa3ac4a34c445bacb70d7eb41704cfbe7006894fabd6a4e6`。四项与 `release/SHA256SUMS.txt` 一致；旧版本资产保留。
 
@@ -102,12 +126,12 @@ sandbox: true
 ## 2. 仓库与版本状态
 
 - 仓库：当前 `<repository-root>`（本机绝对路径不写入公开文档）
-- 正式分支：`main`；发布后证据记录使用独立短分支合并，不移动 `v0.6.22` 标签。
+- 正式分支：`main`；公开 Latest/标签仍为 `v0.6.22`，本地 0.6.23 验收前不移动标签。
 - 分支创建前 HEAD / `origin/main`：`05734cf4bdfef51988197b46d7249fed568696da`
 - 分支创建前已有 0.6.7–0.6.13 本地候选的未提交实现；不得丢弃或从公开 0.6.6 重新制作。
-- `package.json` / lockfile 已提升为 `0.6.22`。
+- `package.json` / lockfile 已提升为 `0.6.23`。
 - 本机 CLI 兼容基准：`0.2.117 (f1c0609308)`。
-- 本机 per-user 安装版已覆盖为 0.6.22；File/Product/ASAR、Fuses、桌面/开始菜单快捷方式以及主进程/About/诊断探针通过。
+- 本机 per-user 安装版已覆盖为 0.6.23；File/Product、Fuses、桌面/开始菜单快捷方式以及主进程/About/诊断探针通过。
 - GitHub `v0.6.22` 已是正式 Latest；Release workflow `30693283048` 与远端 SHA-256/attestation 校验通过。
 
 ## 3. 0.6.5/0.6.6 已实现范围

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### 0.6.25 Plan permission hardening and terminal recovery
+
+- Closed the remaining Plan-mode approval bypasses. PowerShell script blocks, subexpressions and static-call syntax are rejected before pipeline classification; read-only auto-approval is based on explicit ACP kinds and parsed commands rather than user-visible titles or tool names.
+- Plan filesystem access now allows only the current persisted session's exact `plan.md`. Other workspace paths, arbitrary external paths and an existing symbolic-link plan target are rejected in the main process.
+- A rejected permission request that offers no explicit reject option now receives the standard ACP `cancelled` outcome instead of a JSON-RPC error, preventing the CLI from retrying or leaving the session waiting.
+- Terminal-only completion can now settle both direct and Desktop-owned queued prompts by their stable prompt ID, so a missing JSON-RPC response cannot leave a queued Plan follow-up permanently working.
+- Stop is no longer fire-and-forget in the Renderer. The Composer displays the stop attempt and its success/recovery result, while failures remain visible and copyable instead of silently preserving the Stop state.
+- Focused verification passes 4 files / 85 tests. The final candidate passes 82 offline files / 488 tests with 6 live files / 9 tests skipped by design, plus TypeScript, production/resources, 303-file public scans, native-host self-test, Fuses, packaged/Portable UI, Task Scheduler and installed main/About/diagnostics checks. One 0.6.25 Setup/Portable/SBOM/license set is installed per-user; Setup SHA-256 is `4026ce1d961a0ca7f8c66d0fca0cf48a2c5ce1ecac60174d20d838ddcdce1908` and Portable is `6041acb6c378cd75d1e7247b1198e45b1803a4f01c448b8deaa9f1a51d3c3477`. Real long-conversation Plan/Stop behavior remains user acceptance; no GitHub push or Release is performed before that acceptance.
+
+### 0.6.24 Plan wire/state and phantom-queue hotfix
+
+- Corrected the current open-source Grok Build `x.ai/exit_plan_mode` response contract. “批准并执行” returns `outcome=approved`, “继续规划” returns the successful `outcome=cancelled` result with optional `feedback`, and “取消” returns `outcome=abandoned`; legitimate choices are no longer mis-sent as JSON-RPC errors.
+- Plan state now remains session-scoped across reload. Replayed `current_mode_update` changes the adapter's authoritative mode, `session/set_mode` failures are surfaced instead of silently claiming success, and every direct or explicitly queued Prompt pins its `mode` snapshot in `_meta`.
+- Fixed the persistent Stop button after an otherwise completed turn. Grok Build's server-generated internal queue entry for an ordinary direct Prompt is no longer treated as a Desktop-owned follow-up turn; only IDs submitted by Desktop queue/interject actions can start a queued presentation turn.
+- Stabilized workspace-picker focus restoration. Its close callback no longer changes identity on unrelated Sidebar renders, so closing the picker consistently returns keyboard focus to the workspace button.
+- Added current-CLI wire contracts plus an opt-in real Plan acceptance. On installed Grok Build `0.2.117`, a real isolated read-only Plan turn completed with no Renderer permission event, no workspace write and `working=false`; this live test also reproduced the phantom second turn before the ownership fix.
+- Final local verification passes 82 offline files / 483 tests; 6 live files / 9 tests skip by design. TypeScript, production/resources, 303-file public scans, Electron Fuses, packaged/Portable UI, Task Scheduler and installed main/About/diagnostics checks pass. The first package attempt correctly exposed and led to the workspace-picker focus fix; the resulting candidate then passed the complete formal gate.
+- One 0.6.24 Setup/Portable/SBOM/license set is installed per-user. File/Product, main/About/diagnostics, Fuses and desktop/start-menu shortcuts report 0.6.24. Setup SHA-256 is `4f2d37bb24822ef0fd83e966205041c00638fed22df5b19126eb45847e4abf92`; Portable is `afe51b3acbcc5510998b4c869cda1d10f39a9705f88d025952103dda180de6a8`. Existing long-conversation Plan/Stop behavior remains user acceptance; no GitHub push or Release is performed before that acceptance.
+
+### 0.6.23 Plan terminal-state and Stop recovery hotfix
+
+- Fixed a normal/Plan turn remaining permanently `working` after Grok CLI had already streamed the final answer and published `_x.ai/session/update.turn_completed` but omitted the original `session/prompt` JSON-RPC response. The terminal event now settles the matching prompt request by turn ID, clears the Composer Stop state and cannot complete a later queued/interjected turn.
+- Stop now has a bounded recovery path. Desktop first sends the standard ACP cancel notification; if that session alone does not acknowledge cancellation within eight seconds, its CLI process is replaced and the persisted conversation is reloaded without interrupting other concurrently running conversations.
+- Plan mode no longer opens approval cards. Read-only tools are selected automatically, while mutating or unknown tools are rejected automatically; filesystem writes and non-read-only terminal commands remain independently blocked in the main process. Current underscore-style ACP kinds such as `read_file`, `list_directory` and `search_files`, plus bounded read-only PowerShell pipelines, are recognized.
+- Focused regression coverage includes terminal-only completion without a prompt response, idempotent Plan decisions, read/mutation permission routing and acknowledged/stuck cancellation recovery. No paid Provider request is part of the automated gate.
+- Final local verification passes 81 offline files / 478 tests; 5 live files / 8 tests skip by design. TypeScript, production/resources, public scans, Electron Fuses, packaged/Portable UI and Task Scheduler probes pass. One 0.6.23 Setup/Portable/SBOM/license set is installed per-user; File/Product, main/About/diagnostics, support-bundle exclusions and both shortcuts report the installed build. Setup SHA-256 is `345753b1d2ab4ade56dff41853ce8cab6c077282929debb42b99f08f73da76c4`; Portable is `2c5b7d388b67dc45e3622c69965fef0d24eb3b4fd9b1874ef91212f3bccbcc02`. Real Plan/Stop behavior remains user acceptance; no GitHub push or Release was performed.
+
 ### Post-0.6.22 unlimited interactive turns
 
 - Removed the Desktop's 30-minute wall-clock ceiling from ordinary prompts and queued follow-up prompts. Long-running interactive turns now continue until the CLI/upstream completes, the user presses Stop, the process exits or a real transport/provider failure occurs.

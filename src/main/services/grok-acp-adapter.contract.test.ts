@@ -196,7 +196,9 @@ rl.on("line", async (line) => {
         expect.objectContaining({ type: "message-chunk", sessionId: "fake-session", text: "hello" }),
         expect.objectContaining({ type: "commands", sessionId: "fake-session", commands: [expect.objectContaining({ name: "imagine" })] }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: join(root, "images", "generated.jpg") }),
-        expect.objectContaining({ type: "meta", sessionId: "fake-session", meta: expect.objectContaining({ totalTokens: 42 }) }),
+        // turn_completed is the authoritative terminal payload. A later/absent
+        // prompt response must not keep the adapter working or replace its usage.
+        expect.objectContaining({ type: "meta", sessionId: "fake-session", meta: expect.objectContaining({ totalTokens: 41 }) }),
         expect.objectContaining({ type: "session-ready", sessionId: "fake-session", effort: "low" }),
         expect.objectContaining({ type: "prompt-queue", sessionId: "fake-session", entries: [expect.objectContaining({ text: "queued text", state: "queued", version: 2 })] }),
       ]));

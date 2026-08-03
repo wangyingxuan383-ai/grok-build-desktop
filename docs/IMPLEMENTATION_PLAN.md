@@ -1,5 +1,39 @@
 # Grok Build Desktop 实施计划
 
+## v0.6.25 Plan 权限硬边界与终态恢复热修
+
+- [x] 将 Plan 只读命令判定改为完整命令拒绝优先；PowerShell 脚本块、子表达式、静态调用及其他可执行语法不得借只读管道首段绕过。
+- [x] 删除对工具标题/名称关键字的信任；只有明确只读 ACP kind 或通过解析的受限只读命令可自动允许，修改性与未知工具自动取消。
+- [x] Plan 文件写入只允许当前持久会话的精确 `plan.md`；工作区其他文件、任意外部路径和既有符号链接目标均由主进程拒绝。
+- [x] 没有显式拒绝选项的权限请求返回标准 ACP `cancelled` 结果，不再使用会诱发重试/悬挂的 JSON-RPC error。
+- [x] 将 Desktop 排队 Prompt ID 绑定到待决请求；只有终态事件而没有 Prompt RPC response 时仍可准确结算并恢复 Composer。
+- [x] Renderer 等待 Stop 结果并显示停止中、已停止/已恢复或失败回执，不再静默 fire-and-forget。
+- [x] 聚焦 4 文件/85 项与 TypeScript 通过。
+- [x] 运行完整离线套件：82 文件/488 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、303 文件公开扫描、Computer Host 自检、Fuses、打包版/Portable UI、Task Scheduler、正式 0.6.25 资产、per-user 安装、冷启动、主进程/About/诊断和快捷方式核验通过。
+- [ ] 用户实机复验长会话“继续规划”、Plan 只读自动允许/修改自动拒绝、Stop 恢复；验收前不推送 GitHub、不创建 Release。
+
+## v0.6.24 Plan 线协议、状态同步与幽灵队列热修
+
+- [x] 对照当前官方 Grok Build 源码确认 `x.ai/exit_plan_mode` 三种成功结果：`approved`、带可选 `feedback` 的 `cancelled`、`abandoned`；删除“继续规划/取消”误发 JSON-RPC error 的旧实现。
+- [x] 会话回放的 `current_mode_update` 同步适配器真实 `mode`；`session/set_mode` 失败不再被吞掉，普通/排队 Prompt 都携带本回合 `_meta.mode` 快照。
+- [x] 识别 Grok CLI 为普通 Prompt 创建的内部队列条目；只有 Desktop 自己提交的 queue/interject ID 才能启动后续展示回合，防止真实终态后出现幽灵第二回合并永久保留 Stop。
+- [x] 修复正式候选 UI 探针发现的工作区选择器焦点竞态：关闭回调保持稳定，Sidebar 无关重渲染不再破坏返回焦点目标。
+- [x] 聚焦 7 文件/85 项、补充 Plan 模式/队列契约和 TypeScript 通过；本机 CLI `0.2.117` 的无推理 `session/set_mode=plan` 握手通过。
+- [x] 运行一次隔离空目录的真实只读 Plan 回合：无 Renderer 权限卡、无工作区写入、收到计划并安全退出、最终 `working=false`；该验收在修复前稳定复现幽灵回合，修复后通过。
+- [x] 完成最终 0.6.24 候选门槛：82 文件/483 项离线测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、303 文件公开扫描、Fuses、打包版/Portable UI、Task Scheduler、per-user 安装、冷启动、主进程/About/诊断和快捷方式核验通过。首次打包探针暴露的工作区选择器焦点竞态已修复，修正后的候选完整通过。
+- [ ] 用户实机复验现有长会话“继续规划”、停止按钮及 Plan 无权限弹层；验收前不推送 GitHub、不创建 Release。
+
+## v0.6.23 Plan 终态与停止恢复热修
+
+- [x] 复现并定位普通/Plan 回合已收到最终回答与 `turn_completed`，但原始 `session/prompt` RPC 未返回时主进程仍永久保持 `working`。
+- [x] 以回合 ID 将权威终态事件绑定到对应 Prompt 请求；终态立即释放 Composer/关闭拦截，不得误结算后续排队或插话回合。
+- [x] Stop 先走标准 ACP cancel；单会话八秒不确认时只重建该 CLI Adapter 并恢复持久会话，不影响其他并行会话。
+- [x] Plan 模式不再弹权限卡：只读操作自动允许，修改性/未知操作自动拒绝；主进程文件写入与命令只读门仍是硬边界。
+- [x] 兼容 `read_file`、`list_directory`、`search_files` 等当前 ACP 标识，并允许由明确只读阶段组成的 PowerShell 管道。
+- [x] 聚焦 5 文件/80 项与最终 81 文件/478 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、公开扫描、Fuses、打包版/Portable UI 和 Task Scheduler 探针通过；不发送付费模型请求。
+- [x] 生成唯一一套 0.6.23 Setup/Portable/SBOM/许可证资产并 per-user 安装；File/Product、主进程/About/诊断、支持包附件排除及桌面/开始菜单快捷方式验收通过。
+- [ ] 用户实机复验“继续规划→最终回答→发送按钮恢复”、Stop 及 Plan 无权限弹层；验收前不创建 GitHub Release。
+
 ## Post-v0.6.22 交互回合取消上限热修
 
 - [x] 移除普通 Prompt 与排队后续 Prompt 的 Desktop 30 分钟总时长上限；持续输出、工具执行和等待用户操作不再因累计时间自动取消。

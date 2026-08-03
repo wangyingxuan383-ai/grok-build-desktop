@@ -66,11 +66,13 @@ rl.on("line", async (line) => {
       expect(duplicate).toMatchObject({ verdict, state: "duplicate" });
       const response = await waitForJson<Record<string, any>>(responseMarker);
       if (verdict === "approved") {
-        expect(response.result).toMatchObject({ outcome: "approved", comment: "fixture note" });
-        expect(response).not.toHaveProperty("error");
+        expect(response.result).toEqual({ outcome: "approved" });
+      } else if (verdict === "rejected") {
+        expect(response.result).toEqual({ outcome: "cancelled", feedback: "fixture note" });
       } else {
-        expect(response.error).toMatchObject({ code: -32000, data: { comment: "fixture note" } });
+        expect(response.result).toEqual({ outcome: "abandoned" });
       }
+      expect(response).not.toHaveProperty("error");
       expect(await readFile(promptMarker, "utf8")).toBe("0");
     } finally {
       await adapter.dispose();

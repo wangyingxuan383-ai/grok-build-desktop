@@ -1258,7 +1258,7 @@ export class AppController {
 
   async cancelSession(sessionId: string): Promise<void> {
     await this.computer.settleSession(sessionId, "stopped", "Grok 回合已停止，Computer Use 已清理");
-    this.processes.get(sessionId).cancel();
+    await this.processes.cancelSession(sessionId);
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
@@ -1711,8 +1711,7 @@ export class AppController {
    */
   emergencyStopComputer(source = "Ctrl+Alt+Esc"): void {
     for (const sessionId of this.computer.emergencyStop(source)) {
-      try { this.processes.get(sessionId).cancel(); }
-      catch (error) { void this.log.log(`紧急停止后取消会话失败：${error instanceof Error ? error.message : String(error)}`); }
+      void this.processes.cancelSession(sessionId).catch((error) => void this.log.log(`紧急停止后取消会话失败：${error instanceof Error ? error.message : String(error)}`));
     }
   }
 

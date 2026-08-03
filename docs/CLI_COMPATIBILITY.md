@@ -1,5 +1,25 @@
 # Grok CLI Compatibility
 
+## 0.2.117 Plan permission cancellation and exact-plan-file note (Desktop 0.6.25)
+
+- No new private ACP method is required. A mutating/unknown `session/request_permission` that has no explicit reject option is answered with the standard successful `{ outcome: { outcome: "cancelled" } }` shape; a JSON-RPC error is reserved for real transport/protocol failures.
+- Plan auto-approval no longer trusts human-readable tool titles. Explicit read/search/list/fetch/think kinds remain eligible, while execute calls must pass Desktop's bounded command parser; script blocks, subexpressions and static-call syntax are denied before pipeline analysis.
+- `fs/write_text_file` in Plan mode is restricted to the exact `plan.md` below the active persisted session directory. This keeps Grok Build's plan artifact available without granting a general workspace or external-path write exception.
+- A queued Desktop Prompt is associated with its client prompt ID, allowing the existing `turn_completed` event to settle it if Grok Build omits the original JSON-RPC response. This is lifecycle recovery, not a new queue protocol.
+
+## 0.2.117 Plan ext-method and internal-queue note (Desktop 0.6.24)
+
+- Current open-source Grok Build defines `x.ai/exit_plan_mode` as a successful ext-method response with `outcome` equal to `approved`, `cancelled` or `abandoned`; optional `feedback` is valid only for `cancelled`. A JSON-RPC error is a transport/tool-loop failure, not the wire representation of “continue planning” or “abandon”.
+- Current `session/prompt` consumes `_meta.mode`. Desktop sends the per-request Plan/Agent snapshot in addition to `session/set_mode`, treats replayed `current_mode_update` as authoritative and surfaces a failed mode change.
+- `_x.ai/queue/changed.runningPromptId` can identify Grok Build's internal execution queue entry for an ordinary direct Prompt. Desktop only creates a follow-up presentation turn when the ID belongs to an explicit Desktop queue/interject operation.
+- Live evidence on installed CLI `0.2.117 (f1c0609308)`: `session/set_mode=plan` succeeded, and one isolated real read-only Plan turn emitted no UI permission request, wrote no workspace file and ended idle. This is a narrow Plan lifecycle acceptance, not a claim that every model/tool combination has been exercised.
+
+## 0.2.117 terminal-event and Plan permission note (Desktop 0.6.23)
+
+- Current CLI may publish `_x.ai/session/update` with `sessionUpdate=turn_completed` after the complete visible answer without resolving the original `session/prompt` JSON-RPC request. Desktop treats that turn-scoped event as authoritative completion and ignores a later duplicate response.
+- `session/cancel` remains a notification rather than an acknowledged request. Desktop waits eight seconds, then replaces only the affected CLI adapter and reloads the persisted session if it is still working.
+- Plan mode uses the existing `session/request_permission` options without a new private method. Read-only calls are selected automatically; mutating/unknown calls are rejected automatically and still face the independent main-process filesystem/terminal gates. Underscore-style kinds and bounded read-only PowerShell pipelines are normalized locally.
+
 ## Unlimited interactive-turn note (post-Desktop 0.6.22)
 
 - Desktop no longer places a 30-minute wall-clock timer around `session/prompt` or queued follow-up Prompt requests. This does not require a new ACP method and does not change the CLI's own completion/cancellation behavior.
