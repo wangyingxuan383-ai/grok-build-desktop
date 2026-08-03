@@ -159,6 +159,65 @@ describe("configured session restoration", () => {
   });
 });
 
+describe("session cancellation recovery", () => {
+  it("replaces only the stuck session when the CLI does not acknowledge cancel", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const onEvent = vi.fn();
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, onEvent);
+    const stuck = {
+      sessionId: "stuck-session",
+      cwd: "C:\\workspace",
+      effort: "high",
+      mode: "plan",
+      currentModelId: "grok-test",
+      processOptions: undefined,
+      working: true,
+      needsUser: false,
+      cancel: vi.fn(),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const replacement = {
+      start: vi.fn().mockResolvedValue({ sessionId: "stuck-session" }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+      extensionLeaseId: undefined,
+      working: false,
+      needsUser: false,
+    };
+    (manager as any).sessions.set("stuck-session", stuck);
+    vi.spyOn(manager as any, "spawn").mockResolvedValue(replacement);
+    try {
+      await manager.cancelSession("stuck-session", 0);
+      expect(stuck.cancel).toHaveBeenCalledTimes(1);
+      expect(stuck.dispose).toHaveBeenCalledWith(2_000);
+      expect(replacement.start).toHaveBeenCalledWith("stuck-session");
+      expect(manager.get("stuck-session")).toBe(replacement);
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "status", status: "idle", text: "已停止并恢复会话" }));
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not restart after an acknowledged cancel", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapter = {
+      working: true,
+      needsUser: false,
+      cancel: vi.fn(function (this: { working: boolean }) { this.working = false; }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    (manager as any).sessions.set("session", adapter);
+    const spawn = vi.spyOn(manager as any, "spawn");
+    try {
+      await manager.cancelSession("session", 100);
+      expect(adapter.cancel).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
 describe("workspace process environment", () => {
   it("injects per-workspace memory by default while preserving explicit execution-profile overrides", () => {
     expect(mergeProcessEnvironment({ PATH: "base", GROK_MEMORY: undefined }, { GROK_MEMORY: "1" }, { MCP_TOKEN: "secret" })).toEqual({ PATH: "base", GROK_MEMORY: "1", MCP_TOKEN: "secret" });

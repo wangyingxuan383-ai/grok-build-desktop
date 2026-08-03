@@ -711,6 +711,22 @@ export default function App(): React.JSX.Element {
     focusComposer();
   };
 
+  const stopActiveSession = useCallback(async (): Promise<void> => {
+    const sessionId = store.activeSessionId;
+    if (!sessionId) return;
+    setComposerNotice("正在停止当前回合…");
+    try {
+      await window.grokDesktop.cancelSession(sessionId);
+      const notice = "当前回合已停止；若 CLI 未响应，会话已自动恢复。";
+      setComposerNotice(notice);
+      window.setTimeout(() => setComposerNotice((current) => current === notice ? "" : current), 4_000);
+    } catch (error) {
+      const message = `停止失败：${errorMessage(error)}`;
+      setComposerNotice(message);
+      store.setError(message);
+    }
+  }, [store.activeSessionId]);
+
   useEffect(() => window.grokDesktop.onMenuCommand((command: AppMenuCommand) => {
     if (command === "new-session") { setWorkbenchView("chat"); void openNewSessionDialog(); }
     else if (command === "choose-workspace") void (async () => {
@@ -725,7 +741,7 @@ export default function App(): React.JSX.Element {
     else if (command === "search-sessions") document.querySelector<HTMLInputElement>("#session-search")?.focus();
     else if (command === "search-conversation") { setConversationSearchOpen(true); window.setTimeout(() => document.querySelector<HTMLInputElement>("#conversation-search")?.focus(), 0); }
     else if (command === "focus-composer") { setWorkbenchView("chat"); window.setTimeout(focusComposer, 0); }
-    else if (command === "stop-generation" && store.activeSessionId) void window.grokDesktop.cancelSession(store.activeSessionId);
+    else if (command === "stop-generation" && store.activeSessionId) void stopActiveSession();
     else if (command === "copy-final-answer") { const answer = turns.toReversed().find((turn) => turn.final)?.final; if (answer && "text" in answer) void navigator.clipboard.writeText(answer.text); }
     else if (command === "toggle-sidebar") setSidebarCollapsed((value) => !value);
     else if (command === "open-accounts") setPanel("accounts");
@@ -737,7 +753,7 @@ export default function App(): React.JSX.Element {
     else if (command === "open-onboarding") void window.grokDesktop.resetOnboarding().then((state) => { store.setOnboarding(state); setPanel("onboarding"); });
     else if (command === "open-about") setPanel("about");
     else if (command === "open-task-center") setPanel("tasks");
-  }), [activeSession?.id, focusComposer, setWorkbenchView, store.activeSessionId, turns]);
+  }), [activeSession?.id, focusComposer, setWorkbenchView, stopActiveSession, store.activeSessionId, turns]);
 
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;
 
@@ -852,7 +868,7 @@ export default function App(): React.JSX.Element {
             setComposerNotice(reason);
             window.setTimeout(() => setComposerNotice(""), 4_000);
           }}
-          onStop={() => store.activeSessionId && void window.grokDesktop.cancelSession(store.activeSessionId)}
+          onStop={() => void stopActiveSession()}
           onAdd={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachments()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
           onAddFolders={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachmentFolders()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
           onPaste={async (files) => { try { store.addAttachments(await pastedImageAttachments(files)); } catch (error) { store.setError(errorMessage(error)); } }}

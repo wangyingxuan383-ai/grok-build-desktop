@@ -363,6 +363,40 @@ export class GrokProcessManager {
     this.sessions.delete(sessionId);
   }
 
+  /**
+   * ACP cancellation is a notification, so a wedged CLI is not required to
+   * acknowledge it. Give the active turn a short grace period, then replace
+   * only that session process and reload the persisted conversation. This
+   * makes Stop a real recovery boundary without affecting concurrent sessions.
+   */
+  async cancelSession(sessionId: string, graceMs = 8_000): Promise<void> {
+    const current = this.get(sessionId);
+    current.cancel();
+    const deadline = Date.now() + Math.max(0, graceMs);
+    while (Date.now() < deadline) {
+      if (this.sessions.get(sessionId) !== current || (!current.working && !current.needsUser)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (this.sessions.get(sessionId) !== current || (!current.working && !current.needsUser)) return;
+
+    const { cwd, mode, effort, currentModelId: model, processOptions } = current;
+    this.onEvent({ type: "status", sessionId, status: "working", text: "CLI 未确认停止，正在恢复该会话…" });
+    await current.dispose(2_000);
+    this.sessions.delete(sessionId);
+    this.onEvent({ type: "session-reset", sessionId });
+    const replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions);
+    try {
+      await replacement.start(sessionId);
+      this.onSessionStarted?.(replacement.extensionLeaseId, sessionId);
+      this.sessions.set(sessionId, replacement);
+      this.focusedId = sessionId;
+      this.onEvent({ type: "status", sessionId, status: "idle", text: "已停止并恢复会话" });
+    } catch (error) {
+      await replacement.dispose();
+      throw new Error(`停止后恢复会话失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   async stopAll(finalize = true): Promise<void> {
     const sessions = Array.from(this.sessions.entries());
     this.sessions.clear();

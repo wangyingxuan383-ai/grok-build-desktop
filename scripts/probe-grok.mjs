@@ -12,6 +12,7 @@ const valueAfter = (name) => {
 const cliPath = valueAfter("--cli") || join(homedir(), ".grok", "bin", process.platform === "win32" ? "grok.exe" : "grok");
 const cwd = resolve(valueAfter("--cwd") || join(tmpdir(), `grok-build-desktop-probe-${process.pid}-${Date.now()}`));
 const effort = valueAfter("--effort");
+const mode = valueAfter("--mode");
 const cleanup = !argv.includes("--keep");
 const requireMedia = argv.includes("--require-media");
 const requireExtensions = argv.includes("--require-extensions");
@@ -100,6 +101,11 @@ try {
   ]);
   sessionId = typeof created?.sessionId === "string" ? created.sessionId : "";
   if (!sessionId) throw new Error("session/new did not return a sessionId");
+  let modeSwitch;
+  if (mode) {
+    if (mode !== "plan" && mode !== "default") throw new Error(`Unsupported probe mode: ${mode}`);
+    modeSwitch = await request("session/set_mode", { sessionId, modeId: mode });
+  }
   await new Promise((resolveWait) => setTimeout(resolveWait, 250));
   const availableCommands = notifications
     .filter((value) => value.params?.update?.sessionUpdate === "available_commands_update")
@@ -137,7 +143,10 @@ try {
       && value.params?.update?.reasoning_effort === effort);
     if (!confirmed) throw new Error(`session/set_model did not confirm reasoning effort ${effort}`);
   }
-  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, effort, effortSwitch, availableCommands, mediaCommands, videoStrategy, extensionProbe, notifications: notifications.filter((value) => value.method === "_x.ai/session_notification" && value.params?.update?.sessionUpdate === "model_changed").slice(-3) })}\n`);
+  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, videoStrategy, extensionProbe, notifications: notifications.filter((value) => {
+    const update = value.params?.update;
+    return value.method === "_x.ai/session_notification" && (update?.sessionUpdate === "model_changed" || update?.sessionUpdate === "current_mode_update");
+  }).slice(-5) })}\n`);
 } finally {
   lines.close();
   if (!child.killed) {
