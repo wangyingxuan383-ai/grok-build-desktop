@@ -130,9 +130,9 @@ try {
         }
 
         Invoke-LiveGate 'CLI 插件与兼容性' '官方 Marketplace、插件恢复、额度兼容及托管 Provider 配置探针通过。' {
-            $AvailablePlugins = & $Cli plugin list --available --json | ConvertFrom-Json
+            $AvailablePlugins = & $Cli --no-auto-update plugin list --available --json | ConvertFrom-Json
             if (-not ($AvailablePlugins | Where-Object { $_.name -in @('chrome-devtools', 'chrome-devtools-mcp') })) { throw 'Grok extension fallback probe did not find the official Chrome DevTools plugin.' }
-            $Marketplaces = @(& $Cli plugin marketplace list --json | ConvertFrom-Json)
+            $Marketplaces = @(& $Cli --no-auto-update plugin marketplace list --json | ConvertFrom-Json)
             $Official = $Marketplaces | Where-Object { $_.name -eq 'xAI Official' -and $_.source.url } | Select-Object -First 1
             if (-not $Official) { throw 'The xAI Official plugin marketplace source was not found.' }
             $ResolvedCommit = (& git ls-remote ([string]$Official.source.url) HEAD 2>$null | Select-Object -First 1) -split '\s+' | Select-Object -First 1

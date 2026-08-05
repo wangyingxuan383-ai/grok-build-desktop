@@ -1,0 +1,40 @@
+[
+  {
+    "method": "x.ai/follow_ups",
+    "params": {
+      "response_id": "fixture-response",
+      "promptId": "fixture-prompt",
+      "suggestions": [
+        { "label": "Continue with the verified next step" }
+      ]
+    }
+  },
+  {
+    "method": "x.ai/models/update",
+    "params": {
+      "currentModelId": "fixture-upstream-model",
+      "availableModels": [
+        {
+          "modelId": "fixture-upstream-model",
+          "name": "Fixture Model",
+          "_meta": {
+            "supportsReasoningEffort": true,
+            "reasoningEfforts": [
+              { "value": "low" },
+              { "value": "medium" },
+              { "value": "high" },
+              { "value": "xhigh" }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "method": "x.ai/settings/update",
+    "params": {
+      "permission_mode": "default",
+      "reason": "fixture-refresh"
+    }
+  }
+]

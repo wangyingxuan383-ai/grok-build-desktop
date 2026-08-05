@@ -22,7 +22,7 @@ await mkdir(cwd, { recursive: true });
 // Pass plugin directories in both places: current Grok builds accept the
 // session-level metadata, while older/changed builds may only honor the
 // process-level flag. Keeping the flag before `stdio` is required by the CLI.
-const agentArgs = ["agent", ...(pluginDir ? ["--plugin-dir", resolve(pluginDir)] : []), "stdio"];
+const agentArgs = ["--no-auto-update", "agent", ...(pluginDir ? ["--plugin-dir", resolve(pluginDir)] : []), "stdio"];
 const child = spawn(cliPath, agentArgs, {
   cwd,
   env: process.env,

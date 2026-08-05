@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
@@ -9,6 +10,7 @@ import {
   REASONING_EFFORTS,
   type Attachment,
   type ChatEvent,
+  type CliRuntimeHandshake,
   type CommandInfo,
   type ModelInfo,
   type PermissionOption,
@@ -274,6 +276,7 @@ export class LiveEffortUnsupportedError extends Error {
 
 export function buildGrokAgentArgs(effort: ReasoningEffort, pluginDirs: string[] = [], effortFlag: "--effort" | "--reasoning-effort" = "--reasoning-effort", options: SessionProcessOptions & { modelId?: string } = {}): string[] {
   return [
+    "--no-auto-update",
     "agent",
     ...(options.modelId ? ["--model", options.modelId] : []),
     ...(effort ? [effortFlag, effort] : []),
@@ -293,6 +296,8 @@ export class GrokAcpAdapter extends EventEmitter {
   private readonly terminalCommands = new Map<string, string>();
   private readonly mediaToolIds = new Set<string>();
   private readonly backgroundTasks = new Map<string, BackgroundTask>();
+  private readonly completedBackgroundTasks = new Map<string, { update: Record<string, any>; at: number }>();
+  private readonly recapHashes = new Set<string>();
   private readonly ownedQueuedPromptIds = new Set<string>();
   private promptQueue: PromptQueueEntry[] = [];
   private activeQueuedPromptId?: string;
@@ -334,6 +339,7 @@ export class GrokAcpAdapter extends EventEmitter {
   working = false;
   needsUser = false;
   readonly extensionLeaseId?: string;
+  runtimeHandshake?: CliRuntimeHandshake;
 
   get cwd(): string { return this.options.cwd; }
   get effort(): ReasoningEffort { return this.currentEffort; }
@@ -421,10 +427,12 @@ export class GrokAcpAdapter extends EventEmitter {
       this.emitClosed();
     });
 
-    await this.request(acpMethods.agent.initialize, {
+    const initializeResult = await this.request(acpMethods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
-    }, 120_000);
+    }, 120_000) as Record<string, unknown>;
+    this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
+    this.emit("runtime-handshake", this.runtimeHandshake);
     if (resumeSessionId) this.sessionId = resumeSessionId;
     const response = await this.request(resumeSessionId ? acpMethods.agent.session.load : acpMethods.agent.session.new, {
       ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
@@ -456,6 +464,14 @@ export class GrokAcpAdapter extends EventEmitter {
     const reportedModelId = response.models?.currentModelId;
     this.upstreamModelId = reportedModelId || "";
     this.currentModelId = this.providerLocalModelId ?? resolveModelId(reportedModelId, this.models, this.requestedModelId) ?? "";
+    if (this.runtimeHandshake) {
+      this.runtimeHandshake.currentModelId = reportedModelId;
+      this.runtimeHandshake.models = this.models.map((model) => ({
+        modelId: model.modelId,
+        name: model.name,
+        ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((item) => item.value) } : {}),
+      }));
+    }
     if (resumeSessionId) this.currentEffort = await readPersistedEffort(this.options.cwd, this.sessionId) ?? this.currentEffort;
     // Persisted sessions store the upstream route id, not the local provider
     // configuration id. Compare the raw ACP value here so resuming a custom
@@ -497,7 +513,9 @@ export class GrokAcpAdapter extends EventEmitter {
 
   async extension(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
-    return this.request(method, { sessionId: this.sessionId, ...params }) as Promise<Record<string, unknown>>;
+    const result = await this.request(method, { sessionId: this.sessionId, ...params }) as Record<string, unknown>;
+    this.observeRuntimeExtension(method);
+    return result;
   }
 
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
@@ -1104,6 +1122,7 @@ export class GrokAcpAdapter extends EventEmitter {
     }
     const method = String(message.method || "");
     const params = (message.params || {}) as Record<string, any>;
+    if (method.startsWith("x.ai/") || method.startsWith("_x.ai/")) this.observeRuntimeExtension(method.replace(/^_/, ""));
     if (method === acpMethods.client.session.update) {
       this.handleSessionUpdate(params.update);
       return;
@@ -1163,6 +1182,12 @@ export class GrokAcpAdapter extends EventEmitter {
       }
       case "available_commands_update":
         this.commands = (update.availableCommands ?? []).map((command: any) => ({ name: command.name, description: command.description, inputHint: command.input?.hint }));
+        if (this.runtimeHandshake) {
+          this.runtimeHandshake.commands = this.commands.map((command) => command.name);
+          const commandNames = new Set(this.runtimeHandshake.commands.map((command) => command.replace(/^\//, "").toLowerCase()));
+          if (commandNames.has("btw")) this.observeRuntimeExtension("x.ai/btw");
+          if (commandNames.has("recap")) this.observeRuntimeExtension("x.ai/recap");
+        }
         if (this.sessionId) this.emitEvent({ type: "commands", sessionId: this.sessionId, commands: this.commands });
         this.emit("commands-changed");
         break;
@@ -1227,14 +1252,16 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private handlePrivateSessionUpdate(update: Record<string, any>): void {
-    const updateType = String(update.sessionUpdate || "");
+    const updateType = normalizePrivateUpdateName(String(update.sessionUpdate || ""));
     switch (updateType) {
       case "model_changed":
         this.handleModelChanged(update);
         return;
       case "subagent_spawned":
+      case "subagent_progress":
       case "subagent_finished":
         this.emitEvent({ type: "subagent", sessionId: this.sessionId, update });
+        this.emitRuntimeUpdate("subagent", updateType, firstNonEmptyString(update.description, update.message, update.status));
         return;
       case "turn_completed":
         {
@@ -1291,9 +1318,47 @@ export class GrokAcpAdapter extends EventEmitter {
       case "task_completed":
         this.handleTaskCompleted(update);
         return;
+      case "auto_compact_started":
+      case "auto_compact_completed":
+      case "auto_compact_failed":
+      case "auto_compact_cancelled": {
+        const status = updateType.slice("auto_compact_".length) as "started" | "completed" | "failed" | "cancelled";
+        this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status, message: firstNonEmptyString(update.message, update.error, update.reason) });
+        this.emitRuntimeUpdate("session", updateType, firstNonEmptyString(update.message, update.error, update.reason));
+        return;
+      }
+      case "session_recap":
+      case "session_summary":
+      case "session_summary_generated": {
+        const text = firstNonEmptyString(update.recap, update.summary, update.content?.text, update.text);
+        if (!text) return;
+        const turnId = firstNonEmptyString(update.turn_id, update.turnId);
+        const contentHash = createHash("sha256").update(`${this.sessionId}\u0000${turnId ?? ""}\u0000${text}`).digest("hex");
+        if (this.recapHashes.has(contentHash)) return;
+        this.recapHashes.add(contentHash);
+        if (this.recapHashes.size > 256) this.recapHashes.delete(this.recapHashes.values().next().value!);
+        this.emitEvent({ type: "session-recap", sessionId: this.sessionId, turnId, text, contentHash });
+        return;
+      }
+      case "goal_updated":
+        this.emitRuntimeUpdate("goal", updateType, firstNonEmptyString(update.title, update.summary, update.status));
+        return;
+      case "workflow_updated":
+        this.emitRuntimeUpdate("workflow", updateType, firstNonEmptyString(update.title, update.summary, update.status));
+        return;
+      case "model_auto_switched":
+        this.handleModelChanged({ ...update, sessionUpdate: "model_changed", model_id: update.model_id ?? update.modelId ?? update.to_model_id });
+        this.emitRuntimeUpdate("model", updateType, firstNonEmptyString(update.reason, update.model_id, update.modelId));
+        return;
+      case "interaction_resolved":
+        this.emitRuntimeUpdate("session", updateType, firstNonEmptyString(update.outcome, update.status));
+        return;
       default:
         // Unknown lifecycle updates are acknowledged by the caller but must
-        // never be presented as subagents. This is what caused stale cards.
+        // never be presented as subagents or logged with their potentially
+        // sensitive payload. Preserve only the wire shape needed to diagnose
+        // a forward-compatibility gap.
+        void this.options.log.log(`[ACP unknown update] name=${updateType || "unknown"} schema=${wireSchemaVersion(update)} size=${wireSize(update)}`);
         return;
     }
   }
@@ -1301,6 +1366,11 @@ export class GrokAcpAdapter extends EventEmitter {
   private handleTaskBackgrounded(update: Record<string, any>): void {
     const taskId = String(update.task_id || "");
     if (!taskId) return;
+    const completed = this.completedBackgroundTasks.get(taskId);
+    if (completed) {
+      this.completedBackgroundTasks.delete(taskId);
+      return;
+    }
     const toolCallId = String(update.tool_call_id || `background-task-${taskId}`);
     const command = typeof update.command === "string" ? update.command : undefined;
     const task: BackgroundTask = {
@@ -1328,6 +1398,10 @@ export class GrokAcpAdapter extends EventEmitter {
     const taskId = String(snapshot.task_id || update.task_id || "");
     if (!taskId) return;
     const known = this.backgroundTasks.get(taskId);
+    if (!known) {
+      this.completedBackgroundTasks.set(taskId, { update, at: Date.now() });
+      while (this.completedBackgroundTasks.size > 128) this.completedBackgroundTasks.delete(this.completedBackgroundTasks.keys().next().value!);
+    }
     const toolCallId = known?.toolCallId || String(update.tool_call_id || `background-task-${taskId}`);
     const exitCode = typeof snapshot.exit_code === "number" ? snapshot.exit_code : null;
     const signal = snapshot.signal == null ? "" : String(snapshot.signal);
@@ -1352,6 +1426,66 @@ export class GrokAcpAdapter extends EventEmitter {
     this.backgroundTasks.delete(taskId);
   }
 
+  private emitRuntimeUpdate(kind: import("../../shared/types").CliRuntimeUpdate["kind"], name: string, summary?: string, data?: Record<string, unknown>): void {
+    this.emitEvent({
+      type: "runtime-update",
+      sessionId: this.sessionId,
+      update: { kind, name, at: new Date().toISOString(), ...(summary ? { summary } : {}), ...(data ? { data } : {}) },
+    });
+  }
+
+  private observeRuntimeExtension(method: string): void {
+    if (!this.runtimeHandshake || !method.startsWith("x.ai/")) return;
+    if (!this.runtimeHandshake.extensions.includes(method)) {
+      this.runtimeHandshake.extensions = [...this.runtimeHandshake.extensions, method].sort();
+    }
+  }
+
+  private applyModelStateUpdate(state: Record<string, unknown>): void {
+    const available = arrayValue(state.availableModels) ?? arrayValue(state.available_models) ?? [];
+    const models = available.flatMap((item): ModelInfo[] => {
+      const row = recordValue(item);
+      const modelId = firstNonEmptyString(row?.modelId, row?.model_id, row?.id);
+      if (!row || !modelId) return [];
+      const meta = recordValue(row._meta) ?? {};
+      const reasoningEfforts = (arrayValue(meta.reasoningEfforts) ?? arrayValue(row.reasoningEfforts) ?? []).flatMap((candidate) => {
+        const candidateRow = recordValue(candidate);
+        const value = normalizeReasoningEffort(candidateRow?.value ?? candidate);
+        if (!value) return [];
+        return [{ value, label: firstNonEmptyString(candidateRow?.label) ?? value }];
+      });
+      return [{
+        modelId,
+        name: firstNonEmptyString(row.name, row.label) ?? modelId,
+        description: firstNonEmptyString(row.description),
+        totalContextTokens: optionalPositiveInteger(meta.totalContextTokens ?? row.totalContextTokens),
+        supportsReasoningEffort: meta.supportsReasoningEffort === true && reasoningEfforts.length > 0,
+        reasoningEfforts,
+      }];
+    });
+    if (models.length) this.models = models;
+    const reportedModelId = firstNonEmptyString(state.currentModelId, state.current_model_id);
+    if (reportedModelId) {
+      this.upstreamModelId = reportedModelId;
+      this.currentModelId = this.providerLocalModelId ?? resolveModelId(reportedModelId, this.models, this.requestedModelId) ?? reportedModelId;
+    }
+    if (this.runtimeHandshake) {
+      this.runtimeHandshake.currentModelId = reportedModelId ?? this.runtimeHandshake.currentModelId;
+      this.runtimeHandshake.models = this.models.map((model) => ({
+        modelId: model.modelId,
+        name: model.name,
+        ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((entry) => entry.value) } : {}),
+      }));
+    }
+    if (this.sessionId) this.emitEvent({
+      type: "session-ready",
+      sessionId: this.sessionId,
+      models: this.models,
+      currentModelId: this.currentModelId,
+      effort: this.currentEffort,
+    });
+  }
+
   private waitForEffortChange(effort: Exclude<ReasoningEffort, "">): Promise<boolean> {
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
@@ -1372,6 +1506,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private async handleServerRequest(method: string, id: JsonRpcId | undefined, params: Record<string, any>): Promise<void> {
     try {
+      if (method.startsWith("x.ai/") || method.startsWith("_x.ai/")) this.observeRuntimeExtension(method.replace(/^_/, ""));
       switch (method) {
         case acpMethods.client.fs.readTextFile: {
           const content = await readFile(params.path, "utf8");
@@ -1550,8 +1685,87 @@ export class GrokAcpAdapter extends EventEmitter {
         case "_x.ai/session/prompt_complete":
           this.respondOk(id);
           return;
+        case "x.ai/follow_ups":
+        case "_x.ai/follow_ups": {
+          if (params._meta?.isReplay === true) {
+            this.respondOk(id);
+            return;
+          }
+          const raw = params.followUps ?? params.follow_ups ?? params.suggestions ?? params.items ?? [];
+          const suggestions = (Array.isArray(raw) ? raw : []).flatMap((item: unknown, index: number) => {
+            if (typeof item === "string" && item.trim()) return [{ id: `${index}-${createHash("sha256").update(item).digest("hex").slice(0, 12)}`, text: item.trim() }];
+            if (!item || typeof item !== "object") return [];
+            const value = item as Record<string, unknown>;
+            const text = firstNonEmptyString(value.text, value.label, value.prompt, value.title);
+            return text ? [{ id: firstNonEmptyString(value.id) ?? `${index}-${createHash("sha256").update(text).digest("hex").slice(0, 12)}`, text }] : [];
+          }).slice(0, 12);
+          this.emitEvent({
+            type: "follow-ups",
+            sessionId: this.sessionId,
+            responseId: firstNonEmptyString(params.responseId, params.response_id),
+            promptId: firstNonEmptyString(params.promptId, params.prompt_id),
+            suggestions,
+          });
+          this.respondOk(id);
+          return;
+        }
+        case "x.ai/models/update":
+        case "_x.ai/models/update":
+          this.applyModelStateUpdate(params);
+          this.emitRuntimeUpdate("model", "models/update", firstNonEmptyString(params.reason, params.message));
+          this.respondOk(id);
+          return;
+        case "x.ai/settings/update":
+        case "_x.ai/settings/update":
+          this.emitRuntimeUpdate("settings", "settings/update", firstNonEmptyString(params.reason, params.message));
+          this.respondOk(id);
+          return;
+        case "x.ai/sessions/changed":
+        case "_x.ai/sessions/changed":
+        case "x.ai/session/interjection":
+        case "_x.ai/session/interjection":
+          this.emitRuntimeUpdate("session", method.replace(/^_/, ""), firstNonEmptyString(params.reason, params.message, params.status));
+          this.respondOk(id);
+          return;
+        case "x.ai/monitor_event":
+        case "_x.ai/monitor_event":
+          this.emitRuntimeUpdate("monitor", "monitor_event", firstNonEmptyString(params.title, params.message, params.status));
+          this.respondOk(id);
+          return;
+        case "x.ai/scheduled_task_created":
+        case "_x.ai/scheduled_task_created":
+        case "x.ai/scheduled_task_fired":
+        case "_x.ai/scheduled_task_fired":
+        case "x.ai/scheduled_task_deleted":
+        case "_x.ai/scheduled_task_deleted":
+        case "x.ai/scheduled_task_inject":
+        case "_x.ai/scheduled_task_inject":
+          this.emitRuntimeUpdate("scheduled-task", method.replace(/^_?x\.ai\//, ""), firstNonEmptyString(params.title, params.message, params.status));
+          this.respondOk(id);
+          return;
+        case "x.ai/mcp_init_progress":
+        case "_x.ai/mcp_init_progress":
+        case "x.ai/mcp_tools_changed":
+        case "_x.ai/mcp_tools_changed":
+        case "x.ai/mcp_status_changed":
+        case "_x.ai/mcp_status_changed":
+        case "x.ai/mcp_servers_changed":
+        case "_x.ai/mcp_servers_changed":
+          this.emitRuntimeUpdate("mcp", method.replace(/^_?x\.ai\//, ""), firstNonEmptyString(params.server, params.name, params.message, params.status));
+          this.respondOk(id);
+          return;
+        case "x.ai/git_head_changed":
+        case "_x.ai/git_head_changed":
+          this.emitRuntimeUpdate("git", "git_head_changed", firstNonEmptyString(params.head, params.branch, params.message));
+          this.respondOk(id);
+          return;
+        case "x.ai/announcements/update":
+        case "_x.ai/announcements/update":
+          this.emitRuntimeUpdate("announcement", "announcements/update", firstNonEmptyString(params.title, params.message));
+          this.respondOk(id);
+          return;
         default:
-          await this.options.log.log(`[ACP unknown request] ${method}`);
+          await this.options.log.log(`[ACP unknown request] method=${method} schema=${wireSchemaVersion(params)} size=${wireSize(params)}`);
           this.respondError(id, -32601, `Unsupported ACP method: ${method}`);
       }
     } catch (error) {
@@ -2070,6 +2284,105 @@ function optionalNonNegativeNumber(value: unknown): number | undefined {
 
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === "string" && Boolean(value.trim()))?.trim();
+}
+
+export function normalizeRuntimeHandshake(value: Record<string, unknown>): CliRuntimeHandshake {
+  const capabilities = recordValue(value.agentCapabilities) ?? recordValue(value.capabilities) ?? {};
+  const meta = recordValue(value._meta) ?? {};
+  const agentInfo = recordValue(value.agentInfo) ?? recordValue(value.agent) ?? {};
+  const modelState = recordValue(value.modelState) ?? recordValue(meta.modelState) ?? recordValue(capabilities.modelState) ?? {};
+  const rawModels = arrayValue(modelState.availableModels) ?? arrayValue(modelState.models) ?? arrayValue(value.models) ?? [];
+  const rawCommands = arrayValue(value.availableCommands) ?? arrayValue(meta.availableCommands) ?? [];
+  const normalizedCommands = rawCommands.flatMap((item) => {
+    if (typeof item === "string" && item.trim()) return [item.trim()];
+    const row = recordValue(item);
+    const name = firstNonEmptyString(row?.name, row?.command);
+    return name ? [name] : [];
+  });
+  const commandNames = new Set(normalizedCommands.map((command) => command.replace(/^\//, "").toLowerCase()));
+  const feature = (...names: string[]): boolean => names.some((name) => value[name] === true || capabilities[name] === true || meta[name] === true);
+  return {
+    protocolVersion: typeof value.protocolVersion === "number" ? value.protocolVersion : PROTOCOL_VERSION,
+    agentVersion: firstNonEmptyString(value.agentVersion, agentInfo.version, meta.agentVersion, meta.version),
+    checkedAt: new Date().toISOString(),
+    promptCapabilities: flattenBooleanRecord(recordValue(value.promptCapabilities) ?? recordValue(capabilities.promptCapabilities)),
+    sessionCapabilities: flattenBooleanRecord(recordValue(value.sessionCapabilities) ?? recordValue(capabilities.sessionCapabilities)),
+    mcpCapabilities: flattenBooleanRecord(recordValue(value.mcpCapabilities) ?? recordValue(capabilities.mcpCapabilities)),
+    currentModelId: firstNonEmptyString(modelState.currentModelId, modelState.current_model_id),
+    models: rawModels.flatMap((item): CliRuntimeHandshake["models"] => {
+      const row = recordValue(item);
+      const modelId = firstNonEmptyString(row?.modelId, row?.model_id, row?.id);
+      if (!row || !modelId) return [];
+      const modelMeta = recordValue(row._meta) ?? {};
+      const efforts = (arrayValue(modelMeta.reasoningEfforts) ?? arrayValue(row.reasoningEfforts) ?? [])
+        .flatMap((effort) => {
+          const effortRow = recordValue(effort);
+          const normalized = normalizeReasoningEffort(effortRow?.value ?? effort);
+          return normalized ? [normalized] : [];
+        });
+      return [{ modelId, name: firstNonEmptyString(row.name, row.label), ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}) }];
+    }),
+    commands: normalizedCommands,
+    extensions: [...new Set([
+      ...Object.keys(recordValue(capabilities._meta) ?? {}),
+      ...Object.keys(meta).filter((key) => key.startsWith("x.ai/")),
+      ...(commandNames.has("btw") ? ["x.ai/btw"] : []),
+      ...(commandNames.has("recap") || meta.sessionRecap === true ? ["x.ai/recap"] : []),
+    ])].sort(),
+    features: {
+      recap: feature("sessionRecap", "recap"),
+      rewind: feature("rewind", "sessionRewind"),
+      cancelRewind: feature("cancelRewind"),
+      pluginDirectories: feature("pluginDirs", "pluginDirectories", "x.ai/pluginDirs") || Array.isArray(meta.pluginDirs),
+      fsNotifications: feature("fsNotify", "fs_notify") || Boolean(recordValue(capabilities._meta)?.["x.ai/fs_notify"]),
+      voiceMode: feature("voiceMode"),
+    },
+  };
+}
+
+function recordValue(value: unknown): Record<string, any> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : undefined;
+}
+
+function arrayValue(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function flattenBooleanRecord(value: Record<string, any> | undefined, prefix = ""): Record<string, boolean> | undefined {
+  if (!value) return undefined;
+  const output: Record<string, boolean> = {};
+  for (const [key, item] of Object.entries(value)) {
+    const name = prefix ? `${prefix}.${key}` : key;
+    if (typeof item === "boolean") output[name] = item;
+    else if (recordValue(item)) {
+      // ACP uses an empty object to advertise marker capabilities such as
+      // session.list. Preserve the parent as supported, then retain any
+      // nested boolean detail without treating a missing key as support.
+      output[name] = true;
+      Object.assign(output, flattenBooleanRecord(item, name));
+    }
+  }
+  return Object.keys(output).length ? output : undefined;
+}
+
+function normalizePrivateUpdateName(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[\s.-]+/g, "_")
+    .toLowerCase();
+}
+
+function wireSchemaVersion(value: Record<string, any>): string {
+  const meta = recordValue(value._meta);
+  for (const candidate of [value.schemaVersion, value.schema_version, meta?.schemaVersion, meta?.schema_version]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    if (typeof candidate === "number" && Number.isFinite(candidate)) return String(candidate);
+  }
+  return "unknown";
+}
+
+function wireSize(value: unknown): number {
+  try { return Buffer.byteLength(JSON.stringify(value), "utf8"); } catch { return -1; }
 }
 
 function formatRetryStatus(attempt?: number, maxAttempts?: number, delayMs?: number, reason?: string): string {

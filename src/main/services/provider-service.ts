@@ -1083,7 +1083,12 @@ export class ProviderService {
         context_window: item.contextWindow,
         max_completion_tokens: item.maxCompletionTokens,
         inference_idle_timeout_secs: providerInferenceIdleTimeoutSeconds(item),
-        reasoning_efforts: providerReasoningEfforts(item.model, item.reasoningEfforts).map((value) => ({ value, label: value })),
+        // Grok CLI 0.2.118 parses TOML model overrides as either bare effort
+        // strings or inline tables. The TOML serializer emits object arrays as
+        // `[[model.*.reasoning_efforts]]`, which the tightened parser rejects.
+        // Keep Desktop's richer upstream capability data in providers.json,
+        // but publish only CLI-native effort strings to config.toml.
+        reasoning_efforts: cliReasoningEfforts(item.model, item.reasoningEfforts),
         extra_headers: Object.keys(extraHeaders).length ? extraHeaders : undefined,
       };
       }
@@ -1218,8 +1223,8 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
 }
 
 export async function validateGrokConfig(cliPath: string, cwd = process.cwd()): Promise<void> {
-  await exec(cliPath, ["inspect", "--json"], cwd);
-  await exec(cliPath, ["models"], cwd);
+  await exec(cliPath, ["--no-auto-update", "inspect", "--json"], cwd);
+  await exec(cliPath, ["--no-auto-update", "models"], cwd);
 }
 
 function exec(file: string, args: string[], cwd: string): Promise<void> {
@@ -1445,13 +1450,15 @@ function managedCapabilitiesOutdated(config: string, providers: CustomProviderPr
   try {
     const models = asRecord(asRecord(parse(config)).model);
     return providers.some((provider) => provider.models.some((model) => {
-      const expected = providerReasoningEfforts(model.model, model.reasoningEfforts);
+      const expected = cliReasoningEfforts(model.model, model.reasoningEfforts);
       const expectedProtocol = model.protocol ?? provider.protocol;
       const configured = asRecord(models[model.id]);
       if (configured.api_backend !== expectedProtocol) return true;
       if (configured.inference_idle_timeout_secs !== providerInferenceIdleTimeoutSeconds(model)) return true;
-      const current = Array.isArray(configured.reasoning_efforts)
-        ? configured.reasoning_efforts.map(reasoningEffortValue).filter(Boolean)
+      const rawEfforts = configured.reasoning_efforts;
+      if (Array.isArray(rawEfforts) && rawEfforts.some((value) => typeof value !== "string")) return true;
+      const current = Array.isArray(rawEfforts)
+        ? rawEfforts.map(reasoningEffortValue).filter(Boolean)
         : [];
       return expected.join("\0") !== current.join("\0");
     }));
@@ -1461,6 +1468,13 @@ function managedCapabilitiesOutdated(config: string, providers: CustomProviderPr
     return false;
   }
 }
+
+const CLI_REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function cliReasoningEfforts(model: string, configured?: ProviderModelDefinition["reasoningEfforts"]): ReasoningEffort[] {
+  return providerReasoningEfforts(model, configured).filter((value) => CLI_REASONING_EFFORTS.has(value));
+}
+
 function parseModelList(raw: string): Array<{ id: string; name?: string; description?: string; ownedBy?: string; contextWindow?: number; reasoningEfforts?: ProviderModelDefinition["reasoningEfforts"] }> {
   const parsed = JSON.parse(raw) as any;
   const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : [];

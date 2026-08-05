@@ -111,7 +111,7 @@ describe("MemoryService", () => {
     const calls: Array<{ cliPath: string; args: string[]; cwd: string; grokHome?: string }> = [];
     const fixture = await createFixture("commands", async (cliPath, args, cwd, env) => { calls.push({ cliPath, args, cwd, grokHome: env.GROK_HOME }); });
     await fixture.service.clear(fixture.repo, "workspace", true);
-    expect(calls).toEqual([{ cliPath: process.execPath, args: ["memory", "clear", "--workspace", "--yes"], cwd: fixture.repo, grokHome: fixture.grokHome }]);
+    expect(calls).toEqual([{ cliPath: process.execPath, args: ["--no-auto-update", "memory", "clear", "--workspace", "--yes"], cwd: fixture.repo, grokHome: fixture.grokHome }]);
     await expect(fixture.service.clear(fixture.repo, "all", false)).rejects.toThrow("明确确认");
     expect(await fixture.service.markCommand(fixture.repo, "dream", "running")).toMatchObject({ dreamStatus: "running" });
     const dreamed = await fixture.service.markCommand(fixture.repo, "dream", "completed");

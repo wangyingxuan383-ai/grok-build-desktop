@@ -412,10 +412,21 @@ describe("ProviderService", () => {
     const model = ((parse(raw).model as Record<string, any>)["sample-model"]);
     expect(model).not.toHaveProperty("auth_scheme");
     expect(model.env_key).toBe("GROK_DESKTOP_PROVIDER_SAMPLE_KEY");
-    expect(model.reasoning_efforts).toEqual([{ value: "low", label: "low" }, { value: "high", label: "high" }]);
+    expect(model.reasoning_efforts).toEqual(["low", "high"]);
     expect(model.extra_headers["x-api-key"]).toBe("${GROK_DESKTOP_PROVIDER_SAMPLE_KEY}");
     expect(model.extra_headers.Authorization).toBe("");
     expect(raw).not.toContain("test-secret-value");
+  });
+
+  it("keeps upstream-only auto/none out of the 0.2.118 CLI reasoning menu", async () => {
+    const { service, grokHome } = await fixture();
+    await service.upsert(input({
+      models: [{ id: "sample-model", model: "custom-thinking", name: "Custom", reasoningEfforts: ["auto", "none", "max", "high", "minimal"] }],
+    }));
+    const raw = await readFile(join(grokHome, "config.toml"), "utf8");
+    const model = ((parse(raw).model as Record<string, any>)["sample-model"]);
+    expect(model.reasoning_efforts).toEqual(["max", "high", "minimal"]);
+    expect(raw).not.toContain("[[model.sample-model.reasoning_efforts]]");
   });
 
   it("restores missing model protocol and the CLI-catalog effort menu without locking manual values", async () => {
@@ -436,13 +447,7 @@ describe("ProviderService", () => {
       const refreshed = parse(await readFile(configPath, "utf8")) as any;
       expect(refreshed.model["sample-grok-4.5"].api_backend).toBe("responses");
       expect(refreshed.model["sample-grok-4.5"].inference_idle_timeout_secs).toBe(600);
-      expect(refreshed.model["sample-grok-4.5"].reasoning_efforts).toEqual([
-        { value: "xhigh", label: "xhigh" },
-        { value: "high", label: "high" },
-        { value: "medium", label: "medium" },
-        { value: "low", label: "low" },
-        { value: "minimal", label: "minimal" },
-      ]);
+      expect(refreshed.model["sample-grok-4.5"].reasoning_efforts).toEqual(["xhigh", "high", "medium", "low", "minimal"]);
 
       await service.upsert(input({
         protocol: "chat_completions",

@@ -225,3 +225,14 @@
 }
 .workbench-loading { min-width: 0; min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); font-size: .75em; }
 .sidebar-tool-loading { min-height: 120px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); font-size: .68em; }
+.follow-up-suggestions {
+  align-self: center;
+  width: min(780px, calc(100% - 32px));
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  overflow-x: auto;
+  padding: 6px 2px 0;
+}
+.follow-up-suggestions > span { color: var(--text-muted); font-size: 12px; flex: 0 0 auto; }
+.follow-up-suggestions button { flex: 0 0 auto; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

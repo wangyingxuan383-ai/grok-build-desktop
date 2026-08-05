@@ -17,7 +17,7 @@ export interface CliMediaProcessInput {
 }
 
 export function buildCliMediaArgs(prompt: string, transientSessionId: string, toolList: string): string[] {
-  return ["--single", prompt, "--session-id", transientSessionId, "--output-format", "streaming-json", "--always-approve", "--tools", toolList];
+  return ["--no-auto-update", "--single", prompt, "--session-id", transientSessionId, "--output-format", "streaming-json", "--always-approve", "--tools", toolList];
 }
 
 /**

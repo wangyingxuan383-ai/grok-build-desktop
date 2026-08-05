@@ -1421,6 +1421,10 @@ export type ChatEvent =
   | { type: "turn-started"; sessionId: string; presentation: TurnPresentation }
   | { type: "turn-completed"; sessionId: string; presentation?: TurnPresentation }
   | { type: "turn-retry"; sessionId: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
+  | { type: "compact-status"; sessionId: string; status: "started" | "completed" | "failed" | "cancelled"; message?: string }
+  | { type: "session-recap"; sessionId: string; turnId?: string; text: string; contentHash: string }
+  | { type: "follow-ups"; sessionId: string; responseId?: string; promptId?: string; suggestions: Array<{ id: string; text: string }> }
+  | { type: "runtime-update"; sessionId: string; update: CliRuntimeUpdate }
   | { type: "turn-presentations-restore"; sessionId: string; presentations: TurnPresentation[] }
   | { type: "subagent"; sessionId: string; update: { sessionUpdate?: string; subagent_id?: string; duration_ms?: number; output?: string; [key: string]: unknown } }
   | { type: "computer-state"; sessionId: string; state: ComputerTaskState }
@@ -1435,8 +1439,80 @@ export interface CliVersionStatus {
   currentVersion?: string;
   latestVersion?: string;
   channel?: string;
+  installer?: string;
+  autoUpdate?: boolean;
+  checkedAt?: string;
+  changelogUrl?: string;
+  publicLatestVersion?: string;
+  distributionState?: "current" | "stable-update" | "public-ahead" | "error";
   updateAvailable?: boolean;
   error?: string | null;
+}
+
+export type CliCapabilityEvidenceSource = "runtime-declaration" | "successful-probe" | "observed-event" | "version-hint";
+
+export interface CliCapabilityEvidence {
+  name: string;
+  state: "supported" | "unsupported" | "unknown";
+  source: CliCapabilityEvidenceSource;
+  observedAt: string;
+  reason?: string;
+}
+
+export interface CliRuntimeHandshake {
+  protocolVersion: number;
+  agentVersion?: string;
+  checkedAt: string;
+  promptCapabilities?: Record<string, boolean>;
+  sessionCapabilities?: Record<string, boolean>;
+  mcpCapabilities?: Record<string, boolean>;
+  currentModelId?: string;
+  models: Array<{ modelId: string; name?: string; reasoningEfforts?: ReasoningEffort[] }>;
+  commands: string[];
+  extensions: string[];
+  features: {
+    recap: boolean;
+    rewind: boolean;
+    cancelRewind: boolean;
+    pluginDirectories: boolean;
+    fsNotifications: boolean;
+    voiceMode: boolean;
+  };
+}
+
+export interface CliCompatibilitySnapshot {
+  cliVersion?: string;
+  checkedAt: string;
+  handshake?: CliRuntimeHandshake;
+  capabilities: CliCapabilityEvidence[];
+}
+
+export interface CliUpdatePreview {
+  fromVersion: string;
+  targetVersion: string;
+  channel?: string;
+  installer?: string;
+  autoUpdate?: boolean;
+  changelogUrl: string;
+  publicLatestVersion?: string;
+  publicVersionAhead: boolean;
+}
+
+export interface CliUpdateReceipt {
+  fromVersion: string;
+  toVersion: string;
+  status: "updated" | "rolled-back" | "failed";
+  verifiedAt: string;
+  message: string;
+  compatibility?: CliCompatibilitySnapshot;
+}
+
+export interface CliRuntimeUpdate {
+  kind: "model" | "settings" | "goal" | "workflow" | "subagent" | "monitor" | "scheduled-task" | "mcp" | "git" | "announcement" | "session";
+  name: string;
+  at: string;
+  summary?: string;
+  data?: Record<string, unknown>;
 }
 
 export interface LoginState {
@@ -1583,6 +1659,7 @@ export interface GrokDesktopApi {
   openSession(cwd: string, sessionId: string): Promise<{ sessionId: string }>;
   renameSession(sessionId: string, title: string): Promise<void>;
   deleteSession(cwd: string, sessionId: string): Promise<void>;
+  deleteDesktopSessionData(cwd: string, sessionId: string): Promise<void>;
   clearSessions(cwd: string, keepSessionId?: string): Promise<void>;
   pinSession(sessionId: string, pinned: boolean): Promise<void>;
   exportSessionMarkdown(cwd: string, sessionId: string): Promise<string | null>;
@@ -1722,7 +1799,9 @@ export interface GrokDesktopApi {
   getComputerSettings(): Promise<ComputerUseSettings>;
   updateComputerSettings(patch: Partial<ComputerUseSettings>): Promise<ComputerUseSettings>;
   checkCliUpdate(): Promise<CliVersionStatus>;
-  applyCliUpdate(): Promise<CliVersionStatus>;
+  previewCliUpdate(): Promise<CliUpdatePreview>;
+  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string }): Promise<CliUpdateReceipt>;
+  getCliCompatibilitySnapshot(): Promise<CliCompatibilitySnapshot>;
   getCliUpdateHistory(): Promise<CliUpdateRecord[]>;
   exportLogs(): Promise<string | null>;
   onEvent(listener: (event: ChatEvent) => void): () => void;

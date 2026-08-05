@@ -12,19 +12,19 @@ describe("Grok ACP process arguments", () => {
 
   it.each(["none", "minimal", "low", "medium", "high", "xhigh"] as const)(
     "places reasoning effort before stdio for %s",
-    (effort) => expect(buildGrokAgentArgs(effort)).toEqual(["agent", "--reasoning-effort", effort, "stdio"]),
+    (effort) => expect(buildGrokAgentArgs(effort)).toEqual(["--no-auto-update", "agent", "--reasoning-effort", effort, "stdio"]),
   );
 
   it("places repeatable process plugin fallbacks before stdio", () => {
-    expect(buildGrokAgentArgs("low", ["C:\\plugins\\computer", "C:\\plugins\\extra"])).toEqual(["agent", "--reasoning-effort", "low", "--plugin-dir", "C:\\plugins\\computer", "--plugin-dir", "C:\\plugins\\extra", "stdio"]);
+    expect(buildGrokAgentArgs("low", ["C:\\plugins\\computer", "C:\\plugins\\extra"])).toEqual(["--no-auto-update", "agent", "--reasoning-effort", "low", "--plugin-dir", "C:\\plugins\\computer", "--plugin-dir", "C:\\plugins\\extra", "stdio"]);
   });
 
   it("supports the current --effort spelling when advertised by the CLI", () => {
-    expect(buildGrokAgentArgs("high", [], "--effort")).toEqual(["agent", "--effort", "high", "stdio"]);
+    expect(buildGrokAgentArgs("high", [], "--effort")).toEqual(["--no-auto-update", "agent", "--effort", "high", "stdio"]);
   });
 
   it("maps an execution profile to one model, approval and Agent argument set", () => {
-    expect(buildGrokAgentArgs("medium", [], "--reasoning-effort", { modelId: "grok-4.5", alwaysApprove: true, agentProfilePath: "C:\\AppData\\profile.md" })).toEqual(["agent", "--model", "grok-4.5", "--reasoning-effort", "medium", "--always-approve", "--agent-profile", "C:\\AppData\\profile.md", "stdio"]);
+    expect(buildGrokAgentArgs("medium", [], "--reasoning-effort", { modelId: "grok-4.5", alwaysApprove: true, agentProfilePath: "C:\\AppData\\profile.md" })).toEqual(["--no-auto-update", "agent", "--model", "grok-4.5", "--reasoning-effort", "medium", "--always-approve", "--agent-profile", "C:\\AppData\\profile.md", "stdio"]);
   });
 
   it("retains restart-only launch context while deriving approval from the current mode", () => {
@@ -100,7 +100,8 @@ describe("Grok ACP process arguments", () => {
       const result = demuxProviderThinkingText(state, wire.slice(index, index + 3));
       state = result.state;
       chunks.push(...result.chunks);
-    }
+}
+
     const flushed = demuxProviderThinkingText(state, "", true);
     chunks.push(...flushed.chunks);
     expect(chunks.filter((chunk) => chunk.role === "assistant").map((chunk) => chunk.text).join("")).toBe("beforeafter");
@@ -698,5 +699,112 @@ describe("Grok internal queue isolation", () => {
     ]);
     expect(writes).toContainEqual({ jsonrpc: "2.0", id: "queue-snapshot", result: {} });
     expect(writes).toContainEqual({ jsonrpc: "2.0", id: "queue-running", result: {} });
+  });
+});
+
+describe("forward lifecycle compatibility", () => {
+  function lifecycleAdapter() {
+    const events: any[] = [];
+    const logs: string[] = [];
+    const adapter = Object.assign(Object.create(GrokAcpAdapter.prototype), {
+      sessionId: "session-1",
+      currentModelId: "grok-4.5",
+      requestedModelId: "grok-4.5",
+      currentEffort: "high",
+      backgroundTasks: new Map(),
+      completedBackgroundTasks: new Map(),
+      recapHashes: new Set(),
+      models: [],
+      runtimeHandshake: { protocolVersion: 1, checkedAt: new Date().toISOString(), models: [], commands: [], extensions: [], features: { recap: false, rewind: false, cancelRewind: false, pluginDirectories: false, fsNotifications: false, voiceMode: false } },
+      options: { log: { log: async (value: string) => { logs.push(value); } } },
+      emitEvent: (event: any) => { events.push(event); },
+      write: vi.fn(() => true),
+    });
+    return { adapter: adapter as any, events, logs };
+  }
+
+  async function eventFixture(version: "0.2.118" | "0.2.120") {
+    return JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", `events-${version}.json`), "utf8")) as Array<{
+      method: string;
+      params: Record<string, unknown>;
+    }>;
+  }
+
+  it("replays the sanitized 0.2.118 lifecycle fixture, including completion-before-background", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    let requestId = 1;
+    for (const item of await eventFixture("0.2.118")) await adapter.handleServerRequest(item.method, requestId++, item.params);
+    expect(events).toContainEqual(expect.objectContaining({ type: "compact-status", status: "started" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "compact-status", status: "cancelled", message: "user_cancelled" }));
+    expect(events.filter((event) => event.type === "tool-call" && event.tool.rawInput?.taskId === "fixture-fast-task")).toEqual([
+      expect.objectContaining({ tool: expect.objectContaining({ status: "completed", output: "fixture-output" }) }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "session-recap", text: "Sanitized recap fixture." }));
+  });
+
+  it("forward-parses sanitized 0.2.120 extension fixtures without changing local Provider identity", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.providerLocalModelId = "provider:fixture";
+    adapter.currentEffort = "xhigh";
+    let requestId = 1;
+    for (const item of await eventFixture("0.2.120")) await adapter.handleServerRequest(item.method, requestId++, item.params);
+    expect(adapter.currentModelId).toBe("provider:fixture");
+    expect(adapter.currentEffort).toBe("xhigh");
+    expect(adapter.runtimeHandshake.extensions).toEqual(expect.arrayContaining(["x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update"]));
+    expect(events).toContainEqual(expect.objectContaining({ type: "follow-ups", responseId: "fixture-response" }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "runtime-update", update: expect.objectContaining({ kind: "settings", name: "settings/update" }) }));
+  });
+
+  it("keeps a fast completed task terminal when backgrounded arrives later", () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "task_completed", task_id: "fast", exit_code: 0, output: "done" });
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "task_backgrounded", task_id: "fast", command: "echo done" });
+    const updates = events.filter((event) => event.type === "tool-call" && event.tool.rawInput?.taskId === "fast");
+    expect(updates).toHaveLength(1);
+    expect(updates[0].tool.status).toBe("completed");
+  });
+
+  it("deduplicates recaps and exposes compact cancellation", () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "SessionRecap", turn_id: "turn-1", recap: "Summary" });
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "session_recap", turn_id: "turn-1", recap: "Summary" });
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "AutoCompactCancelled", message: "stopped" });
+    expect(events.filter((event) => event.type === "session-recap")).toHaveLength(1);
+    expect(events).toContainEqual(expect.objectContaining({ type: "compact-status", status: "cancelled", message: "stopped" }));
+  });
+
+  it("logs only the method shape for unknown lifecycle events", async () => {
+    const { adapter, logs } = lifecycleAdapter();
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "future_secret_event", schemaVersion: 9, prompt: "do-not-log" });
+    await Promise.resolve();
+    expect(logs.join("\n")).toContain("future_secret_event");
+    expect(logs.join("\n")).toContain("schema=9");
+    expect(logs.join("\n")).not.toContain("do-not-log");
+  });
+
+  it("clears follow-up suggestions on an empty live update and ignores replay", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    await adapter.handleServerRequest("x.ai/follow_ups", "live", { response_id: "r1", promptId: "p1", suggestions: [{ label: "继续" }] });
+    await adapter.handleServerRequest("x.ai/follow_ups", "clear", { response_id: "r1", promptId: "p1", suggestions: [] });
+    await adapter.handleServerRequest("x.ai/follow_ups", "replay", { response_id: "old", suggestions: [{ label: "过期" }], _meta: { isReplay: true } });
+    expect(events.filter((event) => event.type === "follow-ups")).toEqual([
+      expect.objectContaining({ responseId: "r1", promptId: "p1", suggestions: [expect.objectContaining({ text: "继续" })] }),
+      expect.objectContaining({ responseId: "r1", promptId: "p1", suggestions: [] }),
+    ]);
+    expect(adapter.runtimeHandshake.extensions).toContain("x.ai/follow_ups");
+  });
+
+  it("applies a models/update without replacing a custom provider identity or effort", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.providerLocalModelId = "provider:model";
+    adapter.currentEffort = "xhigh";
+    await adapter.handleServerRequest("x.ai/models/update", "models", {
+      currentModelId: "upstream-model",
+      availableModels: [{ modelId: "upstream-model", name: "Upstream", _meta: { supportsReasoningEffort: true, reasoningEfforts: [{ value: "high" }, { value: "xhigh" }] } }],
+    });
+    expect(adapter.currentModelId).toBe("provider:model");
+    expect(adapter.currentEffort).toBe("xhigh");
+    expect(events).toContainEqual(expect.objectContaining({ type: "session-ready", currentModelId: "provider:model", effort: "xhigh" }));
+    expect(adapter.runtimeHandshake.extensions).toContain("x.ai/models/update");
   });
 });

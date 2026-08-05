@@ -139,8 +139,9 @@ import { REASONING_EFFORTS } from "../shared/types";
 import { classifyTurnFailure, turnFailureActions } from "../shared/turn-failure";
 import { AccountVault } from "./services/account-vault";
 import { AuthService } from "./services/auth-service";
-import { locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
+import { buildCliEnv, locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
+import { deleteCliSession } from "./services/cli-session-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
 import { INTERACTIVE_PROMPT_TIMEOUT_MS } from "./services/grok-acp-adapter";
 import { JsonStore } from "./services/json-store";
@@ -987,23 +988,36 @@ export class AppController {
   async deleteSession(cwd: string, sessionId: string): Promise<void> {
     const assignment = await this.profiles.assignment(sessionId);
     await this.processes.close(sessionId);
-    await this.catalog.delete(assignment?.cwd ?? cwd, sessionId);
+    const settings = await this.settingsStore.get();
+    const cliPath = await locateGrokCli(settings.cliPath);
+    if (!cliPath) throw new Error("未找到 Grok CLI；尚未删除任何会话数据。可显式选择“仅清理 Desktop 数据”作为降级操作。");
+    await deleteCliSession(cliPath, sessionId, buildCliEnv(settings, await this.auth.activeApiKey()));
+    await this.catalog.delete(assignment?.cwd ?? cwd, sessionId).catch(() => undefined);
+    await this.cleanupSessionState(sessionId);
+  }
+
+  async deleteDesktopSessionData(cwd: string, sessionId: string): Promise<void> {
+    const assignment = await this.profiles.assignment(sessionId);
+    await this.processes.close(sessionId);
+    await this.catalog.delete(assignment?.cwd ?? cwd, sessionId).catch(() => undefined);
     await this.cleanupSessionState(sessionId);
   }
 
   async clearSessions(cwd: string, keepSessionId?: string): Promise<void> {
     const assignments = (await this.profiles.listAssignments()).filter((value) => samePath(value.sourceWorkspacePath, cwd) && value.sessionId !== keepSessionId);
-    const removedSessionIds = new Set([
-      ...(await this.catalog.list(cwd)).map((session) => session.id),
-      ...assignments.map((value) => value.sessionId),
-    ].filter((id) => id !== keepSessionId));
-    await Promise.all([...removedSessionIds].map((sessionId) => this.processes.close(sessionId).catch(() => undefined)));
-    await this.catalog.clear(cwd, keepSessionId);
-    for (const assignment of assignments) {
-      await this.catalog.delete(assignment.cwd, assignment.sessionId).catch(() => undefined);
+    const targets = new Map<string, string>();
+    for (const session of await this.catalog.list(cwd)) if (session.id !== keepSessionId) targets.set(session.id, cwd);
+    for (const assignment of assignments) targets.set(assignment.sessionId, assignment.cwd);
+    const settings = await this.settingsStore.get();
+    const cliPath = await locateGrokCli(settings.cliPath);
+    if (!cliPath) throw new Error("未找到 Grok CLI；尚未批量删除任何会话");
+    const env = buildCliEnv(settings, await this.auth.activeApiKey());
+    for (const [sessionId, sessionCwd] of targets) {
+      await this.processes.close(sessionId).catch(() => undefined);
+      await deleteCliSession(cliPath, sessionId, env);
+      await this.catalog.delete(sessionCwd, sessionId).catch(() => undefined);
+      await this.cleanupSessionState(sessionId);
     }
-    await this.tokenActivity.forgetSessions(removedSessionIds).catch((error) => this.log.log(`Token 活动明细批量清理失败：${error instanceof Error ? error.message : String(error)}`));
-    for (const sessionId of removedSessionIds) await this.cleanupSessionState(sessionId, false);
   }
 
   private async cleanupSessionState(sessionId: string, forgetTokens = true): Promise<void> {
@@ -2127,7 +2141,9 @@ export class AppController {
   async switchAccount(id: string) { const result = await this.auth.switchAccount(id); this.quota.clear(); return result; }
   async removeAccount(id: string) { const result = await this.auth.removeAccount(id); this.quota.clear(); return result; }
   checkCliUpdate() { return this.updater.check(); }
-  applyCliUpdate() { return this.updater.apply(); }
+  previewCliUpdate() { return this.updater.preview(); }
+  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string }) { return this.updater.apply(input); }
+  getCliCompatibilitySnapshot() { return this.updater.compatibility(); }
   getCliUpdateHistory() { return this.updater.history(); }
   async openPath(path: string): Promise<void> {
     const result = await this.openTarget({ target: path, sessionId: this.focusedSessionId || undefined });

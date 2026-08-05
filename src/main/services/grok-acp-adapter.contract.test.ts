@@ -170,7 +170,7 @@ rl.on("line", async (line) => {
         id: "server-unknown",
         error: { code: -32601 },
       });
-      expect(JSON.parse(await readFile(argsMarker, "utf8"))).toEqual(["agent", "--reasoning-effort", "high", "stdio"]);
+      expect(JSON.parse(await readFile(argsMarker, "utf8"))).toEqual(["--no-auto-update", "agent", "--reasoning-effort", "high", "stdio"]);
       const resumed = new GrokAcpAdapter({
         cliPath: fakeCommand,
         cwd: root,
