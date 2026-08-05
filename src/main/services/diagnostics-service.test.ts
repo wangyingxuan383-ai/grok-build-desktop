@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DiagnosticsService, redactDiagnosticText } from "./diagnostics-service";
+import { strFromU8, unzipSync } from "fflate";
+import { buildSupportBundleArchive, DiagnosticsService, redactDiagnosticText } from "./diagnostics-service";
 
 describe("diagnostic redaction", () => {
   it("removes credentials, user paths, emails and proxy details", () => {
@@ -22,6 +23,30 @@ describe("diagnostic redaction", () => {
     expect(excluded).toContain("会话附件正文");
     expect(excluded).toContain("Base64");
     expect(excluded).toContain("Memory 内容、文件路径和索引");
+  });
+
+  it("redacts adversarial secrets and paths from every serialized support archive entry", () => {
+    const opaque = Buffer.from("provider-secret-value-that-must-never-leak-1234567890").toString("base64");
+    const archive = buildSupportBundleArchive({
+      build: { productName: `Grok ${opaque}`, version: "0.7.0" } as never,
+      report: {
+        checkedAt: new Date().toISOString(), overall: "limited",
+        items: [{
+          id: "bad", label: "Authorization: Bearer hidden-token-value-123456789",
+          status: "warning", summary: "C:\\Users\\Private User\\secret.txt",
+          details: ["\\\\server\\private\\token.txt", "https://host.test/path?access_token=visible-secret"],
+        }],
+      } as never,
+      httpProxyConfigured: true,
+      httpsProxyConfigured: true,
+      log: `API_KEY='raw-secret-value'\n${opaque}\nC:\\Users\\Private User\\secret.txt\n\\\\server\\private\\token.txt`,
+    });
+    const files = unzipSync(archive);
+    const combined = Object.values(files).map((value) => strFromU8(value)).join("\n");
+    for (const secret of [opaque, "hidden-token-value", "raw-secret-value", "Private User", "visible-secret", "server\\private"]) {
+      expect(combined).not.toContain(secret);
+    }
+    expect(combined).toContain("[REDACTED");
   });
 });
 

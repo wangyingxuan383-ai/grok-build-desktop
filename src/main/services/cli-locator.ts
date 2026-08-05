@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import type { AppSettings, CliVersionStatus } from "../../shared/types";
 
@@ -18,6 +18,40 @@ export async function locateGrokCli(configured = ""): Promise<string | undefined
   for (const dir of pathNames) candidates.push(join(dir, process.platform === "win32" ? "grok.exe" : "grok"));
   for (const candidate of candidates) if (await exists(candidate)) return candidate;
   return undefined;
+}
+
+/**
+ * Validate a renderer-supplied CLI override before it is persisted. Merely
+ * checking that a path exists turns the next CLI launch into an arbitrary
+ * executable primitive. A valid override must be a regular Grok-named binary
+ * and identify itself as Grok through the bounded `--version` probe.
+ */
+export async function validateGrokCliExecutable(
+  configured: string,
+  probe: (path: string) => Promise<string> = probeGrokCliIdentity,
+): Promise<string> {
+  const value = configured.trim();
+  if (!value) return "";
+  const canonical = await realpath(value).catch(() => undefined);
+  if (!canonical) throw new Error("指定的 Grok CLI 不存在或无法读取");
+  const info = await stat(canonical).catch(() => undefined);
+  if (!info?.isFile()) throw new Error("指定的 Grok CLI 不是文件");
+  const name = basename(canonical).toLowerCase();
+  if (name !== "grok" && name !== "grok.exe") throw new Error("Grok CLI 文件名必须是 grok 或 grok.exe");
+  const identity = await probe(canonical).catch(() => "");
+  if (!/^grok(?:\s+build)?\s+v?\d+\.\d+\.\d+(?:\s|$)/i.test(identity.trim())) {
+    throw new Error("指定的程序没有通过 Grok CLI 身份验证");
+  }
+  return canonical;
+}
+
+async function probeGrokCliIdentity(path: string): Promise<string> {
+  const { stdout, stderr } = await execFileAsync(path, ["--version"], {
+    timeout: 10_000,
+    windowsHide: true,
+    maxBuffer: 64 * 1024,
+  });
+  return `${stdout}\n${stderr}`.trim();
 }
 
 export function buildCliEnv(settings: AppSettings, apiKey?: string): NodeJS.ProcessEnv {

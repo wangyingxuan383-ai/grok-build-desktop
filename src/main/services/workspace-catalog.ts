@@ -89,11 +89,11 @@ export class WorkspaceCatalog {
   }
 
   async pin(cwd: string, pinned: boolean, settings: AppSettings): Promise<WorkspaceSummary[]> {
-    const data = await this.metadata.get();
     const key = normalize(cwd);
-    if (pinned) data.pinned[key] = cwd;
-    else delete data.pinned[key];
-    await this.metadata.set(data);
+    await this.metadata.mutate((data) => {
+      if (pinned) data.pinned[key] = cwd;
+      else delete data.pinned[key];
+    });
     this.cache = undefined;
     return this.discover(settings, true);
   }

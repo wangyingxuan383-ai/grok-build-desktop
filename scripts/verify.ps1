@@ -30,6 +30,10 @@ if (-not $SkipBuild) {
     npm run build
     if ($LASTEXITCODE -ne 0) { throw "生产构建失败 ($LASTEXITCODE)" }
 }
+npm run check:chunks
+if ($LASTEXITCODE -ne 0) { throw "Renderer 分块预算或 Worker 命名门禁失败 ($LASTEXITCODE)" }
+& (Join-Path $PSScriptRoot 'probe-v070-ui.ps1')
+if ($LASTEXITCODE -ne 0) { throw "当前 v0.7 UI 验收失败 ($LASTEXITCODE)" }
 npm audit --audit-level=high
 if ($LASTEXITCODE -ne 0) { throw "npm 安全审计失败 ($LASTEXITCODE)" }
 
@@ -44,7 +48,7 @@ if ($PackageDirectory) {
     node (Join-Path $PSScriptRoot 'verify-fuses.mjs') $PackagedExecutable
     if ($LASTEXITCODE -ne 0) { throw 'Electron Fuses 校验失败。' }
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $PackagedExecutable
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $PackagedExecutable -ProbeScript 'probe-v042-ui.mjs'
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $PackagedExecutable -ProbeScript 'probe-v070-ui.mjs'
     & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 }
 

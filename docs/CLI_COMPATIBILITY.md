@@ -1,5 +1,13 @@
 # Grok CLI Compatibility
 
+## 0.7.0 audit candidate: session identity, terminal settlement and Plan fixture
+
+- Desktop persists the session's local Provider/model identity separately from the upstream alias reported by `session-ready`. Reopening a managed session therefore cannot silently select the global Grok 4.5 default; if the recorded Provider is disabled, missing or cannot establish its gateway, sending is blocked with a structured error.
+- `turn_completed`, Prompt RPC completion, cancellation and process exit are reconciled by a stable turn ID. A late event from an earlier turn cannot settle a later queued/interjected turn. Desktop-owned accepted/running queue entries are persisted and atomically moved to terminal state.
+- Current CLI Plan behavior is exercised through a test-only in-memory responder in the isolated UI probe. It is not a claim that every installed CLI/model combination has been live-tested. The formal live gate remains required after the 0.7.0 package is built.
+- ACP replay is merged with the local ConversationProjection V2. A partially persisted assistant body receives only a missing suffix; a complete body with different chunk boundaries is not duplicated. If no reliable turn boundary exists, Desktop retains the local projection and marks recovery as unavailable instead of inventing text.
+- Provider protocol translation and media/path boundaries remain evidence-based: unsupported capabilities are not inferred, remote media requires an explicit configured Provider Origin, and Renderer-submitted arbitrary local paths are rejected by the main process.
+
 ## 0.2.117 Plan permission cancellation and exact-plan-file note (Desktop 0.6.25)
 
 - No new private ACP method is required. A mutating/unknown `session/request_permission` that has no explicit reject option is answered with the standard successful `{ outcome: { outcome: "cancelled" } }` shape; a JSON-RPC error is reserved for real transport/protocol failures.

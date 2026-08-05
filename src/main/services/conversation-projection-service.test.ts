@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +31,153 @@ describe("ConversationProjectionService", () => {
       expect.objectContaining({ type: "message-chunk", text: "partial answer" }),
       expect.objectContaining({ type: "error", message: "cancelled" }),
     ]);
+  });
+
+  it("writes a V2 snapshot with runtime, queue, status and terminal usage", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "session-ready", sessionId: "v2", models: [], currentModelId: "custom-model", effort: "xhigh" });
+    await service.record({ type: "mode", sessionId: "v2", mode: "plan" });
+    await service.record({ type: "prompt-queue", sessionId: "v2", entries: [{ id: "queued", sessionId: "v2", text: "later", position: 0, createdAt: new Date().toISOString(), state: "queued" }] });
+    await service.record({ type: "status", sessionId: "v2", status: "working", text: "running" });
+    await service.record({ type: "turn-completed", sessionId: "v2", presentation: { turnId: "turn", ordinal: 0, startedAt: "2026-08-01T00:00:00Z", completedAt: "2026-08-01T00:00:01Z", durationMs: 1_000, outcome: "completed", usage: { totalTokens: 7, source: "acp-turn", exact: true } } });
+    await service.dispose();
+    const projection = await new ConversationProjectionService(root).restore("v2");
+    expect(projection).toMatchObject({ version: 2, runtime: { modelId: "custom-model", effort: "xhigh", mode: "plan" }, queue: { entries: [{ id: "queued" }] } });
+    expect(projection?.events).toEqual([
+      expect.objectContaining({ type: "status", status: "working" }),
+      expect.objectContaining({ type: "turn-completed", presentation: expect.objectContaining({ usage: expect.objectContaining({ totalTokens: 7 }) }) }),
+    ]);
+  });
+
+  it("merges the exact runtime and queue terminal state committed after provisional session-ready", async () => {
+    const root = await tempRoot();
+    let runtime: any;
+    let queue: any;
+    const service = new ConversationProjectionService(root, {
+      runtime: async () => runtime,
+      queue: async () => queue,
+    });
+    await service.record({ type: "session-ready", sessionId: "managed", models: [], currentModelId: "upstream-alias", effort: "high" });
+    runtime = {
+      sessionId: "managed",
+      cwd: "E:\\workspace\\provider",
+      modelId: "local-provider-model",
+      providerId: "provider-a",
+      effort: "high",
+      mode: "agent",
+      updatedAt: "2099-08-04T00:00:00.000Z",
+    };
+    queue = {
+      version: 1,
+      sessionId: "managed",
+      updatedAt: "2099-08-04T00:00:01.000Z",
+      entries: [],
+      terminalEntries: [{ id: "done", sessionId: "managed", text: "queued", position: 0, createdAt: "2099-08-04T00:00:00.000Z", state: "completed" }],
+    };
+    await service.record({ type: "status", sessionId: "managed", status: "idle", text: "ready" });
+    const projection = await service.restore("managed");
+    expect(projection?.runtime).toMatchObject({ cwd: "E:\\workspace\\provider", modelId: "local-provider-model", providerId: "provider-a" });
+    expect(projection?.queue?.terminalEntries).toEqual([expect.objectContaining({ id: "done", state: "completed" })]);
+  });
+
+  it("hard-bounds one UTF-8 streaming block without splitting a character", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root, { maxStreamBlockBytes: 128 });
+    for (let index = 0; index < 20; index += 1) await service.record({ type: "message-chunk", sessionId: "bounded", text: "界".repeat(20) });
+    await service.dispose();
+    const event = (await service.restore("bounded"))?.events.find((value) => value.type === "message-chunk");
+    expect(event?.text).toContain("达到字节上限");
+    expect(event?.text).not.toContain("�");
+    expect(Buffer.byteLength(String(event?.text), "utf8")).toBeLessThanOrEqual(128);
+  });
+
+  it("survives a third reopen without losing the partial body", async () => {
+    const root = await tempRoot();
+    const first = new ConversationProjectionService(root);
+    await first.record({ type: "message-chunk", sessionId: "three", text: "durable partial" });
+    await first.dispose();
+    const second = new ConversationProjectionService(root);
+    expect((await second.restore("three"))?.events).toEqual([expect.objectContaining({ text: "durable partial" })]);
+    await second.dispose();
+    const third = new ConversationProjectionService(root);
+    expect((await third.restore("three"))?.events).toEqual([expect.objectContaining({ text: "durable partial" })]);
+  });
+
+  it("merges only the missing replay suffix into a partially persisted answer", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "user-message", sessionId: "partial-replay", clientMessageId: "local-1", text: "question", delivery: "sent" });
+    await service.record({ type: "message-chunk", sessionId: "partial-replay", text: "partial " });
+    await service.record({ type: "turn-completed", sessionId: "partial-replay" });
+
+    const projection = await service.mergeReplay("partial-replay", [
+      { type: "user-message", sessionId: "partial-replay", clientMessageId: "cli-1", text: "question", delivery: "sent" },
+      { type: "message-chunk", sessionId: "partial-replay", text: "partial answer" },
+      { type: "turn-completed", sessionId: "partial-replay" },
+    ]);
+
+    expect(projection?.events.filter((event) => event.type === "user-message")).toHaveLength(1);
+    expect(projection?.events.flatMap((event) => event.type === "message-chunk" ? [event.text] : []).join("")).toBe("partial answer");
+  });
+
+  it("does not duplicate a complete replay when ACP changes chunk boundaries", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "user-message", sessionId: "rechunked", text: "same question", delivery: "sent" });
+    await service.record({ type: "message-chunk", sessionId: "rechunked", text: "complete " });
+    await service.record({ type: "message-chunk", sessionId: "rechunked", text: "answer" });
+    await service.record({ type: "turn-completed", sessionId: "rechunked" });
+
+    const projection = await service.mergeReplay("rechunked", [
+      { type: "user-message", sessionId: "rechunked", id: "cli-user", text: "same question", delivery: "sent" },
+      { type: "message-chunk", sessionId: "rechunked", text: "complete answer" },
+      { type: "turn-completed", sessionId: "rechunked" },
+    ]);
+
+    expect(projection?.events.flatMap((event) => event.type === "message-chunk" ? [event.text] : []).join("")).toBe("complete answer");
+    expect(projection?.events.filter((event) => event.type === "turn-completed")).toHaveLength(1);
+  });
+
+  it("appends a replayed trailing turn after the durable projection ends", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "user-message", sessionId: "trailing", text: "first", delivery: "sent" });
+    await service.record({ type: "message-chunk", sessionId: "trailing", text: "one" });
+    await service.record({ type: "turn-completed", sessionId: "trailing" });
+
+    const projection = await service.mergeReplay("trailing", [
+      { type: "user-message", sessionId: "trailing", text: "first", delivery: "sent" },
+      { type: "message-chunk", sessionId: "trailing", text: "one" },
+      { type: "turn-completed", sessionId: "trailing" },
+      { type: "user-message", sessionId: "trailing", text: "second", delivery: "sent" },
+      { type: "message-chunk", sessionId: "trailing", text: "two" },
+      { type: "turn-completed", sessionId: "trailing" },
+    ]);
+
+    expect(projection?.events.flatMap((event) => event.type === "user-message" ? [event.text] : [])).toEqual(["first", "second"]);
+    expect(projection?.events.flatMap((event) => event.type === "message-chunk" ? [event.text] : []).join("|")).toBe("one|two");
+  });
+
+  it("does not invent an unmatched replay turn in the middle of durable history", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    for (const [question, answer] of [["first", "one"], ["third", "three"]] as const) {
+      await service.record({ type: "user-message", sessionId: "middle", text: question, delivery: "sent" });
+      await service.record({ type: "message-chunk", sessionId: "middle", text: answer });
+      await service.record({ type: "turn-completed", sessionId: "middle" });
+    }
+
+    const replay = [["first", "one"], ["second", "two"], ["third", "three"]].flatMap(([question, answer]) => [
+      { type: "user-message" as const, sessionId: "middle", text: question!, delivery: "sent" as const },
+      { type: "message-chunk" as const, sessionId: "middle", text: answer! },
+      { type: "turn-completed" as const, sessionId: "middle" },
+    ]);
+    const projection = await service.mergeReplay("middle", replay);
+
+    expect(projection?.events.flatMap((event) => event.type === "user-message" ? [event.text] : [])).toEqual(["first", "third"]);
+    expect(JSON.stringify(projection)).not.toContain("second");
+    expect(JSON.stringify(projection)).not.toContain("two");
   });
 
   it("deletes only the selected session projection", async () => {
@@ -101,5 +248,102 @@ describe("ConversationProjectionService", () => {
     const projection = await restarted.restore("damaged");
     expect(projection?.events.some((event) => event.type === "message-chunk" && String(event.text).includes("0,"))).toBe(true);
     expect(projection?.events.some((event) => event.type === "message-chunk" && String(event.text).includes("204,"))).toBe(true);
+  });
+
+  it("deduplicates a journal record already committed to the snapshot", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    for (let index = 0; index < 205; index += 1) {
+      await service.record({ type: "error", sessionId: "dedupe", message: `event-${index}` });
+    }
+    await service.dispose();
+    const directory = join(root, "conversation-projections");
+    const names = await readdir(directory);
+    const snapshotPath = join(directory, names.find((name) => name.endsWith(".snapshot.json"))!);
+    const journalPath = join(directory, names.find((name) => name.endsWith(".jsonl"))!);
+    const snapshot = JSON.parse(await readFile(snapshotPath, "utf8")) as { events: unknown[]; eventIds: string[] };
+    await appendFile(journalPath, `${JSON.stringify({ id: snapshot.eventIds[0], event: snapshot.events[0] })}\n`, "utf8");
+    const projection = await new ConversationProjectionService(root).restore("dedupe");
+    expect(projection?.events.filter((event) => event.type === "error")).toHaveLength(205);
+  });
+
+  it("deduplicates replayed events that carry a stable client identity", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    const event = { type: "user-message" as const, sessionId: "stable-event", clientMessageId: "client-1", text: "只显示一次", delivery: "sent" as const };
+    await service.record(event);
+    await service.record(structuredClone(event));
+    const projection = await service.restore("stable-event");
+    expect(projection?.events.filter((value) => value.type === "user-message")).toHaveLength(1);
+  });
+
+  it("serializes two projection instances without losing concurrent events", async () => {
+    const root = await tempRoot();
+    const first = new ConversationProjectionService(root);
+    const second = new ConversationProjectionService(root);
+    const writes: Array<Promise<void>> = [];
+    for (let index = 0; index < 205; index += 1) {
+      writes.push(first.record({ type: "error", sessionId: "shared", message: `first-${index}` }));
+      writes.push(second.record({ type: "error", sessionId: "shared", message: `second-${index}` }));
+    }
+    await expect(Promise.all(writes)).resolves.toHaveLength(410);
+    const projection = await new ConversationProjectionService(root).restore("shared");
+    const messages = projection?.events.flatMap((event) => event.type === "error" ? [event.message] : []) ?? [];
+    expect(messages).toHaveLength(410);
+    expect(new Set(messages).size).toBe(410);
+  });
+
+  it("surfaces an explicit marker when compaction truncates old visible events", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root, { maxProjectionEvents: 3, maxProjectionBytes: 1024 * 1024 });
+    for (let index = 0; index < 5; index += 1) await service.record({ type: "error", sessionId: "trimmed", message: `event-${index}` });
+    await service.record({ type: "session-ready", sessionId: "trimmed", models: [] });
+    const projection = await service.restore("trimmed");
+    expect(projection?.events[0]).toMatchObject({ type: "history-recovery", status: "unavailable", message: expect.stringContaining("2 条") });
+    expect(projection?.events.filter((event) => event.type === "error")).toHaveLength(3);
+  });
+
+  it("never writes an oversized snapshot and marks records removed to fit the file cap", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root, {
+      maxProjectionEvents: 100,
+      maxProjectionBytes: 1024 * 1024,
+      maxSnapshotFileBytes: 2_000,
+    });
+    for (let index = 0; index < 8; index += 1) {
+      await service.record({ type: "error", sessionId: "snapshot-cap", message: `${index}-${"x".repeat(500)}` });
+    }
+    await service.record({ type: "session-ready", sessionId: "snapshot-cap", models: [] });
+    const directory = join(root, "conversation-projections");
+    const snapshot = (await readdir(directory)).find((name) => name.endsWith(".snapshot.json"));
+    expect(snapshot).toBeTruthy();
+    expect(Buffer.byteLength(await readFile(join(directory, snapshot!), "utf8"), "utf8")).toBeLessThanOrEqual(2_000);
+    const projection = await service.restore("snapshot-cap");
+    expect(projection?.events[0]).toMatchObject({ type: "history-recovery", status: "unavailable" });
+    expect(projection?.events.some((event) => event.type === "error" && String(event.message).startsWith("7-"))).toBe(true);
+  });
+
+  it("does not read an oversized primary snapshot and falls back to recovery", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    for (let index = 0; index < 205; index += 1) await service.record({ type: "error", sessionId: "oversized", message: `event-${index}` });
+    await service.dispose();
+    const directory = join(root, "conversation-projections");
+    const primary = (await readdir(directory)).find((name) => name.endsWith(".snapshot.json"));
+    expect(primary).toBeTruthy();
+    await truncate(join(directory, primary!), 40 * 1024 * 1024 + 1);
+    const projection = await new ConversationProjectionService(root).restore("oversized");
+    expect(projection?.events.some((event) => event.type === "error" && event.message === "event-204")).toBe(true);
+  });
+
+  it("surfaces a storage failure and accepts later writes after storage recovers", async () => {
+    const root = await tempRoot();
+    const blocked = join(root, "conversation-projections");
+    await writeFile(blocked, "not-a-directory", "utf8");
+    const service = new ConversationProjectionService(root);
+    await expect(service.record({ type: "status", sessionId: "disk", status: "working", text: "before" })).rejects.toThrow();
+    await rm(blocked, { force: true });
+    await service.record({ type: "status", sessionId: "disk", status: "working", text: "after" });
+    expect((await service.restore("disk"))?.events).toEqual([expect.objectContaining({ text: "after" })]);
   });
 });

@@ -1,5 +1,18 @@
 # Feature Matrix
 
+## v0.7.0 comprehensive audit candidate (local, not released)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Session runtime identity | Focused verified | Session-scoped Provider/local model/upstream alias/effort/mode/profile; failed managed-provider launch is fail-closed; fork inherits parent runtime. |
+| Plan/permission/stop lifecycle | Focused + offline fixture verified | Plan receipt closes the old gate before async mode reconciliation; stable turn IDs settle duplicate/late terminal events; isolated responder covers three Plan decisions, permission allow/deny and Stop. Real installed CLI acceptance is still pending. |
+| Persisted queue | Focused verified | accepted/running entries survive restart and move atomically to terminal; late snapshots cannot resurrect or duplicate user messages. |
+| Conversation projection replay | Focused verified | V2 projection stores visible blocks and merges ACP replay by stable user turn/content suffix; partial answers and re-chunked complete answers are covered. |
+| Store/automation concurrency | Focused verified | Cross-process transaction lock/owner fencing and explicit cancellation API; no fixed 24-hour total runtime, optional ACP inactivity is separate. |
+| IPC/path/media boundaries | Focused verified | Runtime schemas, Picker/session/workspace binding, junction/symlink checks, executable-open rejection, session-bound media handles and explicit Provider-Origin remote fetch. |
+| UI and delivery gates | Focused verified | Current v0.7 probe, Plan/permission/Stop fixture wiring, physical 125%–200% scaling, layout regression, renderer chunk/worker gates. Full packaged probe awaits final build. |
+| Release/install | Pending | Version/lockfile are 0.7.0; complete offline suite, formal package, install and cold-start evidence must be produced before any push or Release. |
+
 ## v0.6.25 local Plan permission and terminal-recovery hotfix
 
 | Area | Status | Evidence / boundary |

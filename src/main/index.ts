@@ -1,12 +1,15 @@
 import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, shell } from "electron";
 import type { Event as ElectronEvent } from "electron";
+import { createReadStream } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AppController } from "./app-controller";
 import { ComputerUseOverlay } from "./computer-use-overlay";
 import { registerIpc } from "./ipc";
 import { installApplicationMenu } from "./app-menu";
 import { configureAutomationWorkerStorage } from "./automation-worker-storage";
+import { parseByteRange } from "./media-range";
 import { isAllowedThemeBackgroundUrl } from "./services/theme-service";
 import { createRendererTrustPolicy, isAllowedExternalUrl, isTrustedRendererUrl, trustedDevelopmentUrl } from "./security-policy";
 
@@ -88,9 +91,24 @@ else {
     });
     protocol.handle("grok-media", async (request) => {
       try {
-        const media = await controller?.readTrustedMedia(request.url);
+        const media = await controller?.resolveMediaRequest(request.url);
         if (!media) return new Response("Not found", { status: 404 });
-        return new Response(media.body, { headers: { "Content-Type": media.mimeType, "Cache-Control": "no-store" } });
+        const range = parseByteRange(request.headers.get("range"), media.size);
+        if (range === "invalid") return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${media.size}`, "Accept-Ranges": "bytes" } });
+        const start = range?.start ?? 0;
+        const end = range?.end ?? Math.max(0, media.size - 1);
+        const length = media.size ? end - start + 1 : 0;
+        const stream = media.size ? Readable.toWeb(createReadStream(media.path, { start, end })) as unknown as BodyInit : null;
+        return new Response(stream, {
+          status: range ? 206 : 200,
+          headers: {
+            "Content-Type": media.mimeType,
+            "Content-Length": String(length),
+            "Accept-Ranges": "bytes",
+            ...(range ? { "Content-Range": `bytes ${start}-${end}/${media.size}` } : {}),
+            "Cache-Control": "no-store",
+          },
+        });
       } catch {
         return new Response("Not found", { status: 404 });
       }

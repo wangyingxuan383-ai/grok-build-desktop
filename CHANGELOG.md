@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### 0.7.0 全面审计与稳定性候选（本地进行中）
+
+- 会话运行时按会话保存 Provider、本地模型 ID、上游别名、思考档位、模式和执行档案；恢复旧会话时不再被全局默认模型覆盖。受管 Provider 初始化失败会明确阻止发送，不静默回退到官方模型；分叉会话继承父会话运行时。
+- Plan 决定写入成功后立即关闭旧交互门，模式切换异步收敛；普通回合、Plan、权限等待、队列和插话统一按稳定回合 ID结算。accepted/running 队列落盘，重复终态和迟到事件不会复活或重复消息。离线 UI responder 已覆盖 Plan 三决策、权限允许/拒绝和 Stop 终态。
+- 会话可见内容升级为本地投影 V2：流式正文、过程、工具、计划/权限/问题、错误、媒体、回合耗时和 Usage 可恢复；ACP 回放与本地投影按用户消息和内容后缀合并，避免重开只剩指标或重复回答。
+- JsonStore 使用跨进程事务锁和 owner fencing；自动化任务取消改为显式 API，取消/进程退出/可选 ACP 无活动超时均有持久终态，不再设置 24 小时总时限。支持包日志、IPC 参数、文件路径、媒体和 CLI 路径增加运行时边界校验。
+- 附件、媒体、打开位置和系统路径统一绑定会话/工作区/Picker 签发句柄；阻断任意 Renderer 路径、符号链接越界、可执行文件打开和未经允许的远端媒体。媒体远端默认拒绝，只有显式 Provider Origin 才能进入受限抓取。
+- Provider Chat/Responses/Messages/Gemini 翻译、SSE 错误/EOF/Usage、工具名称映射和扫描状态保留现有成果；未验证能力不伪造模型档位或媒体能力。
+- 当前候选仍在本地门禁阶段：已通过投影、离线 responder、信任边界、Provider/运行时等聚焦测试，以及 TypeScript、主进程构建、Renderer 分块/布局门禁；完整离线套件、打包、安装和真实 CLI/Provider 验收完成前不推送、不创建 Release。
+
 ### 0.6.25 Plan permission hardening and terminal recovery
 
 - Closed the remaining Plan-mode approval bypasses. PowerShell script blocks, subexpressions and static-call syntax are rejected before pipeline classification; read-only auto-approval is based on explicit ACP kinds and parsed commands rather than user-visible titles or tool names.

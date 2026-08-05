@@ -1,4 +1,12 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-03，0.6.25 本地候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-05，0.7.0 本地候选）
+
+> **0.7.0 当前状态：** 工作分支为 `codex/v0.7.0-audit-hardening`，基于 `efc3ab3 chore: checkpoint v0.6.25 local candidate` 继续，未重置既有改动。源码、lockfile 与显示版本已提升至 **0.7.0**；尚未推送、未创建 Release、未覆盖既有 0.6.x 资产。
+
+> **本轮已完成的关键审计修复：** 会话运行时按会话保存 Provider/本地模型/上游别名/思考档位/模式/执行档案，Provider 失败不回退；Plan 决定立即关闭旧交互门并异步切模式；稳定 turnId 结算迟到/重复终态；accepted/running 队列持久化；ConversationProjection V2 对 ACP 回放做缺失尾部合并；JsonStore/自动化采用事务锁和显式取消；附件、媒体句柄、打开位置、CLI 路径及符号链接做主进程可信边界校验。
+
+> **验证证据：** 投影回放 20 项、离线 UI responder 10 项、信任边界 40 项及运行时/Provider 聚焦测试已通过；TypeScript、主进程构建、Renderer 布局/分块/交付门禁已通过。当前仍未完成完整离线套件、正式打包安装、真实 CLI/Provider/双会话实机验收，不能把 0.7.0 称为正式发布版。
+
+> **下一步顺序：** 运行全量离线测试和生产/资源构建；启用隔离 AppData 实跑 `probe-v070-ui.ps1`；生成 0.7.0 Setup/Portable/SHA-256/SBOM/许可证报告并 per-user 安装；冷启动检查 About/诊断/进程/ASAR/Fuses/快捷方式；保留产物交给用户验收。验收通过后才讨论 GitHub push/Release。
 
 > **0.6.25 当前工作状态：** 用户复验 0.6.24 后仍遇到 Plan 长回合持续 Stop、停止无反馈及 Plan 权限问题，并要求排查同类缺口。补充只读审计确认旧门禁仍有四类结构性漏洞：PowerShell 脚本块可藏在看似只读的管道里；工具显示标题可把未知工具伪装成读取；Plan 文件门只拦工作区写入而放过任意外部路径；没有拒绝选项时 Desktop 返回 JSON-RPC error，可能让 CLI 重试或保持等待。源码现改为拒绝优先的命令解析、显式 ACP kind、仅当前会话精确 `plan.md` 可写及标准 `cancelled` 回执。
 

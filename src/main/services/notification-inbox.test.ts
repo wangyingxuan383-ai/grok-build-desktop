@@ -23,4 +23,12 @@ describe("NotificationInboxService", () => {
     expect(repeated.id).toBe(first.id);
     expect(await inbox.list()).toHaveLength(1);
   });
+
+  it("does not lose concurrent notifications", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-inbox-concurrent-"));
+    roots.push(root);
+    const inbox = new NotificationInboxService(root);
+    await Promise.all(Array.from({ length: 25 }, (_, index) => inbox.add({ kind: "completion", title: `任务 ${index}` })));
+    expect(await inbox.list()).toHaveLength(25);
+  });
 });

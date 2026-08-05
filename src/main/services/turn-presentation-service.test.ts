@@ -37,4 +37,16 @@ describe("TurnPresentationService", () => {
       { turnId: "legacy", outcome: undefined, durationMs: undefined },
     ]);
   });
+
+  it("preserves concurrent turn completions for one session", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok turns concurrent "));
+    const service = new TurnPresentationService(root);
+    await Promise.all(Array.from({ length: 20 }, (_, ordinal) => service.recordForSession("session", {
+      turnId: `turn-${ordinal}`,
+      ordinal,
+      startedAt: `2026-07-22T00:00:${String(ordinal).padStart(2, "0")}.000Z`,
+      outcome: "completed",
+    })));
+    expect(await service.list("session")).toHaveLength(20);
+  });
 });

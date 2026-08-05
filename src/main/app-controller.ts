@@ -1,15 +1,15 @@
 import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { copyFile, cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
   AppSettings,
   Attachment,
   BootstrapData,
   ChatEvent,
+  ConversationProjection,
   ReasoningEffort,
   SessionMode,
   SessionSummary,
@@ -21,6 +21,7 @@ import type {
   ClaudeSessionSummary,
   GrokQuotaSnapshot,
   MediaCapabilities,
+  MediaCreationKind,
   MediaCreationRequest,
   MediaGenerationJob,
   MediaArtifact,
@@ -129,6 +130,8 @@ import type {
   FailureDiagnosisReport,
   ToolCallState,
   TurnFailure,
+  ProviderLaunchContext,
+  UserMessageAttachmentPreview,
 } from "../shared/types";
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
@@ -136,14 +139,17 @@ import { REASONING_EFFORTS } from "../shared/types";
 import { classifyTurnFailure, turnFailureActions } from "../shared/turn-failure";
 import { AccountVault } from "./services/account-vault";
 import { AuthService } from "./services/auth-service";
-import { locateGrokCli } from "./services/cli-locator";
+import { locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
 import { INTERACTIVE_PROMPT_TIMEOUT_MS } from "./services/grok-acp-adapter";
 import { JsonStore } from "./services/json-store";
 import { AgentChangeService } from "./services/agent-change-service";
+import { TurnFileChangeJournal } from "./services/turn-file-change-journal";
+import { MediaAccessService } from "./services/media-access-service";
 import { TokenActivityService } from "./services/token-activity-service";
 import { ConversationProjectionService } from "./services/conversation-projection-service";
+import { buildForkRuntimePreferences, SessionRuntimeStateService } from "./services/session-runtime-state-service";
 import { LogService, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
@@ -164,7 +170,7 @@ import { inspectAttachmentPrivacy } from "./services/attachment-privacy-service"
 import { verifyResourceManifest, type ResourceIntegrityResult } from "./services/resource-integrity";
 import { backupUiMetadataForVersion } from "./services/metadata-migration";
 import { DEFAULT_THEME, mergeThemeSettings, ThemeService } from "./services/theme-service";
-import { ProviderService, validateGrokConfig } from "./services/provider-service";
+import { managedBaseUrlEnvironmentName, ProviderService, validateGrokConfig } from "./services/provider-service";
 import { AutomationService } from "./services/automation-service";
 import { resolveAutomationSessionAction } from "./services/automation-session-lifecycle";
 import { NotificationInboxService } from "./services/notification-inbox";
@@ -182,7 +188,13 @@ import { resolveExistingWorkspacePath } from "./services/workspace-path-policy";
 import { AttachmentCacheService } from "./services/attachment-cache-service";
 import { TurnPresentationService } from "./services/turn-presentation-service";
 import { buildCliMediaArgs, runCliMediaProcess } from "./services/media-cli-runner";
-import { resolveTrustedMediaArtifactSource, sweepSessionMediaCache } from "./services/media-cache-service";
+import { fetchTrustedRemoteMediaArtifact, normalizeAcpMediaArtifactSource, resolveTrustedMediaArtifactSource, sessionCacheKey, sweepSessionMediaCache } from "./services/media-cache-service";
+import { canonicalExistingPath, hasCanonicalPath, rememberCanonicalPath, resolveTrustedRendererPath } from "./services/renderer-path-policy";
+import {
+  isOfflineUiSessionResponderEnabled,
+  OFFLINE_UI_SESSION_IDS,
+  OfflineUiSessionResponder,
+} from "./services/offline-ui-session-responder";
 
 export const DEFAULT_SETTINGS: AppSettings = {
   cliPath: "",
@@ -203,6 +215,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   showArchivedCodex: false,
   theme: structuredClone(DEFAULT_THEME),
 };
+
+const UNSAFE_SYSTEM_OPEN_EXTENSIONS = new Set([
+  ".appx", ".bat", ".chm", ".cmd", ".com", ".cpl", ".exe", ".hta", ".inf", ".ins",
+  ".isp", ".js", ".jse", ".lnk", ".msc", ".msi", ".msix", ".msp", ".ps1", ".reg",
+  ".scr", ".sct", ".url", ".vbe", ".vbs", ".ws", ".wsc", ".wsf", ".wsh",
+]);
 
 export class AppController {
   private readonly settingsStore: JsonStore<AppSettings>;
@@ -243,10 +261,13 @@ export class AppController {
   private readonly attachmentCache: AttachmentCacheService;
   private readonly turnPresentations: TurnPresentationService;
   private readonly conversationProjections: ConversationProjectionService;
+  private readonly sessionRuntime: SessionRuntimeStateService;
   private window?: BrowserWindow;
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
   private readonly agentChanges = new AgentChangeService();
+  private readonly turnFileChanges = new TurnFileChangeJournal();
+  private readonly mediaAccess: MediaAccessService;
   private readonly tokenActivity: TokenActivityService;
   private readonly runningSessions = new Set<string>();
   private readonly projectionReplaying = new Set<string>();
@@ -256,6 +277,8 @@ export class AppController {
   private readonly mediaJobs = new Map<string, MediaGenerationJob>();
   private readonly mediaJobControls = new Map<string, { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string } }>();
   private readonly trustedPickedPaths = new Set<string>();
+  private readonly trustedWorkspacePaths = new Set<string>();
+  private readonly offlineUiSessionResponder?: OfflineUiSessionResponder;
 
   constructor(private readonly userDataPath: string) {
     this.appConfig = loadAppConfig();
@@ -268,8 +291,19 @@ export class AppController {
     this.vault = new AccountVault(userDataPath);
     this.catalog = new SessionCatalog(userDataPath);
     this.attachmentCache = new AttachmentCacheService(userDataPath);
+    this.mediaAccess = new MediaAccessService(userDataPath);
     this.turnPresentations = new TurnPresentationService(userDataPath);
-    this.conversationProjections = new ConversationProjectionService(userDataPath);
+    this.sessionRuntime = new SessionRuntimeStateService(userDataPath);
+    this.conversationProjections = new ConversationProjectionService(userDataPath, {
+      runtime: (sessionId) => this.sessionRuntime.get(sessionId),
+      queue: async (sessionId) => ({
+        version: 1,
+        sessionId,
+        updatedAt: new Date().toISOString(),
+        entries: await this.sessionRuntime.getQueue(sessionId),
+        terminalEntries: await this.sessionRuntime.getTerminalQueue(sessionId),
+      }),
+    });
     this.codex = new CodexSessionCatalog(userDataPath, this.log);
     this.claude = new ClaudeSessionCatalog(userDataPath, this.log);
     this.workspaces = new WorkspaceCatalog(userDataPath, this.codex, this.claude);
@@ -315,8 +349,9 @@ export class AppController {
       (leaseId) => void this.computer.releaseLease(leaseId),
       () => this.vault.mcpSecretEnvironment(),
       (cwd) => this.memory.sessionEnvironment(cwd),
-      (scopeId) => this.providerLaunchEnvironment(scopeId),
+      (context) => this.providerLaunchEnvironment(context),
       (sessionId, session) => this.finalizeMemorySession(sessionId, session),
+      this.sessionRuntime,
     );
     this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
       reload: {
@@ -413,6 +448,9 @@ export class AppController {
     });
     this.tokenActivity = new TokenActivityService(userDataPath);
     this.diagnostics = new DiagnosticsService(userDataPath, this.buildInfo, () => this.settingsStore.get(), () => this.auth.activeApiKey(), () => this.getComputerCapability(), this.log, this.appConfig.mockCliPath, { providers: () => this.providers.list(), automations: () => this.automations.list(), quota: () => this.quota.get() });
+    this.offlineUiSessionResponder = isOfflineUiSessionResponderEnabled()
+      ? new OfflineUiSessionResponder((event) => this.window?.webContents.send("grok:event", event))
+      : undefined;
   }
 
   setWindow(window: BrowserWindow): void {
@@ -481,13 +519,19 @@ export class AppController {
     return result.filePath;
   }
 
-  async readTrustedMedia(source: string): Promise<{ body: ArrayBuffer; mimeType: string }> {
+  async openMedia(source: string): Promise<void> {
+    const path = await this.resolveTrustedMediaPath(source);
+    const result = await shell.openPath(path);
+    if (result) throw new Error(result);
+  }
+
+  async resolveMediaRequest(source: string): Promise<{ path: string; mimeType: string; size: number }> {
     const path = await this.resolveTrustedMediaPath(source);
     const info = await stat(path);
-    if (!info.isFile() || info.size > 256 * 1024 * 1024) throw new Error("媒体文件不存在或超过读取限制");
+    if (!info.isFile()) throw new Error("媒体文件不存在");
     const mimeType = localMediaMimeType(path);
     if (!mimeType) throw new Error("媒体文件类型不受支持");
-    return { body: Uint8Array.from(await readFile(path)).buffer as ArrayBuffer, mimeType };
+    return { path, mimeType, size: info.size };
   }
 
   private async loadTrustedImage(source: string): Promise<Electron.NativeImage> {
@@ -506,29 +550,26 @@ export class AppController {
   }
 
   private async resolveTrustedMediaPath(source: string): Promise<string> {
-    let requested: string;
+    if (source.startsWith("grok-media://access/")) {
+      return (await this.mediaAccess.resolve(source, this.focusedSessionId || undefined)).path;
+    }
+    // The only raw path surface retained is the short-lived preview URL that
+    // the main process itself returned from a file picker. Durable user and
+    // assistant media is always exposed through an opaque MediaAccessHandle.
+    // Do not turn file:/absolute strings from a compromised Renderer into a
+    // workspace-wide media read primitive.
+    let requested = "";
     try {
       if (source.startsWith("grok-media:")) {
-        requested = new URL(source).searchParams.get("path") || "";
-      } else if (source.startsWith("file:")) requested = fileURLToPath(source);
-      else if (isAbsolute(source)) requested = source;
-      else throw new Error("媒体来源不是本地文件");
+        const url = new URL(source);
+        if (url.hostname !== "local") throw new Error("媒体访问句柄无效");
+        requested = url.searchParams.get("path") || "";
+      } else throw new Error("媒体来源必须使用应用签发的访问句柄");
     } catch { throw new Error("媒体来源地址无效"); }
     let path: string;
     try { path = await realpath(requested); } catch { throw new Error("媒体文件不存在或无法读取"); }
-    const roots = [
-      join(this.userDataPath, "session-attachments"),
-      join(this.userDataPath, "session-media"),
-      join(homedir(), ".grok", "sessions"),
-    ];
-    const executionRoot = this.focusedSessionId ? this.processes.snapshot(this.focusedSessionId)?.cwd : undefined;
-    if (executionRoot) roots.push(executionRoot);
-    if (this.trustedPickedPaths.has(path)) return path;
-    for (const root of roots) {
-      const canonicalRoot = await realpath(root).catch(() => undefined);
-      if (canonicalRoot && pathWithin(path, canonicalRoot)) return path;
-    }
-    throw new Error("媒体来源不在会话缓存、Grok 会话或受信任工作区");
+    if (hasCanonicalPath(this.trustedPickedPaths, path)) return path;
+    throw new Error("媒体预览路径不是本次应用文件选择器签发的路径");
   }
 
   async prepareAppearance(): Promise<ThemeSettings> {
@@ -548,9 +589,23 @@ export class AppController {
     await this.attachmentCache.sweep(existingSessionIds).catch(() => this.log.log("附件缓存清理失败"));
     await sweepSessionMediaCache(join(this.userDataPath, "session-media"), existingSessionIds)
       .catch(() => this.log.log("媒体缓存清理失败"));
+    await this.mediaAccess.sweep(existingSessionIds).catch(() => this.log.log("媒体访问句柄清理失败"));
     await this.uiState.sweepDraftAttachments().catch(() => this.log.log("输入框文本草稿缓存清理失败"));
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1") await this.auth.importCurrentIfNeeded().catch((error) => this.log.log(error));
     let settings = await this.settingsStore.get();
+    if (settings.cliPath && settings.cliPath !== this.appConfig.mockCliPath) {
+      try {
+        const cliPath = await validateGrokCliExecutable(settings.cliPath);
+        if (cliPath !== settings.cliPath) settings = await this.settingsStore.patch({ cliPath });
+      } catch (error) {
+        await this.log.log(`已拒绝未通过身份验证的 Grok CLI 路径：${error instanceof Error ? error.message : String(error)}`);
+        settings = await this.settingsStore.patch({ cliPath: "" });
+      }
+    }
+    for (const workspace of [settings.activeWorkspace, ...settings.recentWorkspaces].filter(Boolean)) {
+      const canonical = await canonicalExistingPath(workspace, "directory").catch(() => undefined);
+      if (canonical) rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+    }
     if (settings.fontScale < 85) {
       settings = await this.settingsStore.patch({ fontScale: 100, uiDensity: "compact" });
     } else if (settings.fontScale > 130) {
@@ -601,16 +656,26 @@ export class AppController {
   async chooseWorkspace(): Promise<string | null> {
     const result = await dialog.showOpenDialog(this.window!, { title: "选择工作区", properties: ["openDirectory", "createDirectory"] });
     if (result.canceled || !result.filePaths[0]) return null;
-    await this.setWorkspace(result.filePaths[0]);
-    return result.filePaths[0];
+    const canonical = await canonicalExistingPath(result.filePaths[0], "directory");
+    rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+    await this.setWorkspace(canonical);
+    return canonical;
   }
 
   async setWorkspace(cwd: string): Promise<SessionSummary[]> {
     const settings = await this.settingsStore.get();
-    const recent = [cwd, ...settings.recentWorkspaces.filter((value) => value.toLowerCase() !== cwd.toLowerCase())].slice(0, 12);
-    await this.settingsStore.patch({ activeWorkspace: cwd, recentWorkspaces: recent });
-    this.workspaceFiles.invalidate(cwd);
-    return this.listSessions(cwd);
+    const persisted = await Promise.all([settings.activeWorkspace, ...settings.recentWorkspaces]
+      .filter(Boolean)
+      .map((value) => canonicalExistingPath(value, "directory").catch(() => undefined)));
+    for (const value of persisted) if (value) rememberCanonicalPath(this.trustedWorkspacePaths, value, 64);
+    const canonical = await canonicalExistingPath(cwd, "directory");
+    if (!hasCanonicalPath(this.trustedWorkspacePaths, canonical)) {
+      throw new Error("工作区必须来自应用目录选择器、最近项目或已发现项目");
+    }
+    const recent = [canonical, ...settings.recentWorkspaces.filter((value) => !samePath(value, canonical))].slice(0, 12);
+    await this.settingsStore.patch({ activeWorkspace: canonical, recentWorkspaces: recent });
+    this.workspaceFiles.invalidate(canonical);
+    return this.listSessions(canonical);
   }
 
   async listSessions(cwd?: string, query = ""): Promise<SessionSummary[]> {
@@ -660,7 +725,12 @@ export class AppController {
   }
 
   async discoverWorkspaces(force = false): Promise<WorkspaceSummary[]> {
-    return this.workspaces.discover(await this.settingsStore.get(), force);
+    const workspaces = await this.workspaces.discover(await this.settingsStore.get(), force);
+    for (const workspace of workspaces) {
+      const canonical = await canonicalExistingPath(workspace.cwd, "directory").catch(() => undefined);
+      if (canonical) rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+    }
+    return workspaces;
   }
 
   async pinWorkspace(cwd: string, pinned: boolean): Promise<WorkspaceSummary[]> {
@@ -825,9 +895,11 @@ export class AppController {
       targetCwd = worktree.path;
     }
     const settings = await this.settingsStore.get();
+    const modelId = compiled.modelId || settings.defaultModel;
+    const providerId = await this.resolveManagedProviderSelection(modelId);
     let result: { sessionId: string };
     try {
-      result = await this.processes.createConfigured(targetCwd, compiled.effort || settings.defaultEffort, compiled.mode, compiled.modelId || settings.defaultModel, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+      result = await this.processes.createConfigured(targetCwd, compiled.effort || settings.defaultEffort, compiled.mode, modelId, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
     } catch (error) {
       if (worktree) await this.worktrees.remove(workspace, worktree.id, true).catch(() => undefined);
       throw error;
@@ -837,6 +909,7 @@ export class AppController {
     await this.catalog.markRead(result.sessionId);
     const assignment: SessionExecutionAssignment = { sessionId: result.sessionId, sourceWorkspacePath: workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
     await this.profiles.assign(assignment);
+    await this.persistSessionProviderIdentity(result.sessionId, targetCwd, modelId, providerId, compiled.profile.id);
     if (worktree) await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "worktree", id: worktree.id, title: compiled.profile.name, suggestedTitle: worktree.name }]);
     return { sessionId: result.sessionId, cwd: targetCwd, profileId: compiled.profile.id, worktreeId: worktree?.id };
   }
@@ -862,14 +935,21 @@ export class AppController {
         projection = recovery.projection;
         if (recovery.status !== "recovered") recoveryMessage = recovery.message;
       }
+      const replayed = [...(this.projectionReplayBuffers.get(sessionId) ?? [])];
+      if (replayed.length) {
+        try {
+          projection = await this.conversationProjections.mergeReplay(sessionId, replayed) ?? projection;
+        } catch (error) {
+          await this.log.log(`会话回放与本地投影合并失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
       if (projection) {
-        this.window?.webContents.send("grok:event", { type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent);
+        this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent));
       } else {
         // A pre-0.6.16 session may have no local projection yet. Do not discard
         // the ACP replay merely because the new projection layer is active:
         // deliver the buffered replay once, then seed the durable projection so
         // second and third reopens no longer depend on CLI replay completeness.
-        const replayed = this.projectionReplayBuffers.get(sessionId) ?? [];
         for (const event of replayed) {
           this.window?.webContents.send("grok:event", event);
           await this.conversationProjections.record(event)
@@ -930,6 +1010,8 @@ export class AppController {
     await this.profiles.removeAssignment(sessionId);
     if (forgetTokens) await this.tokenActivity.forgetSession(sessionId).catch((error) => this.log.log(`Token 活动明细清理失败：${error instanceof Error ? error.message : String(error)}`));
     this.agentChanges.clear(sessionId);
+    this.turnFileChanges.clearSession(sessionId);
+    await this.mediaAccess.removeSession(sessionId).catch((error) => this.log.log(`媒体访问句柄清理失败：${error instanceof Error ? error.message : String(error)}`));
     await this.dashboard.clear(`session:${sessionId}`);
     await this.attachmentCache.cleanupSession(sessionId);
     await rm(join(this.userDataPath, "session-media", createHashForPath(sessionId)), { recursive: true, force: true })
@@ -944,6 +1026,7 @@ export class AppController {
     }
     await this.turnPresentations.delete(sessionId);
     await this.conversationProjections.delete(sessionId);
+    await this.sessionRuntime.delete(sessionId);
     if (this.focusedSessionId === sessionId) this.focusedSessionId = "";
   }
 
@@ -975,12 +1058,12 @@ export class AppController {
       const normalized: string[] = [];
       for (const path of request.referencePaths.slice(0, 8)) {
         const target = await realpath(path).catch(() => undefined);
-        if (!target || (!pathWithin(target, root) && !this.trustedPickedPaths.has(target))) {
+        if (!target || (!pathWithin(target, root) && !hasCanonicalPath(this.trustedPickedPaths, target))) {
           throw new Error("参考图必须位于当前会话目录，或由“添加参考图”文件选择器明确选取");
         }
         if (!mimeForExtension(extname(target).toLowerCase())) throw new Error("参考图必须是 PNG、JPEG、WebP 或 GIF");
         normalized.push(target);
-        this.trustedPickedPaths.delete(target);
+        this.trustedPickedPaths.delete(process.platform === "win32" ? target.toLowerCase() : target);
       }
       request = { ...request, referencePaths: normalized };
     }
@@ -1045,20 +1128,22 @@ export class AppController {
     job.updatedAt = new Date().toISOString();
     this.publishMediaJob(job);
     try {
-      const artifacts = job.route === "provider"
-        ? request.kind === "image"
-          ? await this.providers.generateImage({ providerId: request.providerId!, modelId: request.modelId!, prompt: request.prompt, aspectRatio: request.aspectRatio, signal: control.abort.signal })
-          : await this.providers.generateVideo({
-            providerId: request.providerId!,
-            modelId: request.modelId!,
-            prompt: request.prompt,
-            aspectRatio: request.aspectRatio,
-            duration: request.duration ?? 6,
-            resolution: request.resolution ?? "480p",
-            referencePaths: request.referencePaths,
-            signal: control.abort.signal,
-          })
-        : await this.runCliMedia(jobId, request, control);
+      let artifacts: MediaArtifact[];
+      if (job.route === "provider") artifacts = await this.runProviderMedia(request, control.abort.signal);
+      else {
+        try { artifacts = await this.runCliMedia(jobId, request, control); }
+        catch (cliError) {
+          if (request.route !== "auto" || control.abort.signal.aborted) throw cliError;
+          const fallback = await this.providerMediaFallback(request.sessionId, request.kind);
+          if (!fallback) throw cliError;
+          job.route = "provider";
+          job.message = `Grok CLI 路由失败，正在回退到 ${fallback.providerName} · ${fallback.modelName}`;
+          job.updatedAt = new Date().toISOString();
+          this.publishMediaJob(job);
+          request = { ...request, providerId: fallback.providerId, modelId: fallback.modelId };
+          artifacts = await this.runProviderMedia(request, control.abort.signal);
+        }
+      }
       if (control.abort.signal.aborted) throw control.abort.signal.reason;
       job.message = "正在保存媒体结果";
       job.progress = 90;
@@ -1070,8 +1155,11 @@ export class AppController {
         const transientWorkspaceRoot = await this.catalog.resolveSessionRoot(control.transientSession.cwd);
         artifactRoots.push(join(transientWorkspaceRoot, control.transientSession.sessionId));
       }
+      const allowedOrigins = job.route === "provider"
+        ? await this.providerMediaAllowedOrigins(request.providerId)
+        : [];
       for (const artifact of artifacts) {
-        const cached = await this.cacheMediaArtifact(request.sessionId, artifact, artifactRoots);
+        const cached = await this.cacheMediaArtifact(request.sessionId, artifact, artifactRoots, allowedOrigins, control.abort.signal);
         job.artifacts.push(cached);
         await this.handleEvent({ type: "media", sessionId: request.sessionId, media: cached.media, source: cached.source, isData: cached.isData, mimeType: cached.mimeType });
       }
@@ -1104,7 +1192,12 @@ export class AppController {
     if (!session) throw new Error("会话当前未加载");
     const toolList = request.kind === "image" ? "image_gen" : "video_gen,image_to_video,reference_to_video";
     const prompt = mediaToolPrompt(request);
-    const providerEnvironment = await this.providerLaunchEnvironment(`media-${crypto.randomUUID()}`);
+    const providerEnvironment = await this.providerLaunchEnvironment({
+      scopeId: `media-${crypto.randomUUID()}`,
+      sessionId: request.sessionId,
+      cwd: session.cwd,
+      modelId: session.modelId,
+    });
     const apiKey = await this.auth.activeApiKey();
     // `grok --single` still writes a normal CLI session. Give it an isolated
     // UUID and remove that transient catalog entry only after its artifacts
@@ -1121,7 +1214,9 @@ export class AppController {
       env: { ...process.env, ...providerEnvironment, ...(apiKey ? { XAI_API_KEY: apiKey } : {}) },
       media: request.kind,
       signal: control.abort.signal,
-      timeoutMs: 600_000,
+      // No wall-clock ceiling: long generations remain valid while the CLI is
+      // still producing progress. A ten-minute silence is treated as a stall.
+      idleTimeoutMs: 600_000,
       windowsVerbatimArguments: batch,
       onSpawn: (child) => { control.child = child; },
       onProgress: () => {
@@ -1136,30 +1231,34 @@ export class AppController {
     });
   }
 
-  private async cacheMediaArtifact(sessionId: string, artifact: MediaArtifact, additionalTrustedRoots: readonly string[] = []): Promise<MediaArtifact> {
+  private async cacheMediaArtifact(
+    sessionId: string,
+    artifact: MediaArtifact,
+    additionalTrustedRoots: readonly string[] = [],
+    allowedOrigins: readonly string[] = [],
+    signal?: AbortSignal,
+  ): Promise<MediaArtifact> {
     const directory = join(this.userDataPath, "session-media", createHashForPath(sessionId));
     await mkdir(directory, { recursive: true });
     if (!artifact.isData) {
       if (/^https?:\/\//i.test(artifact.source)) {
-        const response = await session.defaultSession.fetch(artifact.source, {
-          method: "GET",
-          redirect: "manual",
-          signal: AbortSignal.timeout(120_000),
+        const response = await fetchTrustedRemoteMediaArtifact(artifact.source, {
+          allowedOrigins,
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
         });
         if (!response.ok) throw new Error(`媒体产物下载返回 HTTP ${response.status}`);
         const mimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
         if (artifact.media === "image" ? !mimeType?.startsWith("image/") : !mimeType?.startsWith("video/")) {
           throw new Error("媒体产物 URL 返回了不匹配的内容类型");
         }
-        const buffer = await readBoundedResponseBuffer(response, artifact.media === "video" ? 256 * 1024 * 1024 : 24 * 1024 * 1024);
-        if (artifact.media === "video" && !isSupportedVideoBuffer(buffer)) throw new Error("媒体 URL 返回的视频文件无效或容器不受支持");
         const extension = artifact.media === "video"
           ? mimeType === "video/webm" ? ".webm" : mimeType === "video/quicktime" ? ".mov" : ".mp4"
           : mimeType === "image/jpeg" ? ".jpg" : mimeType === "image/webp" ? ".webp" : mimeType === "image/gif" ? ".gif" : ".png";
         const target = join(directory, `${artifact.id}${extension}`);
-        await writeFile(target, buffer);
-        if (artifact.media === "image" && nativeImage.createFromBuffer(buffer).isEmpty()) throw new Error("媒体 URL 返回的图片文件无效");
-        return { ...artifact, source: target, mimeType, isData: false, name: artifact.name || `${artifact.id}${extension}` };
+        await writeBoundedResponseFile(response, target, artifact.media === "video" ? 256 * 1024 * 1024 : 24 * 1024 * 1024);
+        if (artifact.media === "video" && !await isSupportedVideoFile(target)) throw new Error("媒体 URL 返回的视频文件无效或容器不受支持");
+        if (artifact.media === "image" && nativeImage.createFromPath(target).isEmpty()) throw new Error("媒体 URL 返回的图片文件无效");
+        return this.exposeCachedMedia(sessionId, { ...artifact, source: target, mimeType, isData: false, name: artifact.name || `${artifact.id}${extension}` });
       }
       const sessionRoot = this.processes.snapshot(sessionId)?.cwd;
       const trustedRoots = [...additionalTrustedRoots];
@@ -1172,17 +1271,129 @@ export class AppController {
       const target = join(directory, `${artifact.id}${extension}`);
       await copyFile(source, target);
       if (artifact.media === "image" && nativeImage.createFromPath(target).isEmpty()) throw new Error("媒体工具返回的图片文件无效");
-      if (artifact.media === "video" && !isSupportedVideoBuffer(await readFile(target))) throw new Error("媒体工具返回的视频文件无效或容器不受支持");
-      return { ...artifact, source: target, isData: false };
+      if (artifact.media === "video" && !await isSupportedVideoFile(target)) throw new Error("媒体工具返回的视频文件无效或容器不受支持");
+      return this.exposeCachedMedia(sessionId, { ...artifact, source: target, isData: false });
+    }
+    const maxBytes = artifact.media === "video" ? 256 * 1024 * 1024 : 24 * 1024 * 1024;
+    if (Buffer.byteLength(artifact.source, "ascii") > Math.ceil(maxBytes * 4 / 3) + 8) {
+      throw new Error("媒体产物超过缓存大小限制");
     }
     const buffer = Buffer.from(artifact.source, "base64");
+    if (buffer.byteLength > maxBytes) throw new Error("媒体产物超过缓存大小限制");
     const image = nativeImage.createFromBuffer(buffer);
     if (artifact.media === "image" && image.isEmpty()) throw new Error("Provider 返回的图片数据无效");
     if (artifact.media === "video" && !isSupportedVideoBuffer(buffer)) throw new Error("Provider 返回的视频数据无效或容器不受支持");
     const extension = artifact.media === "video" ? ".mp4" : artifact.mimeType === "image/jpeg" ? ".jpg" : ".png";
     const target = join(directory, `${artifact.id}${extension}`);
     await writeFile(target, buffer);
-    return { ...artifact, source: target, isData: false };
+    return this.exposeCachedMedia(sessionId, { ...artifact, source: target, isData: false });
+  }
+
+  private async exposeCachedMedia(sessionId: string, artifact: MediaArtifact): Promise<MediaArtifact> {
+    const mimeType = artifact.mimeType || localMediaMimeType(artifact.source);
+    if (!mimeType) throw new Error("媒体缓存文件类型不受支持");
+    const handle = await this.mediaAccess.register(sessionId, artifact.source, artifact.media, mimeType, artifact.name);
+    return { ...artifact, source: handle.url, mimeType: handle.mimeType, isData: false, name: handle.name };
+  }
+
+  private async exposeAttachmentPreviews(sessionId: string, previews: UserMessageAttachmentPreview[] | undefined): Promise<UserMessageAttachmentPreview[] | undefined> {
+    if (!previews?.length) return previews;
+    return Promise.all(previews.map(async (preview) => {
+      if (preview.kind !== "image" || preview.isData || !preview.source || preview.source.startsWith("grok-media://access/")) return preview;
+      try {
+        const handle = await this.mediaAccess.registerAttachment(sessionId, preview.source, preview.mimeType || "image/png", preview.name);
+        return { ...preview, source: handle.url, isData: false, availability: "ready" as const };
+      } catch {
+        return { ...preview, source: undefined, isData: false, availability: "missing" as const };
+      }
+    }));
+  }
+
+  private async prepareVisibleEvent(event: ChatEvent): Promise<ChatEvent> {
+    if (event.type === "conversation-projection-restore") {
+      const events: Array<Record<string, unknown>> = [];
+      for (const value of event.projection.events) {
+        if (!value || typeof value !== "object" || typeof value.type !== "string") { events.push(value); continue; }
+        events.push(await this.prepareVisibleEvent(value as ChatEvent) as unknown as Record<string, unknown>);
+      }
+      return { ...event, projection: { ...event.projection, events } as ConversationProjection };
+    }
+    if (event.type === "user-message") {
+      return { ...event, attachments: await this.exposeAttachmentPreviews(event.sessionId, event.attachments) };
+    }
+    if (event.type === "user-attachments-restore") {
+      return {
+        ...event,
+        entries: await Promise.all(event.entries.map(async (entry) => ({
+          ...entry,
+          attachments: await this.exposeAttachmentPreviews(event.sessionId, entry.attachments) ?? [],
+        }))),
+      };
+    }
+    if (event.type === "prompt-queue") {
+      return {
+        ...event,
+        entries: await Promise.all(event.entries.map(async (entry) => ({
+          ...entry,
+          attachmentPreviews: await this.exposeAttachmentPreviews(event.sessionId, entry.attachmentPreviews),
+        }))),
+      };
+    }
+    if (event.type !== "media" || event.source.startsWith("grok-media://access/")) return event;
+    try {
+      const cwd = this.processes.snapshot(event.sessionId)?.cwd ?? "";
+      const allowedOrigins = await this.sessionMediaAllowedOrigins(event.sessionId);
+      const source = event.isData ? event.source : normalizeAcpMediaArtifactSource(event.source, cwd, { allowedOrigins });
+      const sessionRoot = cwd ? join(await this.catalog.resolveSessionRoot(cwd), event.sessionId) : undefined;
+      const cached = await this.cacheMediaArtifact(event.sessionId, {
+        id: `acp-${randomUUID()}`,
+        media: event.media,
+        source,
+        isData: event.isData,
+        mimeType: event.mimeType,
+      }, sessionRoot ? [sessionRoot] : [], allowedOrigins);
+      return { type: "media", sessionId: event.sessionId, media: cached.media, source: cached.source, mimeType: cached.mimeType, isData: false };
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await this.log.log(`ACP 媒体产物未进入会话缓存：${detail}`);
+      return { type: "error", sessionId: event.sessionId, message: `媒体产物不可用：${detail}` };
+    }
+  }
+
+  private async runProviderMedia(request: MediaCreationRequest & { sessionId: string }, signal: AbortSignal): Promise<MediaArtifact[]> {
+    if (!request.providerId || !request.modelId) throw new Error("Provider 媒体路由缺少提供商或模型");
+    return request.kind === "image"
+      ? this.providers.generateImage({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, signal })
+      : this.providers.generateVideo({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, duration: request.duration ?? 6, resolution: request.resolution ?? "480p", referencePaths: request.referencePaths, signal });
+  }
+
+  private async providerMediaAllowedOrigins(providerId?: string): Promise<string[]> {
+    if (!providerId) return [];
+    const provider = await this.providers.managedProviderById(providerId);
+    if (!provider || provider.enabled === false) return [];
+    try { return [new URL(provider.baseUrl).origin]; }
+    catch { return []; }
+  }
+
+  private async sessionMediaAllowedOrigins(sessionId: string): Promise<string[]> {
+    const runtime = await this.sessionRuntime.get(sessionId);
+    if (runtime?.providerId) return this.providerMediaAllowedOrigins(runtime.providerId);
+    const modelId = runtime?.modelId ?? this.processes.snapshot(sessionId)?.modelId;
+    const provider = await this.providers.managedProviderForModel(modelId);
+    return this.providerMediaAllowedOrigins(provider?.id);
+  }
+
+  private async providerMediaFallback(sessionId: string, kind: MediaCreationKind): Promise<{ providerId: string; providerName: string; modelId: string; modelName: string } | undefined> {
+    const modelId = this.processes.snapshot(sessionId)?.modelId;
+    if (!modelId) return undefined;
+    const provider = await this.providers.managedProviderForModel(modelId);
+    if (!provider || provider.enabled === false) return undefined;
+    const model = provider.models.find((value) => value.id === modelId && value.enabled !== false);
+    if (!model) return undefined;
+    const verified = Object.values(model.capabilities?.protocols ?? {}).some((capability) => kind === "image" ? capability?.imageGeneration : capability?.videoGeneration);
+    const configured = kind === "image" ? Boolean(model.media?.image) : Boolean(model.media?.video?.endpoint);
+    if (!verified && !configured) return undefined;
+    return { providerId: provider.id, providerName: provider.name, modelId: model.id, modelName: model.name || model.model };
   }
 
   private publishMediaJob(job: MediaGenerationJob): void {
@@ -1191,7 +1402,7 @@ export class AppController {
 
   async sendPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
     clientMessageId ??= crypto.randomUUID();
-    const prepared = await this.attachmentCache.prepare(sessionId, attachments);
+    const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
     try {
       await this.processes.get(sessionId).prompt(text, prepared.attachments, INTERACTIVE_PROMPT_TIMEOUT_MS, { clientMessageId, attachments: prepared.previews });
@@ -1205,7 +1416,8 @@ export class AppController {
 
   async getOfflineUiFixture(): Promise<OfflineUiFixture | null> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1" || process.env.GROK_DESKTOP_UI_FIXTURE !== "1") return null;
-    const sessionId = "offline-ui-fixture-v0616";
+    this.offlineUiSessionResponder?.reset();
+    const sessionId = OFFLINE_UI_SESSION_IDS.conversation;
     const workspace = (await this.settingsStore.get()).activeWorkspace || process.cwd();
     const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlWQAAAAASUVORK5CYII=";
     const imageAttachments: Attachment[] = ["architecture.png", "result.png", "detail.png"].map((name, index) => ({ id: `fixture-image-${index + 1}`, name, kind: "image", mimeType: "image/png", size: 68, data: png }));
@@ -1214,7 +1426,11 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.6.18 交互与改动验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.7.0 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
+    const waitingSessionId = OFFLINE_UI_SESSION_IDS.waiting;
+    const backgroundSessionId = OFFLINE_UI_SESSION_IDS.background;
+    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.7.0 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
+    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.7.0 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -1252,51 +1468,98 @@ export class AppController {
       { type: "turn-completed", sessionId, presentation: { turnId: "fixture-partial", clientMessageId: "fixture-partial", ordinal: 2, startedAt: "2026-07-22T07:04:00.000Z", completedAt: "2026-07-22T07:13:13.000Z", durationMs: 553_000, outcome: "failed", usage: { inputTokens: 356_400, outputTokens: 34, cachedReadTokens: 352_300, reasoningTokens: 25, totalTokens: 356_459, modelId: "fixture-model", source: "prompt-result", exact: true } } },
       { type: "user-message", sessionId, id: "fixture-client-failed", clientMessageId: "fixture-client-failed", text: "这条消息用于测试失败恢复。", attachments: failed.previews, delivery: "failed" },
       { type: "status", sessionId, status: "idle", text: "离线夹具" },
+      { type: "session-ready", sessionId: waitingSessionId, models: [{ modelId: "fixture-model", name: "Offline Fixture", totalContextTokens: 512_000 }], currentModelId: "fixture-model", effort: "medium" },
+      { type: "mode", sessionId: waitingSessionId, mode: "plan" },
+      { type: "user-message", sessionId: waitingSessionId, id: "fixture-waiting-user", clientMessageId: "fixture-waiting-user", text: "先制定计划，并演示权限确认。", delivery: "sent" },
+      { type: "plan", sessionId: waitingSessionId, requestId: "fixture-plan-request", text: "1. 只读检查项目。\n2. 汇总发现。\n3. 等待批准后再执行写操作。" },
+      { type: "permission", sessionId: waitingSessionId, request: { requestId: "fixture-permission-request", sessionId: waitingSessionId, toolCall: { name: "执行受保护的修改", description: "写入 src/example.ts" }, options: [{ optionId: "deny", name: "No", kind: "reject_once" }, { optionId: "allow", name: "Yes", kind: "allow_once" }] } },
+      { type: "status", sessionId: waitingSessionId, status: "needs-user", text: "等待计划或权限决定" },
+      { type: "session-ready", sessionId: backgroundSessionId, models: [{ modelId: "fixture-background-model", name: "Background Fixture", totalContextTokens: 200_000 }], currentModelId: "fixture-background-model", effort: "xhigh" },
+      { type: "user-message", sessionId: backgroundSessionId, id: "fixture-background-user", clientMessageId: "fixture-background-user", text: "在后台继续分析，不要影响前台草稿。", delivery: "sent" },
+      { type: "turn-started", sessionId: backgroundSessionId, presentation: this.offlineUiSessionResponder?.backgroundPresentation() ?? { turnId: "fixture-background-turn", clientMessageId: "fixture-background-user", ordinal: 0, startedAt: now } },
+      { type: "thought-chunk", sessionId: backgroundSessionId, text: "后台会话正在独立运行。" },
+      { type: "prompt-queue", sessionId: backgroundSessionId, entries: this.offlineUiSessionResponder?.backgroundQueue() ?? [{ id: "fixture-background-queue", sessionId: backgroundSessionId, text: "后台排队消息", position: 0, createdAt: now, state: "queued", clientMessageId: "fixture-background-queue" }] },
+      { type: "status", sessionId: backgroundSessionId, status: "working", text: "后台处理中" },
     ];
-    return { session, events };
+    return {
+      session,
+      sessions: [session, waitingSession, backgroundSession],
+      activeSessionId: sessionId,
+      events: await Promise.all(events.map((event) => this.prepareVisibleEvent(event))),
+    };
   }
 
   async cancelSession(sessionId: string): Promise<void> {
+    if (this.offlineUiSessionResponder?.owns(sessionId)) {
+      await this.offlineUiSessionResponder.cancelSession(sessionId);
+      return;
+    }
     await this.computer.settleSession(sessionId, "stopped", "Grok 回合已停止，Computer Use 已清理");
     await this.processes.cancelSession(sessionId);
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
-    await this.processes.setModel(sessionId, modelId);
-    await this.settingsStore.patch({ defaultModel: modelId });
+    const providerId = await this.resolveManagedProviderSelection(modelId);
+    const previous = await this.sessionRuntime.get(sessionId);
+    const snapshot = this.processes.snapshot(sessionId);
+    const previousModelId = previous?.modelId ?? snapshot?.modelId;
+    const previousProviderId = previous?.providerId
+      ?? (await this.providers.managedProviderForModel(previousModelId))?.id;
+    try {
+      await this.processes.setModel(sessionId, modelId, {
+        target: { providerId, localModelId: modelId },
+        previous: { providerId: previousProviderId, localModelId: previousModelId },
+      });
+      if (previous) await this.sessionRuntime.save({ ...previous, modelId, providerId });
+      else if (snapshot) await this.sessionRuntime.save({ sessionId, cwd: snapshot.cwd, modelId, providerId, effort: snapshot.effort, mode: snapshot.mode });
+    } catch (error) {
+      if (previous) await this.sessionRuntime.save(previous);
+      else await this.sessionRuntime.deletePreferences(sessionId);
+      throw error;
+    }
   }
 
   async setEffort(sessionId: string, effort: ReasoningEffort): Promise<void> {
     if (!REASONING_EFFORTS.includes(effort)) throw new Error("不支持的推理强度");
     await this.processes.setEffort(sessionId, effort);
-    await this.settingsStore.patch({ defaultEffort: effort });
   }
 
   async setMode(sessionId: string, mode: SessionMode): Promise<void> {
-    await this.processes.get(sessionId).applyMode(mode);
-    if (mode !== "plan") await this.settingsStore.patch({ defaultMode: mode });
+    await this.processes.setMode(sessionId, mode);
   }
 
   async pickAttachments(): Promise<Attachment[]> {
     const result = await dialog.showOpenDialog(this.window!, { title: "添加文件或图片", properties: ["openFile", "multiSelections"] });
     if (result.canceled) return [];
-    const attachments = await this.attachmentsFromPaths(result.filePaths);
-    if (this.trustedPickedPaths.size > 256) this.trustedPickedPaths.clear();
-    for (const attachment of attachments) {
-      if (!attachment.path || attachment.kind === "folder") continue;
-      const target = await realpath(attachment.path).catch(() => undefined);
-      if (target) this.trustedPickedPaths.add(target);
-    }
-    return attachments;
+    const paths = await Promise.all(result.filePaths.map((path) => canonicalExistingPath(path, "file")));
+    for (const path of paths) rememberCanonicalPath(this.trustedPickedPaths, path);
+    return this.buildAttachmentsFromPaths(paths);
   }
 
   async pickAttachmentFolders(): Promise<Attachment[]> {
     const result = await dialog.showOpenDialog(this.window!, { title: "添加文件夹", properties: ["openDirectory", "multiSelections"] });
     if (result.canceled) return [];
-    return this.attachmentsFromPaths(result.filePaths);
+    const paths = await Promise.all(result.filePaths.map((path) => canonicalExistingPath(path, "directory")));
+    for (const path of paths) rememberCanonicalPath(this.trustedPickedPaths, path);
+    return this.buildAttachmentsFromPaths(paths);
   }
 
-  async attachmentsFromPaths(paths: string[]): Promise<Attachment[]> {
+  async attachmentsFromPaths(paths: string[], sessionId?: string): Promise<Attachment[]> {
+    const roots = await this.trustedAttachmentRoots(sessionId ?? (this.focusedSessionId || undefined));
+    const trusted = await Promise.all(paths.map((path) => resolveTrustedRendererPath(path, {
+      roots,
+      issuedPaths: this.trustedPickedPaths,
+    })));
+    return this.buildAttachmentsFromPaths(trusted);
+  }
+
+  async attachmentsFromDroppedPaths(paths: string[]): Promise<Attachment[]> {
+    const trusted = await Promise.all(paths.map((path) => canonicalExistingPath(path)));
+    for (const path of trusted) rememberCanonicalPath(this.trustedPickedPaths, path);
+    return this.buildAttachmentsFromPaths(trusted);
+  }
+
+  private async buildAttachmentsFromPaths(paths: readonly string[]): Promise<Attachment[]> {
     return Promise.all(paths.map(async (path): Promise<Attachment> => {
       const info = await stat(path);
       if (info.isDirectory()) return { id: crypto.randomUUID(), name: path.split(/[\\/]/).at(-1) || path, path, kind: "folder" };
@@ -1308,11 +1571,59 @@ export class AppController {
     }));
   }
 
+  private async trustedAttachmentRoots(sessionId?: string): Promise<string[]> {
+    const settings = await this.settingsStore.get();
+    const roots = [settings.activeWorkspace].filter(Boolean);
+    if (sessionId) {
+      const cwd = this.processes.snapshot(sessionId)?.cwd ?? (await this.profiles.assignment(sessionId))?.cwd;
+      if (cwd) roots.push(cwd);
+      roots.push(join(this.userDataPath, "session-attachments", sessionCacheKey(sessionId)));
+    }
+    return roots;
+  }
+
+  private async validatePromptAttachments(sessionId: string, attachments: Attachment[]): Promise<Attachment[]> {
+    const roots = await this.trustedAttachmentRoots(sessionId);
+    return Promise.all(attachments.map(async (attachment) => {
+      if (attachment.data) return attachment;
+      if (!attachment.path) throw new Error(`${attachment.name || "附件"} 缺少受信任的文件来源`);
+      const path = await resolveTrustedRendererPath(attachment.path, {
+        roots,
+        issuedPaths: this.trustedPickedPaths,
+        kind: attachment.kind === "folder" ? "directory" : "file",
+      });
+      return { ...attachment, path };
+    }));
+  }
+
   async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+    const current = await this.settingsStore.get();
+    if (patch.activeWorkspace !== undefined && !samePath(patch.activeWorkspace, current.activeWorkspace)) {
+      const canonical = patch.activeWorkspace
+        ? await canonicalExistingPath(patch.activeWorkspace, "directory")
+        : "";
+      if (canonical && !hasCanonicalPath(this.trustedWorkspacePaths, canonical)) {
+        throw new Error("活动工作区只能通过应用工作区选择器修改");
+      }
+      patch.activeWorkspace = canonical;
+    }
+    if (patch.recentWorkspaces !== undefined
+      && JSON.stringify(patch.recentWorkspaces) !== JSON.stringify(current.recentWorkspaces)) {
+      const canonical = await Promise.all(patch.recentWorkspaces.map((path) => canonicalExistingPath(path, "directory")));
+      if (canonical.some((path) => !hasCanonicalPath(this.trustedWorkspacePaths, path))) {
+        throw new Error("最近工作区只能包含应用已选择或发现的项目");
+      }
+      patch.recentWorkspaces = canonical;
+    }
+    if (patch.cliPath !== undefined && patch.cliPath !== current.cliPath) {
+      patch.cliPath = patch.cliPath === this.appConfig.mockCliPath
+        ? patch.cliPath
+        : await validateGrokCliExecutable(patch.cliPath);
+    }
     if (patch.fontScale !== undefined) patch.fontScale = Math.min(130, Math.max(85, patch.fontScale));
     if (patch.defaultEffort !== undefined && !REASONING_EFFORTS.includes(patch.defaultEffort)) throw new Error("不支持的默认推理强度");
     if (patch.uiDensity !== undefined && !isUiDensity(patch.uiDensity)) throw new Error("不支持的界面密度");
-    if (patch.theme !== undefined) patch.theme = mergeThemeSettings((await this.settingsStore.get()).theme ?? DEFAULT_THEME, patch.theme);
+    if (patch.theme !== undefined) patch.theme = mergeThemeSettings(current.theme ?? DEFAULT_THEME, patch.theme);
     const settings = await this.settingsStore.patch(patch);
     applyNativeTheme(settings.theme);
     return settings;
@@ -1467,15 +1778,17 @@ export class AppController {
   deleteAutomation(id: string): Promise<AutomationTask[]> { return this.automations.delete(id); }
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]> { return this.automations.pause(id, paused); }
   runAutomationNow(id: string): Promise<AutomationRunRecord> { return this.automations.runNow(id); }
+  cancelAutomationRun(id: string): Promise<AutomationRunRecord> { return this.automations.cancelRun(id); }
   listAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
     return this.automations.listRuns(taskId);
   }
   getAutomationGlobalPolicy(): Promise<AutomationGlobalPolicy> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve({
-      defaultProfile: { modelId: "grok-4.5", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false },
+      defaultProfile: { modelId: "", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false },
       maxConcurrentRuns: 2,
       confirmationTimeoutMinutes: 30,
+      inactivityTimeoutMinutes: 0,
       notifyOnSuccess: true,
       notifyOnFailure: true,
     });
@@ -1517,7 +1830,8 @@ export class AppController {
   unregisterAllAutomations(): Promise<void> { return this.automations.unregisterAll(); }
 
   async runAutomationWorker(taskId: string, runId?: string): Promise<AutomationRunRecord> {
-    return this.automations.execute(taskId, runId, async ({ task, prompt, confirm }) => {
+    return this.automations.execute(taskId, runId, async ({ task, prompt, runId: activeRunId, confirm, signal }) => {
+      if (signal.aborted) throw signal.reason ?? new Error("任务已取消");
       const accountContext = await this.prepareAutomationAccount(task);
       const execution = resolveAutomationExecutionPolicy(task.profile);
       const decision = execution.permission === "allow"
@@ -1549,10 +1863,21 @@ export class AppController {
           targetCwd = worktree.path;
         }
         const environment = { ...compiled.environment, ...accountContext.environment };
-        const modelId = compiled.modelId || task.profile.modelId;
-        const result = sessionAction === "reuse"
-          ? await this.processes.openConfigured(targetCwd, sessionId!, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" })
-          : await this.processes.createConfigured(targetCwd, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+        const desktopSettings = await this.settingsStore.get();
+        const modelId = compiled.modelId || task.profile.modelId || desktopSettings.defaultModel;
+        const providerId = await this.resolveManagedProviderSelection(modelId);
+        const previousRuntime = sessionId ? await this.sessionRuntime.get(sessionId) : undefined;
+        if (sessionAction === "reuse" && previousRuntime) await this.sessionRuntime.patch(sessionId!, { modelId, providerId });
+        let result: { sessionId: string };
+        try {
+          result = sessionAction === "reuse"
+            ? await this.processes.openConfigured(targetCwd, sessionId!, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" })
+            : await this.processes.createConfigured(targetCwd, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+        } catch (error) {
+          if (previousRuntime) await this.sessionRuntime.save(previousRuntime);
+          throw error;
+        }
+        await this.persistSessionProviderIdentity(result.sessionId, targetCwd, modelId, providerId, compiled.profile.id);
         if (sessionAction !== "reuse") {
           assignment = { sessionId: result.sessionId, sourceWorkspacePath: task.workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
           await this.profiles.assign(assignment);
@@ -1561,25 +1886,50 @@ export class AppController {
         if (sessionAction !== "reuse") await this.catalog.rename(result.sessionId, task.name);
         await this.automations.setExecutionSession(task.id, result.sessionId);
         const text = task.profile.computerEnabled ? `/computer ${prompt}` : task.skillCommand ? `${task.skillCommand} ${prompt}` : prompt;
+        const adapter = this.processes.get(result.sessionId);
+        const runController = new AbortController();
+        const forwardCancellation = (): void => {
+          if (!runController.signal.aborted) runController.abort(signal.reason ?? new Error("任务已取消"));
+        };
+        signal.addEventListener("abort", forwardCancellation, { once: true });
+        const stopAdapter = (): void => adapter.cancel();
+        runController.signal.addEventListener("abort", stopAdapter, { once: true });
+        const automationPolicy = await this.automations.getPolicy();
+        const inactivityMs = Math.max(0, automationPolicy.inactivityTimeoutMinutes) * 60_000;
+        const inactivityPoll = inactivityMs > 0 ? setInterval(() => {
+          if (runController.signal.aborted || Date.now() - adapter.lastTouched < inactivityMs) return;
+          // Persist the cancellation before unwinding the worker. The worker and
+          // the interactive Desktop process may be different OS processes, so
+          // the run file is the shared cancellation authority.
+          void this.automations.cancelRun(activeRunId).finally(() => {
+            if (!runController.signal.aborted) runController.abort(new Error(`任务连续 ${automationPolicy.inactivityTimeoutMinutes} 分钟没有 ACP 活动，已自动停止`));
+          });
+        }, Math.max(1_000, Math.min(15_000, Math.floor(inactivityMs / 4)))) : undefined;
+        inactivityPoll?.unref?.();
         try {
-          // A persisted Windows task may legitimately run much longer than an
-          // interactive turn. Keep the worker just below Task Scheduler's 24h
-          // execution limit instead of failing a healthy run after 30 minutes.
-          await this.processes.get(result.sessionId).prompt(text, [], 23 * 60 * 60_000);
+          // Persisted tasks have no Desktop wall-clock ceiling. Completion,
+          // explicit user stop, process exit and the automation lease are the
+          // only authorities allowed to settle the run.
+          await waitForAbort(adapter.prompt(text), runController.signal);
           return { sessionId: result.sessionId };
-        } finally { await this.processes.close(result.sessionId); }
+        } finally {
+          if (inactivityPoll) clearInterval(inactivityPoll);
+          signal.removeEventListener("abort", forwardCancellation);
+          runController.signal.removeEventListener("abort", stopAdapter);
+          await this.processes.close(result.sessionId);
+        }
       } finally { await accountContext.cleanup(); }
     });
   }
   async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
     clientMessageId ??= crypto.randomUUID();
-    const prepared = await this.attachmentCache.prepare(sessionId, attachments);
+    const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "queued");
     return this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
   }
   async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
     clientMessageId ??= crypto.randomUUID();
-    const prepared = await this.attachmentCache.prepare(sessionId, attachments);
+    const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
     try {
       const receipt = await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
@@ -1593,10 +1943,14 @@ export class AppController {
   editQueuedPrompt(sessionId: string, id: string, text: string) { return this.processes.get(sessionId).editQueuedPrompt(id, text); }
   removeQueuedPrompt(sessionId: string, id: string) { return this.processes.get(sessionId).removeQueuedPrompt(id); }
   reorderQueuedPrompt(sessionId: string, id: string, position: number) { return this.processes.get(sessionId).reorderQueuedPrompt(id, position); }
-  clearPromptQueue(sessionId: string) { return this.processes.get(sessionId).clearPromptQueue(); }
+  clearPromptQueue(sessionId: string) {
+    if (this.offlineUiSessionResponder?.owns(sessionId)) return this.offlineUiSessionResponder.clearPromptQueue(sessionId);
+    return this.processes.get(sessionId).clearPromptQueue();
+  }
   interjectQueuedPrompt(sessionId: string, id: string, text?: string) { return this.processes.get(sessionId).interjectQueuedPrompt(id, text); }
   async forkSession(sessionId: string, rewindPointId?: string, launch?: ExecutionProfileLaunchInput): Promise<SessionForkResult> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
+    const parentRuntime = await this.sessionRuntime.get(sessionId);
     const parentAssignment = await this.profiles.assignment(sessionId);
     const sourceWorkspace = parentAssignment?.sourceWorkspacePath ?? snapshot.cwd;
     let compiled = launch
@@ -1621,6 +1975,24 @@ export class AppController {
     const inheritedWorktreeId = worktree?.id ?? (!launch ? parentAssignment?.worktreeId : undefined);
     const assignment: SessionExecutionAssignment = { sessionId: childId, sourceWorkspacePath: sourceWorkspace, cwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: inheritedWorktreeId, createdAt: new Date().toISOString() };
     await this.profiles.assign(assignment);
+    const inheritedModelId = parentRuntime?.modelId ?? snapshot.modelId;
+    const inheritedProviderId = parentRuntime?.providerId
+      ?? (await this.providers.managedProviderForModel(inheritedModelId))?.id;
+    const forkRuntime = buildForkRuntimePreferences(parentRuntime, {
+      sessionId: childId,
+      cwd,
+      modelId: inheritedModelId,
+      providerId: inheritedProviderId,
+      effort: snapshot.effort,
+      mode: snapshot.mode,
+      profileId: launch ? compiled.profile.id : parentAssignment?.profileId ?? compiled.profile.id,
+    });
+    await this.sessionRuntime.save({
+      ...forkRuntime,
+      // Choosing an explicit fork profile is the one intentional override;
+      // ordinary forks inherit the parent's complete runtime profile.
+      ...(launch ? { profileId: compiled.profile.id } : {}),
+    });
     if (inheritedWorktreeId) await this.catalog.recordOrigins([{ sessionId: childId, kind: "worktree", id: inheritedWorktreeId, title: compiled.profile.name, suggestedTitle: worktree?.name || "Worktree 分叉" }]);
     return { sessionId: childId, parentSessionId: sessionId, cwd, profileId: compiled.profile.id, worktreeId: inheritedWorktreeId };
   }
@@ -1657,10 +2029,29 @@ export class AppController {
   }
   markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]> { return this.inbox.markRead(id, read); }
   clearInbox(): Promise<NotificationInboxItem[]> { return this.inbox.clear(); }
-  getDraft(key: string): Promise<ComposerDraftState | null> { return this.uiState.getDraft(key); }
+  async getDraft(key: string): Promise<ComposerDraftState | null> {
+    const draft = await this.uiState.getDraft(key);
+    // A restored composer draft was originally selected by the user through
+    // the main-process picker. Re-establish only those exact canonical files
+    // so its preview remains usable after an application restart.
+    for (const attachment of draft?.attachments ?? []) {
+      if (!attachment.path) continue;
+      const path = await realpath(attachment.path).catch(() => undefined);
+      if (path) rememberCanonicalPath(this.trustedPickedPaths, path);
+    }
+    return draft;
+  }
   setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]): Promise<void> { return this.uiState.setDraft(key, text, capability, attachments); }
   clearDraft(key: string): Promise<void> { return this.uiState.clearDraft(key); }
-  createTextDraftAttachment(key: string, text: string): Promise<Attachment> { return this.uiState.createTextDraftAttachment(key, text); }
+  async createTextDraftAttachment(key: string, text: string): Promise<Attachment> {
+    const attachment = await this.uiState.createTextDraftAttachment(key, text);
+    if (attachment.path) {
+      const path = await canonicalExistingPath(attachment.path, "file");
+      rememberCanonicalPath(this.trustedPickedPaths, path);
+      attachment.path = path;
+    }
+    return attachment;
+  }
   readTextDraftAttachment(path: string): Promise<string> { return this.uiState.readTextDraftAttachment(path); }
   deleteTextDraftAttachment(path: string): Promise<void> { return this.uiState.deleteTextDraftAttachment(path); }
   listPromptHistory(cwd: string): Promise<string[]> { return this.uiState.listPromptHistory(cwd); }
@@ -1744,14 +2135,29 @@ export class AppController {
   }
   async openTarget(intent: OpenTargetIntent): Promise<OpenTargetResult> {
     const action = intent.action ?? "open";
-    const roots = [join(this.userDataPath, "session-attachments"), join(this.userDataPath, "session-media")];
-    const sessionRoot = intent.sessionId ? this.processes.snapshot(intent.sessionId)?.cwd ?? (await this.profiles.assignment(intent.sessionId))?.cwd : undefined;
+    const effectiveSessionId = intent.sessionId ?? (this.focusedSessionId || undefined);
+    const roots: string[] = [];
+    const sessionRoot = effectiveSessionId
+      ? this.processes.snapshot(effectiveSessionId)?.cwd ?? (await this.profiles.assignment(effectiveSessionId))?.cwd
+      : undefined;
     if (sessionRoot) roots.push(sessionRoot);
     const configuredWorkspace = (await this.settingsStore.get()).activeWorkspace;
     if (configuredWorkspace) roots.push(configuredWorkspace);
+    if (effectiveSessionId) {
+      const cacheKey = sessionCacheKey(effectiveSessionId);
+      roots.push(
+        join(this.userDataPath, "session-attachments", cacheKey),
+        join(this.userDataPath, "session-media", cacheKey),
+      );
+    }
     const requestedRoot = intent.executionRoot;
-    if (requestedRoot && roots.some((root) => samePath(root, requestedRoot))) roots.push(requestedRoot);
-    const relativeBase = sessionRoot ?? (requestedRoot && roots.some((root) => samePath(root, requestedRoot)) ? requestedRoot : undefined) ?? configuredWorkspace;
+    const canonicalRequestedRoot = requestedRoot
+      ? await canonicalExistingPath(requestedRoot, "directory").catch(() => undefined)
+      : undefined;
+    if (canonicalRequestedRoot && roots.some((root) => samePath(root, canonicalRequestedRoot))) roots.push(canonicalRequestedRoot);
+    const relativeBase = sessionRoot
+      ?? (canonicalRequestedRoot && roots.some((root) => samePath(root, canonicalRequestedRoot)) ? canonicalRequestedRoot : undefined)
+      ?? configuredWorkspace;
     if (!isAbsolute(intent.target) && !relativeBase) {
       return { ok: false, target: intent.target, kind: "missing", action, message: "相对目标缺少会话或 Worktree 执行根目录" };
     }
@@ -1771,6 +2177,9 @@ export class AppController {
         : [".mp4", ".webm", ".mov", ".mkv"].includes(extension)
           ? "video"
           : "file";
+    if (action === "open" && info.isFile() && UNSAFE_SYSTEM_OPEN_EXTENSIONS.has(extension)) {
+      return { ok: false, target: canonicalTarget, kind, action, message: `为避免执行本地代码，应用不会直接打开 ${extension || "该"} 文件` };
+    }
     if (action === "copy-path") {
       clipboard.writeText(canonicalTarget);
       return { ok: true, target: canonicalTarget, kind, action, message: "路径已复制" };
@@ -1790,9 +2199,18 @@ export class AppController {
     if (!isAllowedExternalUrl(url)) throw new Error("仅允许打开 HTTP/HTTPS 链接");
     return shell.openExternal(url);
   }
-  respondPermission(sessionId: string, requestId: string | number, optionId: string) { this.processes.get(sessionId).respondPermission(requestId, optionId); }
+  async respondPermission(sessionId: string, requestId: string | number, optionId: string): Promise<void> {
+    if (this.offlineUiSessionResponder?.owns(sessionId)) {
+      await this.offlineUiSessionResponder.respondPermission(sessionId, requestId, optionId);
+      return;
+    }
+    this.processes.get(sessionId).respondPermission(requestId, optionId);
+  }
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>) { this.processes.get(sessionId).respondQuestion(requestId, answers); }
-  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment = "") { return this.processes.get(sessionId).respondPlan(requestId, verdict, comment); }
+  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment = "") {
+    if (this.offlineUiSessionResponder?.owns(sessionId)) return this.offlineUiSessionResponder.respondPlan(sessionId, requestId, verdict, comment);
+    return this.processes.get(sessionId).respondPlan(requestId, verdict, comment);
+  }
 
   private async compileExecutionProfile(workspacePath: string, profileId?: string): Promise<CompiledExecutionProfile> {
     return this.profiles.compile(workspacePath, profileId, await this.definitions.listAgents(workspacePath));
@@ -1817,7 +2235,41 @@ export class AppController {
   private async openAssignedSession(assignment: SessionExecutionAssignment): Promise<{ sessionId: string }> {
     const compiled = await this.profiles.compileProfile(assignment.profile, await this.definitions.listAgents(assignment.cwd));
     const settings = await this.settingsStore.get();
-    return this.processes.openConfigured(assignment.cwd, assignment.sessionId, compiled.effort || settings.defaultEffort, compiled.mode, compiled.modelId || settings.defaultModel, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+    return this.processes.openConfigured(assignment.cwd, assignment.sessionId, compiled.effort || settings.defaultEffort, compiled.mode, compiled.modelId || settings.defaultModel, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" }, true);
+  }
+
+  /**
+   * Resolves an exact managed Provider identity before a conversation launch or
+   * model switch. Disabled registrations remain discoverable specifically so a
+   * stale session cannot silently fall through to an official model with the
+   * same display name.
+   */
+  private async resolveManagedProviderSelection(modelId: string | undefined): Promise<string | undefined> {
+    if (!modelId || !this.providers) return undefined;
+    const provider = await this.providers.managedProviderForModel(modelId);
+    if (!provider) return undefined;
+    if (provider.enabled === false) throw new Error(`提供商“${provider.name}”已停用，无法使用模型“${modelId}”`);
+    const model = provider.models.find((value) => value.id === modelId);
+    if (!model || model.enabled === false) throw new Error(`模型“${provider.name} · ${model?.name || modelId}”已停用，无法启动会话`);
+    return provider.id;
+  }
+
+  private async persistSessionProviderIdentity(sessionId: string, cwd: string, modelId: string | undefined, providerId: string | undefined, profileId?: string): Promise<void> {
+    const previous = await this.sessionRuntime.get(sessionId);
+    if (previous) {
+      await this.sessionRuntime.patch(sessionId, { cwd, modelId, providerId, profileId: profileId ?? previous.profileId });
+      return;
+    }
+    const snapshot = this.processes.snapshot(sessionId);
+    await this.sessionRuntime.save({
+      sessionId,
+      cwd,
+      modelId,
+      providerId,
+      effort: snapshot?.effort ?? "",
+      mode: snapshot?.mode ?? "agent",
+      profileId,
+    });
   }
 
   private async reconcileProviderDesktopDefault(providers: CustomProviderProfile[]): Promise<void> {
@@ -1949,16 +2401,56 @@ export class AppController {
    * environment write or a concurrent config.toml edit must not be able to
    * block launching sessions that do not use a provider at all.
    */
-  private async providerLaunchEnvironment(scopeId: string): Promise<Record<string, string>> {
+  private async providerLaunchEnvironment(context: ProviderLaunchContext): Promise<Record<string, string>> {
     if (!this.providers) return {};
-    try { return await this.providers.desktopEnvironment(scopeId); }
+    const localModelId = context.localModelId ?? context.modelId;
+    const recordedProvider = await this.providers.managedProviderById(context.providerId);
+    const providerByModel = await this.providers.managedProviderForModel(localModelId);
+    if (context.providerId && !recordedProvider) {
+      throw new Error(`此会话记录的自定义提供商（${context.providerId}）已不存在。为防止串到官方模型，已阻止发送`);
+    }
+    if (recordedProvider && providerByModel?.id !== recordedProvider.id) {
+      throw new Error(`此会话记录的模型“${localModelId || "未知"}”不再属于提供商“${recordedProvider.name}”。为防止错误路由，已阻止发送`);
+    }
+    const managed = recordedProvider ?? providerByModel;
+    if (managed?.enabled === false) throw new Error(`提供商“${managed.name}”已停用，无法恢复此会话`);
+    const managedModel = managed?.models.find((model) => model.id === localModelId);
+    if (managedModel?.enabled === false) throw new Error(`模型“${managed!.name} · ${managedModel.name || managedModel.model}”已停用，无法恢复此会话`);
+    try {
+      const environment = await this.providers.desktopEnvironment(context.scopeId, managed?.id);
+      if (managed && !environment[managedBaseUrlEnvironmentName(managed.id)]) {
+        throw new Error(`提供商“${managed.name}”的网关路由未建立`);
+      }
+      return environment;
+    }
     catch (error) {
-      await this.log.log(`提供商兼容环境不可用，本次会话按无提供商启动：${error instanceof Error ? error.message : String(error)}`);
+      const detail = error instanceof Error ? error.message : String(error);
+      if (managed) {
+        await this.log.log(`受管模型 ${localModelId} 的提供商环境启动失败：${detail}`);
+        throw new Error(`自定义模型“${managed.name} · ${managedModel?.name || managedModel?.model || localModelId}”启动失败：${detail}`);
+      }
+      await this.log.log(`未使用受管模型的会话忽略提供商环境错误：${detail}`);
       return {};
     }
   }
 
   private async handleEvent(event: ChatEvent): Promise<void> {
+    if (event.type === "tool-call") {
+      const snapshot = this.processes.snapshot(event.sessionId);
+      try {
+        event.tool = await this.turnFileChanges.observe(
+          event.sessionId,
+          snapshot?.cwd ?? "",
+          this.processes.get(event.sessionId)?.activeTurnId,
+          event.tool,
+        );
+      } catch (error) {
+        // Refusing an untrusted or unavailable filesystem path must not hide
+        // the original ACP tool update from the user.
+        await this.log.log(`文件改动快照未采集：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    event = await this.prepareVisibleEvent(event);
     // Failure enrichment changes what the renderer presents, so it is the only
     // disk/network-adjacent observer allowed to run before delivery.
     if (event.type === "error") {
@@ -1966,6 +2458,14 @@ export class AppController {
       if (event.failure) await this.enrichFailure(event.failure);
     }
     const sessionId = event.sessionId ?? "";
+    const readyModelId = event.type === "session-ready" ? event.currentModelId : undefined;
+    if (event.type === "session-ready" && sessionId && readyModelId) {
+      void this.providers.managedProviderForModel(readyModelId).then(async (provider) => {
+        // Reconcile atomically: a managed session keeps its provider-scoped
+        // local id even when ACP reports only the upstream alias.
+        await this.sessionRuntime.reconcileSessionReady(sessionId, readyModelId, provider?.id);
+      }).catch((error) => this.log.log(`保存会话 Provider 路由失败：${error instanceof Error ? error.message : String(error)}`));
+    }
     if (event.type === "session-reset" && sessionId) {
       this.projectionReplaying.add(sessionId);
       this.projectionReplayBuffers.set(sessionId, []);
@@ -1973,11 +2473,11 @@ export class AppController {
       this.window?.webContents.send("grok:event", event);
       const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
       if (projection) {
-        this.window?.webContents.send("grok:event", {
+        this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({
           type: "conversation-projection-restore",
           sessionId,
           projection,
-        } satisfies ChatEvent);
+        } satisfies ChatEvent));
       }
     } else {
       const replayingVisibleEvent = sessionId
@@ -1990,15 +2490,30 @@ export class AppController {
         this.window?.webContents.send("grok:event", event);
       }
       if (event.type === "session-ready" && sessionId && this.projectionReplaying.has(sessionId)) {
-        const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
-        if (projection) {
-          this.window?.webContents.send("grok:event", {
-            type: "conversation-projection-restore",
-            sessionId,
-            projection,
-          } satisfies ChatEvent);
+        // openSession owns the initial replay barrier so it can reconcile once
+        // before sending a single restore. A transport rebuild that happens
+        // outside openSession is reconciled here instead.
+        if (!this.projectionOpenSessions.has(sessionId)) {
+          const buffered = [...(this.projectionReplayBuffers.get(sessionId) ?? [])];
+          let projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+          if (buffered.length) {
+            projection = await this.conversationProjections.mergeReplay(sessionId, buffered)
+              .catch(async (error) => {
+                await this.log.log(`会话传输重建投影合并失败：${error instanceof Error ? error.message : String(error)}`);
+                return projection;
+              });
+          }
+          if (projection) {
+            this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({
+              type: "conversation-projection-restore",
+              sessionId,
+              projection,
+            } satisfies ChatEvent));
+          } else {
+            for (const replayed of buffered) this.window?.webContents.send("grok:event", replayed);
+          }
+          this.finishProjectionReplay(sessionId);
         }
-        if (!this.projectionOpenSessions.has(sessionId)) this.finishProjectionReplay(sessionId);
       }
     }
 
@@ -2060,8 +2575,8 @@ export class AppController {
   /**
    * A transport reset normally ends with session-ready. If an older or broken
    * CLI never emits it, keeping replay mode forever would silently discard all
-   * later visible events. Prefer the already-restored local projection; only
-   * when no projection exists do we release and seed the bounded replay buffer.
+   * later visible events. Reconcile the bounded replay buffer with the durable
+   * local projection before releasing the barrier; never discard either side.
    */
   private async releaseStalledProjectionReplay(sessionId: string): Promise<void> {
     if (!this.projectionReplaying.has(sessionId)) return;
@@ -2070,9 +2585,22 @@ export class AppController {
       return;
     }
     const buffered = [...(this.projectionReplayBuffers.get(sessionId) ?? [])];
-    const projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+    let projection = await this.conversationProjections.restore(sessionId).catch(() => undefined);
+    if (buffered.length) {
+      projection = await this.conversationProjections.mergeReplay(sessionId, buffered)
+        .catch(async (error) => {
+          await this.log.log(`会话超时回放投影合并失败：${error instanceof Error ? error.message : String(error)}`);
+          return projection;
+        });
+    }
     this.finishProjectionReplay(sessionId);
-    if (!projection) {
+    if (projection) {
+      this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({
+        type: "conversation-projection-restore",
+        sessionId,
+        projection,
+      } satisfies ChatEvent));
+    } else {
       for (const event of buffered) {
         this.window?.webContents.send("grok:event", event);
         await this.conversationProjections.record(event)
@@ -2296,34 +2824,52 @@ function sanitizeProjectionReplayEvent(event: ChatEvent): ChatEvent {
   };
 }
 
-async function readBoundedResponseBuffer(response: Response, maxBytes: number): Promise<Buffer> {
+async function writeBoundedResponseFile(response: Response, target: string, maxBytes: number): Promise<void> {
   const declared = Number(response.headers.get("content-length") ?? 0);
   if (Number.isFinite(declared) && declared > maxBytes) throw new Error("媒体产物超过缓存大小限制");
-  if (!response.body) return Buffer.alloc(0);
+  if (!response.body) throw new Error("媒体产物响应没有正文");
   const reader = response.body.getReader();
-  const chunks: Buffer[] = [];
+  const file = await open(target, "w");
   let total = 0;
   try {
-    while (true) {
-      const next = await reader.read();
-      if (next.done) break;
-      total += next.value.byteLength;
-      if (total > maxBytes) {
-        await reader.cancel("media artifact too large").catch(() => undefined);
-        throw new Error("媒体产物超过缓存大小限制");
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        total += next.value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel("media artifact too large").catch(() => undefined);
+          throw new Error("媒体产物超过缓存大小限制");
+        }
+        let offset = 0;
+        while (offset < next.value.byteLength) {
+          const written = await file.write(next.value, offset, next.value.byteLength - offset);
+          offset += written.bytesWritten;
+        }
       }
-      chunks.push(Buffer.from(next.value));
+    } finally {
+      reader.releaseLock();
+      await file.close();
     }
-  } finally {
-    reader.releaseLock();
+  } catch (error) {
+    await rm(target, { force: true }).catch(() => undefined);
+    throw error;
   }
-  return Buffer.concat(chunks, total);
 }
 
 function isSupportedVideoBuffer(buffer: Buffer): boolean {
   return buffer.subarray(4, 8).toString("ascii") === "ftyp"
     || buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))
     || buffer.subarray(0, 4).toString("ascii") === "OggS";
+}
+
+async function isSupportedVideoFile(path: string): Promise<boolean> {
+  const file = await open(path, "r");
+  try {
+    const header = Buffer.alloc(16);
+    const { bytesRead } = await file.read(header, 0, header.length, 0);
+    return isSupportedVideoBuffer(header.subarray(0, bytesRead));
+  } finally { await file.close(); }
 }
 
 function profileSlug(value: string): string { return value.normalize("NFKC").toLocaleLowerCase().replace(/[^a-z0-9\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 32) || "session"; }
@@ -2338,4 +2884,23 @@ function isUiDensity(value: unknown): value is UiDensity {
 
 function applyNativeTheme(theme: ThemeSettings): void {
   nativeTheme.themeSource = theme.mode === "system" ? "system" : theme.mode === "light" || (theme.mode === "custom" && theme.customBase === "light") ? "light" : "dark";
+}
+
+function waitForAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("任务已取消"));
+  return new Promise<T>((resolvePromise, rejectPromise) => {
+    let settled = false;
+    const finish = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = (): void => finish(() => rejectPromise(signal.reason ?? new Error("任务已取消")));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => finish(() => resolvePromise(value)),
+      (error) => finish(() => rejectPromise(error)),
+    );
+  });
 }

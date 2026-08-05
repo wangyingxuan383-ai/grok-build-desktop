@@ -117,19 +117,19 @@ export class ExecutionProfileService {
     const validation = this.validate(candidate);
     if (!validation.valid) throw new Error(validation.message || "执行配置档无效");
     if (BUILTIN_PROFILES.some((value) => value.id === candidate.id)) throw new Error("内置配置档不可覆盖；请复制为全局或项目配置档");
-    const state = await this.store.get();
-    state.global ??= [];
-    state.projects ??= {};
-    const target = input.scope === "global" ? state.global : (state.projects[identity] ??= []);
-    const duplicate = target.find((value) => profileNameKey(value.name) === profileNameKey(candidate.name) && value.id !== candidate.id);
-    if (duplicate) throw new Error("同一范围内已存在同名执行配置档");
-    const previous = [...state.global, ...Object.values(state.projects).flat()].find((value) => value.id === candidate.id);
-    candidate.createdAt = previous?.createdAt ?? now;
-    state.global = state.global.filter((value) => value.id !== candidate.id);
-    for (const key of Object.keys(state.projects)) state.projects[key] = state.projects[key]!.filter((value) => value.id !== candidate.id);
-    const destination = input.scope === "global" ? state.global : (state.projects[identity] ??= []);
-    destination.push(candidate);
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      state.global ??= [];
+      state.projects ??= {};
+      const target = input.scope === "global" ? state.global : (state.projects[identity] ??= []);
+      const duplicate = target.find((value) => profileNameKey(value.name) === profileNameKey(candidate.name) && value.id !== candidate.id);
+      if (duplicate) throw new Error("同一范围内已存在同名执行配置档");
+      const previous = [...state.global, ...Object.values(state.projects).flat()].find((value) => value.id === candidate.id);
+      candidate.createdAt = previous?.createdAt ?? now;
+      state.global = state.global.filter((value) => value.id !== candidate.id);
+      for (const key of Object.keys(state.projects)) state.projects[key] = state.projects[key]!.filter((value) => value.id !== candidate.id);
+      const destination = input.scope === "global" ? state.global : (state.projects[identity] ??= []);
+      destination.push(candidate);
+    });
     return this.list(input.workspacePath);
   }
 
@@ -137,13 +137,13 @@ export class ExecutionProfileService {
     if (!confirmed) throw new Error("删除执行配置档前需要明确确认");
     if (BUILTIN_PROFILES.some((value) => value.id === profileId)) throw new Error("内置执行配置档不可删除");
     const identity = await this.resolveIdentity(workspacePath);
-    const state = await this.store.get();
-    const before = state.global.length + Object.values(state.projects).reduce((total, values) => total + values.length, 0);
-    state.global = state.global.filter((value) => value.id !== profileId);
-    for (const key of Object.keys(state.projects)) state.projects[key] = state.projects[key]!.filter((value) => value.id !== profileId);
-    const after = state.global.length + Object.values(state.projects).reduce((total, values) => total + values.length, 0);
-    if (before === after) throw new Error("执行配置档不存在或已删除");
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      const before = state.global.length + Object.values(state.projects).reduce((total, values) => total + values.length, 0);
+      state.global = state.global.filter((value) => value.id !== profileId);
+      for (const key of Object.keys(state.projects)) state.projects[key] = state.projects[key]!.filter((value) => value.id !== profileId);
+      const after = state.global.length + Object.values(state.projects).reduce((total, values) => total + values.length, 0);
+      if (before === after) throw new Error("执行配置档不存在或已删除");
+    });
     return this.list(workspacePath || identity);
   }
 
@@ -199,10 +199,10 @@ export class ExecutionProfileService {
   }
 
   async assign(value: SessionExecutionAssignment): Promise<void> {
-    const state = await this.store.get();
-    state.assignments ??= {};
-    state.assignments[value.sessionId] = structuredClone(value);
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      state.assignments ??= {};
+      state.assignments[value.sessionId] = structuredClone(value);
+    });
   }
 
   async assignment(sessionId: string): Promise<SessionExecutionAssignment | undefined> {
@@ -211,10 +211,7 @@ export class ExecutionProfileService {
   }
 
   async removeAssignment(sessionId: string): Promise<void> {
-    const state = await this.store.get();
-    if (!state.assignments?.[sessionId]) return;
-    delete state.assignments[sessionId];
-    await this.store.set(state);
+    await this.store.mutate((state) => { if (state.assignments) delete state.assignments[sessionId]; });
   }
 
   async listAssignments(): Promise<SessionExecutionAssignment[]> {
@@ -223,14 +220,14 @@ export class ExecutionProfileService {
   }
 
   async repairAssignments(exists: (assignment: SessionExecutionAssignment) => Promise<boolean>): Promise<string[]> {
-    const state = await this.store.get();
     const removed: string[] = [];
-    for (const [sessionId, assignment] of Object.entries(state.assignments ?? {})) {
-      if (await exists(assignment)) continue;
-      delete state.assignments[sessionId];
-      removed.push(sessionId);
-    }
-    if (removed.length) await this.store.set(state);
+    await this.store.mutate(async (state) => {
+      for (const [sessionId, assignment] of Object.entries(state.assignments ?? {})) {
+        if (await exists(assignment)) continue;
+        delete state.assignments[sessionId];
+        removed.push(sessionId);
+      }
+    });
     return removed;
   }
 }

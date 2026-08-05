@@ -50,4 +50,11 @@ describe("UiStateService", () => {
     expect(history.filter((value) => value === "prompt-20")).toHaveLength(1);
     expect(history).not.toContain("prompt-0");
   });
+
+  it("preserves concurrent prompt history writes", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-ui-history-concurrent-"));
+    const service = new UiStateService(root);
+    await Promise.all(Array.from({ length: 25 }, (_, index) => service.appendPromptHistory("workspace", `parallel-${index}`)));
+    expect(await service.listPromptHistory("workspace")).toHaveLength(25);
+  });
 });

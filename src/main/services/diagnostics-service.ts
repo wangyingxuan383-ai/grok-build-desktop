@@ -193,15 +193,39 @@ export class DiagnosticsService {
   async createBundle(path: string): Promise<void> {
     const report = await this.run();
     const settings = await this.getSettings();
-    const log = redactDiagnosticText(redactSecrets(await this.log.read()));
-    const diagnostics = { build: this.build, report, proxy: { httpConfigured: Boolean(settings.httpProxy), httpsConfigured: Boolean(settings.httpsProxy) } };
-    const files = {
-      "diagnostics.json": strToU8(`${JSON.stringify(diagnostics, null, 2)}\n`),
-      "app.log": strToU8(log),
-      "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、Memory 内容或路径、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
-    };
-    await writeFile(path, zipSync(files, { level: 6 }));
+    const archive = buildSupportBundleArchive({
+      build: this.build,
+      report,
+      httpProxyConfigured: Boolean(settings.httpProxy),
+      httpsProxyConfigured: Boolean(settings.httpsProxy),
+      log: await this.log.read(),
+    });
+    await writeFile(path, archive);
   }
+}
+
+export function buildSupportBundleArchive(input: {
+  build: BuildInfo;
+  report: SystemCompatibilityReport;
+  httpProxyConfigured: boolean;
+  httpsProxyConfigured: boolean;
+  log: string;
+}): Uint8Array {
+  const diagnostics = {
+    build: input.build,
+    report: input.report,
+    proxy: { httpConfigured: input.httpProxyConfigured, httpsConfigured: input.httpsProxyConfigured },
+  };
+  // Redact the serialized report as a second boundary. Diagnostic item labels
+  // and provider/model display names are user-controlled and must not be able
+  // to smuggle paths or credentials into a support archive.
+  const diagnosticJson = redactDiagnosticText(redactSecrets(JSON.stringify(diagnostics, null, 2)));
+  const files = {
+    "diagnostics.json": strToU8(`${diagnosticJson}\n`),
+    "app.log": strToU8(redactDiagnosticText(redactSecrets(input.log))),
+    "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、Memory 内容或路径、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
+  };
+  return zipSync(files, { level: 6 });
 }
 
 function windowsStatus(): SystemDiagnosticItem {

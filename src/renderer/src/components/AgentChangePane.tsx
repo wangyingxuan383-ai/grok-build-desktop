@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentChangeIndex, AgentFileChange, NavigationIntent } from "../../../shared/types";
 import { UiIcon } from "../ui-icons";
 
@@ -28,6 +28,15 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(false);
   const [light, setLight] = useState(() => document.documentElement.dataset.themeResolved === "light");
+  const mountedRef = useRef(true);
+  const refreshGenerationRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      refreshGenerationRef.current += 1;
+    };
+  }, []);
   useEffect(() => {
     const update = (): void => setLight(document.documentElement.dataset.themeResolved === "light");
     document.documentElement.addEventListener("grok-theme-change", update);
@@ -35,13 +44,27 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
   }, []);
 
   const refresh = async (next = scope): Promise<void> => {
-    if (!sessionId) { setIndex(undefined); return; }
+    const generation = ++refreshGenerationRef.current;
+    const isCurrent = (): boolean => mountedRef.current && generation === refreshGenerationRef.current;
+    if (!sessionId) {
+      if (isCurrent()) { setIndex(undefined); setLoading(false); }
+      return;
+    }
     setLoading(true);
-    try { setIndex(await window.grokDesktop.getAgentChanges(sessionId, next)); }
-    catch (error) { onError(error instanceof Error ? error.message : String(error)); }
-    finally { setLoading(false); }
+    setIndex(undefined);
+    try {
+      const value = await window.grokDesktop.getAgentChanges(sessionId, next);
+      if (isCurrent()) setIndex(value);
+    } catch (error) {
+      if (isCurrent()) onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
   };
-  useEffect(() => { void refresh(scope); }, [sessionId, scope]);
+  useEffect(() => {
+    void refresh(scope);
+    return () => { refreshGenerationRef.current += 1; };
+  }, [sessionId, scope]);
 
   const files = index?.files ?? [];
   const selected = useMemo(() => files.find((file) => file.id === selectedId) ?? files[0], [files, selectedId]);

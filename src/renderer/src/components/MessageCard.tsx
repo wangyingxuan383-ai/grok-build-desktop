@@ -13,6 +13,11 @@ const DiffEditor = lazy(async () => {
 });
 
 export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, showThinking, expandTools, onResolved, onRetry, onNavigate, onDiagnose }: { message: UiMessage; sessionId: string; navigationRoot?: string; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onDiagnose?: (failure: TurnFailure) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
+  // Resolved interactions remain in the durable conversation projection as an
+  // audit event, but their full decision surface must disappear immediately.
+  // Keeping a disabled Plan/permission/question card on screen made a
+  // successful response look pending and invited duplicate clicks.
+  if (isResolvedInteraction(message)) return null;
   if (message.kind === "thought" && !showThinking) return <div className="thinking-placeholder"><span /> 思考过程</div>;
   if (message.kind === "user") return <UserMessageCard message={message} onRetry={onRetry} />;
   if (message.kind === "assistant") return <div className="message-row assistant"><div className="assistant-body"><LazyMarkdownView text={message.text} /></div></div>;
@@ -32,6 +37,11 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   return null;
 });
 
+export function isResolvedInteraction(message: UiMessage): boolean {
+  return (message.kind === "permission" || message.kind === "question" || message.kind === "plan")
+    && message.resolved === true;
+}
+
 export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<UiMessage, { kind: "media" }>> }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? messages : messages.slice(0, 4);
@@ -47,10 +57,10 @@ export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<Ui
 
 function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
   const [preview, setPreview] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
   const src = message.isData ? `data:${message.mimeType || "image/png"};base64,${message.source}` : toFileUrl(message.source);
-  useEffect(() => { setUnavailable(false); setPreview(false); }, [src]);
-  const pathActions = !message.isData && <><button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button><button onClick={() => void navigator.clipboard.writeText(message.source)}>复制路径</button></>;
+  const [unavailable, setUnavailable] = useState(!src);
+  useEffect(() => { setUnavailable(!src); setPreview(false); }, [src]);
+  const pathActions = !message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>;
   return <div className="media-result-item">
     {unavailable
       ? <div className="media-unavailable"><strong>{message.media === "image" ? "图片文件不可用" : "视频文件不可用"}</strong><span>历史缓存可能已被清理或原文件已移动。不会再显示损坏的图片占位。</span></div>
@@ -61,7 +71,7 @@ function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "
       {!unavailable && message.media === "image" && <><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button></>}
       {pathActions}
     </div>
-    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
+    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
   </div>;
 }
 
@@ -298,7 +308,13 @@ function protectedActionSummary(value: unknown): string {
   const title = [tool.title, tool.name, tool.description].find((item): item is string => typeof item === "string" && Boolean(item.trim()));
   return title?.trim().slice(0, 240) ?? "";
 }
-function toFileUrl(path: string): string { return `grok-media://local/?path=${encodeURIComponent(path.replace(/^\\\\\?\\/, ""))}`; }
+function toFileUrl(path: string): string {
+  // Durable conversation media is exposed only through an opaque handle. A
+  // raw path here means an old/corrupt projection escaped main-process
+  // normalization; render it as unavailable instead of minting a path URL in
+  // the sandboxed Renderer.
+  return path.startsWith("grok-media://access/") ? path : "";
+}
 function formatBytes(size?: number): string { return typeof size !== "number" ? "附件" : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`; }
 
 export function toolLocationCandidates(tool: Extract<UiMessage, { kind: "tool" }>["tool"]): Array<{ path: string; line?: number }> {

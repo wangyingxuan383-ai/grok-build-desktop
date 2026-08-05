@@ -34,9 +34,10 @@ rl.on("line", (line) => {
     await writeFile(fakeCommand, `@echo off\r\n"${process.execPath}" "${fakeScript}" %*\r\n`, "utf8");
 
     const events: ChatEvent[] = [];
+    const log = new LogService(join(root, "adapter.log"));
     const adapter = new GrokAcpAdapter({
       cliPath: fakeCommand, cwd: root, env: process.env, effort: "", mode: "plan",
-      log: new LogService(join(root, "adapter.log")),
+      log,
     });
     adapter.on("event", (event: ChatEvent) => events.push(event));
     try {
@@ -55,6 +56,7 @@ rl.on("line", (line) => {
       expect(events.filter((event) => event.type === "turn-completed")).toHaveLength(1);
     } finally {
       await adapter.dispose(500);
+      await log.flush();
     }
   });
 
@@ -84,9 +86,10 @@ rl.on("line", (line) => {
     await writeFile(fakeCommand, `@echo off\r\n"${process.execPath}" "${fakeScript}" %*\r\n`, "utf8");
 
     const events: ChatEvent[] = [];
+    const log = new LogService(join(root, "adapter.log"));
     const adapter = new GrokAcpAdapter({
       cliPath: fakeCommand, cwd: root, env: process.env, effort: "", mode: "agent",
-      log: new LogService(join(root, "adapter.log")),
+      log,
     });
     adapter.on("event", (event: ChatEvent) => events.push(event));
     try {
@@ -104,6 +107,7 @@ rl.on("line", (line) => {
       expect(events.filter((event) => event.type === "turn-completed")).toHaveLength(1);
     } finally {
       await adapter.dispose(500);
+      await log.flush();
     }
   });
 });

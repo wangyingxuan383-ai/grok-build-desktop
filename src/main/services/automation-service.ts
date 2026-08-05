@@ -1,6 +1,6 @@
 import { safeStorage } from "electron";
 import { spawn } from "node:child_process";
-import { mkdir, open, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { AutomationGlobalPolicy, AutomationPendingConfirmation, AutomationRegistrationDiagnostic, AutomationRunRecord, AutomationTask, AutomationTaskInput, ComputerRiskCategory } from "../../shared/types";
 import iconv from "iconv-lite";
@@ -28,15 +28,39 @@ export interface AutomationServiceOptions {
   pendingPollMs?: number;
   globalSlotPollMs?: number;
   globalSlotTimeoutMs?: number;
+  leaseHeartbeatMs?: number;
+  leaseStaleMs?: number;
+  cancellationPollMs?: number;
 }
 
 const DEFAULT_POLICY: AutomationGlobalPolicy = {
-  defaultProfile: { modelId: "grok-4.5", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false },
+  // Empty means "inherit the current Desktop default when the run starts".
+  defaultProfile: { modelId: "", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false },
   maxConcurrentRuns: 2,
   confirmationTimeoutMinutes: 30,
+  inactivityTimeoutMinutes: 0,
   notifyOnSuccess: true,
   notifyOnFailure: true,
 };
+
+interface AutomationLeaseRecord {
+  version: 1;
+  leaseId: string;
+  runId: string;
+  pid: number;
+  processStartedAt: string;
+  heartbeatAt: string;
+}
+
+interface AutomationLease {
+  path: string;
+  record: AutomationLeaseRecord;
+  handle: Awaited<ReturnType<typeof open>>;
+  heartbeat?: NodeJS.Timeout;
+  release(): Promise<void>;
+}
+
+const PROCESS_STARTED_AT = new Date().toISOString();
 
 export class AutomationService {
   private readonly root: string;
@@ -49,6 +73,7 @@ export class AutomationService {
   private readonly cipher: AutomationCipher;
   private readonly scheduler: TaskSchedulerAdapter;
   private readonly now: () => Date;
+  private readonly activeRunControllers = new Map<string, AbortController>();
 
   constructor(userDataPath: string, private readonly log: LogService, private readonly options: AutomationServiceOptions) {
     this.root = join(userDataPath, "automations");
@@ -125,6 +150,23 @@ export class AutomationService {
     return (await this.readRuns()).filter((value) => !taskId || value.taskId === taskId).slice(0, 500);
   }
 
+  async cancelRun(runId: string): Promise<AutomationRunRecord> {
+    const path = this.runPath(runId);
+    const run = await readJson<AutomationRunRecord>(path);
+    if (["completed", "failed", "cancelled", "skipped"].includes(run.status)) return run;
+    const cancelled: AutomationRunRecord = {
+      ...run,
+      status: "cancelled",
+      finishedAt: this.now().toISOString(),
+      error: "用户已停止任务",
+    };
+    await this.writeRun(cancelled);
+    await this.rejectPendingForRun(runId);
+    this.activeRunControllers.get(runId)?.abort(new Error("用户已停止任务"));
+    this.options.onChanged?.({ taskId: run.taskId, run: cancelled });
+    return cancelled;
+  }
+
   async setExecutionSession(id: string, sessionId?: string): Promise<void> {
     const task = await this.readTask(id);
     if (sessionId) task.sessionId = sessionId;
@@ -147,18 +189,20 @@ export class AutomationService {
       await this.writeTask(task);
       this.options.onChanged?.({ taskId: id, task: stripPrompt(task, this.now()) });
     } finally {
-      await lock.close();
-      await rm(this.lockPath(id), { force: true });
+      await lock.release();
     }
     return this.list();
   }
 
   getPolicy(): Promise<AutomationGlobalPolicy> { return this.policyStore.get(); }
   async updatePolicy(patch: Partial<AutomationGlobalPolicy>): Promise<AutomationGlobalPolicy> {
-    const current = await this.policyStore.get(); const next = { ...current, ...patch, defaultProfile: { ...current.defaultProfile, ...patch.defaultProfile } };
-    next.maxConcurrentRuns = Math.max(1, Math.min(8, Math.floor(next.maxConcurrentRuns)));
-    next.confirmationTimeoutMinutes = Math.max(1, Math.min(120, Math.floor(next.confirmationTimeoutMinutes)));
-    return this.policyStore.set(next);
+    return this.policyStore.mutate((current) => {
+      const next = { ...current, ...patch, defaultProfile: { ...current.defaultProfile, ...patch.defaultProfile } };
+      next.maxConcurrentRuns = Math.max(1, Math.min(8, Math.floor(next.maxConcurrentRuns)));
+      next.confirmationTimeoutMinutes = Math.max(1, Math.min(120, Math.floor(next.confirmationTimeoutMinutes)));
+      next.inactivityTimeoutMinutes = Math.max(0, Math.min(10_080, Math.floor(next.inactivityTimeoutMinutes ?? 0)));
+      return next;
+    });
   }
 
   async applyPolicyToAll(): Promise<AutomationTask[]> {
@@ -173,7 +217,7 @@ export class AutomationService {
     for (const task of await this.readStoredTasks()) await this.scheduler.unregister(task.id).catch((error) => this.log.log(`删除计划任务失败：${sanitizeError(error)}`));
   }
 
-  async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; confirm(toolCall: unknown, force?: boolean): Promise<boolean> }) => Promise<{ sessionId?: string }>): Promise<AutomationRunRecord> {
+  async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; signal: AbortSignal; confirm(toolCall: unknown, force?: boolean): Promise<boolean> }) => Promise<{ sessionId?: string }>): Promise<AutomationRunRecord> {
     const task = await this.readTask(taskId); const id = runId && runId !== "scheduled" ? runId : crypto.randomUUID();
     if (!task.sessionId && !task.sessionMigrationComplete) {
       const previous = (await this.readRuns()).find((value) => value.taskId === taskId && value.sessionId);
@@ -182,28 +226,48 @@ export class AutomationService {
       await this.writeTask(task);
     }
     let run: AutomationRunRecord = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => ({ id, taskId, status: "queued", scheduledAt: this.now().toISOString() }));
+    if (run.status === "cancelled") return run;
     if (!task.enabled) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "任务已暂停" }; await this.writeRun(run); return run; }
     const lock = await this.acquire(taskId, id);
     if (!lock) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "同一任务已有运行实例，本次触发已合并" }; await this.writeRun(run); return run; }
-    let slot: { handle: Awaited<ReturnType<typeof open>>; path: string } | undefined;
+    let slot: AutomationLease | undefined;
     let prompt: string | undefined;
+    const controller = new AbortController();
+    this.activeRunControllers.set(id, controller);
+    const cancellationPoll = setInterval(() => {
+      void readJson<AutomationRunRecord>(this.runPath(id)).then((current) => {
+        if (current.status === "cancelled" && !controller.signal.aborted) controller.abort(new Error(current.error || "任务已取消"));
+      }).catch(() => undefined);
+    }, Math.max(50, this.options.cancellationPollMs ?? 1_000));
+    cancellationPoll.unref?.();
     try {
-      slot = await this.acquireGlobalSlot(id);
+      slot = await this.acquireGlobalSlot(id, controller.signal);
+      const beforeStart = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
+      if (beforeStart.status === "cancelled" || controller.signal.aborted) return beforeStart;
       run = { ...run, status: "running", startedAt: this.now().toISOString() }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
       prompt = this.cipher.decrypt(task.encryptedPrompt);
-      const result = await executor({ task: stripPrompt(task), prompt, runId: id, confirm: (toolCall, force) => this.confirmHighImpact(taskId, id, toolCall, force) });
+      const result = await executor({ task: stripPrompt(task), prompt, runId: id, signal: controller.signal, confirm: (toolCall, force) => this.confirmHighImpact(taskId, id, toolCall, force, controller.signal) });
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error("任务已取消");
       if (result.sessionId) {
         task.sessionId = result.sessionId;
         task.sessionMigrationComplete = true;
         task.updatedAt = this.now().toISOString();
         await this.writeTask(task);
       }
-      run = { ...run, status: "completed", sessionId: result.sessionId, finishedAt: this.now().toISOString() };
+      const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
+      run = current.status === "cancelled"
+        ? current
+        : { ...run, status: "completed", sessionId: result.sessionId, finishedAt: this.now().toISOString() };
     } catch (error) {
-      run = { ...run, status: "failed", error: sanitizeError(error, prompt ? [prompt] : []), finishedAt: this.now().toISOString() };
+      const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => undefined);
+      run = controller.signal.aborted || current?.status === "cancelled"
+        ? { ...(current ?? run), status: "cancelled", error: current?.error || "用户已停止任务", finishedAt: current?.finishedAt ?? this.now().toISOString() }
+        : { ...run, status: "failed", error: sanitizeError(error, prompt ? [prompt] : []), finishedAt: this.now().toISOString() };
     } finally {
-      if (slot) { await slot.handle.close(); await rm(slot.path, { force: true }); }
-      await lock.close(); await rm(this.lockPath(taskId), { force: true });
+      clearInterval(cancellationPoll);
+      this.activeRunControllers.delete(id);
+      if (slot) await slot.release();
+      await lock.release();
     }
     await this.writeRun(run); this.options.onChanged?.({ taskId, run });
     return run;
@@ -219,7 +283,7 @@ export class AutomationService {
     const path = join(this.pendingRoot, `${safeId(id)}.json`); const value = await readJson<PendingFile>(path); value.decision = approved; await atomicJson(path, value);
   }
 
-  private async confirmHighImpact(taskId: string, runId: string, toolCall: unknown, force = false): Promise<boolean> {
+  private async confirmHighImpact(taskId: string, runId: string, toolCall: unknown, force = false, signal?: AbortSignal): Promise<boolean> {
     const risk = classifyScheduledRisk(toolCall); if (!risk && !force) return true;
     const policy = await this.getPolicy(); const id = crypto.randomUUID(); const expiresAt = new Date(this.now().getTime() + policy.confirmationTimeoutMinutes * 60_000).toISOString();
     const pending: PendingFile = { public: { id, taskId, runId, category: risk?.category ?? "tool-permission", summary: force && !risk ? "任务需要工具权限确认" : "高影响操作等待确认", expiresAt }, encryptedSummary: this.cipher.encrypt(risk?.summary ?? JSON.stringify(toolCall ?? {}).slice(0, 500)) };
@@ -228,7 +292,7 @@ export class AutomationService {
     if (waitingRun) { waitingRun.status = "awaiting-confirmation"; await this.writeRun(waitingRun); this.options.onChanged?.({ taskId, run: waitingRun, pending: { ...pending.public } }); }
     else this.options.onChanged?.({ taskId, pending: { ...pending.public } });
     let decision: boolean | undefined;
-    while (this.now().getTime() < new Date(expiresAt).getTime()) { const current = await readJson<PendingFile>(join(this.pendingRoot, `${id}.json`)); if (current.decision !== undefined) { decision = current.decision; break; } await delay(this.options.pendingPollMs ?? 1_000); }
+    while (!signal?.aborted && this.now().getTime() < new Date(expiresAt).getTime()) { const current = await readJson<PendingFile>(join(this.pendingRoot, `${id}.json`)); if (current.decision !== undefined) { decision = current.decision; break; } await delay(this.options.pendingPollMs ?? 1_000); }
     if (waitingRun && decision !== undefined) { waitingRun.status = "running"; await this.writeRun(waitingRun); this.options.onChanged?.({ taskId, run: waitingRun }); }
     await rm(join(this.pendingRoot, `${id}.json`), { force: true }); return decision === true;
   }
@@ -246,17 +310,16 @@ export class AutomationService {
     await this.writeTask(task);
   }
 
-  private async acquireGlobalSlot(runId: string): Promise<{ handle: Awaited<ReturnType<typeof open>>; path: string }> {
+  private async acquireGlobalSlot(runId: string, signal?: AbortSignal): Promise<AutomationLease> {
     const policy = await this.getPolicy(); await mkdir(this.slotsRoot, { recursive: true });
     const started = Date.now();
     while (true) {
+      if (signal?.aborted) throw signal.reason ?? new Error("任务已取消");
       await this.cleanupStaleSlots();
       for (let index = 0; index < policy.maxConcurrentRuns; index++) {
         const path = join(this.slotsRoot, `${index}.slot`);
         try {
-          const handle = await open(path, "wx");
-          await handle.writeFile(runId);
-          return { handle, path };
+          return await this.createLease(path, runId);
         } catch (error: any) {
           if (error?.code !== "EEXIST") throw error;
         }
@@ -269,7 +332,7 @@ export class AutomationService {
   private async acquire(taskId: string, runId: string) {
     await mkdir(this.locksRoot, { recursive: true });
     for (let attempt = 0; attempt < 2; attempt++) {
-      try { const handle = await open(this.lockPath(taskId), "wx"); await handle.writeFile(runId); return handle; }
+      try { return await this.createLease(this.lockPath(taskId), runId); }
       catch (error: any) {
         if (error?.code !== "EEXIST") throw error;
         if (attempt === 0 && await this.isStaleLock(this.lockPath(taskId))) { await rm(this.lockPath(taskId), { force: true }); continue; }
@@ -283,12 +346,68 @@ export class AutomationService {
       const path = join(this.slotsRoot, name); if (await this.isStaleLock(path)) await rm(path, { force: true });
     }
   }
+  private async rejectPendingForRun(runId: string): Promise<void> {
+    await mkdir(this.pendingRoot, { recursive: true });
+    for (const name of (await readdir(this.pendingRoot).catch(() => [])).filter((value) => value.endsWith(".json"))) {
+      const path = join(this.pendingRoot, name);
+      const pending = await readJson<PendingFile>(path).catch(() => undefined);
+      if (!pending || pending.public.runId !== runId || pending.decision !== undefined) continue;
+      pending.decision = false;
+      await atomicJson(path, pending);
+    }
+  }
   private async isStaleLock(path: string): Promise<boolean> {
-    const runId = (await readFile(path, "utf8").catch(() => "")).trim();
+    const raw = (await readFile(path, "utf8").catch(() => "")).trim();
+    let lease: AutomationLeaseRecord | undefined;
+    try {
+      const parsed = JSON.parse(raw) as AutomationLeaseRecord;
+      if (parsed.version === 1 && parsed.leaseId && parsed.runId) lease = parsed;
+    } catch { /* v0.6 lock files contained only the run id */ }
+    const runId = lease?.runId ?? raw;
     const run = runId ? await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined) : undefined;
     if (run && ["completed", "failed", "cancelled", "skipped"].includes(run.status)) return true;
     const modified = await stat(path).catch(() => undefined);
-    return !modified || this.now().getTime() - modified.mtimeMs > 24 * 60 * 60_000;
+    if (!modified) return true;
+    if (this.now().getTime() - modified.mtimeMs > Math.max(50, this.options.leaseStaleMs ?? 5 * 60_000)) return true;
+    return Boolean(lease?.pid && !isProcessAlive(lease.pid));
+  }
+
+  private async createLease(path: string, runId: string): Promise<AutomationLease> {
+    const handle = await open(path, "wx");
+    const record: AutomationLeaseRecord = {
+      version: 1,
+      leaseId: crypto.randomUUID(),
+      runId,
+      pid: process.pid,
+      processStartedAt: PROCESS_STARTED_AT,
+      heartbeatAt: this.now().toISOString(),
+    };
+    try {
+      await handle.writeFile(`${JSON.stringify(record)}\n`, "utf8");
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      await rm(path, { force: true }).catch(() => undefined);
+      throw error;
+    }
+    const lease: AutomationLease = {
+      path,
+      record,
+      handle,
+      release: async () => {
+        if (lease.heartbeat) clearInterval(lease.heartbeat);
+        await handle.close().catch(() => undefined);
+        const current = await readFile(path, "utf8").catch(() => "");
+        if (current.includes(record.leaseId)) await rm(path, { force: true });
+      },
+    };
+    const heartbeatMs = Math.max(10, this.options.leaseHeartbeatMs ?? 30_000);
+    lease.heartbeat = setInterval(() => {
+      record.heartbeatAt = this.now().toISOString();
+      const now = this.now();
+      void utimes(path, now, now).catch((error) => this.log.log(`自动化租约心跳失败：${sanitizeError(error)}`));
+    }, heartbeatMs);
+    lease.heartbeat.unref?.();
+    return lease;
   }
   private async readStoredTasks(): Promise<StoredAutomationTask[]> { const publicTasks = await this.list(); return Promise.all(publicTasks.map((task) => this.readTask(task.id))); }
   private readTask(id: string): Promise<StoredAutomationTask> { return this.readTaskFile(this.taskPath(id)); }
@@ -326,7 +445,7 @@ export class WindowsTaskScheduler implements TaskSchedulerAdapter {
 
 export function buildTaskXml(task: AutomationTask, executable: string, args: string[]): string {
   const trigger = scheduleXml(task.schedule);
-  return `<?xml version="1.0" encoding="UTF-16"?>\n<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>${xml(task.name)}</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>${task.missedRunPolicy === "skip" ? "false" : "true"}</StartWhenAvailable><WakeToRun>${task.wakeToRun}</WakeToRun><ExecutionTimeLimit>PT24H</ExecutionTimeLimit></Settings><Actions Context="Author"><Exec><Command>${xml(executable)}</Command><Arguments>${xml(args.map(quoteArg).join(" "))}</Arguments><WorkingDirectory>${xml(task.workspace)}</WorkingDirectory></Exec></Actions></Task>`;
+  return `<?xml version="1.0" encoding="UTF-16"?>\n<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>${xml(task.name)}</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>${task.missedRunPolicy === "skip" ? "false" : "true"}</StartWhenAvailable><WakeToRun>${task.wakeToRun}</WakeToRun><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings><Actions Context="Author"><Exec><Command>${xml(executable)}</Command><Arguments>${xml(args.map(quoteArg).join(" "))}</Arguments><WorkingDirectory>${xml(task.workspace)}</WorkingDirectory></Exec></Actions></Task>`;
 }
 
 function scheduleXml(schedule: AutomationTask["schedule"]): string {
@@ -396,12 +515,16 @@ function stripPrompt(value: StoredAutomationTask, now = new Date()): AutomationT
     : task.registrationDiagnostic;
   return { ...task, registrationError, registrationDiagnostic, nextRunAt: task.enabled ? calculateNextRun(task.schedule, now)?.toISOString() : undefined };
 }
-function validateTaskInput(value: AutomationTaskInput, requirePrompt: boolean): void { if (!value.name.trim()) throw new Error("任务名称不能为空"); if (!value.workspace.trim()) throw new Error("任务工作区不能为空"); if (requirePrompt && !value.prompt?.trim()) throw new Error("任务提示词不能为空"); if (!value.profile.modelId.trim()) throw new Error("任务模型不能为空"); if (!(value.contextPolicy === "reuse" || value.contextPolicy === "fresh")) throw new Error("任务上下文策略无效"); if (!(["run-once", "skip"] as const).includes(value.missedRunPolicy)) throw new Error("错过运行策略无效"); if (value.skillCommand && !/^\/[A-Za-z0-9._-]+$/.test(value.skillCommand.trim())) throw new Error("Skill 命令必须以 / 开头且不包含参数"); if (value.schedule.kind === "interval" && (!Number.isInteger(value.schedule.minutes) || value.schedule.minutes < 1)) throw new Error("固定间隔不得小于一分钟"); if (value.schedule.kind === "daily" || value.schedule.kind === "weekly") { if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.schedule.time)) throw new Error("任务执行时间格式无效"); } if (value.schedule.kind === "weekly" && (!value.schedule.days.length || value.schedule.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("每周任务至少选择一个有效星期"); if (value.schedule.kind === "once" && !Number.isFinite(new Date(value.schedule.at).getTime())) throw new Error("单次任务时间无效"); }
+function validateTaskInput(value: AutomationTaskInput, requirePrompt: boolean): void { if (!value.name.trim()) throw new Error("任务名称不能为空"); if (!value.workspace.trim()) throw new Error("任务工作区不能为空"); if (requirePrompt && !value.prompt?.trim()) throw new Error("任务提示词不能为空"); if (!(value.contextPolicy === "reuse" || value.contextPolicy === "fresh")) throw new Error("任务上下文策略无效"); if (!(["run-once", "skip"] as const).includes(value.missedRunPolicy)) throw new Error("错过运行策略无效"); if (value.skillCommand && !/^\/[A-Za-z0-9._-]+$/.test(value.skillCommand.trim())) throw new Error("Skill 命令必须以 / 开头且不包含参数"); if (value.schedule.kind === "interval" && (!Number.isInteger(value.schedule.minutes) || value.schedule.minutes < 1)) throw new Error("固定间隔不得小于一分钟"); if (value.schedule.kind === "daily" || value.schedule.kind === "weekly") { if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.schedule.time)) throw new Error("任务执行时间格式无效"); } if (value.schedule.kind === "weekly" && (!value.schedule.days.length || value.schedule.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("每周任务至少选择一个有效星期"); if (value.schedule.kind === "once" && !Number.isFinite(new Date(value.schedule.at).getTime())) throw new Error("单次任务时间无效"); }
 function sanitizeError(value: unknown, sensitive: string[] = []): string { let text = value instanceof Error ? value.message : String(value); for (const item of sensitive.filter(Boolean)) text = text.split(item).join("[REDACTED]"); return text.replace(/(?:sk|xai|ghp|github_pat)_[A-Za-z0-9_-]{8,}/gi, "[REDACTED]").slice(0, 1000); }
 async function readJson<T>(path: string): Promise<T> { return JSON.parse(await readFile(path, "utf8")) as T; }
 async function atomicJson(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); const temp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`; try { await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8"); await renameSafe(temp, path); } catch (error) { await rm(temp, { force: true }); throw error; } }
 async function renameSafe(from: string, to: string): Promise<void> { const { rename } = await import("node:fs/promises"); try { await rename(from, to); } catch (error: any) { if (!["EEXIST", "EPERM"].includes(error?.code)) throw error; await rm(to, { force: true }); await rename(from, to); } }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
 
 export function calculateNextRun(schedule: AutomationTask["schedule"], now = new Date()): Date | undefined {
   if (schedule.kind === "once") { const value = new Date(schedule.at); return Number.isFinite(value.getTime()) && value.getTime() >= now.getTime() ? value : undefined; }

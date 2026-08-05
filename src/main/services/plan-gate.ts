@@ -14,7 +14,10 @@ const SAFE_GIT_BRANCH_QUERY = /^git\s+branch(?:\s+--(?:show-current|list|all|rem
 const SAFE_NODE_QUERY = /^node\s+(?:--version|-v)$/i;
 const SAFE_NPM_QUERY = /^npm\s+(?:--version|-v|view(?:\s+.+)?)$/i;
 const SAFE_GROK_QUERY = /^grok\s+(?:--version|version|models|inspect)(?:\s+.*)?$/i;
-const WRITE_CAPABLE_QUERY_FLAG = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff\b|--exec\b|-exec(?:dir)?\b|-delete\b|-fprint(?:f)?\b|--pre(?:-glob)?\b)/i;
+// `git diff/show --textconv` is not necessarily read-only: Git may invoke an
+// arbitrary external text-conversion driver from repository configuration.
+// Keep Plan mode limited to Git's built-in object/diff readers.
+const WRITE_CAPABLE_QUERY_FLAG = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff\b|--textconv\b|--exec\b|-exec(?:dir)?\b|-delete\b|-fprint(?:f)?\b|--pre(?:-glob)?\b)/i;
 
 export function isWithinWorkspace(candidate: string, workspaceRoot: string): boolean {
   const target = resolve(candidate);
@@ -77,10 +80,11 @@ export function isPlanSafeToolCall(toolCall: unknown): boolean {
     return command ? isReadOnlyCommand(command) : false;
   }
   return [
-    "read", "read file", "read text file",
-    "search", "search files",
-    "list", "list directory",
-    "glob", "grep", "find", "inspect", "think", "fetch",
+    "read", "read file", "read files", "read many files", "read text file",
+    "view", "view file", "view files", "stat", "get file info",
+    "search", "search files", "search code", "search text", "code search", "web search",
+    "list", "list directory", "list files",
+    "glob", "grep", "find", "inspect", "think", "fetch", "fetch url",
   ].includes(normalizedKind);
 }
 

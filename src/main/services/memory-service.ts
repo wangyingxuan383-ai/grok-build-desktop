@@ -57,16 +57,17 @@ export class MemoryService {
   async updateSettings(workspacePath: string, patch: Partial<Pick<MemorySettings, "enabled" | "saveOnSessionEnd" | "autoDream">>): Promise<MemorySettings> {
     const layout = await this.resolveLayout(workspacePath);
     const current = await this.getSettingsForWorkspace(workspacePath);
-    const state = await this.store.get();
-    state.workspaces[layout.workspaceIdentity] = {
-      enabled: patch.enabled ?? current.enabled,
-      saveOnSessionEnd: patch.saveOnSessionEnd ?? current.saveOnSessionEnd,
-      autoDream: patch.autoDream ?? current.autoDream,
-      lastFlushAt: current.lastFlushAt,
-      lastDreamAt: current.lastDreamAt,
-      dreamStatus: current.dreamStatus,
-    };
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      const latest = state.workspaces[layout.workspaceIdentity];
+      state.workspaces[layout.workspaceIdentity] = {
+        enabled: patch.enabled ?? latest?.enabled ?? current.enabled,
+        saveOnSessionEnd: patch.saveOnSessionEnd ?? latest?.saveOnSessionEnd ?? current.saveOnSessionEnd,
+        autoDream: patch.autoDream ?? latest?.autoDream ?? current.autoDream,
+        lastFlushAt: latest?.lastFlushAt ?? current.lastFlushAt,
+        lastDreamAt: latest?.lastDreamAt ?? current.lastDreamAt,
+        dreamStatus: latest?.dreamStatus ?? current.dreamStatus,
+      };
+    });
     return this.getSettingsForWorkspace(workspacePath);
   }
 
@@ -193,9 +194,17 @@ export class MemoryService {
   async markCommand(workspacePath: string, command: "flush" | "dream", status: "running" | "completed" | "failed"): Promise<MemorySettings> {
     const current = await this.getSettingsForWorkspace(workspacePath);
     const patch: Partial<MemorySettings> = command === "flush" ? status === "completed" ? { lastFlushAt: new Date().toISOString() } : {} : { dreamStatus: status, ...(status === "completed" ? { lastDreamAt: new Date().toISOString() } : {}) };
-    const state = await this.store.get();
-    state.workspaces[current.workspaceIdentity] = { enabled: current.enabled, saveOnSessionEnd: current.saveOnSessionEnd, autoDream: current.autoDream, lastFlushAt: patch.lastFlushAt ?? current.lastFlushAt, lastDreamAt: patch.lastDreamAt ?? current.lastDreamAt, dreamStatus: patch.dreamStatus ?? current.dreamStatus };
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      const latest = state.workspaces[current.workspaceIdentity];
+      state.workspaces[current.workspaceIdentity] = {
+        enabled: latest?.enabled ?? current.enabled,
+        saveOnSessionEnd: latest?.saveOnSessionEnd ?? current.saveOnSessionEnd,
+        autoDream: latest?.autoDream ?? current.autoDream,
+        lastFlushAt: patch.lastFlushAt ?? latest?.lastFlushAt ?? current.lastFlushAt,
+        lastDreamAt: patch.lastDreamAt ?? latest?.lastDreamAt ?? current.lastDreamAt,
+        dreamStatus: patch.dreamStatus ?? latest?.dreamStatus ?? current.dreamStatus,
+      };
+    });
     return this.getSettingsForWorkspace(workspacePath);
   }
 }

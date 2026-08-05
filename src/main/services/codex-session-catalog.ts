@@ -92,19 +92,19 @@ export class CodexSessionCatalog {
   }
 
   async hide(id: string, hidden = true): Promise<void> {
-    const data = await this.metadata.get();
-    if (hidden) data.hidden[id] = true;
-    else delete data.hidden[id];
-    await this.metadata.set(data);
+    await this.metadata.mutate((data) => {
+      if (hidden) data.hidden[id] = true;
+      else delete data.hidden[id];
+    });
   }
 
   async recordContinuation(id: string, grokSessionId: string): Promise<void> {
-    const data = await this.metadata.get();
-    const current = data.continuations[id];
-    const values = Array.isArray(current) ? current : current ? [current] : [];
-    if (!values.includes(grokSessionId)) values.push(grokSessionId);
-    data.continuations[id] = values;
-    await this.metadata.set(data);
+    await this.metadata.mutate((data) => {
+      const current = data.continuations[id];
+      const values = Array.isArray(current) ? current : current ? [current] : [];
+      if (!values.includes(grokSessionId)) values.push(grokSessionId);
+      data.continuations[id] = values;
+    });
   }
 
   async listContinuations(cwd = ""): Promise<CodexContinuationMapping[]> {

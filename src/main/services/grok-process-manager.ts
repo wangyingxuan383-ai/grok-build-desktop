@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { AppSettings, ChatEvent, CommandInfo, LiveStatus, ReasoningEffort, SessionMode } from "../../shared/types";
+import type { AppSettings, ChatEvent, CommandInfo, LiveStatus, ProviderLaunchContext, ReasoningEffort, SessionMode } from "../../shared/types";
 import { buildCliEnv, detectEffortFlag, locateGrokCli } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
 import type { LogService } from "./log-service";
+import type { SessionRuntimeStateService } from "./session-runtime-state-service";
 
 export interface LiveSessionSnapshot {
   sessionId: string;
@@ -11,6 +12,16 @@ export interface LiveSessionSnapshot {
   mode: SessionMode;
   modelId?: string;
   processOptions?: SessionProcessOptions;
+}
+
+export interface ManagedModelIdentity {
+  providerId?: string;
+  localModelId?: string;
+}
+
+export interface ModelSwitchIdentity {
+  target: ManagedModelIdentity;
+  previous: ManagedModelIdentity;
 }
 
 export class GrokProcessManager {
@@ -28,8 +39,9 @@ export class GrokProcessManager {
     private readonly onSessionClosed?: (leaseId: string | undefined) => void,
     private readonly getMcpSecretEnvironment: () => Promise<Record<string, string>> = async () => ({}),
     private readonly getWorkspaceEnvironment: (cwd: string) => Promise<Record<string, string>> = async () => ({}),
-    private readonly getProviderEnvironment: (scopeId: string) => Promise<Record<string, string>> = async () => ({}),
+    private readonly getProviderEnvironment: (context: ProviderLaunchContext) => Promise<Record<string, string>> = async () => ({}),
     private readonly beforeSessionClose?: (sessionId: string, session: GrokAcpAdapter, reason: "close" | "shutdown" | "reap" | "cap") => Promise<void>,
+    private readonly runtimeState?: SessionRuntimeStateService,
   ) {
     this.reaper = setInterval(() => void this.reap(), 5 * 60_000);
     this.reaper.unref();
@@ -85,9 +97,10 @@ export class GrokProcessManager {
     for (const snapshot of snapshots) {
       this.sessions.delete(snapshot.sessionId);
       await snapshot.session.dispose();
-      const adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions);
+      const adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions, snapshot.sessionId);
       try {
         await adapter.start(snapshot.sessionId);
+        await this.rememberSession(snapshot.sessionId, adapter);
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
@@ -158,6 +171,7 @@ export class GrokProcessManager {
     let result: { sessionId: string };
     try {
       result = await adapter.start();
+      await this.rememberSession(result.sessionId, adapter);
     } catch (error) {
       await adapter.dispose();
       throw error;
@@ -173,6 +187,7 @@ export class GrokProcessManager {
     const adapter = await this.spawn(cwd, effort, mode, modelId, permissionDecider, environmentOverride, processOptions);
     try {
       const result = await adapter.start();
+      await this.rememberSession(result.sessionId, adapter);
       this.sessions.set(result.sessionId, adapter);
       this.onSessionStarted?.(adapter.extensionLeaseId, result.sessionId);
       this.focusedId = result.sessionId;
@@ -181,16 +196,32 @@ export class GrokProcessManager {
     } catch (error) { await adapter.dispose(); throw error; }
   }
 
-  async openConfigured(cwd: string, sessionId: string, effort: ReasoningEffort, mode: SessionMode, modelId: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv, processOptions?: SessionProcessOptions): Promise<{ sessionId: string }> {
+  async openConfigured(cwd: string, sessionId: string, effort: ReasoningEffort, mode: SessionMode, modelId: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv, processOptions?: SessionProcessOptions, restoreRuntimePreferences = false): Promise<{ sessionId: string }> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
       existing.lastTouched = Date.now();
       this.focusedId = sessionId;
       return { sessionId };
     }
-    const adapter = await this.spawn(cwd, effort, mode, modelId, permissionDecider, environmentOverride, processOptions);
+    // A task execution profile is allowed to stay fixed for scheduled runs.
+    // Opening an ordinary assigned conversation is different: the choices the
+    // user made inside that conversation must win over both the old profile and
+    // today's global defaults. Keep the distinction explicit so automation does
+    // not accidentally inherit interactive state.
+    const saved = restoreRuntimePreferences ? await this.runtimeState?.get(sessionId) : undefined;
+    const adapter = await this.spawn(
+      cwd,
+      saved?.effort ?? effort,
+      saved?.mode ?? mode,
+      saved?.modelId ?? modelId,
+      permissionDecider,
+      environmentOverride,
+      processOptions,
+      sessionId,
+    );
     try {
       await adapter.start(sessionId);
+      await this.rememberSession(sessionId, adapter);
       this.sessions.set(sessionId, adapter);
       this.onSessionStarted?.(adapter.extensionLeaseId, sessionId);
       this.focusedId = sessionId;
@@ -207,10 +238,13 @@ export class GrokProcessManager {
       this.onEvent({ type: "session-ready", sessionId, models: existing.models, currentModelId: existing.currentModelId, effort: existing.effort });
       return { sessionId };
     }
-    const settings = await this.getSettings();
-    const adapter = await this.spawn(cwd, settings.defaultEffort, settings.defaultMode, settings.defaultModel);
+    const saved = await this.runtimeState?.get(sessionId);
+    // Existing conversations must not inherit the latest global model from an
+    // unrelated task. Without a Desktop record, let the CLI-reported model win.
+    const adapter = await this.spawn(cwd, saved?.effort ?? "", saved?.mode ?? "agent", saved?.modelId, undefined, undefined, undefined, sessionId);
     try {
       await adapter.start(sessionId);
+      await this.rememberSession(sessionId, adapter);
     } catch (error) {
       await adapter.dispose();
       throw error;
@@ -244,6 +278,7 @@ export class GrokProcessManager {
     this.onEvent({ type: "status", sessionId, status: "working", text: "正在切换推理强度…" });
     try {
       await current.setEffort(effort);
+      await this.runtimeState?.patch(sessionId, { effort });
       this.onEvent({ type: "status", sessionId, status: "idle", text: "推理强度已更新" });
     } catch (error) {
       await this.log.log(`live reasoning effort failed without restarting the persisted session: ${error instanceof Error ? error.message : String(error)}`);
@@ -271,8 +306,9 @@ export class GrokProcessManager {
     this.onEvent({ type: "status", sessionId, status: "working", text: "正在应用推理强度并恢复会话…" });
     let replacement: GrokAcpAdapter | undefined;
     try {
-      replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions);
+      replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions, sessionId);
       await replacement.start(sessionId);
+      await this.rememberSession(sessionId, replacement);
       this.onSessionStarted?.(replacement.extensionLeaseId, sessionId);
       if (replacement.effort !== effort) {
         throw new Error(`CLI 恢复会话后仍使用 ${replacement.effort || "默认强度"}`);
@@ -283,9 +319,10 @@ export class GrokProcessManager {
       await replacement?.dispose();
       this.onEvent({ type: "session-reset", sessionId });
       this.onEvent({ type: "status", sessionId, status: "working", text: "新强度启动失败，正在恢复原设置…" });
-      const rollback = await this.spawn(cwd, previousEffort, mode, model, undefined, undefined, processOptions);
+      const rollback = await this.spawn(cwd, previousEffort, mode, model, undefined, undefined, processOptions, sessionId);
       try {
         await rollback.start(sessionId);
+        await this.rememberSession(sessionId, rollback);
         this.onSessionStarted?.(rollback.extensionLeaseId, sessionId);
         this.sessions.set(sessionId, rollback);
         this.focusedId = sessionId;
@@ -305,9 +342,10 @@ export class GrokProcessManager {
     await previous.dispose();
     this.sessions.delete(sessionId);
     this.onEvent({ type: "session-reset", sessionId });
-    const replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions);
+    const replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions, sessionId);
     try {
       await replacement.start(sessionId);
+      await this.rememberSession(sessionId, replacement);
       this.onSessionStarted?.(replacement.extensionLeaseId, sessionId);
       this.sessions.set(sessionId, replacement);
       this.focusedId = sessionId;
@@ -317,12 +355,13 @@ export class GrokProcessManager {
     }
   }
 
-  async setModel(sessionId: string, modelId: string): Promise<void> {
+  async setModel(sessionId: string, modelId: string, identity: ModelSwitchIdentity = { target: {}, previous: {} }): Promise<void> {
     const current = this.get(sessionId);
     if (current.working || current.needsUser) throw new Error("当前会话正在运行或等待操作，完成后再更改模型");
     const previousModelId = current.currentModelId;
     try {
-      await current.setModel(modelId);
+      await current.setModel(modelId, { localModelId: identity.target.localModelId, persistRuntime: false });
+      await this.rememberSession(sessionId, current, identity.target);
       return;
     } catch (error) {
       this.onEvent({ type: "status", sessionId, status: "working", text: "CLI 不支持热切换，正在重启并恢复会话…" });
@@ -333,22 +372,25 @@ export class GrokProcessManager {
       await current.dispose();
       this.sessions.delete(sessionId);
       this.onEvent({ type: "session-reset", sessionId });
-      const replacement = await this.spawn(cwd, effort, mode, modelId, undefined, undefined, processOptions);
+      const replacement = await this.spawn(cwd, effort, mode, modelId, undefined, undefined, processOptions, sessionId, identity.target);
       try {
         await replacement.start(sessionId);
+        await this.rememberSession(sessionId, replacement, identity.target);
         this.onSessionStarted?.(replacement.extensionLeaseId, sessionId);
         this.sessions.set(sessionId, replacement);
         this.focusedId = sessionId;
       } catch (restartError) {
         await replacement.dispose();
-        const rollback = await this.spawn(cwd, effort, mode, previousModelId, undefined, undefined, processOptions);
+        const rollback = await this.spawn(cwd, effort, mode, previousModelId, undefined, undefined, processOptions, sessionId, identity.previous);
         try {
           await rollback.start(sessionId);
+          await this.rememberSession(sessionId, rollback, identity.previous);
           this.onSessionStarted?.(rollback.extensionLeaseId, sessionId);
           this.sessions.set(sessionId, rollback);
           this.focusedId = sessionId;
-        } catch {
+        } catch (rollbackError) {
           await rollback.dispose();
+          throw new Error(`模型热切换失败，且原模型恢复失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}；目标错误：${restartError instanceof Error ? restartError.message : String(restartError)}`);
         }
         throw new Error(`模型热切换失败，已尝试恢复原模型：${restartError instanceof Error ? restartError.message : String(restartError)}；原错误：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -361,6 +403,11 @@ export class GrokProcessManager {
     if (finalize) await this.finalizeSession(sessionId, session, "close");
     await session.dispose();
     this.sessions.delete(sessionId);
+  }
+
+  async setMode(sessionId: string, mode: SessionMode): Promise<void> {
+    await this.get(sessionId).applyMode(mode);
+    await this.runtimeState?.patch(sessionId, { mode });
   }
 
   /**
@@ -384,9 +431,10 @@ export class GrokProcessManager {
     await current.dispose(2_000);
     this.sessions.delete(sessionId);
     this.onEvent({ type: "session-reset", sessionId });
-    const replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions);
+    const replacement = await this.spawn(cwd, effort, mode, model, undefined, undefined, processOptions, sessionId);
     try {
       await replacement.start(sessionId);
+      await this.rememberSession(sessionId, replacement);
       this.onSessionStarted?.(replacement.extensionLeaseId, sessionId);
       this.sessions.set(sessionId, replacement);
       this.focusedId = sessionId;
@@ -420,9 +468,10 @@ export class GrokProcessManager {
     const failures: string[] = [];
     for (const snapshot of snapshots) {
       this.onEvent({ type: "session-reset", sessionId: snapshot.sessionId });
-      const adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions);
+      const adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions, snapshot.sessionId);
       try {
         await adapter.start(snapshot.sessionId);
+        await this.rememberSession(snapshot.sessionId, adapter);
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
@@ -439,7 +488,7 @@ export class GrokProcessManager {
     await this.stopAll();
   }
 
-  private async spawn(cwd: string, effort: ReasoningEffort, mode: SessionMode, modelId?: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv, processOptions?: SessionProcessOptions): Promise<GrokAcpAdapter> {
+  private async spawn(cwd: string, effort: ReasoningEffort, mode: SessionMode, modelId?: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv, processOptions?: SessionProcessOptions, resumeSessionId?: string, launchIdentity?: ManagedModelIdentity): Promise<GrokAcpAdapter> {
     const settings = await this.getSettings();
     const cliPath = await locateGrokCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI，请在设置中指定路径");
@@ -447,26 +496,42 @@ export class GrokProcessManager {
     const mcpSecretEnvironment = await this.getMcpSecretEnvironment();
     const workspaceEnvironment = await this.getWorkspaceEnvironment(cwd);
     const providerScopeId = randomUUID();
-    const providerEnvironment = await this.getProviderEnvironment(providerScopeId);
+    const savedRuntime = resumeSessionId ? await this.runtimeState?.get(resumeSessionId) : undefined;
+    const providerId = launchIdentity ? launchIdentity.providerId : savedRuntime?.providerId;
+    const localModelId = launchIdentity
+      ? launchIdentity.localModelId ?? modelId
+      : savedRuntime?.modelId ?? modelId;
+    const providerEnvironment = await this.getProviderEnvironment({ scopeId: providerScopeId, sessionId: resumeSessionId, cwd, modelId, localModelId, providerId });
+    const initialPromptQueue = resumeSessionId ? await this.runtimeState?.getQueue(resumeSessionId) : undefined;
     const extensions = await this.getSessionExtensions?.();
-    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, environmentOverride), workspaceEnvironment);
+    const effectivePermissionDecider = permissionDecider ?? processOptions?.permissionDecider;
+    const effectiveEnvironmentOverride = environmentOverride ?? processOptions?.environmentOverride;
+    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, effectiveEnvironmentOverride), workspaceEnvironment);
     const adapter = new GrokAcpAdapter({
       cliPath,
       cwd,
       env,
       effort,
       modelId,
+      localModelId,
       mode,
       log: this.log,
       sessionMcpServers: extensions?.mcpServers,
       pluginDirs: extensions?.pluginDirs,
       extensionLeaseId: extensions?.leaseId,
       effortFlag: await detectEffortFlag(cliPath, env),
-      permissionDecider,
+      permissionDecider: effectivePermissionDecider,
       providerScopeId,
+      initialPromptQueue,
+      onPromptQueueChanged: this.runtimeState ? (sessionId, entries) => this.runtimeState!.saveQueue(sessionId, entries) : undefined,
+      onPromptQueueTerminal: this.runtimeState ? (sessionId, entry) => this.runtimeState!.recordQueueTerminal(sessionId, entry) : undefined,
+      onRuntimeChanged: this.runtimeState ? async (sessionId, patch) => { await this.runtimeState!.patch(sessionId, patch); } : undefined,
       agentProfilePath: processOptions?.agentProfilePath,
       sessionMeta: processOptions?.sessionMeta,
-      alwaysApprove: processOptions?.alwaysApprove ?? mode === "auto",
+      // The effective restored mode, rather than the profile's stale launch
+      // flag, controls CLI approval behavior on every respawn.
+      alwaysApprove: mode === "auto",
+      environmentOverride: effectiveEnvironmentOverride ? { ...effectiveEnvironmentOverride } : undefined,
     });
     adapter.on("event", (event: ChatEvent) => this.onEvent(event));
     adapter.on("closed", () => {
@@ -475,6 +540,20 @@ export class GrokProcessManager {
       this.onSessionClosed?.(adapter.extensionLeaseId);
     });
     return adapter;
+  }
+
+  private async rememberSession(sessionId: string, adapter: GrokAcpAdapter, identity?: ManagedModelIdentity): Promise<void> {
+    if (!this.runtimeState) return;
+    const previous = await this.runtimeState.get(sessionId);
+    await this.runtimeState.save({
+      sessionId,
+      cwd: adapter.cwd,
+      modelId: identity?.localModelId ?? (adapter.currentModelId || previous?.modelId),
+      providerId: identity ? identity.providerId : previous?.providerId,
+      effort: adapter.effort,
+      mode: adapter.mode,
+      profileId: previous?.profileId,
+    });
   }
 
   private async enforceCap(): Promise<void> {

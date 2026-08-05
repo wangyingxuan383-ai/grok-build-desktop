@@ -32,7 +32,7 @@ window.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const paths = Array.from(event.dataTransfer?.files ?? []).map((file) => webUtils.getPathForFile(file)).filter(Boolean);
     if (!paths.length) return;
-    void ipcRenderer.invoke("attachments:paths", paths).then((attachments: Attachment[]) => {
+    void ipcRenderer.invoke("attachments:dropped", paths).then((attachments: Attachment[]) => {
       for (const listener of droppedAttachmentListeners) listener(attachments);
     });
   });
@@ -173,11 +173,12 @@ const api: GrokDesktopApi = {
   respondPlan: (id, requestId, verdict, comment) => ipcRenderer.invoke("plan:respond", id, requestId, verdict, comment),
   pickAttachments: () => ipcRenderer.invoke("attachments:pick"),
   pickAttachmentFolders: () => ipcRenderer.invoke("attachments:pick-folders"),
-  attachmentsFromPaths: (paths) => ipcRenderer.invoke("attachments:paths", paths),
+  attachmentsFromPaths: (paths, sessionId) => ipcRenderer.invoke("attachments:paths", paths, sessionId),
   openPath: (path) => ipcRenderer.invoke("system:open-path", path),
   openTarget: (intent) => ipcRenderer.invoke("system:open-target", intent),
   copyImage: (source) => ipcRenderer.invoke("system:copy-image", source),
   saveImage: (source) => ipcRenderer.invoke("system:save-image", source),
+  openMedia: (source) => ipcRenderer.invoke("system:open-media", source),
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),
@@ -231,6 +232,7 @@ const api: GrokDesktopApi = {
   deleteAutomation: (id) => ipcRenderer.invoke("automations:delete", id),
   pauseAutomation: (id, paused) => ipcRenderer.invoke("automations:pause", id, paused),
   runAutomationNow: (id) => ipcRenderer.invoke("automations:run-now", id),
+  cancelAutomationRun: (id) => ipcRenderer.invoke("automations:run:cancel", id),
   listAutomationRuns: (taskId) => ipcRenderer.invoke("automations:runs", taskId),
   getAutomationGlobalPolicy: () => ipcRenderer.invoke("automations:policy:get"),
   updateAutomationGlobalPolicy: (patch) => ipcRenderer.invoke("automations:policy:update", patch),

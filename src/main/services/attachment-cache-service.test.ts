@@ -118,4 +118,18 @@ describe("attachment cache", () => {
     expect(await readFile(prepared.attachments[0]!.path!, "utf8")).toBe(text);
     expect(prepared.previews[0]).toMatchObject({ availability: "ready", isData: false });
   });
+
+  it("does not lose concurrent message attachment records", async () => {
+    const userData = await root();
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("session", [pasted()]);
+    await Promise.all(Array.from({ length: 20 }, (_, index) => service.record(
+      "session",
+      `message-${index}`,
+      `text-${index}`,
+      prepared.previews,
+      "sent",
+    )));
+    expect(await service.restore("session")).toHaveLength(20);
+  });
 });

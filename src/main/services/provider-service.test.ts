@@ -45,6 +45,18 @@ describe("ProviderService", () => {
     expect(values.find((value) => value.id === "sample")?.hasCredential).toBe(true);
   });
 
+  it("serializes concurrent provider index and TOML mutations", async () => {
+    const { service } = await fixture();
+    try {
+      await Promise.all([
+        service.upsert(input({ id: "alpha", name: "Alpha", credentialMode: "none", credentialValue: undefined, models: [{ id: "alpha-model", model: "alpha", name: "Alpha" }] })),
+        service.upsert(input({ id: "beta", name: "Beta", credentialMode: "none", credentialValue: undefined, models: [{ id: "beta-model", model: "beta", name: "Beta" }] })),
+      ]);
+      const values = await service.list();
+      expect(values.filter((value) => value.owned).map((value) => value.id).sort()).toEqual(["alpha", "beta"]);
+    } finally { await service.dispose(); }
+  });
+
   it("migrates markerless Desktop-owned model tables without duplicating TOML definitions", async () => {
     const { service, grokHome } = await fixture();
     try {
@@ -131,6 +143,31 @@ describe("ProviderService", () => {
     } finally {
       await service.dispose();
     }
+  });
+
+  it("rejects cross-origin media artifact URLs before following them", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-artifact-origin-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    const seen: string[] = [];
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "origin.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async (request) => {
+        seen.push(String(request));
+        return new Response(JSON.stringify({ data: [{ url: "https://attacker.example.test/result.png" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    try {
+      await service.upsert(input({ credentialMode: "none", credentialValue: undefined, protocol: "chat_completions", models: [{
+        id: "image-model", model: "image-model", name: "Image", media: { image: { transport: "openai_images" } },
+      }] }));
+      await expect(service.generateImage({ providerId: "sample", modelId: "image-model", prompt: "dot", aspectRatio: "1:1", signal: new AbortController().signal }))
+        .rejects.toThrow("媒体产物地址必须与 Provider 基础地址同源");
+      expect(seen).toEqual(["https://api.example.test/v1/images/generations"]);
+    } finally { await service.dispose(); }
   });
 
   it("uses explicit Gemini image and compatible video transports only after actual media evidence", async () => {
@@ -309,6 +346,20 @@ describe("ProviderService", () => {
     }
   });
 
+  it("fails a managed session launch before spawning the CLI when its credential disappeared", async () => {
+    const { service, environment } = await fixture();
+    await service.upsert(input());
+    environment.values.delete("GROK_DESKTOP_PROVIDER_SAMPLE_KEY");
+    try {
+      await expect(service.desktopEnvironment("required-scope", "sample")).rejects.toThrow("凭据不可用");
+      // An unrelated official session remains launchable even if an unused
+      // managed credential is absent.
+      await expect(service.desktopEnvironment("optional-scope")).resolves.toHaveProperty(managedBaseUrlEnvironmentName("sample"));
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("still hands the CLI its loopback routes when the environment write and the block migration both fail", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-provider-degrade-")); roots.push(root);
     const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true });
@@ -328,6 +379,7 @@ describe("ProviderService", () => {
     try {
       const desktop = await service.desktopEnvironment("degraded-scope");
       expect(desktop[managedBaseUrlEnvironmentName("sample")]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[A-Za-z0-9_-]+\/sample\/degraded-scope$/);
+      await expect(service.desktopEnvironment("strict-scope", "sample")).rejects.toThrow("config.toml 校验失败");
     } finally {
       await service.dispose();
     }

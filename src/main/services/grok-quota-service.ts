@@ -18,7 +18,7 @@ export class GrokQuotaService {
   private cache = new Map<string, GrokQuotaSnapshot>();
   private rolling = new Map<string, QuotaWindow>();
   private readonly store?: JsonStore<QuotaPersistence>;
-  private rollingLoaded = false;
+  private rollingLoad?: Promise<void>;
 
   constructor(
     private readonly vault: AccountVault,
@@ -117,7 +117,7 @@ export class GrokQuotaService {
       if (!active) return parsed;
       await this.loadRolling();
       this.rolling.set(active.profile.id, parsed);
-      await this.persistRolling();
+      await this.persistRolling(active.profile.id, parsed);
       const cached = this.cache.get(active.profile.id);
       if (cached) this.cache.set(active.profile.id, { ...cached, rolling24h: parsed });
     } catch (error) {
@@ -137,20 +137,21 @@ export class GrokQuotaService {
   }
 
   private async loadRolling(): Promise<void> {
-    if (this.rollingLoaded) return;
-    this.rollingLoaded = true;
-    if (!this.store) return;
-    const data = await this.store.get();
-    const now = Date.now();
-    for (const [accountId, value] of Object.entries(data.rolling24h ?? {})) {
-      if (!value || value.unit !== "tokens") continue;
-      this.rolling.set(accountId, { ...value, expired: rollingExpired(value, now) });
-    }
+    if (!this.rollingLoad) this.rollingLoad = (async () => {
+      if (!this.store) return;
+      const data = await this.store.get();
+      const now = Date.now();
+      for (const [accountId, value] of Object.entries(data.rolling24h ?? {})) {
+        if (!value || value.unit !== "tokens") continue;
+        this.rolling.set(accountId, { ...value, expired: rollingExpired(value, now) });
+      }
+    })();
+    await this.rollingLoad;
   }
 
-  private async persistRolling(): Promise<void> {
+  private async persistRolling(accountId: string, value: QuotaWindow): Promise<void> {
     if (!this.store) return;
-    await this.store.set({ rolling24h: Object.fromEntries(this.rolling) });
+    await this.store.mutate((data) => { data.rolling24h[accountId] = value; });
   }
 }
 

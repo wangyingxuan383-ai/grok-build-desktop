@@ -223,3 +223,5 @@
   .topbar-copy > span { display: none; }
   .workspace-empty { width: calc(100% - 32px); }
 }
+.workbench-loading { min-width: 0; min-height: 0; flex: 1; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); font-size: .75em; }
+.sidebar-tool-loading { min-height: 120px; display: flex; align-items: center; justify-content: center; gap: 7px; color: var(--muted); font-size: .68em; }

@@ -1,5 +1,32 @@
 # Grok Build Desktop 实施计划
 
+## v0.7.0 全面审计与单一候选（2026-08-05）
+
+### 会话、Plan、停止与队列
+
+- [x] 增加会话级运行时偏好，恢复/分叉保留 Provider、本地模型、上游别名、思考档位、模式和执行档案；Provider 初始化失败 fail-closed。
+- [x] Plan 决定先写入并立即清理旧交互门，模式切换异步收敛；稳定 `turnId` 结算重复/迟到终态。
+- [x] accepted/running 队列持久化并在终态原子迁移；跨会话停止、插话和后台完成不污染当前 Composer。
+- [x] 建立仅测试环境启用的主进程离线 responder，覆盖 Plan 三决策、权限允许/拒绝、Stop 和唯一终态。
+- [ ] 在版本统一后实跑当前 v0.7 UI 探针、真实 CLI Plan/Stop 和至少两个并行会话。
+
+### 投影、文件、媒体与边界
+
+- [x] ConversationProjection V2 保存可见正文/过程/工具/交互/错误/媒体/Usage，并对 ACP 回放做稳定用户回合与缺失尾部合并。
+- [x] JsonStore、账号/自动化等关键写入增加跨进程事务与 owner fencing；自动化取消改为显式 API，无固定 24 小时总时限。
+- [x] 附件、MediaAccessHandle、远端媒体、打开位置、CLI 路径和符号链接均在主进程做会话/工作区边界校验。
+- [x] 非 Git 文件改动继续使用真实写入日志，媒体产物保留受限缓存和句柄生命周期。
+- [ ] 完成媒体范围读取、旧会话投影修复和真实文件/媒体/Provider 验收。
+
+### UI、性能与交付
+
+- [x] App Shell、Right Dock、Provider 管理器和弹层已拆分；当前 v0.7 探针不再动态接受旧版本，缩放使用物理窗口尺寸。
+- [x] Renderer 分块预算、Worker 命名、布局回归和交付脚本门禁已加入；live 门禁缺少 CLI 时明确 skipped/failed。
+- [ ] 运行完整离线套件、TypeScript、资源/生产构建、公开扫描、Fuses、正式打包和 per-user 安装。
+- [ ] 安装后冷启动检查 About、诊断、进程、ASAR、快捷方式和当前 UI 探针；用户验收前不推送、不创建 GitHub Release。
+
+版本、lockfile、显示版本和文档已切换为 0.7.0；所有未完成项必须在交付前补充具体测试或实机证据。
+
 ## v0.6.25 Plan 权限硬边界与终态恢复热修
 
 - [x] 将 Plan 只读命令判定改为完整命令拒绝优先；PowerShell 脚本块、子表达式、静态调用及其他可执行语法不得借只读管道首段绕过。

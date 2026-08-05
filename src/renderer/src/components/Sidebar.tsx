@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { AppSettings, ClaudeSessionSummary, CodexSessionSummary, SessionOriginKind, SessionSummary, WorkspaceSummary } from "../../../shared/types";
 import { groupSessionsByOrigin, sessionSourceLabel } from "../session-groups";
 import { useAppStore } from "../store";
 import type { WorkbenchView } from "../workbench-store";
 import { UiIcon, type UiIconName } from "../ui-icons";
-import { FileExplorer } from "./FileWorkbench";
-import { GitExplorer } from "./GitWorkbench";
-import { WorktreeExplorer } from "./WorktreeWorkbench";
+
+const LazyFileExplorer = lazy(() => import("./FileWorkbench").then((module) => ({ default: module.FileExplorer })));
+const LazyGitExplorer = lazy(() => import("./GitWorkbench").then((module) => ({ default: module.GitExplorer })));
+const LazyWorktreeExplorer = lazy(() => import("./WorktreeWorkbench").then((module) => ({ default: module.WorktreeExplorer })));
 
 export type SidebarPanel = "settings" | "accounts" | "about" | "tasks" | "extensions";
 
@@ -86,7 +87,8 @@ export function Sidebar(props: {
     <div className="sidebar-context"><button className="workspace-button" onClick={() => setShowRecent(!showRecent)}><UiIcon name="folder"/><span className="workspace-name">{shortPath(props.settings?.activeWorkspace || "选择工作区")}</span><UiIcon name="chevron-down" size={13}/></button></div>
     <section className="project-tools"><button className="project-tools-heading" onClick={() => setProjectToolsOpen((value) => { const next = !value; void window.grokDesktop.updateSettings({ projectToolsOpen: next }).catch(() => undefined); return next; })} aria-expanded={projectToolsOpen}><span><UiIcon name={projectToolsOpen ? "chevron-down" : "chevron-right"} size={13}/>开发工具</span></button>{projectToolsOpen && <nav>{projectTools.map((item) => <button key={item.view} className={item.view === props.activeView ? "active" : ""} onClick={() => props.onView(item.view)}><UiIcon name={item.icon}/><span>{item.label}</span></button>)}<button onClick={() => props.onPanel("tasks")}><UiIcon name="tasks"/><span>任务</span></button><button onClick={() => props.onPanel("extensions")}><UiIcon name="extensions"/><span>扩展</span></button></nav>}</section>
     {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onClose={closeWorkspaceMenu} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onClear={props.onClear} />}
-    {props.activeView === "files" ? <FileExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "source-control" ? <GitExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "worktrees" ? <WorktreeExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : <>
+    <Suspense fallback={<div className="sidebar-tool-loading" role="status"><div className="spinner"/>加载项目工具…</div>}>
+    {props.activeView === "files" ? <LazyFileExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "source-control" ? <LazyGitExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "worktrees" ? <LazyWorktreeExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : <>
     <div className="search"><UiIcon name="search" size={14}/><input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="搜索任务" /></div>
     <div className="session-list">
       <div className="workspace-task-group current"><div><UiIcon name="chevron-down" size={12}/><strong>{shortPath(props.settings?.activeWorkspace || "当前项目")}</strong><span>{liveSessionCount ? `${liveSessionCount} 运行 · ${props.sessions.length}` : props.sessions.length}</span></div></div>
@@ -97,6 +99,7 @@ export function Sidebar(props: {
       {!props.settings?.claudeGroupCollapsed && props.claudeSessions.map((session) => <div key={session.id} className={`session-row claude ${props.activeClaudeId === session.id ? "active" : ""}`} onClick={() => props.onOpenClaude(session)}><span className="claude-mark">A</span><div className="session-copy"><strong>{session.title}</strong><span>{relativeTime(session.updatedAt)}{session.model ? ` · ${session.model}` : ""}</span></div><div className="session-actions"><button title="从镜像列表隐藏" onClick={(event) => { event.stopPropagation(); props.onHideClaude(session); }}>×</button></div></div>)}
       {props.workspaces.filter((workspace) => workspace.exists && workspace.cwd.toLocaleLowerCase() !== (props.settings?.activeWorkspace || "").toLocaleLowerCase()).slice(0, 8).map((workspace) => <button className="workspace-task-group collapsed" key={workspace.cwd} title={`${workspace.cwd} · 点击后按需加载任务`} onClick={() => props.onRecent(workspace.cwd)}><UiIcon name="chevron-right" size={12}/><strong>{workspace.name}</strong><span>{workspace.grokSessions}</span></button>)}
     </div></>}
+    </Suspense>
     <div className="sidebar-footer"><button onClick={() => props.onPanel("accounts")}><span className="avatar">{activeAccount?.label.slice(0, 1).toUpperCase() || "?"}</span><span>{activeAccount?.label || "登录账号"}</span></button><button title="版本与更新" onClick={() => props.onPanel("about")}><UiIcon name="download"/><span>{props.version}</span></button><button className="icon-button" title="设置" onClick={() => props.onPanel("settings")}><UiIcon name="settings"/></button></div>
   </aside>;
 }
