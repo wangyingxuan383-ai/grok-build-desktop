@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BackgroundTaskSummary, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
+import type { BackgroundTaskSummary, CliRuntimeUpdate, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
 import { canOpenRecentFileDiff } from "../session-ui-guards";
 import type { UiChatTurn } from "../store";
 import { UiIcon, type UiIconName } from "../ui-icons";
@@ -8,13 +8,14 @@ import { LazyMarkdownView } from "./LazyMarkdownView";
 export type RightUtilityTool = "launcher" | "document" | "files" | "tasks";
 export type RightTool = "review" | "agent-changes" | RightUtilityTool;
 
-export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
+export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, runtimeUpdates, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
   tool: RightUtilityTool;
   turn?: UiChatTurn;
   cwd: string;
   sessionId?: string;
   paths: string[];
   queue: PromptQueueEntry[];
+  runtimeUpdates: CliRuntimeUpdate[];
   sessionStatus?: string;
   onTool(tool: RightTool): void;
   onClose(): void;
@@ -39,7 +40,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, ses
     {tool === "launcher" ? <ToolLauncher onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button></nav>}
     {tool === "document" && <DocumentTool turn={turn} onExpand={onExpandResult}/>}
     {tool === "files" && <FilesTool cwd={cwd} sessionId={sessionId} paths={paths} onNavigate={onNavigate} onError={onError}/>}
-    {tool === "tasks" && <TasksTool sessionId={sessionId} queue={queue} sessionStatus={sessionStatus} onError={onError}/>}
+    {tool === "tasks" && <TasksTool sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError}/>}
   </aside>;
 }
 
@@ -96,7 +97,7 @@ function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string
   </div>;
 }
 
-function TasksTool({ sessionId, queue, sessionStatus, onError }: { sessionId?: string; queue: PromptQueueEntry[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
+function TasksTool({ sessionId, queue, runtimeUpdates, sessionStatus, onError }: { sessionId?: string; queue: PromptQueueEntry[]; runtimeUpdates: CliRuntimeUpdate[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
   const [tasks, setTasks] = useState<BackgroundTaskSummary[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -105,7 +106,7 @@ function TasksTool({ sessionId, queue, sessionStatus, onError }: { sessionId?: s
     const timer = window.setInterval(refresh, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [onError, sessionId]);
-  return <div className="right-tool-scroll tasks-tool"><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section></div>;
+  return <div className="right-tool-scroll tasks-tool"><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{runtimeUpdates.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{runtimeUpdates.length}</span></header>{runtimeUpdates.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
 }
 
 function readWidth(tool: RightUtilityTool): number { return Math.max(420, Math.min(760, Number(localStorage.getItem(`grok:right-width:${tool}`)) || 560)); }

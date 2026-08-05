@@ -109,6 +109,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:open", (cwd: string, id: string) => controller.openSession(cwd, id));
   handle("session:rename", (id: string, title: string) => controller.renameSession(id, title));
   handle("session:delete", (cwd: string, id: string) => controller.deleteSession(cwd, id));
+  handle("session:delete-desktop-data", (cwd: string, id: string) => controller.deleteDesktopSessionData(cwd, id));
   handle("session:clear", (cwd: string, keep?: string) => controller.clearSessions(cwd, keep));
   handle("session:pin", (id: string, pinned: boolean) => controller.pinSession(id, pinned));
   handle("session:export-markdown", (cwd: string, id: string) => controller.exportSessionMarkdown(cwd, id));
@@ -248,7 +249,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("computer:settings:get", () => controller.getComputerSettings());
   handle("computer:settings:update", (patch: Partial<ComputerUseSettings>) => controller.updateComputerSettings(patch));
   handle("cli:check-update", () => controller.checkCliUpdate());
-  handle("cli:apply-update", () => controller.applyCliUpdate());
+  handle("cli:update-preview", () => controller.previewCliUpdate());
+  handle("cli:apply-update", (input: { targetVersion: string; expectedCurrentVersion: string }) => controller.applyCliUpdate(input));
+  handle("cli:compatibility", () => controller.getCliCompatibilitySnapshot());
   handle("cli:update-history", () => controller.getCliUpdateHistory());
   handle("logs:export", () => controller.exportLogs());
 }

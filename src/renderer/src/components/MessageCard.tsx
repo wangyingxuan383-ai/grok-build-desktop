@@ -30,6 +30,8 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   if (message.kind === "error") return <ErrorCard text={message.text} failure={message.failure} onDiagnose={onDiagnose} />;
   if (message.kind === "media") return <GeneratedMediaGallery messages={[message]} />;
   if (message.kind === "recovery") return <div className={`history-recovery-card ${message.status}`}><strong>{message.status === "recovered" ? "历史内容已恢复" : "历史内容无法可靠恢复"}</strong><span>{message.text}</span></div>;
+  if (message.kind === "recap") return <details className="session-recap-card"><summary>会话回顾</summary><LazyMarkdownView text={message.text}/></details>;
+  if (message.kind === "compact") return <div className={`compact-status-card ${message.status}`}><strong>{message.status === "started" ? "正在压缩上下文" : message.status === "completed" ? "上下文压缩完成" : message.status === "cancelled" ? "上下文压缩已取消" : "上下文压缩失败"}</strong>{message.text && <span>{message.text}</span>}</div>;
   if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;
   if (message.kind === "permission") return <PermissionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "question") return <QuestionCard message={message} sessionId={sessionId} onResolved={onResolved} />;

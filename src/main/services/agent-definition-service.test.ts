@@ -39,7 +39,7 @@ describe("AgentDefinitionService", () => {
     expect(await readFile(current.path!, "utf8")).toBe(edited);
     expect(await readFile(saved.backupPath!, "utf8")).toBe(initial);
     expect(hotReloads).toBe(2);
-    expect(calls.at(-1)).toMatchObject({ args: ["inspect", "--json"], cwd: fixture.repo, grokHome: fixture.grokHome });
+    expect(calls.at(-1)).toMatchObject({ args: ["--no-auto-update", "inspect", "--json"], cwd: fixture.repo, grokHome: fixture.grokHome });
 
     await writeFile(current.path!, edited.replace("Updated", "External"), "utf8");
     const conflict = await fixture.service.saveAgent({ workspacePath: fixture.repo, targetSource: "user", name: "reviewer", originalPath: current.path, expectedHash: saved.definition!.hash, rawMarkdown: edited.replace("Updated", "Local") });

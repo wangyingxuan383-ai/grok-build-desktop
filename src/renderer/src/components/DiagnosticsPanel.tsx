@@ -1,15 +1,23 @@
 import { useEffect, useState } from "react";
-import type { SupportBundlePreview, SystemCompatibilityReport } from "../../../shared/types";
+import type { CliCompatibilitySnapshot, SupportBundlePreview, SystemCompatibilityReport } from "../../../shared/types";
 
 export function DiagnosticsPanel({ onClose }: { onClose(): void }): React.JSX.Element {
   const [report, setReport] = useState<SystemCompatibilityReport>();
   const [preview, setPreview] = useState<SupportBundlePreview>();
+  const [cliCompatibility, setCliCompatibility] = useState<CliCompatibilitySnapshot>();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
   const run = async (): Promise<void> => {
     setBusy(true); setMessage("");
-    try { setReport(await window.grokDesktop.runDiagnostics()); }
+    try {
+      const [diagnostics, compatibility] = await Promise.all([
+        window.grokDesktop.runDiagnostics(),
+        window.grokDesktop.getCliCompatibilitySnapshot().catch(() => undefined),
+      ]);
+      setReport(diagnostics);
+      if (compatibility) setCliCompatibility(compatibility);
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
@@ -32,6 +40,7 @@ export function DiagnosticsPanel({ onClose }: { onClose(): void }): React.JSX.El
     <div className="panel-scroll">
       <div className={`diagnostic-overall ${report?.overall || "checking"}`}>{busy ? "正在检查…" : report ? ({ ready: "可以使用", limited: "部分能力受限", blocked: "核心能力不可用" }[report.overall]) : "等待检查"}</div>
       <div className="diagnostic-list">{report?.items.map((item) => <article className={`diagnostic-item ${item.status}`} key={item.id}><span className="diagnostic-dot"/><div><strong>{item.label}</strong><p>{item.summary}</p>{item.details?.map((line) => <code key={line}>{line}</code>)}</div></article>)}</div>
+      {cliCompatibility && <section className="support-preview"><h3>CLI 运行时握手</h3><p>CLI {cliCompatibility.cliVersion || "未知"} · Agent {cliCompatibility.handshake?.agentVersion || "未知"} · ACP {cliCompatibility.handshake?.protocolVersion ?? "未知"}</p><p>模型 {cliCompatibility.handshake?.models.length ?? 0} · 命令 {cliCompatibility.handshake?.commands.length ?? 0} · 证据 {cliCompatibility.capabilities.filter((item) => item.state === "supported").length}/{cliCompatibility.capabilities.length}</p><div className="diagnostic-capability-grid">{cliCompatibility.capabilities.map((item) => <span key={item.name} className={item.state}><strong>{item.name}</strong><small>{item.state} · {item.source}</small></span>)}</div></section>}
       {preview && <section className="support-preview"><h3>脱敏支持包</h3><p>将包含：{preview.fields.join("、")}</p><p>明确排除：{preview.excluded.join("、")}</p>{preview.files.map((file) => <div key={file.name}><code>{file.name}</code> — {file.description}</div>)}</section>}
       {message && <p className="panel-message">{message}</p>}
     </div>

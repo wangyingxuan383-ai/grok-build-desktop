@@ -43,3 +43,24 @@ test("live verify records explicit Plan, Provider, CLI, and multi-session outcom
   assert.match(source, /Add-LiveGateResult\s+'当前 Provider 推理'\s+'skipped'/);
   assert.match(source, /Add-LiveGateResult\s+'双会话并行回合与队列\/插话'\s+'skipped'/);
 });
+
+test("managed CLI update paths require an exact stable target and disable child auto-update", async () => {
+  const [updateScript, liveVerify, acpProbe, pluginProbe, providerProbe] = await Promise.all([
+    load("./update-grok.ps1"),
+    load("./verify-live.ps1"),
+    load("./probe-grok.mjs"),
+    load("./probe-plugin-restore.ps1"),
+    load("./probe-provider-cli.ps1"),
+  ]);
+  assert.match(updateScript, /必须通过 -Version 指定并确认精确目标/);
+  assert.match(updateScript, /@\('update', '--version', \$Version\)/);
+  assert.match(updateScript, /@\('--no-auto-update', 'models'\)/);
+  assert.match(updateScript, /\$BeforeVersion = \(\[regex\]::Match/);
+  assert.match(updateScript, /\$Status\.currentVersion -ne \$BeforeVersion/);
+  assert.doesNotMatch(updateScript, /\$UpdateArguments = @\('update'\)\s*\r?\n/);
+  assert.match(liveVerify, /& \$Cli --no-auto-update plugin list --available --json/);
+  assert.match(liveVerify, /& \$Cli --no-auto-update plugin marketplace list --json/);
+  assert.match(acpProbe, /const agentArgs = \["--no-auto-update", "agent"/);
+  assert.match(pluginProbe, /\$ManagedArguments = @\('--no-auto-update'\) \+ \$Arguments/);
+  assert.match(providerProbe, /@\('--no-auto-update'\) \+ \$Arguments/);
+});

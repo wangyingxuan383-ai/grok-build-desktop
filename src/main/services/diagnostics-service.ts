@@ -148,12 +148,13 @@ export class DiagnosticsService {
       cliVersion = await readCliVersion(cliPath, env);
       effortFlag = await detectEffortFlag(cliPath, env);
       items.push({ id: "cli", label: "Grok CLI", status: cliVersion ? "ok" : "error", summary: cliVersion ? `已找到 Grok CLI ${cliVersion}` : "CLI 存在但无法读取版本", details: [redactDiagnosticPath(cliPath), `推理参数：${effortFlag}`] });
-      const models = await execFileAsync(cliPath, ["models"], { env, timeout: 20_000, windowsHide: true }).then(() => true).catch(() => false);
+      const models = await execFileAsync(cliPath, ["--no-auto-update", "models"], { env, timeout: 20_000, windowsHide: true }).then(() => true).catch(() => false);
       items.push({ id: "models", label: "模型与登录", status: models ? "ok" : "warning", summary: models ? "CLI 可以读取模型列表" : "模型列表不可用；可能尚未登录或网络受限" });
       const acp = await probeAcpInitialize(cliPath, env);
       items.push({ id: "acp", label: "ACP 核心", status: acp.ok ? "ok" : "error", summary: acp.ok ? "initialize 握手通过" : "ACP initialize 握手失败", details: acp.message ? [redactDiagnosticText(acp.message)] : undefined });
-      const extensions = await execFileAsync(cliPath, ["plugin", "--help"], { env, timeout: 15_000, windowsHide: true }).then(() => true).catch(() => false);
+      const extensions = await execFileAsync(cliPath, ["--no-auto-update", "plugin", "--help"], { env, timeout: 15_000, windowsHide: true }).then(() => true).catch(() => false);
       items.push({ id: "extensions", label: "扩展与媒体", status: extensions ? "ok" : "warning", summary: extensions ? "插件命令可用；媒体能力将在会话中动态探测" : "插件命令不可用，扩展功能将降级" });
+      items.push(await runGrokDoctor(cliPath, env));
     }
 
     const reader = join(homedir(), ".grok", "bundled", "skills", "shared", "resume-session", "session_reader.py");
@@ -204,6 +205,42 @@ export class DiagnosticsService {
   }
 }
 
+async function runGrokDoctor(cliPath: string, env: NodeJS.ProcessEnv): Promise<SystemDiagnosticItem> {
+  try {
+    const { stdout } = await execFileAsync(cliPath, ["--no-auto-update", "doctor", "--json"], {
+      env,
+      timeout: 30_000,
+      windowsHide: true,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const report = JSON.parse(stdout) as {
+      schemaVersion?: string;
+      findings?: Array<{ id?: string; disposition?: string; message?: string; note?: string }>;
+      counts?: { issues?: number; recommendations?: number; probeNotes?: number };
+    };
+    const issues = Number(report.counts?.issues ?? 0);
+    const recommendations = Number(report.counts?.recommendations ?? 0);
+    const details = (Array.isArray(report.findings) ? report.findings : []).slice(0, 8).map((finding) =>
+      redactDiagnosticText(`${finding.id || "finding"} · ${finding.disposition || "unknown"} · ${finding.message || finding.note || "无说明"}`),
+    );
+    return {
+      id: "grok-doctor",
+      label: "Grok Doctor",
+      status: issues > 0 ? "warning" : "ok",
+      summary: `schema ${report.schemaVersion || "未知"} · ${issues} 个问题 · ${recommendations} 条建议`,
+      ...(details.length ? { details } : {}),
+    };
+  } catch (error) {
+    return {
+      id: "grok-doctor",
+      label: "Grok Doctor",
+      status: "warning",
+      summary: "当前 CLI 未提供 doctor --json 或诊断执行失败",
+      details: [redactDiagnosticText(error instanceof Error ? error.message : String(error))],
+    };
+  }
+}
+
 export function buildSupportBundleArchive(input: {
   build: BuildInfo;
   report: SystemCompatibilityReport;
@@ -249,7 +286,7 @@ async function writableStatus(userDataPath: string): Promise<SystemDiagnosticIte
 
 async function probeAcpInitialize(cliPath: string, env: NodeJS.ProcessEnv): Promise<{ ok: boolean; message?: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cliPath, ["agent", "stdio"], { cwd: tmpdir(), env, windowsHide: true });
+    const child = spawn(cliPath, ["--no-auto-update", "agent", "stdio"], { cwd: tmpdir(), env, windowsHide: true });
     let buffer = "";
     let finished = false;
     const finish = (value: { ok: boolean; message?: string }): void => {

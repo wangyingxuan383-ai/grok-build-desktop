@@ -262,7 +262,7 @@ export class ExtensionService {
     const cli = await locateGrokCli(settings.cliPath);
     if (!cli) throw new Error("未找到 Grok CLI");
     await this.log.log(`extension cli ${args.slice(0, 3).join(" ")}`);
-    return new Promise((resolve, reject) => execFile(cli, args, { windowsHide: true, timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    return new Promise((resolve, reject) => execFile(cli, ["--no-auto-update", ...args], { windowsHide: true, timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(new Error(String(stderr || stdout || error.message).trim()));
       else resolve(String(stdout || stderr).trim());
     }));

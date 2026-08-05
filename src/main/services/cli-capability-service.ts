@@ -49,7 +49,7 @@ export class CliCapabilityService {
       const runner = this.dependencies.run
         ? (args: readonly string[]) => this.dependencies.run!(cliPath, args, env, cwd)
         : (args: readonly string[]) => runCliCommand(cliPath, args, env, cwd);
-      pending = probeCliCapabilities({ cliVersion: version, cacheKey, run: runner });
+      pending = probeCliCapabilities({ cliVersion: version, cacheKey, run: (args) => runner(["--no-auto-update", ...args]) });
       this.cache.set(cacheKey, pending);
     }
     const snapshot = await pending;

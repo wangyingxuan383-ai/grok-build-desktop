@@ -47,7 +47,7 @@ describe("CLI capability snapshot", () => {
   });
 
   it("caches static probes by CLI version and overlays runtime ACP evidence", async () => {
-    const run = vi.fn(async (_path: string, args: readonly string[]) => fixtureRunner()(args));
+    const run = vi.fn(async (_path: string, args: readonly string[]) => fixtureRunner()(args[0] === "--no-auto-update" ? args.slice(1) : args));
     const settings = { cliPath: "C:\\mock\\grok.exe", activeWorkspace: "C:\\workspace" } as AppSettings;
     const service = new CliCapabilityService(async () => settings, async () => undefined, {
       locate: async () => settings.cliPath,
@@ -58,6 +58,7 @@ describe("CLI capability snapshot", () => {
     await service.get();
     await service.get();
     expect(run).toHaveBeenCalledTimes(5);
+    expect(run.mock.calls.every(([, args]) => args[0] === "--no-auto-update")).toBe(true);
     await service.recordRuntimeSupport(["acp.initialize", "acp.sessionNew"]);
     const snapshot = await service.get();
     expect(snapshot.capabilities["acp.initialize"]).toMatchObject({ state: "supported", source: "acp-runtime" });

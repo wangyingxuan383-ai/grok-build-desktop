@@ -153,6 +153,7 @@ const RULES: Record<string, Rule> = {
   "session:open": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:rename": (args) => { idArg(args, 0); stringArg(args, 1, 4_096); },
   "session:delete": (args) => { pathArg(args, 0); idArg(args, 1); },
+  "session:delete-desktop-data": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:clear": (args) => { pathArg(args, 0); optionalIdArg(args, 1); },
   "session:pin": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "session:export-markdown": (args) => { pathArg(args, 0); idArg(args, 1); },
@@ -251,7 +252,9 @@ const RULES: Record<string, Rule> = {
   "computer:settings:get": noArgs,
   "computer:settings:update": (args) => computerSettingsArg(args, 0),
   "cli:check-update": noArgs,
-  "cli:apply-update": noArgs,
+  "cli:update-preview": noArgs,
+  "cli:apply-update": (args) => cliUpdateInputArg(args, 0),
+  "cli:compatibility": noArgs,
   "cli:update-history": noArgs,
   "logs:export": noArgs,
 };
@@ -746,6 +749,12 @@ function computerSettingsArg(args: unknown[], index: number): void {
   recordStringArray(value, "alwaysAllowedAppIds", 1_000, 512, true);
   optionalRecordInteger(value, "maxScreenshotEdge", 256, 8_192);
   optionalRecordString(value, "emergencyShortcut", 128);
+}
+function cliUpdateInputArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, ["targetVersion", "expectedCurrentVersion"]);
+  const target = requiredRecordString(value, "targetVersion", 64);
+  const current = requiredRecordString(value, "expectedCurrentVersion", 64);
+  if (!/^\d+\.\d+\.\d+$/.test(target) || !/^\d+\.\d+\.\d+$/.test(current)) throw new Error("IPC CLI 版本格式无效");
 }
 function mediaSourceArg(args: unknown[], index: number, allowData: boolean): void {
   const value = stringArg(args, index, allowData ? 28 * 1024 * 1024 : 32_767);

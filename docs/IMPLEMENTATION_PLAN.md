@@ -1,5 +1,38 @@
 # Grok Build Desktop 实施计划
 
+## v0.7.0 Grok Build CLI 0.2.118 安全适配（2026-08-05）
+
+### 受控更新与运行时握手
+
+- [x] Desktop 启动的 ACP、媒体、登录、插件、Provider、Memory、诊断和能力探针统一传入 `--no-auto-update`；更新服务成为唯一 CLI 修改入口。
+- [x] 增加 `CliRuntimeHandshake`、`CliCapabilityEvidence`、`CliCompatibilitySnapshot`、`CliUpdatePreview` 与 `CliUpdateReceipt`，规范化 `initialize` 的 Agent 版本、Session/Prompt/MCP、模型、思考档位、命令、Recap、Rewind、插件目录等非敏感能力。
+- [x] 固定目标更新会在执行前重新校验当前版本、stable 目标和用户确认，暂停并恢复活动会话；新版本验证失败时精确回滚旧版本，回滚或会话恢复失败均明确报错。
+- [x] 区分 stable 更新源与已公开版本提示；公开 Changelog 版本只用于“已公布、尚未下发”的提示，不作为安装目标。
+- [x] 保存脱敏的 0.2.117 本机握手、0.2.118 生命周期及 0.2.120 官方源码前向形态 Fixture；功能启用遵循“运行时声明 → 成功探测 → 已观察事件 → 版本提示”。
+
+### 0.2.118 生命周期与会话删除
+
+- [x] 兼容 `task_completed` 先于 `task_backgrounded`，接入 Auto Compact started/completed/failed/cancelled，并让 Compact 期间 Stop 继续走真实会话取消。
+- [x] Recap 按会话、回合和内容哈希去重并使用稳定投影 ID；未知事件只记录方法名、结构版本和字节大小。
+- [x] 会话删除先调用 `grok --no-auto-update sessions delete <id>`；成功后才清理 Desktop 投影、附件、媒体和 Token 数据。官方删除失败时仅可经显式确认执行 Desktop 本地数据清理。
+- [x] `grok doctor --json` 进入诊断中心，只保留受限、脱敏的结构化摘要。
+- [x] 固定目标升级本机 stable 0.2.118，替换为脱敏的真实握手 Fixture，并完成无推理 `initialize/session/new`、空会话官方删除和一次最小真实 Plan 验收（19.28 秒、无权限卡、无工作区写入）。
+- [x] 修复 0.2.118 对 TOML `[[model.*.reasoning_efforts]]` 的拒绝：Provider 元数据继续保留完整档位，CLI 托管配置改写为其原生 effort 字符串并迁移旧数组表。
+
+### 0.2.119–0.2.120 前向兼容（0.7.1 功能面延期）
+
+- [x] 前向解析 `x.ai/follow_ups`、`x.ai/models/update`、`x.ai/settings/update`，保持自定义 Provider 本地模型身份和当前努力档位；控件只在运行时证据出现后启用。
+- [x] 解析 Goal、Workflow、Subagent、Retry、后台任务、模型自动切换与运行时间线事件，后台事件按会话隔离。
+- [x] `/btw`、Recap 等能力从实际命令或已观察扩展获得，不按版本号猜测。
+- [ ] 0.7.1 在 stable 实际下发后完成 `/btw` 旁路提问、完整 Session 管理、Mermaid Plan、MCP/插件状态、官方 Git 接口与 `doctor fix` 预览确认；0.7.0 不显示未经验证的控件。
+
+### 0.7.0 候选门禁与本地交付
+
+- [x] 最终候选运行一次完整离线门禁：94 个测试文件、670 项测试通过；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块和 `npm audit` 通过。
+- [x] 正式生成且只生成一组 0.7.0 Setup、Portable、SHA-256、SBOM 和许可证报告；打包版及安装版分别通过 0.7.0 UI 探针。
+- [x] 完成 per-user 安装、File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式检查；安装版保持本地等待用户验收。
+- [ ] 用户验收现有长会话 Plan/Stop、两个真实并行模型会话和已配置自定义 Provider；通过前不推送、不创建 Release。
+
 ## v0.7.0 全面审计与单一候选（2026-08-05）
 
 ### 会话、Plan、停止与队列
@@ -8,7 +41,8 @@
 - [x] Plan 决定先写入并立即清理旧交互门，模式切换异步收敛；稳定 `turnId` 结算重复/迟到终态。
 - [x] accepted/running 队列持久化并在终态原子迁移；跨会话停止、插话和后台完成不污染当前 Composer。
 - [x] 建立仅测试环境启用的主进程离线 responder，覆盖 Plan 三决策、权限允许/拒绝、Stop 和唯一终态。
-- [ ] 在版本统一后实跑当前 v0.7 UI 探针、真实 CLI Plan/Stop 和至少两个并行会话。
+- [x] 实跑当前 v0.7 打包版与安装版 UI 探针，以及 CLI 0.2.118 最小真实只读 Plan；无权限卡、无工作区写入。
+- [ ] 实跑既有长会话 Stop 和至少两个真实并行模型会话；保留给用户本地验收。
 
 ### 投影、文件、媒体与边界
 

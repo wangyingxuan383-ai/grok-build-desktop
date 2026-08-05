@@ -82,6 +82,15 @@ describe("session event reducer", () => {
     expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "retry", attempt: 2, maxAttempts: 3, delayMs: 1000 })]);
   });
 
+  it("keeps the composer stoppable for the full auto-compact lifecycle", () => {
+    let state = apply(baseState(), { type: "compact-status", sessionId: "session", status: "started" });
+    expect(state.views.session.compacting).toBe(true);
+    expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "compact", status: "started" })]);
+    state = apply(state, { type: "compact-status", sessionId: "session", status: "cancelled", message: "user cancelled" });
+    expect(state.views.session.compacting).toBe(false);
+    expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "compact", status: "cancelled", text: "user cancelled" })]);
+  });
+
   it("restores the durable visible projection after an incomplete ACP replay", () => {
     let state = apply(baseState(), { type: "user-message", sessionId: "session", clientMessageId: "client", text: "hello", delivery: "sent" });
     state = apply(state, {

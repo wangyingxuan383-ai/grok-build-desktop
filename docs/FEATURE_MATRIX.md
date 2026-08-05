@@ -4,14 +4,19 @@
 
 | Area | Status | Evidence / boundary |
 |---|---|---|
+| CLI controlled updates | Focused + installed verified | Every managed ACP/probe path uses `--no-auto-update`; exact stable target, concurrent click coalescing/rejection, verification, rollback and session restoration are unit-tested. This machine updated exactly from 0.2.117 to stable 0.2.118 and rechecked current/no-update. |
+| CLI runtime capability snapshot | Fixture + live handshake verified | Sanitized real 0.2.117/0.2.118 handshakes plus 0.2.118 lifecycle and official-source 0.2.120 forward fixtures cover Session/Prompt/MCP, models/efforts, commands, Recap/Rewind/plugins and unknown fields. Runtime declaration/probe/event evidence outranks version hints. |
+| CLI 0.2.118 lifecycle | Focused + minimal Plan live verified | Completion-before-background, Compact cancellation, Recap hash dedupe, unknown-event redaction and official-first session deletion are covered. One read-only Plan turn completed in 19.28s with no permission card and no workspace writes. |
+| CLI 0.2.118 custom-model TOML | Focused verified | Managed `reasoning_efforts` use CLI-native strings rather than rejected array-of-table output; upstream-only `auto/none` remain Desktop metadata and legacy object arrays are migrated on managed Provider launch. |
+| CLI 0.2.119–0.2.120 forward parse | Fixture verified; UI deferred to 0.7.1 | Follow-ups, models/settings updates and runtime timeline events parse only when observed; custom Provider identity is preserved. `/btw`, official Session/MCP/Git UI and doctor fixes are not claimed in 0.7.0. |
 | Session runtime identity | Focused verified | Session-scoped Provider/local model/upstream alias/effort/mode/profile; failed managed-provider launch is fail-closed; fork inherits parent runtime. |
-| Plan/permission/stop lifecycle | Focused + offline fixture verified | Plan receipt closes the old gate before async mode reconciliation; stable turn IDs settle duplicate/late terminal events; isolated responder covers three Plan decisions, permission allow/deny and Stop. Real installed CLI acceptance is still pending. |
+| Plan/permission/stop lifecycle | Focused + live Plan + installed fixture verified | Plan receipt closes the old gate before async mode reconciliation; stable turn IDs settle duplicate/late terminal events; isolated responder covers three Plan decisions, permission allow/deny and Stop. CLI 0.2.118 minimal read-only Plan passed live; an existing long-session Stop remains user acceptance. |
 | Persisted queue | Focused verified | accepted/running entries survive restart and move atomically to terminal; late snapshots cannot resurrect or duplicate user messages. |
 | Conversation projection replay | Focused verified | V2 projection stores visible blocks and merges ACP replay by stable user turn/content suffix; partial answers and re-chunked complete answers are covered. |
 | Store/automation concurrency | Focused verified | Cross-process transaction lock/owner fencing and explicit cancellation API; no fixed 24-hour total runtime, optional ACP inactivity is separate. |
 | IPC/path/media boundaries | Focused verified | Runtime schemas, Picker/session/workspace binding, junction/symlink checks, executable-open rejection, session-bound media handles and explicit Provider-Origin remote fetch. |
-| UI and delivery gates | Focused verified | Current v0.7 probe, Plan/permission/Stop fixture wiring, physical 125%–200% scaling, layout regression, renderer chunk/worker gates. Full packaged probe awaits final build. |
-| Release/install | Pending | Version/lockfile are 0.7.0; complete offline suite, formal package, install and cold-start evidence must be produced before any push or Release. |
+| UI and delivery gates | Packaged + installed verified | Current v0.7 probe, Plan/permission/Stop fixture wiring, physical 125%–200% scaling, layout regression and renderer chunk/worker gates pass against the packaged and per-user installed binaries. |
+| Release/install | Installed locally for acceptance | 94 test files/670 offline tests pass; 6 live files/9 tests skip by design. Production/resources, 341-file scan, Native/Computer Host, 24/24 Computer Use, Fuses, package/install/cold start, ASAR, File/Product/About/diagnostics and both shortcuts pass. Setup SHA-256 is `61877c2f7585352877a704ac8b06ade61818baa36a06d03a4b05488fdf53bfda`; Portable is `3532c406bbfefc41f3af1d727f654d5a434e481a98462d4170cc52b47730395d`. No push or Release before user acceptance. |
 
 ## v0.6.25 local Plan permission and terminal-recovery hotfix
 

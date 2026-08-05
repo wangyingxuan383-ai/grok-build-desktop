@@ -1,10 +1,22 @@
 # Grok CLI Compatibility
 
+## 0.2.118 stable adapter / 0.2.119–0.2.120 forward compatibility (Desktop 0.7.0)
+
+- Desktop-managed Grok processes use `--no-auto-update`. Only the update service may mutate the CLI, and it requires an exact version that still matches the stable feed immediately before installation. Public Changelog versions are display-only until the stable feed offers them.
+- `initialize` is normalized into a non-sensitive runtime handshake. Session/Prompt/MCP markers, models and reasoning efforts, commands, Recap/Rewind, plugin directories and observed private methods are stored as evidence; unknown response fields are discarded.
+- Capability precedence is runtime declaration, successful bounded probe, observed event, then version hint. An observed method can enable its own surface; a version number alone cannot.
+- 0.2.118 event handling covers completion-before-background ordering, Auto Compact lifecycle/cancellation and Recap hash deduplication. Unknown events log only method name, schema version and serialized byte size.
+- Session deletion is official-first (`grok --no-auto-update sessions delete <id>`). Desktop data is removed only after official success, or after a separate explicit local-only confirmation when the CLI operation fails.
+- Forward fixtures parse `x.ai/follow_ups`, `x.ai/models/update` and `x.ai/settings/update`. Model updates keep a managed Provider's local model ID and current selected effort; they do not silently rename it to an upstream or official Grok model.
+- `/btw`, complete Session management, Mermaid Plan, MCP/plugin status, official Git interfaces and automatic doctor fixes are scoped to Desktop 0.7.1 after the relevant runtime capability appears in a stable-installed CLI. They are not claimed as 0.7.0 features.
+- Live acceptance on 2026-08-05 installed exactly `0.2.118 (1e1687c1cf)`, then passed initialize/session/new and official empty-session deletion. A single read-only Plan turn completed in 19.28 seconds with no permission request and an unchanged empty workspace.
+- 0.2.118 rejects TOML object arrays serialized as `[[model.*.reasoning_efforts]]`. Desktop now emits the CLI-native string-list form, filters upstream-only `auto/none` from the CLI menu, and keeps richer protocol-specific reasoning evidence in Desktop provider metadata.
+
 ## 0.7.0 audit candidate: session identity, terminal settlement and Plan fixture
 
 - Desktop persists the session's local Provider/model identity separately from the upstream alias reported by `session-ready`. Reopening a managed session therefore cannot silently select the global Grok 4.5 default; if the recorded Provider is disabled, missing or cannot establish its gateway, sending is blocked with a structured error.
 - `turn_completed`, Prompt RPC completion, cancellation and process exit are reconciled by a stable turn ID. A late event from an earlier turn cannot settle a later queued/interjected turn. Desktop-owned accepted/running queue entries are persisted and atomically moved to terminal state.
-- Current CLI Plan behavior is exercised through a test-only in-memory responder in the isolated UI probe. It is not a claim that every installed CLI/model combination has been live-tested. The formal live gate remains required after the 0.7.0 package is built.
+- Current CLI Plan behavior is exercised both through a test-only in-memory responder in the packaged/installed UI probe and one isolated live 0.2.118 read-only Plan turn. This does not claim every installed model, Provider or existing long session has been live-tested; those remain user acceptance.
 - ACP replay is merged with the local ConversationProjection V2. A partially persisted assistant body receives only a missing suffix; a complete body with different chunk boundaries is not duplicated. If no reliable turn boundary exists, Desktop retains the local projection and marks recovery as unavailable instead of inventing text.
 - Provider protocol translation and media/path boundaries remain evidence-based: unsupported capabilities are not inferred, remote media requires an explicit configured Provider Origin, and Renderer-submitted arbitrary local paths are rejected by the main process.
 

@@ -178,7 +178,7 @@ export class AuthService {
     const cliPath = await this.resolveCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI");
     const active = await this.vault.active();
-    const { stdout } = await execFileAsync(cliPath, ["models"], {
+    const { stdout } = await execFileAsync(cliPath, ["--no-auto-update", "models"], {
       env: buildCliEnv(settings, active?.payload.apiKey),
       timeout: 30_000,
       windowsHide: true,
@@ -218,7 +218,7 @@ export class AuthService {
       const appOwnsBrowser = await this.detectNoBrowser(cliPath, buildCliEnv(settings));
       await this.stopSessions();
       snapshot = await this.captureAuthSnapshot(true);
-      child = this.spawnLogin(cliPath, ["login", "--device-auth", ...(appOwnsBrowser ? ["--no-browser"] : [])], {
+      child = this.spawnLogin(cliPath, ["--no-auto-update", "login", "--device-auth", ...(appOwnsBrowser ? ["--no-browser"] : [])], {
         env: buildCliEnv(settings),
         windowsHide: true,
         stdio: "pipe",
@@ -312,7 +312,7 @@ export class AuthService {
     const settings = await this.getSettings();
     const cliPath = await this.resolveCli(settings.cliPath);
     const active = await this.vault.active();
-    if (cliPath) await execFileAsync(cliPath, ["logout"], { env: buildCliEnv(settings, active?.payload.apiKey), timeout: 30_000, windowsHide: true }).catch(() => undefined);
+    if (cliPath) await execFileAsync(cliPath, ["--no-auto-update", "logout"], { env: buildCliEnv(settings, active?.payload.apiKey), timeout: 30_000, windowsHide: true }).catch(() => undefined);
     if (active) await this.vault.remove(active.profile.id);
     await rm(this.authPath, { force: true });
     this.updateLogin({ running: false, message: "已退出登录" });
@@ -396,7 +396,7 @@ export class AuthService {
 
 async function supportsNoBrowser(cliPath: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    const { stdout, stderr } = await execFileAsync(cliPath, ["login", "--help"], { env, timeout: 15_000, windowsHide: true });
+    const { stdout, stderr } = await execFileAsync(cliPath, ["--no-auto-update", "login", "--help"], { env, timeout: 15_000, windowsHide: true });
     return /(?:^|\s)--no-browser(?:[=\s,]|$)/m.test(`${stdout}\n${stderr}`);
   } catch {
     return false;

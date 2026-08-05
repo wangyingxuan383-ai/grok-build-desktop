@@ -1,12 +1,18 @@
 # Grok Build Desktop 下一会话完整交接（2026-08-05，0.7.0 本地候选）
 
-> **0.7.0 当前状态：** 工作分支为 `codex/v0.7.0-audit-hardening`，基于 `efc3ab3 chore: checkpoint v0.6.25 local candidate` 继续，未重置既有改动。源码、lockfile 与显示版本已提升至 **0.7.0**；尚未推送、未创建 Release、未覆盖既有 0.6.x 资产。
+> **CLI 0.2.118 适配进度：** 已建立受控更新、运行时能力快照、官方优先会话删除、Compact/Recap/后台任务乱序兼容，以及 0.2.119/0.2.120 的事件前向解析。所有受管子进程已禁用 CLI 自更新；本机已从 `grok 0.2.117 (f1c0609308)` 精确升级到 stable `0.2.118 (1e1687c1cf)`。真实握手、空会话删除及一次最小 Plan 已通过；0.7.0 已完成全量离线门禁、正式打包、per-user 安装和安装版冷启动，当前是等待用户桌面验收的本地候选，不是公开发布版。
+
+> **接手顺序：** 先由用户验收已安装的 0.7.0，重点检查现有长会话的 Plan/Stop、两个真实并行模型会话和已配置自定义 Provider。受管 Provider 下一次启动时会把旧 `reasoning_efforts` 数组表迁移为 0.2.118 接受的字符串列表。0.2.119/0.2.120 未由 stable 下发时禁止强装；0.7.1 功能只保留 Fixture 前向解析。验收前不要推送或创建 Release。
+
+> **0.7.0 当前状态：** 工作分支为 `codex/v0.7.0-audit-hardening`，已在 `19cff12 chore: checkpoint v0.7.0 audit candidate` 保存实施前基线，未重置既有改动。源码、lockfile、File/Product、安装版及 About 均为 **0.7.0**；尚未推送、未创建 Release、未覆盖既有 0.6.x 资产。
 
 > **本轮已完成的关键审计修复：** 会话运行时按会话保存 Provider/本地模型/上游别名/思考档位/模式/执行档案，Provider 失败不回退；Plan 决定立即关闭旧交互门并异步切模式；稳定 turnId 结算迟到/重复终态；accepted/running 队列持久化；ConversationProjection V2 对 ACP 回放做缺失尾部合并；JsonStore/自动化采用事务锁和显式取消；附件、媒体句柄、打开位置、CLI 路径及符号链接做主进程可信边界校验。
 
-> **验证证据：** 投影回放 20 项、离线 UI responder 10 项、信任边界 40 项及运行时/Provider 聚焦测试已通过；TypeScript、主进程构建、Renderer 布局/分块/交付门禁已通过。当前仍未完成完整离线套件、正式打包安装、真实 CLI/Provider/双会话实机验收，不能把 0.7.0 称为正式发布版。
+> **验证证据：** 最终候选一次完整门禁通过 94 个测试文件、670 项离线测试；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、0.7.0 打包 UI 及 `npm audit`（0 漏洞）通过。真实 CLI 0.2.118 最小只读 Plan 在 19.28 秒内完成，无权限卡、无工作区写入。安装版又独立通过 1280/1440/1920、125%–200% 的 0.7.0 UI 冷启动探针。真实自定义 Provider、双模型并行及既有长会话 Stop 仍是用户验收边界。
 
-> **下一步顺序：** 运行全量离线测试和生产/资源构建；启用隔离 AppData 实跑 `probe-v070-ui.ps1`；生成 0.7.0 Setup/Portable/SHA-256/SBOM/许可证报告并 per-user 安装；冷启动检查 About/诊断/进程/ASAR/Fuses/快捷方式；保留产物交给用户验收。验收通过后才讨论 GitHub push/Release。
+> **0.7.0 本地产物：** Setup SHA-256 `61877c2f7585352877a704ac8b06ade61818baa36a06d03a4b05488fdf53bfda`；Portable SHA-256 `3532c406bbfefc41f3af1d727f654d5a434e481a98462d4170cc52b47730395d`；SBOM SHA-256 `94f0d554c708f1fbdc731918fde88582ba94f525050b6bebd3fdb2500e7192c8`；许可证报告 SHA-256 `382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。桌面和开始菜单快捷方式均指向 `%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`，ASAR 与 Fuses 已验证。
+
+> **下一步顺序：** 用户在桌面安装版验收 0.7.0；仅对验收暴露的问题运行受影响测试。通过后再更新公开发布状态、推送分支并创建 Release。0.7.1 继续等待 stable 实际下发 0.2.119/0.2.120 后再做真实能力验收。
 
 > **0.6.25 当前工作状态：** 用户复验 0.6.24 后仍遇到 Plan 长回合持续 Stop、停止无反馈及 Plan 权限问题，并要求排查同类缺口。补充只读审计确认旧门禁仍有四类结构性漏洞：PowerShell 脚本块可藏在看似只读的管道里；工具显示标题可把未知工具伪装成读取；Plan 文件门只拦工作区写入而放过任意外部路径；没有拒绝选项时 Desktop 返回 JSON-RPC error，可能让 CLI 重试或保持等待。源码现改为拒绝优先的命令解析、显式 ACP kind、仅当前会话精确 `plan.md` 可写及标准 `cancelled` 回执。
 

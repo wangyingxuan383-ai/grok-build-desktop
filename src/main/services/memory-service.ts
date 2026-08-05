@@ -187,7 +187,7 @@ export class MemoryService {
     const settings = await this.getSettings();
     const cliPath = await locateGrokCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI");
-    await this.runCli(cliPath, ["memory", "clear", `--${scope}`, "--yes"], workspacePath, { ...process.env, GROK_HOME: this.grokHome, GROK_MEMORY_LOG: "0" });
+    await this.runCli(cliPath, ["--no-auto-update", "memory", "clear", `--${scope}`, "--yes"], workspacePath, { ...process.env, GROK_HOME: this.grokHome, GROK_MEMORY_LOG: "0" });
     return this.list(workspacePath);
   }
 

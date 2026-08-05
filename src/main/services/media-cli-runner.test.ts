@@ -18,7 +18,7 @@ async function fixture(source: string): Promise<{ root: string; script: string }
 describe("runCliMediaProcess", () => {
   it("isolates headless media work in an explicit transient CLI session", () => {
     expect(buildCliMediaArgs("draw a cat", "00000000-0000-4000-8000-000000000001", "image_gen")).toEqual([
-      "--single", "draw a cat",
+      "--no-auto-update", "--single", "draw a cat",
       "--session-id", "00000000-0000-4000-8000-000000000001",
       "--output-format", "streaming-json",
       "--always-approve",

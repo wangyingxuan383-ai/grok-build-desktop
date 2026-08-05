@@ -2,15 +2,24 @@
 
 ## Unreleased
 
-### 0.7.0 全面审计与稳定性候选（本地进行中）
+### 0.7.0 全面审计与稳定性候选（已本地安装，等待验收）
 
+- Grok Build CLI 适配改为运行时证据驱动：保存脱敏的 `initialize` 能力快照，消费 Agent/协议版本、Session/Prompt/MCP 能力、模型/努力档位、命令、Recap、Rewind 与插件目录；版本号仅作为最后一级提示。
+- 所有 Desktop 管理的 ACP、媒体、登录、Memory、Provider、插件和诊断子进程显式传入 `--no-auto-update`。CLI 更新只接受用户确认的 stable 精确目标，更新前再次校验源状态并暂停会话，完成后验证 initialize、session/new、官方空会话删除与基础扩展；失败时精确回滚并恢复会话。
+- 区分本机 stable 目标和官方已公布版本：公开 Changelog 高于 stable 时仅提示分批发布状态，不会越过更新通道强制安装。
+- 适配 0.2.118 生命周期：快速后台任务完成先于 backgrounded 时不复活任务；Auto Compact 可见且可取消；Recap 按内容哈希去重；未知事件只记录名称、结构版本和大小。
+- 会话删除优先使用官方 `grok sessions delete`，成功后才清理 Desktop 投影/附件/媒体/Token；失败时必须显式选择“仅清理 Desktop 数据”。诊断中心增加受限脱敏的 `grok doctor --json` 摘要。
+- 为 0.2.119/0.2.120 增加按运行时事件启用的前向解析：follow-ups、模型/设置热更新、Goal、Workflow、Subagent、Retry 和后台任务。自定义 Provider 的本地模型身份不会被上游别名改回官方模型；完整 `/btw`、Session/MCP/Git 新界面延期到 0.7.1 且须 stable 实机证据。
+- 本机已按 stable 精确升级到 `grok 0.2.118 (1e1687c1cf)`；真实 `initialize/session/new` 与空会话官方删除完成，最小只读 Plan 回合在 19.28 秒内通过，未出现权限卡或工作区写入。升级过程未安装 0.2.119/0.2.120。
+- 0.2.118 收紧了自定义模型 TOML 思考档位解析。Desktop 不再把对象数组序列化成 CLI 拒绝的 `[[model.*.reasoning_efforts]]`，而是写入原生字符串列表，并把 `auto/none` 留在 Desktop 上游能力层而非 CLI 模型菜单。
 - 会话运行时按会话保存 Provider、本地模型 ID、上游别名、思考档位、模式和执行档案；恢复旧会话时不再被全局默认模型覆盖。受管 Provider 初始化失败会明确阻止发送，不静默回退到官方模型；分叉会话继承父会话运行时。
 - Plan 决定写入成功后立即关闭旧交互门，模式切换异步收敛；普通回合、Plan、权限等待、队列和插话统一按稳定回合 ID结算。accepted/running 队列落盘，重复终态和迟到事件不会复活或重复消息。离线 UI responder 已覆盖 Plan 三决策、权限允许/拒绝和 Stop 终态。
 - 会话可见内容升级为本地投影 V2：流式正文、过程、工具、计划/权限/问题、错误、媒体、回合耗时和 Usage 可恢复；ACP 回放与本地投影按用户消息和内容后缀合并，避免重开只剩指标或重复回答。
 - JsonStore 使用跨进程事务锁和 owner fencing；自动化任务取消改为显式 API，取消/进程退出/可选 ACP 无活动超时均有持久终态，不再设置 24 小时总时限。支持包日志、IPC 参数、文件路径、媒体和 CLI 路径增加运行时边界校验。
 - 附件、媒体、打开位置和系统路径统一绑定会话/工作区/Picker 签发句柄；阻断任意 Renderer 路径、符号链接越界、可执行文件打开和未经允许的远端媒体。媒体远端默认拒绝，只有显式 Provider Origin 才能进入受限抓取。
 - Provider Chat/Responses/Messages/Gemini 翻译、SSE 错误/EOF/Usage、工具名称映射和扫描状态保留现有成果；未验证能力不伪造模型档位或媒体能力。
-- 当前候选仍在本地门禁阶段：已通过投影、离线 responder、信任边界、Provider/运行时等聚焦测试，以及 TypeScript、主进程构建、Renderer 分块/布局门禁；完整离线套件、打包、安装和真实 CLI/Provider 验收完成前不推送、不创建 Release。
+- 最终候选一次完整门禁通过 94 个测试文件、670 项离线测试；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、打包版与安装版 0.7.0 UI、`npm audit`（0 漏洞）均通过。
+- 已生成并 per-user 安装唯一一组 0.7.0 本地产物。Setup SHA-256 为 `61877c2f7585352877a704ac8b06ade61818baa36a06d03a4b05488fdf53bfda`，Portable 为 `3532c406bbfefc41f3af1d727f654d5a434e481a98462d4170cc52b47730395d`；File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式通过。现有长会话 Stop、双真实模型并行和已配置 Provider 留给用户验收；验收前不推送、不创建 Release。
 
 ### 0.6.25 Plan permission hardening and terminal recovery
 

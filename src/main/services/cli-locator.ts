@@ -7,6 +7,11 @@ import type { AppSettings, CliVersionStatus } from "../../shared/types";
 
 const execFileAsync = promisify(execFile);
 const effortFlags = new Map<string, "--effort" | "--reasoning-effort">();
+export const CLI_CHANGELOG_URL = "https://x.ai/build/changelog";
+// Highest public release whose wire shape is covered by this Desktop build.
+// It is a display/forward-compatibility hint only; the stable update feed is
+// always the sole authority for an installable target.
+export const KNOWN_PUBLIC_CLI_VERSION = "0.2.120";
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
@@ -89,11 +94,22 @@ export async function checkCliUpdate(cliPath: string, env = process.env): Promis
       latestVersion?: string;
       updateAvailable?: boolean;
       channel?: string;
+      installer?: string;
+      autoUpdate?: boolean;
       error?: string | null;
     };
-    return { found: true, path: cliPath, ...result };
+    const publicAhead = compareVersions(KNOWN_PUBLIC_CLI_VERSION, result.latestVersion) > 0;
+    return {
+      found: true,
+      path: cliPath,
+      ...result,
+      checkedAt: new Date().toISOString(),
+      changelogUrl: CLI_CHANGELOG_URL,
+      publicLatestVersion: KNOWN_PUBLIC_CLI_VERSION,
+      distributionState: result.error ? "error" : publicAhead ? "public-ahead" : result.updateAvailable ? "stable-update" : "current",
+    };
   } catch (error) {
-    return { found: true, path: cliPath, error: error instanceof Error ? error.message : String(error) };
+    return { found: true, path: cliPath, checkedAt: new Date().toISOString(), changelogUrl: CLI_CHANGELOG_URL, publicLatestVersion: KNOWN_PUBLIC_CLI_VERSION, distributionState: "error", error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -102,7 +118,7 @@ export async function detectEffortFlag(cliPath: string, env = process.env): Prom
   const cached = effortFlags.get(key);
   if (cached) return cached;
   try {
-    const { stdout, stderr } = await execFileAsync(cliPath, ["agent", "--help"], { env, timeout: 15_000, windowsHide: true });
+    const { stdout, stderr } = await execFileAsync(cliPath, ["--no-auto-update", "agent", "--help"], { env, timeout: 15_000, windowsHide: true });
     const help = `${stdout}\n${stderr}`;
     const flag = /(?:^|\s)--effort(?:[=\s,]|$)/m.test(help) ? "--effort" : "--reasoning-effort";
     effortFlags.set(key, flag);
@@ -115,6 +131,16 @@ export async function detectEffortFlag(cliPath: string, env = process.env): Prom
 export function parseVersion(value?: string): [number, number, number] | undefined {
   const match = /(?:^|\D)(\d+)\.(\d+)\.(\d+)/.exec(value ?? "");
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
+}
+
+export function compareVersions(left?: string, right?: string): number {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (!a || !b) return 0;
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index]! !== b[index]!) return a[index]! > b[index]! ? 1 : -1;
+  }
+  return 0;
 }
 
 export function isLockedBinaryError(message: string): boolean {

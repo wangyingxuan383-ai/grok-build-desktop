@@ -399,7 +399,7 @@ export class AgentDefinitionService {
     const settings = await this.getSettings();
     const cliPath = await locateGrokCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI，无法运行 grok inspect --json");
-    const value = await this.runInspect(cliPath, ["inspect", "--json"], workspacePath, { ...buildCliEnv(settings), GROK_HOME: this.grokHome });
+    const value = await this.runInspect(cliPath, ["--no-auto-update", "inspect", "--json"], workspacePath, { ...buildCliEnv(settings), GROK_HOME: this.grokHome });
     const report = typeof value === "string" ? JSON.parse(value) as InspectReport : value;
     if (!report || typeof report !== "object") throw new Error("grok inspect --json 未返回有效对象");
     if (expectedAgentName && Array.isArray(report.agents) && !report.agents.some((agent) => agent.name === expectedAgentName)) throw new Error(`grok inspect 未加载 Agent “${expectedAgentName}”`);

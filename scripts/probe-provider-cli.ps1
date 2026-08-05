@@ -29,7 +29,8 @@ extra_headers = { "X-Probe" = "${GROK_DESKTOP_PROBE_HEADER}" }
   function Invoke-CliProbe([string[]]$Arguments) {
     $start = [System.Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $CliPath
-    $start.Arguments = ($Arguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '
+    $ManagedArguments = if ($Arguments[0] -eq 'version') { $Arguments } else { @('--no-auto-update') + $Arguments }
+    $start.Arguments = ($ManagedArguments | ForEach-Object { '"' + ($_ -replace '"', '\"') + '"' }) -join ' '
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true

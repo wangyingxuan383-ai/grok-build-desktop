@@ -491,7 +491,7 @@ function laterTimestamp(left: string, right: string): string {
 }
 
 function isPersistable(event: ChatEvent): boolean {
-  return !["session-reset", "session-ready", "commands", "mode", "prompt-queue", "turn-presentations-restore", "user-attachments-restore", "conversation-projection-restore", "history-recovery"].includes(event.type);
+  return !["session-reset", "session-ready", "commands", "mode", "prompt-queue", "turn-presentations-restore", "user-attachments-restore", "conversation-projection-restore", "history-recovery", "follow-ups"].includes(event.type);
 }
 
 function sanitizeEvent(event: ChatEvent): ChatEvent {
@@ -740,6 +740,7 @@ function stableProjectionRecordId(event: ChatEvent): string | undefined {
   else if (event.type === "permission") identity = String(event.request.requestId);
   else if (event.type === "question" || event.type === "plan" || event.type === "interaction-resolved") identity = String(event.requestId ?? "");
   else if (event.type === "turn-started" || event.type === "turn-completed") identity = event.presentation?.turnId;
+  else if (event.type === "session-recap") identity = `${event.turnId ?? "session"}:${event.contentHash}`;
   else if (event.type === "error") identity = event.failure?.failureId;
   if (!identity) return undefined;
   const digest = createHash("sha256").update(`${event.type}\0${identity}\0${JSON.stringify(event)}`).digest("hex");
