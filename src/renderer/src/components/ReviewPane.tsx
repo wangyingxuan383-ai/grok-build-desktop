@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitReviewFile, GitReviewFileSummary, GitReviewIndex, GitReviewScope, GitWorkspaceCapability, NavigationIntent } from "../../../shared/types";
 import { UiIcon } from "../ui-icons";
 import type { ReviewCommentDraft } from "../review-comments";
@@ -31,6 +31,16 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
   const [commentTarget, setCommentTarget] = useState<{ path: string; line: number; side: "old" | "new" }>();
   const [commentBody, setCommentBody] = useState("");
   const [width, setWidth] = useState(() => Math.max(420, Math.min(760, Number(localStorage.getItem("grok:right-width:review")) || 620)));
+  const mountedRef = useRef(true);
+  const refreshGenerationRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      refreshGenerationRef.current += 1;
+    };
+  }, []);
 
   const scope = useMemo<GitReviewScope>(() => {
     if (kind === "commit") return { kind, revision: commit || "HEAD" };
@@ -45,15 +55,24 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
   useEffect(() => setKind(initialKind), [initialKind]);
 
   const refresh = async (): Promise<void> => {
+    const generation = ++refreshGenerationRef.current;
+    const isCurrent = (): boolean => mountedRef.current && generation === refreshGenerationRef.current;
     if (!cwd) {
-      setCapability({ available: false, cwd: "", reason: "no-workspace", message: "请选择工作区后再查看变更" });
-      setIndex(undefined);
-      setSelectedFile(undefined);
+      if (isCurrent()) {
+        setCapability({ available: false, cwd: "", reason: "no-workspace", message: "请选择工作区后再查看变更" });
+        setIndex(undefined);
+        setSelectedFile(undefined);
+        setLoading(false);
+      }
       return;
     }
     setLoading(true);
+    setCapability(undefined);
+    setIndex(undefined);
+    setSelectedFile(undefined);
     try {
       const nextCapability = await window.grokDesktop.getGitWorkspaceCapability(cwd);
+      if (!isCurrent()) return;
       setCapability(nextCapability);
       if (!nextCapability.available) {
         setIndex(undefined);
@@ -61,18 +80,23 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
         return;
       }
       const next = await window.grokDesktop.getGitReviewIndex(cwd, scope);
+      if (!isCurrent()) return;
       setIndex(next);
       setSelectedFileId((current) => next.files.some((file) => file.id === current) ? current : next.files[0]?.id ?? "");
     } catch (error) {
+      if (!isCurrent()) return;
       setIndex(undefined);
       setSelectedFile(undefined);
       onError(errorMessage(error));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
-  useEffect(() => { void refresh(); }, [cwd, scope]);
+  useEffect(() => {
+    void refresh();
+    return () => { refreshGenerationRef.current += 1; };
+  }, [cwd, scope]);
   useEffect(() => {
     if (!index || !selectedFileId) { setSelectedFile(undefined); return; }
     let cancelled = false;
@@ -85,12 +109,15 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
   }, [cwd, index?.id, scope, selectedFileId]);
   useEffect(() => {
     if (!cwd || capability?.available !== true) return;
+    let cancelled = false;
     void Promise.all([window.grokDesktop.listGitHistory(cwd, 30), window.grokDesktop.listGitBranches(cwd)]).then(([history, values]) => {
+      if (cancelled) return;
       setCommits(history);
       setBranches(values);
       setCommit((current) => current || history[0]?.hash || "HEAD");
       setBranch((current) => current || values.find((value) => !value.current)?.name || values[0]?.name || "HEAD~1");
     }).catch(() => undefined);
+    return () => { cancelled = true; };
   }, [capability?.available, cwd]);
 
   const runFileAction = async (file: GitReviewFile, action: "stage" | "unstage" | "revert"): Promise<void> => {
@@ -101,9 +128,9 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
       if (action === "stage") await window.grokDesktop.stageGitChanges(cwd, [file.path]);
       else if (action === "unstage") await window.grokDesktop.unstageGitChanges(cwd, [file.path]);
       else await window.grokDesktop.discardGitChanges(cwd, { trackedPaths: file.kind === "untracked" ? [] : [file.path], untrackedPaths: file.kind === "untracked" ? [file.path] : [], confirmedPaths: [file.path] });
-      await refresh();
-    } catch (error) { onError(errorMessage(error)); }
-    finally { setBusy(""); }
+      if (mountedRef.current) await refresh();
+    } catch (error) { if (mountedRef.current) onError(errorMessage(error)); }
+    finally { if (mountedRef.current) setBusy(""); }
   };
 
   const runHunkAction = async (file: GitReviewFile, hunkId: string, action: "stage" | "unstage" | "revert"): Promise<void> => {
@@ -112,9 +139,23 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
     setBusy(`${action}:${hunkId}`);
     try {
       await window.grokDesktop.applyGitReviewHunk(cwd, { snapshotId: index.id, scope, fileId: file.id, hunkId, action, confirmed: action === "revert" });
-      await refresh();
-    } catch (error) { onError(errorMessage(error)); await refresh(); }
-    finally { setBusy(""); }
+      if (mountedRef.current) await refresh();
+    } catch (error) { if (mountedRef.current) { onError(errorMessage(error)); await refresh(); } }
+    finally { if (mountedRef.current) setBusy(""); }
+  };
+
+  const runAllAction = async (): Promise<void> => {
+    if (!index || index.readOnly || !index.files.length) return;
+    setBusy("all");
+    try {
+      if (kind === "staged") await window.grokDesktop.unstageGitChanges(cwd);
+      else await window.grokDesktop.stageGitChanges(cwd);
+      if (mountedRef.current) await refresh();
+    } catch (error) {
+      if (mountedRef.current) onError(errorMessage(error));
+    } finally {
+      if (mountedRef.current) setBusy("");
+    }
   };
 
   const beginResize = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -140,7 +181,7 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
     {kind === "commit" && <select className="review-reference" aria-label="选择提交" value={commit} onChange={(event) => setCommit(event.target.value)}>{commits.map((value) => <option key={value.hash} value={value.hash}>{value.shortHash} {value.subject}</option>)}</select>}
     {kind === "branch" && <select className="review-reference" aria-label="选择基准分支" value={branch} onChange={(event) => setBranch(event.target.value)}>{branches.map((value) => <option key={value.name} value={value.name}>{value.name}{value.current ? "（当前）" : ""}</option>)}</select>}
     {kind === "last-turn" && !lastTurnPaths.length && <div className="review-empty compact">最近一回合没有可确认的写入路径。</div>}
-    <div className="review-toolbar"><button onClick={() => void refresh()} disabled={loading}><UiIcon name="refresh" /> 刷新</button>{index && !index.readOnly && index.files.length > 0 && <button onClick={() => void (kind === "staged" ? window.grokDesktop.unstageGitChanges(cwd) : window.grokDesktop.stageGitChanges(cwd)).then(refresh).catch((error) => onError(errorMessage(error)))}>{kind === "staged" ? "全部取消暂存" : "全部暂存"}</button>}</div>
+    <div className="review-toolbar"><button onClick={() => void refresh()} disabled={loading}><UiIcon name="refresh" /> 刷新</button>{index && !index.readOnly && index.files.length > 0 && <button disabled={Boolean(busy)} onClick={() => void runAllAction()}>{kind === "staged" ? "全部取消暂存" : "全部暂存"}</button>}</div>
     {loading && <div className="review-empty">正在建立文件索引…</div>}
     {!loading && capability && !capability.available && <div className="review-empty review-capability-empty"><UiIcon name="folder" /><strong>{capability.message}</strong><span>{capability.reason === "not-repository" ? "仍可在“最近文件”中查看本回合写入内容；Review 只在 Git 工作区中启用。" : "选择可用的 Git 工作区后刷新。"}</span></div>}
     {!loading && index && <div className="review-body">

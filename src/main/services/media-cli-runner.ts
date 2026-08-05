@@ -9,7 +9,8 @@ export interface CliMediaProcessInput {
   env: NodeJS.ProcessEnv;
   media: MediaCreationKind;
   signal: AbortSignal;
-  timeoutMs?: number;
+  /** Stops only a silent/stalled process. null disables inactivity recovery. */
+  idleTimeoutMs?: number | null;
   windowsVerbatimArguments?: boolean;
   onSpawn?(child: ChildProcessWithoutNullStreams): void;
   onProgress?(): void;
@@ -21,7 +22,7 @@ export function buildCliMediaArgs(prompt: string, transientSessionId: string, to
 
 /**
  * Runs the fixed-argument Grok CLI media command and accepts only concrete
- * artifacts found in streaming-json. It is Electron-independent so timeout,
+ * artifacts found in streaming-json. It is Electron-independent so inactivity,
  * cancellation and parsing can be exercised against a local fake CLI.
  */
 export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<MediaArtifact[]> {
@@ -38,6 +39,17 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   let pending = "";
   let stderr = "";
   let timedOut = false;
+  let idleTimer: NodeJS.Timeout | undefined;
+  const idleTimeoutMs = input.idleTimeoutMs === undefined ? 600_000 : input.idleTimeoutMs;
+  const armIdleTimer = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    if (idleTimeoutMs === null) return;
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      if (!child.killed) child.kill();
+    }, Math.max(1, idleTimeoutMs));
+    idleTimer.unref?.();
+  };
   const collectLine = (line: string): void => {
     for (const artifact of mediaArtifactsFromStreamingLine(line, input.media, input.cwd)) {
       if (!artifacts.some((value) => value.source === artifact.source)) artifacts.push(artifact);
@@ -46,6 +58,7 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
+    armIdleTimer();
     pending += chunk;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
@@ -53,14 +66,13 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     if (pending.length > 1024 * 1024) pending = pending.slice(-1024 * 1024);
     input.onProgress?.();
   });
-  child.stderr.on("data", (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-100_000); });
+  child.stderr.on("data", (chunk: string) => {
+    armIdleTimer();
+    stderr = `${stderr}${chunk}`.slice(-100_000);
+  });
   const abort = (): void => { if (!child.killed) child.kill(); };
   input.signal.addEventListener("abort", abort, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    if (!child.killed) child.kill();
-  }, Math.max(1, input.timeoutMs ?? 600_000));
-  timeout.unref?.();
+  armIdleTimer();
   try {
     const exitCode = await new Promise<number | null>((resolveExit, reject) => {
       child.once("error", reject);
@@ -68,12 +80,12 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     });
     if (pending.trim()) collectLine(pending);
     if (input.signal.aborted) throw abortReason(input.signal);
-    if (timedOut) throw new Error(`媒体任务超过 ${Math.ceil((input.timeoutMs ?? 600_000) / 1000)} 秒`);
+    if (timedOut) throw new Error(`媒体任务连续 ${Math.ceil((idleTimeoutMs ?? 0) / 1000)} 秒没有输出`);
     if (exitCode !== 0) throw new Error(mediaCliFailureMessage(stderr) || `Grok CLI 媒体任务退出（${String(exitCode)}）`);
     if (!artifacts.length) throw new Error(mediaCliFailureMessage(stderr) || "Grok CLI 已结束，但 streaming-json 中没有可识别的媒体产物");
     return artifacts;
   } finally {
-    clearTimeout(timeout);
+    if (idleTimer) clearTimeout(idleTimer);
     input.signal.removeEventListener("abort", abort);
   }
 }

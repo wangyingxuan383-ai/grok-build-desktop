@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +39,7 @@ describe("AutomationService", () => {
     expect((await service.clearSession(created!.id, cleanup))[0]?.sessionId).toBeUndefined();
     expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({ id: created!.id, sessionId: "stable-session" }));
   });
-  it("generates escaped XML for Chinese and spaced non-system paths", () => { const task = { ...input(), id: "task-id", promptPresent: true, registrationStatus: "registered", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } satisfies AutomationTask; const xml = buildTaskXml(task, "D:\\应用 & 工具\\Grok Build Desktop.exe", ["--scheduler-worker", task.id, "scheduled"]); expect(xml).toContain("InteractiveToken"); expect(xml).toContain("LeastPrivilege"); expect(xml).toContain("<StartWhenAvailable>true</StartWhenAvailable>"); expect(xml).toContain("D:\\应用 &amp; 工具"); expect(xml).toContain("D:\\中文 工作区"); expect(buildTaskXml({ ...task, missedRunPolicy: "skip" }, "app.exe", [])).toContain("<StartWhenAvailable>false</StartWhenAvailable>"); });
+  it("generates escaped XML for Chinese and spaced non-system paths without a wall-clock ceiling", () => { const task = { ...input(), id: "task-id", promptPresent: true, registrationStatus: "registered", createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" } satisfies AutomationTask; const xml = buildTaskXml(task, "D:\\应用 & 工具\\Grok Build Desktop.exe", ["--scheduler-worker", task.id, "scheduled"]); expect(xml).toContain("InteractiveToken"); expect(xml).toContain("LeastPrivilege"); expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"); expect(xml).toContain("<StartWhenAvailable>true</StartWhenAvailable>"); expect(xml).toContain("D:\\应用 &amp; 工具"); expect(xml).toContain("D:\\中文 工作区"); expect(buildTaskXml({ ...task, missedRunPolicy: "skip" }, "app.exe", [])).toContain("<StartWhenAvailable>false</StartWhenAvailable>"); });
   it("computes stable next-run previews for daily, weekly and interval schedules", () => { const now = new Date(2026, 6, 20, 10, 0, 0); expect(calculateNextRun({ kind: "daily", time: "09:30" }, now)?.getDate()).toBe(21); expect(calculateNextRun({ kind: "weekly", time: "11:00", days: [1, 3] }, now)?.getDay()).toBe(1); expect(calculateNextRun({ kind: "interval", minutes: 15 }, now)?.getTime()).toBe(now.getTime() + 900_000); });
   it("classifies high-impact scheduled tool calls while leaving ordinary reads automatic", () => { expect(classifyScheduledRisk({ command: "Remove-Item important.txt" })?.category).toBe("delete"); expect(classifyScheduledRisk({ command: "Get-Content README.md" })).toBeUndefined(); });
   it("validates interval, weekly day and clock boundaries", async () => { const { service } = await fixture(); await expect(service.create(input({ schedule: { kind: "interval", minutes: 0 } }))).rejects.toThrow("不得小于一分钟"); await expect(service.create(input({ schedule: { kind: "weekly", time: "09:00", days: [7] } }))).rejects.toThrow("有效星期"); await expect(service.create(input({ schedule: { kind: "daily", time: "25:00" } }))).rejects.toThrow("时间格式"); });
@@ -58,6 +58,67 @@ describe("AutomationService", () => {
     })));
     expect(runs.every((run) => run.status === "completed")).toBe(true);
     expect(peak).toBe(2);
+  });
+  it("serializes concurrent policy patches instead of losing one field", async () => {
+    const { service } = await fixture();
+    await Promise.all([
+      service.updatePolicy({ maxConcurrentRuns: 4 }),
+      service.updatePolicy({ confirmationTimeoutMinutes: 17 }),
+    ]);
+    expect(await service.getPolicy()).toEqual(expect.objectContaining({ maxConcurrentRuns: 4, confirmationTimeoutMinutes: 17 }));
+  });
+  it("inherits the Desktop model instead of persisting Grok 4.5 as the automation default", async () => {
+    const { service } = await fixture();
+    expect((await service.getPolicy()).defaultProfile.modelId).toBe("");
+    const [task] = await service.create(input({ profile: { ...input().profile, modelId: "" } }));
+    expect(task?.profile.modelId).toBe("");
+  });
+  it("reclaims a crashed legacy task lock after the short inactivity lease instead of waiting 24 hours", async () => {
+    const { root, service } = await fixture({ leaseStaleMs: 50 });
+    const [task] = await service.create(input());
+    const lockRoot = join(root, "automations", "locks");
+    const lockPath = join(lockRoot, `${task!.id}.lock`);
+    await mkdir(lockRoot, { recursive: true });
+    await writeFile(lockPath, "crashed-run", "utf8");
+    const old = new Date(Date.now() - 1_000);
+    await utimes(lockPath, old, old);
+    const run = await service.execute(task!.id, "recovered-run", async () => ({}));
+    expect(run.status).toBe("completed");
+  });
+  it("keeps a long active lease alive with heartbeats", async () => {
+    const { service } = await fixture({ leaseHeartbeatMs: 10, leaseStaleMs: 60 });
+    const [task] = await service.create(input());
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const first = service.execute(task!.id, "heartbeat-run", async () => { await barrier; return {}; });
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    const second = await service.execute(task!.id, "overlap-run", async () => ({}));
+    expect(second.status).toBe("skipped");
+    release();
+    expect((await first).status).toBe("completed");
+  });
+  it("cancels a running worker through the persisted run authority", async () => {
+    const { service } = await fixture({ cancellationPollMs: 5 });
+    const [task] = await service.create(input());
+    const execution = service.execute(task!.id, "cancelled-run", async ({ signal }) => {
+      await new Promise<void>((_resolve, reject) => {
+        const rejectCancelled = () => reject(signal.reason ?? new Error("cancelled"));
+        if (signal.aborted) rejectCancelled();
+        else signal.addEventListener("abort", rejectCancelled, { once: true });
+      });
+      return {};
+    });
+    await vi.waitFor(async () => expect((await service.listRuns()).find((run) => run.id === "cancelled-run")?.status).toBe("running"));
+    expect((await service.cancelRun("cancelled-run")).status).toBe("cancelled");
+    const terminal = await execution;
+    expect(terminal.status).toBe("cancelled");
+    expect(terminal.error).toBe("用户已停止任务");
+  });
+  it("persists zero as disabled inactivity timeout without a total runtime ceiling", async () => {
+    const { service } = await fixture();
+    expect((await service.getPolicy()).inactivityTimeoutMinutes).toBe(0);
+    expect((await service.updatePolicy({ inactivityTimeoutMinutes: 240 })).inactivityTimeoutMinutes).toBe(240);
+    expect((await service.updatePolicy({ inactivityTimeoutMinutes: -5 })).inactivityTimeoutMinutes).toBe(0);
   });
   it("pauses for an encrypted high-impact confirmation and resumes only after approval", async () => { let service!: AutomationService; let rawPending = ""; const { root, service: created } = await fixture({ pendingPollMs: 5, onChanged: (event) => { if (!event.pending) return; void (async () => { rawPending = await readFile(join(root, "automations", "pending", `${event.pending!.id}.json`), "utf8"); await service.respondPending(event.pending!.id, true); })(); } }); service = created; const [task] = await service.create(input()); const run = await service.execute(task!.id, "confirm-run", async ({ confirm }) => { expect(await confirm({ command: "删除旧备份" })).toBe(true); return { sessionId: "confirmed-session" }; }); expect(run.status).toBe("completed"); expect(rawPending).not.toContain("删除旧备份"); expect(rawPending).toContain("encryptedSummary"); });
   it("redacts the encrypted prompt if a worker error echoes it", async () => { const { service } = await fixture(); const [task] = await service.create(input()); const run = await service.execute(task!.id, "failed-run", async ({ prompt }) => { throw new Error(`provider failed while running: ${prompt}`); }); expect(run.status).toBe("failed"); expect(run.error).not.toContain("检查项目并汇报"); expect(run.error).toContain("[REDACTED]"); });

@@ -571,6 +571,8 @@ export interface AutomationGlobalPolicy {
   defaultProfile: AutomationExecutionProfile;
   maxConcurrentRuns: number;
   confirmationTimeoutMinutes: number;
+  /** Zero disables automatic cancellation; otherwise only genuine ACP inactivity is measured. */
+  inactivityTimeoutMinutes: number;
   notifyOnSuccess: boolean;
   notifyOnFailure: boolean;
 }
@@ -601,7 +603,7 @@ export interface PromptQueueEntry {
   text: string;
   position: number;
   createdAt: string;
-  state: "queued" | "interjected" | "sending";
+  state: "queued" | "interjected" | "sending" | "accepted" | "completed" | "failed" | "cancelled";
   /** Server-owned optimistic-concurrency version from x.ai/queue/changed. */
   version?: number;
   owner?: string;
@@ -611,12 +613,51 @@ export interface PromptQueueEntry {
   attachmentPreviews?: UserMessageAttachmentPreview[];
 }
 
+/** Durable per-session execution choices. Global defaults are used only when a session is created. */
+export interface SessionRuntimePreferences {
+  sessionId: string;
+  cwd: string;
+  modelId?: string;
+  providerId?: string;
+  effort: ReasoningEffort;
+  mode: SessionMode;
+  profileId?: string;
+  updatedAt: string;
+}
+
+/** Queue ownership survives a Desktop/CLI restart and is reconciled with the CLI queue by stable IDs. */
+export interface PersistedPromptQueue {
+  version: 1;
+  sessionId: string;
+  updatedAt: string;
+  entries: PromptQueueEntry[];
+  terminalEntries?: PromptQueueEntry[];
+}
+
+/** Main-process-only context used to bind one CLI process to its selected managed Provider route. */
+export interface ProviderLaunchContext {
+  scopeId: string;
+  sessionId?: string;
+  cwd: string;
+  /** Stable Desktop/provider configuration id. Never replace this with an upstream alias. */
+  localModelId?: string;
+  /** Model id passed to the CLI. For managed models this is normally the same local config id. */
+  modelId?: string;
+  providerId?: string;
+}
+
 export interface QueueOperationReceipt {
   operationId: string;
   entryId?: string;
   state: "queued" | "interjected" | "updated" | "removed" | "reordered" | "cleared";
   message: string;
   fallback?: boolean;
+  /**
+   * Queue edit/remove/reorder commands are private one-way CLI extensions.
+   * `transport` means the JSON-RPC notification was written successfully;
+   * `cli` is reserved for an authoritative x.ai/queue/changed acknowledgement.
+   */
+  acknowledgement?: "transport" | "cli";
 }
 
 export interface PlanDecisionReceipt {
@@ -1156,6 +1197,16 @@ export interface MediaArtifact {
   name?: string;
 }
 
+/** Opaque, session-bound access to a cached media file. Local paths stay in main. */
+export interface MediaAccessHandle {
+  id: string;
+  sessionId: string;
+  media: MediaCreationKind;
+  mimeType: string;
+  name: string;
+  url: string;
+}
+
 export interface MediaGenerationJob {
   jobId: string;
   sessionId: string;
@@ -1337,11 +1388,13 @@ export interface QuestionItem {
 }
 
 export interface ConversationProjection {
-  version: 1;
+  version: 1 | 2;
   sessionId: string;
   updatedAt: string;
   /** Persisted ChatEvent records. Kept structurally loose to avoid a recursive union. */
   events: Array<Record<string, unknown>>;
+  runtime?: SessionRuntimePreferences;
+  queue?: PersistedPromptQueue;
 }
 
 export type ChatEvent =
@@ -1428,6 +1481,9 @@ export interface SendPromptInput {
 export interface OfflineUiFixture {
   session: SessionSummary;
   events: ChatEvent[];
+  /** Optional current-version multi-session fixture data. Older probes can keep using session/events. */
+  sessions?: SessionSummary[];
+  activeSessionId?: string;
 }
 
 export interface GrokDesktopApi {
@@ -1546,11 +1602,12 @@ export interface GrokDesktopApi {
   respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<PlanDecisionReceipt>;
   pickAttachments(): Promise<Attachment[]>;
   pickAttachmentFolders(): Promise<Attachment[]>;
-  attachmentsFromPaths(paths: string[]): Promise<Attachment[]>;
+  attachmentsFromPaths(paths: string[], sessionId?: string): Promise<Attachment[]>;
   openPath(path: string): Promise<void>;
   openTarget(intent: OpenTargetIntent): Promise<OpenTargetResult>;
   copyImage(source: string): Promise<void>;
   saveImage(source: string): Promise<string | null>;
+  openMedia(source: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
@@ -1601,6 +1658,7 @@ export interface GrokDesktopApi {
   deleteAutomation(id: string): Promise<AutomationTask[]>;
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]>;
   runAutomationNow(id: string): Promise<AutomationRunRecord>;
+  cancelAutomationRun(id: string): Promise<AutomationRunRecord>;
   listAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]>;
   getAutomationGlobalPolicy(): Promise<AutomationGlobalPolicy>;
   updateAutomationGlobalPolicy(patch: Partial<AutomationGlobalPolicy>): Promise<AutomationGlobalPolicy>;

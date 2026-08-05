@@ -1,7 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityApplicationDraft, CapabilityApplicationSelection, CustomProviderInput, CustomProviderProfile, ProviderCapabilityVerification, ProviderCompatibilityFlavor, ProviderConnectionDraft, ProviderDraftProbeResult, ProviderImageTransport, ProviderModelCandidate, ProviderModelDefinition, ProviderProtocol, ProviderProxyMode, ProviderReasoningMode, ProviderScanJob, ProviderScanProgress, ProviderSchemaProfile, ProviderUpstreamProtocol, ReasoningEffort } from "../../../shared/types";
 import { DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS, PROVIDER_REASONING_EFFORTS, providerReasoningEfforts } from "../../../shared/provider-model-capabilities";
 import { UiIcon } from "../ui-icons";
+import { ProviderScanStatus } from "./provider/ProviderScanStatus";
+import {
+  acceptListedProviderScanJob,
+  beginProviderScanCancellation,
+  isProviderScanTerminal,
+  mergeProviderScanProgress,
+  rollbackProviderScanCancellation,
+  withProviderValue,
+  type ProviderScanJobsByProvider,
+} from "./provider/provider-manager-state";
 
 type Preset = "openai-chat" | "responses" | "anthropic" | "gemini-compatible" | "ollama" | "gateway";
 
@@ -18,42 +28,57 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
   const [candidates, setCandidates] = useState<ProviderModelCandidate[]>([]);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [modelSearch, setModelSearch] = useState("");
-  const [probe, setProbe] = useState<ProviderDraftProbeResult>();
-  const [scanJob, setScanJob] = useState<ProviderScanJob>();
+  const [draftProbe, setDraftProbe] = useState<ProviderDraftProbeResult>();
+  const [providerProbes, setProviderProbes] = useState<Record<string, ProviderDraftProbeResult | undefined>>({});
+  const [providerTests, setProviderTests] = useState<Record<string, boolean | undefined>>({});
+  const [scanJobs, setScanJobs] = useState<ProviderScanJobsByProvider>({});
   const [scanReasoning, setScanReasoning] = useState(true);
   const [scanTools, setScanTools] = useState(true);
   const [scanMedia, setScanMedia] = useState(false);
   const [application, setApplication] = useState<CapabilityApplicationDraft>();
   const [applicationSelection, setApplicationSelection] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState("");
+  const scanListRequests = useRef(new Map<string, number>());
   const selected = providers.find((provider) => provider.id === selectedId);
+  const providerProbe = selected ? providerProbes[selected.id] : undefined;
+  const scanJob = selected ? scanJobs[selected.id] : undefined;
   const visibleProviders = providers.filter((provider) => `${provider.name} ${provider.id} ${provider.protocol}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const visibleCandidates = candidates.filter((candidate) => `${candidate.name} ${candidate.remoteId} ${candidate.localId} ${candidate.ownedBy ?? ""}`.toLocaleLowerCase().includes(modelSearch.trim().toLocaleLowerCase()));
-  const refresh = async (): Promise<void> => {
+  const refresh = useCallback(async (): Promise<void> => {
     const values = await window.grokDesktop.listProviders();
     setProviders(values);
     setSelectedId((current) => values.some((value) => value.id === current) ? current : values[0]?.id ?? "");
-  };
-  useEffect(() => { void refresh().catch((error) => onError(message(error))); }, []);
+  }, []);
+  const loadProviderScanJobs = useCallback(async (providerId: string): Promise<void> => {
+    const request = (scanListRequests.current.get(providerId) ?? 0) + 1;
+    scanListRequests.current.set(providerId, request);
+    const jobs = await window.grokDesktop.listProviderScanJobs(providerId);
+    if (scanListRequests.current.get(providerId) !== request) return;
+    setScanJobs((current) => withProviderValue(current, providerId, acceptListedProviderScanJob(current[providerId], providerId, jobs)));
+  }, []);
+  const refreshProviderEvidence = useCallback(async (providerId: string): Promise<void> => {
+    await Promise.all([refresh(), loadProviderScanJobs(providerId)]);
+  }, [loadProviderScanJobs, refresh]);
+  useEffect(() => { void refresh().catch((error) => onError(message(error))); }, [onError, refresh]);
   useEffect(() => window.grokDesktop.onProviderScanProgress((progress: ProviderScanProgress) => {
-    setScanJob((current) => current?.jobId === progress.jobId || progress.providerId === selectedId
-      ? { ...(current ?? progress), ...progress } as ProviderScanJob
-      : current);
-    if (progress.status === "completed" || progress.status === "cancelled") void refresh();
-  }), [selectedId]);
+    setScanJobs((current) => withProviderValue(current, progress.providerId, mergeProviderScanProgress(current[progress.providerId], progress)));
+    if (isProviderScanTerminal(progress.status)) {
+      void refreshProviderEvidence(progress.providerId).catch((error) => onError(message(error)));
+    }
+  }), [onError, refreshProviderEvidence]);
   useEffect(() => {
-    if (!selectedId) { setScanJob(undefined); return; }
-    void window.grokDesktop.listProviderScanJobs(selectedId).then((jobs) => setScanJob(jobs[0])).catch(() => undefined);
-  }, [selectedId]);
+    if (!selectedId) return;
+    void loadProviderScanJobs(selectedId).catch((error) => onError(message(error)));
+  }, [loadProviderScanJobs, onError, selectedId]);
 
-  const startCreate = (preset: Preset): void => { setDraft(presetDraft(preset)); setCandidates([]); setSelectedCandidates(new Set()); setProbe(undefined); };
-  const startEdit = (profile: CustomProviderProfile): void => { if (!profile.owned) return; setDraft(profileDraft(profile)); setCandidates([]); setSelectedCandidates(new Set()); setProbe(undefined); };
+  const startCreate = (preset: Preset): void => { setDraft(presetDraft(preset)); setCandidates([]); setSelectedCandidates(new Set()); setDraftProbe(undefined); };
+  const startEdit = (profile: CustomProviderProfile): void => { if (!profile.owned) return; setDraft(profileDraft(profile)); setCandidates([]); setSelectedCandidates(new Set()); setDraftProbe(undefined); };
   const runProbe = async (discover: boolean): Promise<void> => {
     if (!draft) return;
     setBusy(discover ? "discover" : "probe");
     try {
       const result = await window.grokDesktop.probeProviderDraft(draft);
-      setProbe(result);
+      setDraftProbe(result);
       if (discover && !result.ok) throw new Error(result.message);
       if (discover) {
         const values = await window.grokDesktop.discoverProviderModels(draft);
@@ -89,7 +114,7 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
       const { headers, models = [], ...connection } = draft;
       const input: CustomProviderInput = { ...connection, extraHeaders: Object.fromEntries(headers.map((header) => [header.name.trim(), header.value.trim()])), models };
       const values = await window.grokDesktop.upsertProvider(input);
-      setProviders(values); setSelectedId(input.id); setDraft(undefined); setCandidates([]); setProbe(undefined); onSettingsChanged();
+      setProviders(values); setSelectedId(input.id); setDraft(undefined); setCandidates([]); setDraftProbe(undefined); onSettingsChanged();
     } catch (error) { onError(message(error)); }
     finally { setBusy(""); }
   };
@@ -153,8 +178,25 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
         includeImages,
         context: { mode: "off" },
       });
-      setScanJob(job);
+      setScanJobs((current) => withProviderValue(current, profile.id, acceptListedProviderScanJob(current[profile.id], profile.id, [job])));
+      void loadProviderScanJobs(profile.id).catch((error) => onError(message(error)));
     } catch (error) { onError(message(error)); }
+  };
+  const cancelScan = async (providerId: string, job: ProviderScanJob): Promise<void> => {
+    if (job.providerId !== providerId || job.status === "cancelling" || isProviderScanTerminal(job.status)) return;
+    const previous = job;
+    const optimistic = beginProviderScanCancellation(job, new Date().toISOString());
+    setScanJobs((current) => withProviderValue(current, providerId, optimistic));
+    try {
+      const result = await window.grokDesktop.cancelProviderScan(job.jobId);
+      setScanJobs((current) => withProviderValue(current, providerId, acceptListedProviderScanJob(current[providerId], providerId, [result])));
+      if (isProviderScanTerminal(result.status)) {
+        void refreshProviderEvidence(providerId).catch((error) => onError(message(error)));
+      }
+    } catch (error) {
+      setScanJobs((current) => withProviderValue(current, providerId, rollbackProviderScanCancellation(current[providerId], optimistic, previous)));
+      onError(message(error));
+    }
   };
   const openApplication = async (profile: CustomProviderProfile): Promise<void> => {
     setBusy("application");
@@ -190,10 +232,12 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
     <header><div><h2>自定义提供商</h2><span>连接、模型发现与 CLI 配置</span></div><button className="icon-button" aria-label="关闭提供商管理" onClick={onClose}><UiIcon name="close"/></button></header>
     <div className="provider-manager-layout">
       <aside className="provider-manager-list"><label><UiIcon name="search"/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索提供商"/></label><div className="provider-preset-menu"><strong>添加提供商</strong><div><button onClick={() => startCreate("openai-chat")}>OpenAI 兼容</button><button onClick={() => startCreate("responses")}>Responses</button><button onClick={() => startCreate("anthropic")}>Anthropic</button><button onClick={() => startCreate("gemini-compatible")}>Gemini 兼容</button><button onClick={() => startCreate("ollama")}>Ollama</button><button onClick={() => startCreate("gateway")}>普通网关</button></div></div><nav>{visibleProviders.map((provider) => <button className={provider.id === selectedId && !draft ? "active" : ""} key={provider.id} onClick={() => { setSelectedId(provider.id); setDraft(undefined); }}><span className={`provider-health ${provider.hasCredential ? "ready" : "missing"}`}/><span><strong>{provider.name}</strong><small>{protocolLabel(provider.protocol)} · {provider.models.length} 个模型</small></span>{!provider.owned && <em>外部</em>}</button>)}</nav></aside>
-      <main className="provider-manager-detail">{draft ? <ProviderDraftEditor draft={draft} setDraft={setDraft} candidates={candidates} setCandidates={setCandidates} visibleCandidates={visibleCandidates} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} modelSearch={modelSearch} setModelSearch={setModelSearch} probe={probe} busy={busy} onProbe={() => void runProbe(false)} onDiscover={() => void runProbe(true)} onImport={importSelected} onSave={() => void save()} onCancel={() => setDraft(undefined)}/> : selected ? <ProviderDetails
+      <main className="provider-manager-detail">{draft ? <ProviderDraftEditor draft={draft} setDraft={setDraft} candidates={candidates} setCandidates={setCandidates} visibleCandidates={visibleCandidates} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} modelSearch={modelSearch} setModelSearch={setModelSearch} probe={draftProbe} busy={busy} onProbe={() => void runProbe(false)} onDiscover={() => void runProbe(true)} onImport={importSelected} onSave={() => void save()} onCancel={() => setDraft(undefined)}/> : selected ? <ProviderDetails
+        key={selected.id}
         provider={selected}
         busy={busy}
-        probe={probe}
+        testing={Boolean(providerTests[selected.id])}
+        probe={providerProbe}
         scanJob={scanJob}
         scanReasoning={scanReasoning}
         scanTools={scanTools}
@@ -203,16 +247,18 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
         onScanMedia={setScanMedia}
         onEdit={() => startEdit(selected)}
         onTest={async () => {
-          setBusy("test");
+          const providerId = selected.id;
+          const endpoint = selected.modelListUrl || `${selected.baseUrl}/models`;
+          setProviderTests((current) => withProviderValue(current, providerId, true));
           try {
-            const result = await window.grokDesktop.testProvider(selected.id);
-            setProbe({ ...result, endpoint: selected.modelListUrl || `${selected.baseUrl}/models`, warnings: [], candidates: [] });
+            const result = await window.grokDesktop.testProvider(providerId);
+            setProviderProbes((current) => withProviderValue(current, providerId, { ...result, endpoint, warnings: [], candidates: [] }));
           } catch (error) { onError(message(error)); }
-          finally { setBusy(""); }
+          finally { setProviderTests((current) => withProviderValue(current, providerId, false)); }
         }}
         onScan={(modelId) => startScan(selected, modelId ? [modelId] : undefined)}
         onMediaScan={(modelId) => startScan(selected, [modelId], true)}
-        onCancelScan={async () => { if (scanJob) setScanJob(await window.grokDesktop.cancelProviderScan(scanJob.jobId)); }}
+        onCancelScan={async () => { if (scanJob) await cancelScan(selected.id, scanJob); }}
         onApplyCapabilities={() => openApplication(selected)}
         onToggleProvider={(enabled) => persistProfile(selected, { enabled })}
         onToggleModel={(modelId, enabled) => persistProfile(selected, { models: selected.models.map((model) => model.id === modelId ? { ...model, enabled } : model) })}
@@ -242,7 +288,7 @@ function ProviderDraftEditor({ draft, setDraft, candidates, setCandidates, visib
       <h4>额外 Header（环境变量来源）</h4><div className="provider-header-rows">{draft.headers.map((header, index) => <div key={index}><input value={header.name} placeholder="Header 名称" onChange={(event) => setDraft({ ...draft, headers: draft.headers.map((value, position) => position === index ? { ...value, name: event.target.value } : value) })}/><input value={header.value} placeholder="环境变量名" onChange={(event) => setDraft({ ...draft, headers: draft.headers.map((value, position) => position === index ? { ...value, value: event.target.value } : value) })}/><button onClick={() => setDraft({ ...draft, headers: draft.headers.filter((_value, position) => position !== index) })}>删除</button></div>)}<button onClick={() => setDraft({ ...draft, headers: [...draft.headers, { name: "", source: "environment", value: "" }] })}>+ 添加 Header</button></div>
       <div className="provider-probe-actions"><button disabled={Boolean(busy)} onClick={onProbe}>{busy === "probe" ? "测试中…" : "测试连接"}</button><button className="primary" disabled={Boolean(busy)} onClick={onDiscover}>{busy === "discover" ? "获取中…" : "获取模型列表"}</button>{probe && <span className={probe.ok ? "success-text" : "error-text"}>{probe.message} · {probe.latencyMs} ms</span>}</div>{probe?.warnings.map((warning) => <p className="provider-probe-warning" key={warning}>{warning}</p>)}</section>
     <section><div className="provider-model-heading"><div><h3>远端模型</h3><span>{candidates.length ? `${candidates.length} 个候选${selectedCandidates.size ? ` · 已选 ${selectedCandidates.size}` : ""}` : "先获取模型列表"}</span></div><label><UiIcon name="search"/><input value={modelSearch} onChange={(event) => setModelSearch(event.target.value)} placeholder="搜索模型或来源"/></label><button onClick={() => setSelectedCandidates(new Set(visibleCandidates.filter((value) => !value.alreadyConfigured).map((value) => value.remoteId)))}>选择可见项</button><button disabled={!selectedCandidates.size} onClick={() => setSelectedCandidates(new Set())}>清空选择</button><button disabled={!selectedCandidates.size} onClick={onImport}>批量导入 {selectedCandidates.size || ""}</button></div><div className="provider-candidates">{visibleCandidates.map((candidate, index) => <label className={candidate.alreadyConfigured ? "configured" : ""} key={candidate.remoteId}><input type="checkbox" disabled={candidate.alreadyConfigured} checked={selectedCandidates.has(candidate.remoteId)} onChange={(event) => { const next = new Set(selectedCandidates); if (event.target.checked) next.add(candidate.remoteId); else next.delete(candidate.remoteId); setSelectedCandidates(next); }}/><span><strong>{candidate.name}</strong><small>{candidate.ownedBy ? <em className="candidate-owner">{candidate.ownedBy}</em> : null}{candidate.remoteId}{candidate.alreadyConfigured ? " · 已配置" : ""}</small></span><input value={candidate.localId} aria-label={`本地模型 ID ${candidate.remoteId}`} onChange={(event) => { setCandidates(candidates.map((value) => value.remoteId === candidate.remoteId ? { ...value, localId: event.target.value } : value)); }}/></label>)}</div></section>
-    <section><div className="provider-model-heading"><div><h3>将保存的模型</h3><span>每个模型可独立选择客户端协议、上游协议、超时与思考传输</span></div><button onClick={() => setDraft({ ...draft, models: [...(draft.models ?? []), { id: `${draft.id}-model`, model: "", name: "", contextWindow: undefined, inferenceIdleTimeoutSeconds: DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS }] })}>+ 手工添加</button></div><div className="provider-imported-models">{(draft.models ?? []).map((model, index) => <ProviderModelEditorRow key={`${index}:${model.id}`} draft={draft} model={model} onChange={(patch) => updateModel(index, patch)} onRemove={() => setDraft({ ...draft, models: (draft.models ?? []).filter((_value, position) => position !== index) })}/>)}</div><p className="provider-probe-warning">默认首字节上限 360 秒、推理流空闲 600 秒、整个 ACP 回合 1800 秒。手工勾选仅表示允许选择；深度扫描会另外标记“请求接受、映射、确认或拒绝”，不会把 HTTP 200 伪装成语义确认。</p></section>
+    <section><div className="provider-model-heading"><div><h3>将保存的模型</h3><span>每个模型可独立选择客户端协议、上游协议、超时与思考传输</span></div><button onClick={() => setDraft({ ...draft, models: [...(draft.models ?? []), { id: `${draft.id}-model`, model: "", name: "", contextWindow: undefined, inferenceIdleTimeoutSeconds: DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS }] })}>+ 手工添加</button></div><div className="provider-imported-models">{(draft.models ?? []).map((model, index) => <ProviderModelEditorRow key={`${index}:${model.id}`} draft={draft} model={model} onChange={(patch) => updateModel(index, patch)} onRemove={() => setDraft({ ...draft, models: (draft.models ?? []).filter((_value, position) => position !== index) })}/>)}</div><p className="provider-probe-warning">默认首字节上限 360 秒、推理流空闲 600 秒；交互回合没有固定总时长上限。手工勾选仅表示允许选择；深度扫描会另外标记“请求接受、映射、确认或拒绝”，不会把 HTTP 200 伪装成语义确认。</p></section>
   </div></div>;
 }
 
@@ -314,9 +360,10 @@ function ProviderModelEditorRow({ draft, model, onChange, onRemove }: {
   </div>;
 }
 
-function ProviderDetails({ provider, busy, probe, scanJob, scanReasoning, scanTools, scanMedia, onScanReasoning, onScanTools, onScanMedia, onEdit, onTest, onScan, onMediaScan, onCancelScan, onApplyCapabilities, onToggleProvider, onToggleModel, onRemove, onDesktopDefault, onCliDefault }: {
+function ProviderDetails({ provider, busy, testing, probe, scanJob, scanReasoning, scanTools, scanMedia, onScanReasoning, onScanTools, onScanMedia, onEdit, onTest, onScan, onMediaScan, onCancelScan, onApplyCapabilities, onToggleProvider, onToggleModel, onRemove, onDesktopDefault, onCliDefault }: {
   provider: CustomProviderProfile;
   busy: string;
+  testing: boolean;
   probe?: ProviderDraftProbeResult;
   scanJob?: ProviderScanJob;
   scanReasoning: boolean;
@@ -344,9 +391,9 @@ function ProviderDetails({ provider, busy, probe, scanJob, scanReasoning, scanTo
     <header>
       <div><strong>{provider.name}{provider.enabled === false ? "（已停用）" : ""}</strong><span>{provider.id} · {protocolLabel(provider.protocol)} → {upstreamProtocolLabel(provider.upstreamProtocol ?? protocolUpstream(provider.protocol))}</span></div>
       <div>
-        <button disabled={Boolean(busy) && busy !== "scan"} onClick={onTest}>{busy === "test" ? "测试中…" : "浅层测试"}</button>
+        <button disabled={testing || Boolean(busy)} onClick={onTest}>{testing ? "测试中…" : "浅层测试"}</button>
         {provider.owned && (scanJob && (scanJob.status === "queued" || scanJob.status === "running" || scanJob.status === "cancelling")
-          ? <button className="danger-text" onClick={() => void onCancelScan()}>取消扫描</button>
+          ? <button className="danger-text" disabled={scanJob.status === "cancelling"} onClick={() => void onCancelScan()}>{scanJob.status === "cancelling" ? "正在取消…" : "取消扫描"}</button>
           : <button disabled={Boolean(busy)} onClick={() => void onScan()}>深度兼容扫描</button>)}
         {provider.owned && scanned > 0 && <button disabled={Boolean(busy)} onClick={() => void onApplyCapabilities()}>{busy === "application" ? "读取中…" : "应用扫描结果"}</button>}
         {provider.owned && <button disabled={Boolean(busy)} onClick={() => void onToggleProvider(provider.enabled === false)}>{provider.enabled === false ? "启用" : "停用"}</button>}
@@ -359,15 +406,7 @@ function ProviderDetails({ provider, busy, probe, scanJob, scanReasoning, scanTo
       <button className={tab === "capabilities" ? "active" : ""} onClick={() => setTab("capabilities")}>协议能力 <span>{scanned}/{provider.models.length}</span></button>
       <button className={tab === "connection" ? "active" : ""} onClick={() => setTab("connection")}>连接</button>
     </nav>
-    <div className="provider-scan-options">
-      <div className="provider-scan-feature-row">
-        <label className="check"><input type="checkbox" checked={scanReasoning} onChange={(event) => onScanReasoning(event.target.checked)}/>思考档位</label>
-        <label className="check"><input type="checkbox" checked={scanTools} onChange={(event) => onScanTools(event.target.checked)}/>工具与续写</label>
-        <label className="check"><input type="checkbox" checked={scanMedia} onChange={(event) => onScanMedia(event.target.checked)}/>媒体能力</label>
-      </div>
-      <span>批量扫描范围始终是当前 Provider“{provider.name}”，不会扫描其他 Provider。上下文窗口改为使用模型元数据或手工值，不再发送缓慢且费用不确定的自动探测请求。</span>
-    </div>
-    {scanJob && <div className={`provider-scan-banner ${scanJob.status}`}><span className={scanJob.status === "running" || scanJob.status === "cancelling" ? "provider-scan-spinner" : ""}/><div><strong>{scanStatusLabel(scanJob.status)}</strong><span>{scanJob.message}</span><small>{scanJob.completed}/{scanJob.total} 子步骤 · 成功 {scanJob.succeeded} · 失败 {scanJob.failed}{scanJob.modelId ? ` · ${scanJob.modelId}` : ""}{scanJob.protocol ? ` · ${protocolLabel(scanJob.protocol)}` : ""}{scanJob.effort ? ` · ${scanJob.effort}` : ""}</small><progress value={scanJob.completed} max={Math.max(1, scanJob.total)}/></div></div>}
+    <ProviderScanStatus providerName={provider.name} job={scanJob} reasoning={scanReasoning} tools={scanTools} media={scanMedia} onReasoning={onScanReasoning} onTools={onScanTools} onMedia={onScanMedia}/>
     {probe && <p className={probe.ok ? "provider-result success" : "provider-result error"}>{probe.message} · {probe.latencyMs} ms</p>}
     {tab === "connection" && <dl>
       <dt>基础地址</dt><dd>{provider.baseUrl}</dd>
@@ -426,9 +465,6 @@ function verificationLabel(value: ProviderCapabilityVerification): string {
 function yesNo(value: boolean | undefined): string { return value === undefined ? "未知" : value ? "支持" : "不支持"; }
 function defaultBudgets(): Partial<Record<Exclude<ReasoningEffort, "">, number>> { return { auto: -1, none: 0, minimal: 512, low: 1024, medium: 8192, high: 24576, xhigh: 32768, max: 128000 }; }
 function isScanTerminal(status: ProviderScanJob["status"]): boolean { return status === "completed" || status === "cancelled" || status === "failed"; }
-function scanStatusLabel(status: ProviderScanJob["status"]): string {
-  return ({ queued: "等待扫描", running: "正在扫描", cancelling: "正在取消", completed: "扫描完成", cancelled: "扫描已取消", failed: "扫描失败" })[status];
-}
 function evidenceSourceLabel(source: CapabilityApplicationDraft["changes"][number]["evidenceSource"]): string {
   return ({ live_probe: "真实扫描", model_metadata: "模型元数据", compatibility_profile: "兼容档建议", manual: "手工配置" })[source];
 }

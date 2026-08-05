@@ -52,6 +52,21 @@ describe("ExecutionProfileService", () => {
     expect(await fixture.service.repairAssignments(async () => false)).toEqual(["session-a"]);
     expect(await fixture.service.assignment("session-a")).toBeUndefined();
   });
+
+  it("preserves concurrent per-session assignments", async () => {
+    const fixture = await createFixture();
+    const profile = await fixture.service.resolve(fixture.workspace, "builtin-normal");
+    await Promise.all(Array.from({ length: 20 }, (_, index) => fixture.service.assign({
+      sessionId: `session-${index}`,
+      sourceWorkspacePath: fixture.workspace,
+      cwd: fixture.workspace,
+      profileId: profile.id,
+      profileName: profile.name,
+      profile,
+      createdAt: "2026-07-22T00:00:00.000Z",
+    })));
+    expect(await fixture.service.listAssignments()).toHaveLength(20);
+  });
 });
 
 async function createFixture() {

@@ -63,6 +63,18 @@ interface BackgroundTask {
   command?: string;
 }
 
+interface PendingQueueOperation {
+  operationId: string;
+  description: string;
+  confirms(entries: PromptQueueEntry[], runningPromptId?: string): boolean;
+  onConfirmed?(): void;
+  /** Restore only the optimistic fields owned by this operation. */
+  onTimeout?(): void;
+  /** Authoritative queue notifications supersede any local rollback. */
+  queueRevision: number;
+  timer: NodeJS.Timeout;
+}
+
 export interface AcpToolDiff {
   path?: string;
   oldText?: string;
@@ -198,6 +210,9 @@ export interface SessionProcessOptions {
   agentProfilePath?: string;
   sessionMeta?: Record<string, unknown>;
   alwaysApprove?: boolean;
+  /** In-memory execution-profile overrides retained across controlled respawns. */
+  environmentOverride?: NodeJS.ProcessEnv;
+  permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>;
 }
 
 interface AdapterOptions extends SessionProcessOptions {
@@ -206,14 +221,19 @@ interface AdapterOptions extends SessionProcessOptions {
   env: NodeJS.ProcessEnv;
   effort: ReasoningEffort;
   modelId?: string;
+  /** Stable managed-provider model id shown by Desktop and persisted across resumes. */
+  localModelId?: string;
   mode: SessionMode;
   log: LogService;
   sessionMcpServers?: unknown[];
   pluginDirs?: string[];
   extensionLeaseId?: string;
   effortFlag?: "--effort" | "--reasoning-effort";
-  permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>;
   providerScopeId?: string;
+  initialPromptQueue?: PromptQueueEntry[];
+  onPromptQueueChanged?: (sessionId: string, entries: PromptQueueEntry[]) => void | Promise<void>;
+  onPromptQueueTerminal?: (sessionId: string, entry: PromptQueueEntry) => void | Promise<void>;
+  onRuntimeChanged?: (sessionId: string, patch: { modelId?: string; effort?: ReasoningEffort; mode?: SessionMode }) => void | Promise<void>;
 }
 
 export interface UserPromptPresentation {
@@ -276,13 +296,22 @@ export class GrokAcpAdapter extends EventEmitter {
   private readonly ownedQueuedPromptIds = new Set<string>();
   private promptQueue: PromptQueueEntry[] = [];
   private activeQueuedPromptId?: string;
+  private activeQueuedPrompt?: PromptQueueEntry;
   private pendingQueuedTurn?: PromptQueueEntry;
+  private restoredQueueTimer?: NodeJS.Timeout;
+  private readonly restoredQueueIds = new Set<string>();
+  private readonly restoredQueueSeenIds = new Set<string>();
+  private readonly pendingQueueOperations = new Map<string, PendingQueueOperation>();
+  private queueRevision = 0;
   private pendingEffortChange?: PendingEffortChange;
   private pendingPlanRequest?: JsonRpcId;
   private readonly pendingPermissionRequests = new Set<string>();
   private readonly pendingQuestionRequests = new Set<string>();
+  private readonly pendingInteractionRequestIds = new Map<string, JsonRpcId>();
   private readonly resolvedPlanRequests = new Map<string, PlanDecisionReceipt>();
   private activeTurn?: TurnPresentation & { monotonicStartedAt: number };
+  private readonly settledTurns = new Map<string, TurnPresentation>();
+  private readonly turnsAwaitingAuthoritativeTerminal = new Set<string>();
   private nextTurnOrdinal = 0;
   private cancelRequested = false;
   private providerThinking: ProviderThinkingDemuxState = { pending: "", thought: false };
@@ -290,6 +319,10 @@ export class GrokAcpAdapter extends EventEmitter {
   private disposed = false;
   private currentEffort: ReasoningEffort;
   private requestedModelId = "";
+  private providerLocalModelId?: string;
+  private upstreamModelId = "";
+  private suspendModelRuntimePersistence = false;
+  private planGateReleased = false;
   sessionId = "";
   models: ModelInfo[] = [];
   commands: CommandInfo[] = [];
@@ -304,7 +337,19 @@ export class GrokAcpAdapter extends EventEmitter {
 
   get cwd(): string { return this.options.cwd; }
   get effort(): ReasoningEffort { return this.currentEffort; }
-  get processOptions(): SessionProcessOptions { return { agentProfilePath: this.options.agentProfilePath, sessionMeta: this.options.sessionMeta ? structuredClone(this.options.sessionMeta) : undefined, alwaysApprove: this.options.alwaysApprove }; }
+  get currentUpstreamModelId(): string { return this.upstreamModelId; }
+  get processOptions(): SessionProcessOptions {
+    return {
+      agentProfilePath: this.options.agentProfilePath,
+      sessionMeta: this.options.sessionMeta ? structuredClone(this.options.sessionMeta) : undefined,
+      // Mode is the source of truth. Retaining the launch-time boolean made an
+      // Auto profile stay --always-approve after the conversation switched to
+      // Agent or Plan and was later respawned.
+      alwaysApprove: this.mode === "auto",
+      environmentOverride: this.options.environmentOverride ? { ...this.options.environmentOverride } : undefined,
+      permissionDecider: this.options.permissionDecider,
+    };
+  }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
   get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
   setNextTurnOrdinal(value: number): void { this.nextTurnOrdinal = Math.max(this.nextTurnOrdinal, Math.max(0, Math.floor(value))); }
@@ -326,11 +371,20 @@ export class GrokAcpAdapter extends EventEmitter {
     super();
     this.currentEffort = options.effort;
     this.requestedModelId = options.modelId ?? "";
+    this.providerLocalModelId = options.localModelId;
     this.terminal = new TerminalService(options.env);
     this.mode = options.mode;
     this.planActive = options.mode === "plan";
     this.autoApprove = options.mode === "auto";
     this.extensionLeaseId = options.extensionLeaseId;
+    this.promptQueue = (options.initialPromptQueue ?? [])
+      .filter((entry) => !["completed", "failed", "cancelled"].includes(entry.state))
+      .slice(0, 128)
+      .map((entry, position) => ({ ...entry, position }));
+    for (const entry of this.promptQueue) {
+      this.ownedQueuedPromptIds.add(entry.id);
+      this.restoredQueueIds.add(entry.id);
+    }
   }
 
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
@@ -357,6 +411,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.working = false;
       this.needsUser = false;
       this.finishTurn(terminalOutcome);
+      this.persistActiveQueueTerminal(terminalOutcome);
       if (activeTurnId) this.settlePromptRequestFromTerminal(activeTurnId, terminalOutcome);
       if (!this.disposed) {
         const message = `Grok 进程已退出（代码 ${String(code)}）`;
@@ -399,13 +454,16 @@ export class GrokAcpAdapter extends EventEmitter {
       };
     });
     const reportedModelId = response.models?.currentModelId;
-    this.currentModelId = resolveModelId(reportedModelId, this.models, this.requestedModelId) || "";
+    this.upstreamModelId = reportedModelId || "";
+    this.currentModelId = this.providerLocalModelId ?? resolveModelId(reportedModelId, this.models, this.requestedModelId) ?? "";
     if (resumeSessionId) this.currentEffort = await readPersistedEffort(this.options.cwd, this.sessionId) ?? this.currentEffort;
     // Persisted sessions store the upstream route id, not the local provider
     // configuration id. Compare the raw ACP value here so resuming a custom
     // model really reapplies its route instead of silently using the official
     // model while the renderer still shows the provider-prefixed alias.
-    if (this.options.modelId && this.options.modelId !== reportedModelId) await this.setModel(this.options.modelId);
+    if (this.options.modelId && this.options.modelId !== reportedModelId) {
+      await this.setModel(this.options.modelId, { localModelId: this.providerLocalModelId });
+    }
     await this.applyMode(this.mode, false);
     this.emitEvent({
       type: "session-ready",
@@ -415,6 +473,16 @@ export class GrokAcpAdapter extends EventEmitter {
       effort: this.effort,
       modes: response.modes?.availableModes,
     });
+    if (this.promptQueue.length) {
+      this.promptQueue = this.promptQueue.map((entry, position) => ({ ...entry, sessionId: this.sessionId, position }));
+      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      // A resumed Grok session may replay its private queue during
+      // session/load. Give that authoritative notification a short head start;
+      // any Desktop-owned IDs it does not replay are re-submitted with the
+      // original promptId. This restores queued work without inventing a new
+      // user message or changing its ordering.
+      this.restoredQueueTimer = setTimeout(() => void this.reconcileRestoredQueue(), 500);
+    }
     // Some CLIs publish available commands while session/new is still in
     // flight, before the response assigns sessionId. Re-emit the snapshot with
     // the final id so the renderer does not lose slash/media capabilities.
@@ -463,10 +531,16 @@ export class GrokAcpAdapter extends EventEmitter {
         () => this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "sent" }),
         startedTurn.turnId,
       ) as { _meta?: Record<string, unknown> } & Partial<PromptTerminalResult>;
-      const terminalOutcome = result._grokDesktopTerminalOutcome;
+      // Cancellation is a notification and older CLIs may resolve the
+      // original prompt RPC before publishing their authoritative terminal
+      // update.  Never let that race turn an acknowledged Stop into a
+      // completed turn.  A terminal result synthesized from turn_completed
+      // still wins when it is present.
+      const terminalOutcome = result._grokDesktopTerminalOutcome ?? (this.cancelRequested ? "cancelled" : undefined);
       const meta = extractPromptMeta(result);
       this.emitEvent({ type: "meta", sessionId: this.sessionId, meta });
-      this.finishTurn(terminalOutcome ?? "completed", hasUsage(meta) ? { ...meta, modelId: meta.modelId ?? this.currentModelId, source: terminalOutcome ? "acp-turn" : "prompt-result", exact: true } : undefined, startedTurn.turnId);
+      const completed = this.finishTurn(terminalOutcome ?? "completed", hasUsage(meta) ? { ...meta, modelId: meta.modelId ?? this.currentModelId, source: terminalOutcome ? "acp-turn" : "prompt-result", exact: true } : undefined, startedTurn.turnId);
+      if (completed && !terminalOutcome) this.turnsAwaitingAuthoritativeTerminal.add(completed.turnId);
       this.activatePendingQueuedTurn();
       this.working = Boolean(this.activeTurn);
       this.needsUser = false;
@@ -479,7 +553,8 @@ export class GrokAcpAdapter extends EventEmitter {
       this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
       const failureMessage = error instanceof Error ? error.message : String(error);
       this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
-      this.finishTurn(this.cancelRequested ? "cancelled" : "failed", undefined, startedTurn.turnId);
+      const failed = this.finishTurn(this.cancelRequested ? "cancelled" : "failed", undefined, startedTurn.turnId);
+      if (failed) this.turnsAwaitingAuthoritativeTerminal.add(failed.turnId);
       this.activatePendingQueuedTurn();
       // The structured error event above owns the visible card. A text-bearing
       // status event would append a second unstructured "Internal error" card.
@@ -501,11 +576,10 @@ export class GrokAcpAdapter extends EventEmitter {
     // A queued ACP prompt request is intentionally answered only after that
     // prompt eventually runs. Do not keep the Renderer composer blocked while
     // it waits; x.ai/queue/changed remains the authoritative visible state.
-    void this.request(acpMethods.agent.session.prompt, {
-      sessionId: this.sessionId,
-      prompt,
-      _meta: { promptId: id, sendNow, mode: this.mode === "plan" ? "plan" : "agent", clientIdentifier: "grok-build-desktop" },
-    }, INTERACTIVE_PROMPT_TIMEOUT_MS, undefined, undefined, id).catch((error) => {
+    void this.submitQueuedRequest(entry, prompt, sendNow).catch((error) => {
+      // Process replacement is a recovery boundary, not a queue failure. The
+      // durable entry will be reconciled by the replacement adapter.
+      if (this.disposed) return;
       this.ownedQueuedPromptIds.delete(id);
       this.promptQueue = this.promptQueue.filter((value) => value.id !== id);
       this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
@@ -565,19 +639,49 @@ export class GrokAcpAdapter extends EventEmitter {
   async editQueuedPrompt(id: string, text: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
     if (!entry || entry.state !== "queued") throw new Error("仅等待中的队列消息可以编辑");
-    this.queueNotification("x.ai/queue/edit", { id, newText: text });
+    const operationId = crypto.randomUUID();
+    const previousText = entry.text;
+    this.awaitQueueConfirmation(
+      operationId,
+      "编辑队列消息",
+      (entries) => entries.some((value) => value.id === id && value.text === text),
+      undefined,
+      () => {
+        this.promptQueue = this.promptQueue.map((value) => value.id === id && value.state === "queued" && value.text === text
+          ? { ...value, text: previousText }
+          : value);
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      },
+    );
+    try { this.queueNotification("x.ai/queue/edit", { id, newText: text }); }
+    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
     this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, text } : value);
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId: crypto.randomUUID(), entryId: id, state: "updated", message: "编辑已提交，等待 CLI 确认" };
+    return { operationId, entryId: id, state: "updated", message: "编辑已写入 CLI，等待队列刷新确认", acknowledgement: "transport" };
   }
   async removeQueuedPrompt(id: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
     if (!entry || entry.state !== "queued") throw new Error("仅等待中的队列消息可以删除");
-    this.queueNotification("x.ai/queue/remove", { id, expectedVersion: entry?.version ?? 0 });
-    this.ownedQueuedPromptIds.delete(id);
+    const operationId = crypto.randomUUID();
+    const previousPosition = this.promptQueue.findIndex((value) => value.id === id);
+    this.awaitQueueConfirmation(
+      operationId,
+      "撤回队列消息",
+      (entries) => !entries.some((value) => value.id === id),
+      () => this.ownedQueuedPromptIds.delete(id),
+      () => {
+        if (this.promptQueue.some((value) => value.id === id)) return;
+        const restored = [...this.promptQueue];
+        restored.splice(Math.max(0, Math.min(previousPosition, restored.length)), 0, entry);
+        this.promptQueue = restored.map((value, position) => ({ ...value, position }));
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      },
+    );
+    try { this.queueNotification("x.ai/queue/remove", { id, expectedVersion: entry?.version ?? 0 }); }
+    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
     this.promptQueue = this.promptQueue.filter((value) => value.id !== id).map((value, position) => ({ ...value, position }));
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId: crypto.randomUUID(), entryId: id, state: "removed", message: "队列消息已移除" };
+    return { operationId, entryId: id, state: "removed", message: "撤回请求已写入 CLI，等待队列刷新确认", acknowledgement: "transport" };
   }
   async reorderQueuedPrompt(id: string, position: number): Promise<QueueOperationReceipt> {
     const ordered = [...this.promptQueue].sort((a, b) => a.position - b.position);
@@ -586,32 +690,83 @@ export class GrokAcpAdapter extends EventEmitter {
     if (ordered[current]?.state !== "queued") throw new Error("已提交或发送中的消息不能重新排序");
     const [moved] = ordered.splice(current, 1);
     ordered.splice(Math.max(0, Math.min(position, ordered.length)), 0, moved!);
-    this.queueNotification("x.ai/queue/reorder", { orderedIds: ordered.map((value) => value.id) });
+    const operationId = crypto.randomUUID();
+    const orderedIds = ordered.map((value) => value.id);
+    const previousIds = this.promptQueue.slice().sort((a, b) => a.position - b.position).map((value) => value.id);
+    this.awaitQueueConfirmation(
+      operationId,
+      "调整队列顺序",
+      (entries) => entries.map((value) => value.id).join("\0") === orderedIds.join("\0"),
+      undefined,
+      () => {
+        const positions = new Map(previousIds.map((value, index) => [value, index]));
+        this.promptQueue = this.promptQueue.slice()
+          .sort((a, b) => (positions.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(b.id) ?? Number.MAX_SAFE_INTEGER))
+          .map((value, nextPosition) => ({ ...value, position: nextPosition }));
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      },
+    );
+    try { this.queueNotification("x.ai/queue/reorder", { orderedIds }); }
+    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
     this.promptQueue = ordered.map((value, nextPosition) => ({ ...value, position: nextPosition }));
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId: crypto.randomUUID(), entryId: id, state: "reordered", message: "队列顺序已更新" };
+    return { operationId, entryId: id, state: "reordered", message: "顺序调整已写入 CLI，等待队列刷新确认", acknowledgement: "transport" };
   }
   async clearPromptQueue(): Promise<QueueOperationReceipt> {
     const removable = this.promptQueue.filter((entry) => entry.state === "queued");
-    for (const entry of removable) {
-      this.queueNotification("x.ai/queue/remove", { id: entry.id, expectedVersion: entry.version ?? 0 });
-      this.ownedQueuedPromptIds.delete(entry.id);
+    const operationId = crypto.randomUUID();
+    const removableIds = new Set(removable.map((entry) => entry.id));
+    if (removable.length) this.awaitQueueConfirmation(
+      operationId,
+      "撤回全部等待消息",
+      (entries) => entries.every((entry) => !removableIds.has(entry.id)),
+      () => { for (const id of removableIds) this.ownedQueuedPromptIds.delete(id); },
+      () => {
+        const byId = new Map(this.promptQueue.map((entry) => [entry.id, entry]));
+        for (const entry of removable) if (!byId.has(entry.id)) byId.set(entry.id, entry);
+        this.promptQueue = [...byId.values()].sort((a, b) => a.position - b.position).map((value, position) => ({ ...value, position }));
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      },
+    );
+    try {
+      for (const entry of removable) {
+        this.queueNotification("x.ai/queue/remove", { id: entry.id, expectedVersion: entry.version ?? 0 });
+      }
+    } catch (error) {
+      this.cancelQueueConfirmation(operationId);
+      throw error;
     }
     this.promptQueue = this.promptQueue.filter((entry) => entry.state !== "queued").map((value, position) => ({ ...value, position }));
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
     return {
-      operationId: crypto.randomUUID(),
+      operationId,
       state: "cleared",
-      message: removable.length ? `已撤回 ${removable.length} 条尚未提交的队列消息` : "没有可撤回的等待消息；已提交的插话不能撤回",
+      message: removable.length ? `已向 CLI 提交撤回 ${removable.length} 条等待消息，正在确认` : "没有可撤回的等待消息；已提交的插话不能撤回",
+      acknowledgement: removable.length ? "transport" : "cli",
     };
   }
   async interjectQueuedPrompt(id: string, text?: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
     if (!entry || entry.state !== "queued") throw new Error("该消息已不在等待队列中");
-    this.queueNotification("x.ai/queue/interject", { id, expectedVersion: entry?.version ?? 0, ...(text?.trim() ? { newText: text.trim() } : {}) });
-    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, state: "interjected", ...(text?.trim() ? { text: text.trim() } : {}) } : value);
+    const operationId = crypto.randomUUID();
+    const nextText = text?.trim() || entry.text;
+    this.awaitQueueConfirmation(
+      operationId,
+      "置顶插话",
+      (entries, runningPromptId) => runningPromptId === id || entries.some((value) => value.id === id && value.state !== "queued"),
+      undefined,
+      () => {
+        this.promptQueue = this.promptQueue.map((value) => value.id === id && value.state === "interjected"
+          ? { ...value, state: "queued", text: entry.text }
+          : value);
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      },
+    );
+    try { this.queueNotification("x.ai/queue/interject", { id, expectedVersion: entry?.version ?? 0, ...(text?.trim() ? { newText: nextText } : {}) }); }
+    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
+    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, state: "interjected", text: nextText } : value);
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId: crypto.randomUUID(), entryId: id, state: "interjected", message: "插话请求已提交；若 CLI 不支持即时插话，将按队首消息处理" };
+    return { operationId, entryId: id, state: "interjected", message: "插话已写入 CLI；确认后会作为同一会话的下一回合执行", acknowledgement: "transport" };
   }
   async fork(targetPromptIndex?: string, newCwd = this.cwd): Promise<Record<string, unknown>> {
     const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
@@ -658,21 +813,53 @@ export class GrokAcpAdapter extends EventEmitter {
   cancel(): void {
     if (!this.sessionId) return;
     this.cancelRequested = true;
+    for (const key of this.pendingPermissionRequests) {
+      const requestId = this.pendingInteractionRequestIds.get(key) ?? key;
+      this.write({ jsonrpc: "2.0", id: requestId, result: { outcome: { outcome: "cancelled" } } });
+      this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "permission", requestId, outcome: "cancelled" });
+    }
+    for (const key of this.pendingQuestionRequests) {
+      const requestId = this.pendingInteractionRequestIds.get(key) ?? key;
+      this.write({ jsonrpc: "2.0", id: requestId, result: { outcome: "cancelled" } });
+      this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "question", requestId, outcome: "cancelled" });
+    }
+    if (this.pendingPlanRequest !== undefined) {
+      const requestId = this.pendingPlanRequest;
+      this.write({ jsonrpc: "2.0", id: requestId, result: { outcome: "abandoned" } });
+      this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "plan", requestId, outcome: "cancelled" });
+    }
+    this.pendingPermissionRequests.clear();
+    this.pendingQuestionRequests.clear();
+    this.pendingInteractionRequestIds.clear();
+    this.pendingPlanRequest = undefined;
     this.write({ jsonrpc: "2.0", method: acpMethods.agent.session.cancel, params: { sessionId: this.sessionId } });
     this.needsUser = false;
     this.emitStatus("working", "正在停止…");
   }
 
-  async setModel(modelId: string): Promise<void> {
+  async setModel(modelId: string, identity: { localModelId?: string; persistRuntime?: boolean } = {}): Promise<void> {
     const previousRequestedModelId = this.requestedModelId;
+    const previousLocalModelId = this.providerLocalModelId;
+    const previousCurrentModelId = this.currentModelId;
+    const previousUpstreamModelId = this.upstreamModelId;
     this.requestedModelId = modelId;
+    this.providerLocalModelId = identity.localModelId;
+    const previousSuspendModelRuntimePersistence = this.suspendModelRuntimePersistence;
+    this.suspendModelRuntimePersistence = identity.persistRuntime === false;
     try {
       const result = await this.request("session/set_model", { sessionId: this.sessionId, modelId }) as { _meta?: { model?: { Ok?: string } } };
-      this.currentModelId = resolveModelId(result._meta?.model?.Ok || modelId, this.models, this.requestedModelId) || modelId;
+      this.upstreamModelId = result._meta?.model?.Ok || modelId;
+      this.currentModelId = this.providerLocalModelId ?? resolveModelId(this.upstreamModelId, this.models, this.requestedModelId) ?? modelId;
+      if (identity.persistRuntime !== false) this.persistRuntimePatch({ modelId: this.currentModelId });
       this.emitEvent({ type: "session-ready", sessionId: this.sessionId, models: this.models, currentModelId: this.currentModelId, effort: this.effort });
     } catch (error) {
       this.requestedModelId = previousRequestedModelId;
+      this.providerLocalModelId = previousLocalModelId;
+      this.currentModelId = previousCurrentModelId;
+      this.upstreamModelId = previousUpstreamModelId;
       throw error;
+    } finally {
+      this.suspendModelRuntimePersistence = previousSuspendModelRuntimePersistence;
     }
   }
 
@@ -708,6 +895,8 @@ export class GrokAcpAdapter extends EventEmitter {
     this.mode = mode;
     this.autoApprove = mode === "auto";
     this.planActive = mode === "plan";
+    if (mode === "plan") this.planGateReleased = false;
+    this.persistRuntimePatch({ mode });
     if (persist) this.emitEvent({ type: "mode", sessionId: this.sessionId, mode });
   }
 
@@ -718,9 +907,10 @@ export class GrokAcpAdapter extends EventEmitter {
       throw new Error("Grok 进程不可用，权限决定未提交");
     }
     this.pendingPermissionRequests.delete(key);
-    this.needsUser = false;
+    this.pendingInteractionRequestIds.delete(key);
+    this.refreshNeedsUser();
     this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "permission", requestId, outcome: optionId });
-    this.emitStatus(this.working ? "working" : "idle");
+    this.emitStatus(this.needsUser ? "needs-user" : this.working ? "working" : "idle");
   }
 
   private cancelPermission(requestId: JsonRpcId): void {
@@ -730,9 +920,10 @@ export class GrokAcpAdapter extends EventEmitter {
       throw new Error("Grok 进程不可用，权限取消决定未提交");
     }
     this.pendingPermissionRequests.delete(key);
-    this.needsUser = false;
+    this.pendingInteractionRequestIds.delete(key);
+    this.refreshNeedsUser();
     this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "permission", requestId, outcome: "cancelled" });
-    this.emitStatus(this.working ? "working" : "idle");
+    this.emitStatus(this.needsUser ? "needs-user" : this.working ? "working" : "idle");
   }
 
   respondQuestion(requestId: JsonRpcId, answers: Record<string, string>): void {
@@ -742,9 +933,10 @@ export class GrokAcpAdapter extends EventEmitter {
       throw new Error("Grok 进程不可用，回答未提交");
     }
     this.pendingQuestionRequests.delete(key);
-    this.needsUser = false;
+    this.pendingInteractionRequestIds.delete(key);
+    this.refreshNeedsUser();
     this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "question", requestId, outcome: "answered" });
-    this.emitStatus(this.working ? "working" : "idle");
+    this.emitStatus(this.needsUser ? "needs-user" : this.working ? "working" : "idle");
   }
 
   async respondPlan(requestId: JsonRpcId | undefined, verdict: "approved" | "rejected" | "cancelled", comment = ""): Promise<PlanDecisionReceipt> {
@@ -792,14 +984,37 @@ export class GrokAcpAdapter extends EventEmitter {
       throw new Error("Grok 进程不可用，计划决策未提交");
     }
     this.pendingPlanRequest = undefined;
-    this.needsUser = false;
-    this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "plan", requestId: id, outcome: verdict });
-    if (verdict === "approved") {
-      await this.applyMode("agent");
-    } else if (verdict === "cancelled") {
-      await this.applyMode("agent");
+    if (verdict === "approved" || verdict === "cancelled") {
+      // The exit-plan response is already on the wire. Release the old Plan
+      // enforcement boundary immediately; session/set_mode is only a later
+      // reconciliation and must not keep rejecting implementation tools.
+      this.planGateReleased = true;
+      this.planActive = false;
+      this.mode = "agent";
+      this.autoApprove = false;
+      // Persist the local safety boundary before the optional CLI
+      // reconciliation. If the process exits while set_mode is unavailable,
+      // reopening the task must not resurrect the already-resolved Plan gate.
+      this.persistRuntimePatch({ mode: "agent" });
+      this.emitEvent({ type: "mode", sessionId: this.sessionId, mode: "agent" });
     }
+    this.refreshNeedsUser();
+    this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "plan", requestId: id, outcome: verdict });
     this.emitStatus(this.working ? "working" : "idle", receipt.message);
+    // The decision is already durably written to the CLI. Mode reconciliation
+    // is a separate best-effort phase: waiting for session/set_mode here can
+    // keep the Renderer IPC pending while Grok resumes the tool loop.
+    if (verdict === "approved" || verdict === "cancelled") {
+      void this.applyMode("agent", false).then(() => {
+        this.emitStatus(this.working ? "working" : "idle", "已退出 Plan 模式");
+      }).catch((error) => {
+        const message = `计划决定已提交，但模式恢复失败：${error instanceof Error ? error.message : String(error)}`;
+        const failure = this.buildFailure(message, { error });
+        failure.nextActions = ["计划决定已生效，旧 Plan 权限门控不会重新启用", "可从模式菜单手动切换到 Agent 后继续"];
+        this.emitEvent({ type: "error", sessionId: this.sessionId, message, failure });
+        this.emitStatus(this.working ? "working" : "error", "计划决定已提交；模式恢复失败");
+      });
+    }
     return receipt;
   }
 
@@ -838,6 +1053,14 @@ export class GrokAcpAdapter extends EventEmitter {
 
   async dispose(timeoutMs = 5_000): Promise<void> {
     this.disposed = true;
+    if (this.restoredQueueTimer) clearTimeout(this.restoredQueueTimer);
+    this.restoredQueueTimer = undefined;
+    // Defensive for adapters whose process never reached normal field
+    // initialization (including failed construction/recovery fixtures).
+    if (this.pendingQueueOperations) {
+      for (const pending of this.pendingQueueOperations.values()) clearTimeout(pending.timer);
+      this.pendingQueueOperations.clear();
+    }
     this.finishEffortChange(false);
     this.lines?.close();
     await this.terminal.disposeAll();
@@ -928,9 +1151,13 @@ export class GrokAcpAdapter extends EventEmitter {
         this.emitEvent({ type: "plan", sessionId: this.sessionId, text: update.content?.text || update.plan || "" });
         break;
       case "current_mode_update": {
-        const mode = update.currentModeId === "plan" ? "plan" : this.autoApprove ? "auto" : "agent";
+        const reportedMode = update.currentModeId === "plan" ? "plan" : this.autoApprove ? "auto" : "agent";
+        // A late replay from the just-resolved Plan request is not a new user
+        // decision. Keep the local mode/gate released until a genuinely new
+        // exit_plan request re-arms it.
+        const mode = reportedMode === "plan" && this.planGateReleased ? "agent" : reportedMode;
         this.mode = mode;
-        this.planActive = mode === "plan";
+        this.planActive = mode === "plan" && !this.planGateReleased;
         this.emitEvent({ type: "mode", sessionId: this.sessionId, mode });
         break;
       }
@@ -976,11 +1203,19 @@ export class GrokAcpAdapter extends EventEmitter {
     const modelId = typeof update.model_id === "string" ? update.model_id : undefined;
     if (modelId) {
       const resolved = resolveModelId(modelId, this.models, this.requestedModelId) || modelId;
-      this.currentModelId = resolved;
-      if (!modelIdsAlias(modelId, this.requestedModelId)) this.requestedModelId = resolved;
+      this.upstreamModelId = modelId;
+      if (this.providerLocalModelId) {
+        // A managed gateway can report its upstream alias (for example
+        // grok-4.5). Keep the provider-scoped local id as Desktop identity.
+        this.currentModelId = this.providerLocalModelId;
+      } else {
+        this.currentModelId = resolved;
+        if (!modelIdsAlias(modelId, this.requestedModelId)) this.requestedModelId = resolved;
+      }
     }
     const effort = normalizeReasoningEffort(update.reasoning_effort);
     if (effort !== undefined) this.currentEffort = effort;
+    this.persistRuntimePatch({ ...(!this.suspendModelRuntimePersistence && this.currentModelId ? { modelId: this.currentModelId } : {}), ...(effort ? { effort } : {}) });
     this.emitEvent({
       type: "session-ready",
       sessionId: this.sessionId,
@@ -1004,26 +1239,37 @@ export class GrokAcpAdapter extends EventEmitter {
       case "turn_completed":
         {
         const terminalOutcome = normalizeTerminalTurnOutcome(update);
-        const completingQueuedPromptId = this.activeQueuedPromptId;
-        const activeTurnId = this.activeTurn?.turnId;
+        const terminalTurnId = this.resolveTerminalTurnId(update);
+        if (!terminalTurnId) {
+          void this.options.log.log("ignored uncorrelated turn_completed update");
+          return;
+        }
+        const completingActiveTurn = this.activeTurn?.turnId === terminalTurnId;
+        const completingQueuedPromptId = completingActiveTurn ? this.activeQueuedPromptId : undefined;
         let terminalMeta: PromptMeta | undefined;
         if (update.usage) {
           terminalMeta = extractUsageMeta(update.usage);
           this.emitEvent({ type: "meta", sessionId: this.sessionId, meta: terminalMeta });
-          this.finishTurn(terminalOutcome, { ...terminalMeta, modelId: terminalMeta.modelId ?? this.currentModelId, source: "acp-turn", exact: true });
-        } else this.finishTurn(terminalOutcome);
+        }
+        const usage = terminalMeta
+          ? { ...terminalMeta, modelId: terminalMeta.modelId ?? this.currentModelId, source: "acp-turn" as const, exact: true as const }
+          : undefined;
+        if (completingActiveTurn) this.finishTurn(terminalOutcome, usage, terminalTurnId);
+        else if (!this.correctSettledTurn(terminalTurnId, terminalOutcome, usage)) {
+          void this.options.log.log(`ignored stale turn_completed update for ${terminalTurnId}`);
+          return;
+        }
         // Grok CLI can publish the authoritative turn terminal event without
         // ever completing the original session/prompt JSON-RPC request. Treat
         // that event as the request completion for the same turn; otherwise a
         // fully rendered final answer leaves Desktop permanently "working".
-        if (activeTurnId) this.settlePromptRequestFromTerminal(activeTurnId, terminalOutcome, terminalMeta, completingQueuedPromptId);
+        this.settlePromptRequestFromTerminal(terminalTurnId, terminalOutcome, terminalMeta, completingQueuedPromptId);
         if (completingQueuedPromptId) {
-          if (this.activeQueuedPromptId === completingQueuedPromptId) this.activeQueuedPromptId = undefined;
-          this.ownedQueuedPromptIds.delete(completingQueuedPromptId);
+          this.persistActiveQueueTerminal(terminalOutcome);
         }
-        this.activatePendingQueuedTurn();
+        if (completingActiveTurn) this.activatePendingQueuedTurn();
         this.working = Boolean(this.activeTurn);
-        this.needsUser = false;
+        if (completingActiveTurn) this.needsUser = false;
         this.emitStatus(
           this.activeTurn ? "working" : terminalOutcome === "failed" ? "error" : "idle",
           this.activeTurn ? "正在处理已提交的跟进消息…" : terminalOutcome === "cancelled" ? "已取消" : terminalOutcome === "failed" ? "执行失败" : "已完成",
@@ -1187,13 +1433,9 @@ export class GrokAcpAdapter extends EventEmitter {
             return;
           }
           this.pendingPermissionRequests.add(String(id));
+          this.pendingInteractionRequestIds.set(String(id), id);
           const options = (params.options ?? []) as PermissionOption[];
-          const decided = await this.options.permissionDecider?.(params.toolCall);
-          if (decided !== undefined) {
-            const option = decided ? options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once") : options.find((value) => /reject|deny/i.test(value.kind || ""));
-            if (option && id !== undefined) this.respondPermission(id, option.optionId);
-            else this.cancelPermission(id);
-          } else if (this.planActive) {
+          if (this.planActive) {
             // Plan mode must never strand the user behind repetitive approval
             // cards. Known read-only inspection is allowed; mutating or unknown
             // tools are rejected automatically. The fs/terminal handlers below
@@ -1204,16 +1446,23 @@ export class GrokAcpAdapter extends EventEmitter {
               : options.find((value) => /reject|deny/i.test(value.kind || ""));
             if (option && id !== undefined) this.respondPermission(id, option.optionId);
             else this.cancelPermission(id);
-          } else if (this.autoApprove) {
+          } else {
+            const decided = await this.options.permissionDecider?.(params.toolCall);
+            if (decided !== undefined) {
+              const option = decided ? options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once") : options.find((value) => /reject|deny/i.test(value.kind || ""));
+              if (option && id !== undefined) this.respondPermission(id, option.optionId);
+              else this.cancelPermission(id);
+            } else if (this.autoApprove) {
             const option = options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once");
             const fallback = options.find((value) => /reject|deny/i.test(value.kind || ""));
             if (option && id !== undefined) this.respondPermission(id, option.optionId);
             else if (fallback && id !== undefined) this.respondPermission(id, fallback.optionId);
             else this.cancelPermission(id);
-          } else {
-            this.needsUser = true;
-            this.emitStatus("needs-user", "等待权限确认");
-            this.emitEvent({ type: "permission", sessionId: this.sessionId, request: { requestId: id ?? "", sessionId: this.sessionId, toolCall: params.toolCall, options } });
+            } else {
+              this.needsUser = true;
+              this.emitStatus("needs-user", "等待权限确认");
+              this.emitEvent({ type: "permission", sessionId: this.sessionId, request: { requestId: id ?? "", sessionId: this.sessionId, toolCall: params.toolCall, options } });
+            }
           }
           return;
         }
@@ -1224,6 +1473,8 @@ export class GrokAcpAdapter extends EventEmitter {
             return;
           }
           this.pendingPlanRequest = id;
+          this.planGateReleased = false;
+          this.planActive = true;
           this.needsUser = true;
           this.emitStatus("needs-user", "等待计划确认");
           this.emitEvent({ type: "plan", sessionId: this.sessionId, requestId: id, text: params.planContent || params.plan || params.input?.plan || "" });
@@ -1235,6 +1486,7 @@ export class GrokAcpAdapter extends EventEmitter {
             return;
           }
           this.pendingQuestionRequests.add(String(id));
+          this.pendingInteractionRequestIds.set(String(id), id);
           this.needsUser = true;
           this.emitStatus("needs-user", "等待回答");
           this.emitEvent({ type: "question", sessionId: this.sessionId, requestId: id ?? "", questions: params.questions ?? [] });
@@ -1255,6 +1507,12 @@ export class GrokAcpAdapter extends EventEmitter {
         case "_x.ai/queue/changed": {
           const previous = this.promptQueue;
           const runningPromptId = typeof params.runningPromptId === "string" ? params.runningPromptId : typeof params.running_prompt_id === "string" ? params.running_prompt_id : undefined;
+          const rawQueue = params.queue ?? params.entries ?? params.update?.queue ?? [];
+          if (runningPromptId && this.restoredQueueIds.has(runningPromptId)) this.restoredQueueSeenIds.add(runningPromptId);
+          if (Array.isArray(rawQueue)) for (const raw of rawQueue) {
+            const queueId = raw && typeof raw === "object" && typeof raw.id === "string" ? raw.id : undefined;
+            if (queueId && this.restoredQueueIds.has(queueId)) this.restoredQueueSeenIds.add(queueId);
+          }
           if (runningPromptId && this.ownedQueuedPromptIds.has(runningPromptId) && runningPromptId !== this.activeQueuedPromptId && runningPromptId !== this.pendingQueuedTurn?.id) {
             const starting = previous.find((entry) => entry.id === runningPromptId);
             if (starting) {
@@ -1266,8 +1524,14 @@ export class GrokAcpAdapter extends EventEmitter {
           // direct session/prompt. It has a server-generated id and is not a
           // user-queued follow-up. Treating it as ours starts a phantom second
           // turn after the real turn completes and leaves the Stop button on.
-          this.promptQueue = normalizePromptQueue(params.queue ?? params.entries ?? params.update?.queue ?? [], this.sessionId, previous)
+          this.promptQueue = normalizePromptQueue(rawQueue, this.sessionId, previous)
             .filter((entry) => this.ownedQueuedPromptIds.has(entry.id));
+          if (this.activeQueuedPrompt && !this.promptQueue.some((entry) => entry.id === this.activeQueuedPrompt!.id)) {
+            this.promptQueue = [{ ...this.activeQueuedPrompt, state: "accepted" }, ...this.promptQueue];
+          }
+          this.promptQueue = this.promptQueue.map((entry, position) => ({ ...entry, position }));
+          this.queueRevision += 1;
+          this.confirmQueueOperations(runningPromptId);
           this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
           this.respondOk(id);
           return;
@@ -1291,7 +1555,7 @@ export class GrokAcpAdapter extends EventEmitter {
           this.respondError(id, -32601, `Unsupported ACP method: ${method}`);
       }
     } catch (error) {
-      await this.options.log.log(`[ACP handler error] ${method}: ${error instanceof Error ? error.message : String(error)}`);
+      await this.options?.log?.log(`[ACP handler error] ${method}: ${error instanceof Error ? error.message : String(error)}`);
       this.respondError(id, -32603, error instanceof Error ? error.message : String(error));
     }
   }
@@ -1330,25 +1594,134 @@ export class GrokAcpAdapter extends EventEmitter {
       ...(usage ? { usage } : {}),
     };
     this.cancelRequested = false;
+    this.rememberSettledTurn(presentation);
     this.emitEvent({ type: "turn-completed", sessionId: this.sessionId, presentation });
     return presentation;
   }
 
+  private rememberSettledTurn(presentation: TurnPresentation): void {
+    this.settledTurns.set(presentation.turnId, presentation);
+    while (this.settledTurns.size > 128) {
+      const oldest = this.settledTurns.keys().next().value;
+      if (!oldest) break;
+      this.settledTurns.delete(oldest);
+      this.turnsAwaitingAuthoritativeTerminal.delete(oldest);
+    }
+  }
+
+  private correctSettledTurn(turnId: string, outcome: TurnOutcome, usage?: TurnPresentation["usage"]): boolean {
+    const previous = this.settledTurns.get(turnId);
+    if (!previous) return false;
+    const corrected: TurnPresentation = {
+      ...previous,
+      outcome,
+      ...(usage ? { usage } : {}),
+    };
+    this.turnsAwaitingAuthoritativeTerminal.delete(turnId);
+    this.rememberSettledTurn(corrected);
+    this.emitEvent({ type: "turn-completed", sessionId: this.sessionId, presentation: corrected });
+    return true;
+  }
+
+  private resolveTerminalTurnId(update: Record<string, unknown>): string | undefined {
+    const explicit = terminalTurnId(update);
+    if (explicit) {
+      if (this.activeTurn?.turnId === explicit || this.settledTurns.has(explicit)) return explicit;
+      for (const pending of this.pending.values()) {
+        if (pending.turnId === explicit) return explicit;
+        if (pending.promptId === explicit && pending.turnId) return pending.turnId;
+      }
+      if (this.activeQueuedPromptId === explicit) return this.activeTurn?.turnId;
+      return explicit;
+    }
+    // Older CLIs omit turnId. If the previous prompt RPC already resolved,
+    // its authoritative terminal is necessarily older than any now-active
+    // queued turn and must correct that settled turn instead of ending the new
+    // one. Insertion order is prompt order.
+    const awaiting = this.turnsAwaitingAuthoritativeTerminal.values().next().value;
+    return awaiting ?? this.activeTurn?.turnId;
+  }
+
   private startQueuedTurn(entry: PromptQueueEntry): void {
+    const resumedAcceptedTurn = entry.state === "accepted" || entry.state === "sending";
     this.pendingQueuedTurn = undefined;
     this.activeQueuedPromptId = entry.id;
+    this.activeQueuedPrompt = { ...entry, state: "accepted" };
+    this.promptQueue = [
+      this.activeQueuedPrompt,
+      ...this.promptQueue.filter((value) => value.id !== entry.id),
+    ].map((value, position) => ({ ...value, position }));
+    // Persist accepted/running ownership. Without this snapshot a process
+    // crash makes the in-flight queued prompt disappear on restart.
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
     this.working = true;
     this.beginTurn(entry.clientMessageId);
     // The prompt was already persisted by the CLI when it entered the queue.
     // Emit it only after its own turn boundary exists so it cannot be grouped
     // under the previous final answer.
-    this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: entry.clientMessageId, clientMessageId: entry.clientMessageId, text: entry.text, attachments: entry.attachmentPreviews, delivery: "sent" });
+    if (!resumedAcceptedTurn) {
+      this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: entry.clientMessageId, clientMessageId: entry.clientMessageId, text: entry.text, attachments: entry.attachmentPreviews, delivery: "sent" });
+    }
     this.emitStatus("working", entry.state === "interjected" ? "正在处理已提交的跟进消息…" : "正在处理队列消息…");
   }
 
   private activatePendingQueuedTurn(): void {
     const pending = this.pendingQueuedTurn;
     if (pending && !this.activeTurn) this.startQueuedTurn(pending);
+  }
+
+  private persistActiveQueueTerminal(outcome: TurnOutcome): void {
+    const entry = this.activeQueuedPrompt;
+    if (!entry) return;
+    const terminal = { ...entry, state: outcome === "completed" ? "completed" : outcome } satisfies PromptQueueEntry;
+    this.activeQueuedPrompt = undefined;
+    this.activeQueuedPromptId = undefined;
+    this.ownedQueuedPromptIds.delete(entry.id);
+    this.promptQueue = this.promptQueue.filter((value) => value.id !== entry.id).map((value, position) => ({ ...value, position }));
+    this.queueRevision += 1;
+    // `onPromptQueueTerminal` performs the durable remove+terminal append in
+    // one JsonStore mutation. Send the visible snapshot without separately
+    // persisting it, otherwise saveQueue can race and erase terminal history.
+    this.emit("event", { type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue } satisfies ChatEvent);
+    if (!this.options.onPromptQueueTerminal) return;
+    void Promise.resolve(this.options.onPromptQueueTerminal(this.sessionId, terminal)).catch((error: unknown) => {
+      void this.options.log.log(`prompt queue terminal persistence failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  private async reconcileRestoredQueue(): Promise<void> {
+    this.restoredQueueTimer = undefined;
+    if (this.disposed || !this.sessionId) return;
+    const missing = this.promptQueue.filter((entry) => this.restoredQueueIds.has(entry.id) && !this.restoredQueueSeenIds.has(entry.id));
+    for (const entry of missing) {
+      if (this.disposed || !this.promptQueue.some((value) => value.id === entry.id)) return;
+      const attachments = attachmentsFromQueuePreview(entry.attachmentPreviews);
+      const prompt = await buildPromptBlocks(entry.text, attachments);
+      const sendNow = entry.state === "interjected" || entry.state === "sending" || entry.state === "accepted";
+      void this.submitQueuedRequest(entry, prompt, sendNow, true).catch((error) => {
+        if (this.disposed) return;
+        this.ownedQueuedPromptIds.delete(entry.id);
+        this.promptQueue = this.promptQueue.filter((value) => value.id !== entry.id);
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+        const failureMessage = `恢复队列消息失败：${error instanceof Error ? error.message : String(error)}`;
+        this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
+        if (this.options.onPromptQueueTerminal) void Promise.resolve(this.options.onPromptQueueTerminal(this.sessionId, { ...entry, state: "failed" })).catch(() => undefined);
+      });
+    }
+  }
+
+  private submitQueuedRequest(entry: PromptQueueEntry, prompt: unknown[], sendNow: boolean, recovered = false): Promise<unknown> {
+    return this.request(acpMethods.agent.session.prompt, {
+      sessionId: this.sessionId,
+      prompt,
+      _meta: {
+        promptId: entry.id,
+        sendNow,
+        ...(recovered ? { recovered: true } : {}),
+        mode: this.mode === "plan" ? "plan" : "agent",
+        clientIdentifier: "grok-build-desktop",
+      },
+    }, INTERACTIVE_PROMPT_TIMEOUT_MS, undefined, undefined, entry.id);
   }
 
   private emitProviderText(text: string, flush = false): void {
@@ -1416,6 +1789,46 @@ export class GrokAcpAdapter extends EventEmitter {
     })) throw new Error(`Grok 进程不可用：${method}`);
   }
 
+  private awaitQueueConfirmation(
+    operationId: string,
+    description: string,
+    confirms: PendingQueueOperation["confirms"],
+    onConfirmed?: PendingQueueOperation["onConfirmed"],
+    onTimeout?: PendingQueueOperation["onTimeout"],
+    timeoutMs = 5_000,
+  ): void {
+    const queueRevision = this.queueRevision;
+    const timer = setTimeout(() => {
+      const pending = this.pendingQueueOperations.get(operationId);
+      if (!pending) return;
+      this.pendingQueueOperations.delete(operationId);
+      const rolledBack = this.queueRevision === pending.queueRevision;
+      if (rolledBack) pending.onTimeout?.();
+      const message = rolledBack
+        ? `${description}已送达 CLI，但 ${Math.ceil(timeoutMs / 1_000)} 秒内未收到队列确认；已恢复操作前状态`
+        : `${description}未收到匹配确认；界面已采用 CLI 最新队列状态`;
+      this.emitEvent({ type: "error", sessionId: this.sessionId, message, failure: this.buildFailure(message) });
+    }, timeoutMs);
+    timer.unref?.();
+    this.pendingQueueOperations.set(operationId, { operationId, description, confirms, onConfirmed, onTimeout, queueRevision, timer });
+  }
+
+  private cancelQueueConfirmation(operationId: string): void {
+    const pending = this.pendingQueueOperations.get(operationId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingQueueOperations.delete(operationId);
+  }
+
+  private confirmQueueOperations(runningPromptId?: string): void {
+    for (const [operationId, pending] of this.pendingQueueOperations) {
+      if (!pending.confirms(this.promptQueue, runningPromptId)) continue;
+      clearTimeout(pending.timer);
+      this.pendingQueueOperations.delete(operationId);
+      pending.onConfirmed?.();
+    }
+  }
+
   private respondOk(id: JsonRpcId | undefined, result: unknown = {}): void {
     if (id !== undefined) this.write({ jsonrpc: "2.0", id, result });
   }
@@ -1434,11 +1847,31 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private emitEvent(event: ChatEvent): void {
+    if (event.type === "prompt-queue") {
+      const persist = this.options.onPromptQueueChanged;
+      if (persist) void Promise.resolve(persist(event.sessionId, event.entries.map((entry) => ({ ...entry })))).catch((error: unknown) => {
+        void this.options.log.log(`prompt queue persistence failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
     this.emit("event", event);
+  }
+
+  private persistRuntimePatch(patch: { modelId?: string; effort?: ReasoningEffort; mode?: SessionMode }): void {
+    if (!this.sessionId || !this.options.onRuntimeChanged || !Object.keys(patch).length) return;
+    void Promise.resolve(this.options.onRuntimeChanged(this.sessionId, patch)).catch((error: unknown) => {
+      void this.options.log.log(`session runtime persistence failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   private emitStatus(status: "idle" | "working" | "needs-user" | "error", text?: string): void {
     if (this.sessionId) this.emitEvent({ type: "status", sessionId: this.sessionId, status, text });
+  }
+
+  private refreshNeedsUser(): boolean {
+    this.needsUser = this.pendingPlanRequest !== undefined
+      || (this.pendingPermissionRequests?.size ?? 0) > 0
+      || (this.pendingQuestionRequests?.size ?? 0) > 0;
+    return this.needsUser;
   }
 
   private emitMediaFromContent(content: any): void {
@@ -1448,9 +1881,8 @@ export class GrokAcpAdapter extends EventEmitter {
     }
     const uri = content.uri || content.resource?.uri;
     if (typeof uri === "string") {
-      const path = uri.replace(/^file:\/\//, "");
-      const kind = mediaKind(path);
-      if (kind) this.emitEvent({ type: "media", sessionId: this.sessionId, media: kind, source: path });
+      const kind = mediaKind(uri);
+      if (kind) this.emitEvent({ type: "media", sessionId: this.sessionId, media: kind, source: uri });
     }
   }
 
@@ -1496,6 +1928,21 @@ export function buildPromptText(text: string, attachments: Attachment[]): string
 function mimeForPath(path: string): string {
   const ext = extname(path).toLowerCase();
   return ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".gif" ? "image/gif" : ext === ".webp" ? "image/webp" : "image/png";
+}
+
+function attachmentsFromQueuePreview(previews: UserMessageAttachmentPreview[] | undefined): Attachment[] {
+  if (!previews?.length) return [];
+  return previews.flatMap((preview): Attachment[] => {
+    if (preview.availability === "missing" || !preview.source) return [];
+    return [{
+      id: preview.id,
+      name: preview.name,
+      kind: preview.kind,
+      mimeType: preview.mimeType,
+      size: preview.size,
+      ...(preview.isData ? { data: preview.source } : { path: preview.source }),
+    }];
+  });
 }
 
 async function buildPromptBlocks(text: string, attachments: Attachment[]): Promise<unknown[]> {
@@ -1574,6 +2021,17 @@ function normalizeTerminalTurnOutcome(update: Record<string, unknown>): TurnOutc
   return "completed";
 }
 
+function terminalTurnId(update: Record<string, unknown>): string | undefined {
+  const meta = update._meta && typeof update._meta === "object" ? update._meta as Record<string, unknown> : undefined;
+  const value = update.turnId ?? update.turn_id
+    ?? update.clientMessageId ?? update.client_message_id
+    ?? update.promptId ?? update.prompt_id
+    ?? meta?.turnId ?? meta?.turn_id ?? meta?.clientMessageId ?? meta?.promptId;
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const normalized = String(value).trim();
+  return normalized || undefined;
+}
+
 function extractPromptMeta(result: { _meta?: Record<string, unknown> }): PromptMeta {
   const meta = result?._meta ?? {};
   return {
@@ -1588,11 +2046,11 @@ function extractPromptMeta(result: { _meta?: Record<string, unknown> }): PromptM
 
 function extractUsageMeta(usage: Record<string, unknown>): PromptMeta {
   return {
-    totalTokens: numberOrUndefined(usage.totalTokens),
-    inputTokens: numberOrUndefined(usage.inputTokens),
-    outputTokens: numberOrUndefined(usage.outputTokens),
-    cachedReadTokens: numberOrUndefined(usage.cachedReadTokens),
-    reasoningTokens: numberOrUndefined(usage.reasoningTokens),
+    totalTokens: numberOrUndefined(usage.totalTokens ?? usage.total_tokens),
+    inputTokens: numberOrUndefined(usage.inputTokens ?? usage.input_tokens),
+    outputTokens: numberOrUndefined(usage.outputTokens ?? usage.output_tokens),
+    cachedReadTokens: numberOrUndefined(usage.cachedReadTokens ?? usage.cached_read_tokens),
+    reasoningTokens: numberOrUndefined(usage.reasoningTokens ?? usage.reasoning_tokens),
   };
 }
 

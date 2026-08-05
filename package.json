@@ -1,6 +1,6 @@
 {
   "name": "grok-build-desktop",
-  "version": "0.6.25",
+  "version": "0.7.0",
   "private": true,
   "description": "Windows desktop GUI for the local Grok Build CLI",
   "main": "out/main/index.js",
@@ -20,12 +20,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:computer-acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-computer-flows.ps1",
-    "test:ui-acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-v030-ui.ps1",
+    "test:ui-acceptance": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/probe-v070-ui.ps1",
     "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-win.ps1",
     "package:dir": "npm run check:public && npm run build:resources && npm run build && electron-builder --win --dir --x64",
     "release:assets": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/generate-release-assets.ps1",
     "licenses": "license-checker-rseidelsohn --production --json --out release/THIRD_PARTY_LICENSES.json",
     "check:public": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-public-safety.ps1",
+    "check:chunks": "node scripts/check-renderer-chunks.mjs",
     "verify": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1",
     "verify:live": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-live.ps1"
   },
@@ -68,8 +69,12 @@
   "overrides": {
     "@hono/node-server": "2.0.11",
     "dompurify": "3.4.12",
-    "fast-uri": "3.1.4",
-    "brace-expansion": "5.0.8",
+    "fast-uri": "3.1.5",
+    "brace-expansion": "5.0.9",
+    "hono": "4.12.34",
+    "ip-address": "10.4.0",
+    "postcss": "8.5.25",
+    "undici": "7.29.0",
     "tar": "7.5.22"
   },
   "build": {

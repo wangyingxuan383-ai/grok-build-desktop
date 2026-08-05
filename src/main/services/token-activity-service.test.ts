@@ -50,6 +50,35 @@ describe("token activity recording", () => {
     expect((await activity.report()).windows.today.turns).toBe(1);
   });
 
+  it("replaces an ordinary prompt result with later authoritative usage for the same turn", async () => {
+    const { service: activity } = await service();
+    const base = turn({ turnId: "corrected-turn", usage: { ...usage(10, 1)!, source: "prompt-result" } });
+    await activity.record("s1", base);
+    await activity.record("s1", {
+      ...base,
+      usage: { ...usage(25, 5)!, cachedReadTokens: 20, source: "acp-turn" },
+    });
+
+    const report = await activity.report();
+    expect(report.windows.today).toMatchObject({
+      turns: 1,
+      turnsWithUsage: 1,
+      inputTokens: 25,
+      outputTokens: 5,
+      cachedReadTokens: 20,
+      totalTokens: 30,
+    });
+    expect(report.days.at(-1)).toMatchObject({ turns: 1, turnsWithUsage: 1, totalTokens: 30 });
+  });
+
+  it("upgrades an unmeasured ordinary result when authoritative usage arrives", async () => {
+    const { service: activity } = await service();
+    const base = turn({ turnId: "late-usage" });
+    await activity.record("s1", base);
+    await activity.record("s1", { ...base, usage: usage(40, 4) });
+    expect((await activity.report()).windows.today).toMatchObject({ turns: 1, turnsWithUsage: 1, totalTokens: 44 });
+  });
+
   it("does not lose concurrent turns or their anonymous rollup", async () => {
     const { service: activity } = await service();
     await Promise.all([

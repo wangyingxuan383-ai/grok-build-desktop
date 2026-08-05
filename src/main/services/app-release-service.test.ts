@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BuildInfo } from "../../shared/types";
-import { compareVersions, parseGitHubRelease } from "./app-release-service";
+import { AppReleaseService, compareVersions, parseGitHubRelease } from "./app-release-service";
+import type { LogService } from "./log-service";
 
 const build: BuildInfo = { productName: "Grok Build Desktop", version: "0.4.0", channel: "stable", commit: "test", builtAt: "2026-01-01T00:00:00Z", repository: "owner/repo", profile: "public", packaged: true, signed: false, unofficial: true };
 
@@ -13,5 +14,20 @@ describe("application releases", () => {
   it("compares semantic versions", () => {
     expect(compareVersions("0.4.1", "0.4.0")).toBeGreaterThan(0);
     expect(compareVersions("0.4.0", "0.4.0")).toBe(0);
+  });
+  it("aborts an update check that never returns headers", async () => {
+    const log = { log: vi.fn(async () => undefined) } as unknown as LogService;
+    const service = new AppReleaseService(build, log, (_url, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    }), 10);
+    const result = await service.check(true);
+    expect(result.error).toBe("应用更新检查响应超时");
+    expect(log.log).toHaveBeenCalled();
+  });
+  it("rejects oversized release metadata before parsing", async () => {
+    const service = new AppReleaseService(build, { log: vi.fn(async () => undefined) } as unknown as LogService, async () => ({
+      ok: true, status: 200, json: async () => ({}), text: async () => "x".repeat(2 * 1024 * 1024 + 1),
+    }));
+    expect((await service.check(true)).error).toContain("2 MiB");
   });
 });

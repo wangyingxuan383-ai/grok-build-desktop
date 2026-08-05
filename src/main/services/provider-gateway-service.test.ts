@@ -42,6 +42,27 @@ describe("provider schema compatibility", () => {
 });
 
 describe("ProviderGatewayService", () => {
+  it("rejects a cross-origin upstream redirect without following it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-redirect-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "redirect", name: "Redirect", baseUrl: "https://provider.example/v1", protocol: "chat_completions",
+      upstreamProtocol: "openai_chat", schemaProfile: "standard", authScheme: "bearer", credentialMode: "existing",
+      credentialEnv: "REDIRECT_KEY", extraHeaders: {}, models: [], owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    let calls = 0;
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider], environment: async () => "secret", log: new LogService(join(root, "gateway.log")),
+      fetcher: async () => { calls += 1; return new Response(null, { status: 307, headers: { location: "https://attacker.example/steal" } }); },
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id)}/chat/completions`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+      expect(response.status).toBe(502);
+      expect(await response.text()).toContain("其他 Origin");
+      expect(calls).toBe(1);
+    } finally { await gateway.dispose(); }
+  });
+
   it("replaces the CLI authorization header with the managed provider credential", async () => {
     let capturedAuthorization = "";
     let capturedApiKey = "";
@@ -686,9 +707,11 @@ describe("ProviderGatewayService cross-protocol routing", () => {
       response.flushHeaders();
       setTimeout(() => {
         response.write(`data: ${JSON.stringify({ id: "chat_1", model: "remote", choices: [{ delta: { content: "OK" }, finish_reason: null }] })}\n\n`);
+      }, 20);
+      setTimeout(() => {
         response.write(`data: ${JSON.stringify({ id: "chat_1", model: "remote", choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`);
         response.end("data: [DONE]\n\n");
-      }, 80);
+      }, 120);
     });
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
     const address = upstream.address();
@@ -715,15 +738,67 @@ describe("ProviderGatewayService cross-protocol routing", () => {
       });
       const reader = response.body!.getReader();
       const first = await reader.read();
-      expect(new TextDecoder().decode(first.value)).toContain("grok-desktop protocol bridge");
+      const firstText = new TextDecoder().decode(first.value);
+      expect(firstText).toContain("response.output_text.delta");
+      expect(firstText).not.toContain("response.completed");
       let rest = "";
       for (;;) {
         const next = await reader.read();
         if (next.done) break;
         rest += new TextDecoder().decode(next.value);
       }
-      expect(rest).toContain("response.output_text.delta");
       expect(rest).toContain("response.completed");
+    } finally {
+      await gateway.dispose();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  it.each([
+    {
+      label: "premature EOF",
+      frame: `data: ${JSON.stringify({ id: "partial", model: "remote", choices: [{ delta: { content: "half" }, finish_reason: null }] })}\n\n`,
+      failure: "有效终态前结束",
+    },
+    {
+      label: "explicit error event",
+      frame: `data: ${JSON.stringify({ error: { message: "upstream failed" } })}\n\n`,
+      failure: "错误终态",
+    },
+  ])("does not record a translated SSE $label as completed", async ({ frame, failure }) => {
+    const upstream = createServer(async (request, response) => {
+      for await (const _chunk of request) { /* consume request */ }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(frame);
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("fixture failed");
+    const root = await mkdtemp(join(tmpdir(), "provider-gateway-sse-terminal-")); roots.push(root);
+    const provider: CustomProviderProfile = {
+      id: "sse-terminal", name: "SSE terminal", baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      protocol: "responses", upstreamProtocol: "openai_chat", schemaProfile: "standard",
+      authScheme: "bearer", credentialMode: "none", proxyMode: "direct", extraHeaders: {},
+      models: [{ id: "terminal-model", model: "remote", name: "Remote" }],
+      owned: true, hasCredential: true, insecureHttp: false,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    const gateway = new ProviderGatewayService({
+      providers: async () => [provider],
+      fetcher: (input, init) => fetch(input, init),
+      log: new LogService(join(root, "gateway.log")),
+    });
+    try {
+      const response = await fetch(`${await gateway.route(provider.id, "terminal-scope")}/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "remote", input: "Hi", stream: true }),
+      });
+      await response.text().catch(() => "");
+      const observations = gateway.recentObservations(provider.id, "terminal-scope");
+      expect(observations.some((entry) => entry.outcome === "completed")).toBe(false);
+      expect(observations[0]).toMatchObject({ outcome: "failed", phase: "response", reason: "upstream-stream" });
+      expect(gateway.recentFailures(provider.id, "terminal-scope")[0]?.message).toContain(failure);
     } finally {
       await gateway.dispose();
       await new Promise<void>((resolve) => upstream.close(() => resolve()));

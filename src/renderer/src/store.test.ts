@@ -119,12 +119,42 @@ describe("session event reducer", () => {
       ],
     };
     state = apply(state, { type: "session-reset", sessionId: "session" });
-    expect(state.views.session.messages).toEqual([]);
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "user", text: "before reset" }),
+      expect.objectContaining({ kind: "assistant", text: "partial answer" }),
+    ]);
+    expect(state.views.session.status).toBe("cold");
     state = apply(state, { type: "conversation-projection-restore", sessionId: "session", projection });
     expect(state.views.session.messages).toEqual([
       expect.objectContaining({ kind: "user", text: "before reset" }),
       expect.objectContaining({ kind: "assistant", text: "partial answer" }),
     ]);
+  });
+
+  it("isolates background session lifecycle state from the active session", () => {
+    let state = baseState();
+    state.views.background = emptyView();
+    state = apply(state, { type: "status", sessionId: "background", status: "working", text: "running elsewhere" });
+    state = apply(state, { type: "prompt-queue", sessionId: "background", entries: [{ id: "bg", sessionId: "background", text: "queued", position: 0, createdAt: "2026-08-04T00:00:00Z", state: "queued" }] });
+    expect(state.activeSessionId).toBe("session");
+    expect(state.views.session).toMatchObject({ status: "idle", queue: [] });
+    expect(state.views.background).toMatchObject({ status: "working", queue: [{ id: "bg" }] });
+  });
+
+  it("restores V2 queue and session runtime without requiring a visible message", () => {
+    const state = apply(baseState(), {
+      type: "conversation-projection-restore",
+      sessionId: "session",
+      projection: {
+        version: 2,
+        sessionId: "session",
+        updatedAt: "2026-08-04T00:00:00Z",
+        events: [],
+        runtime: { sessionId: "session", cwd: "D:\\repo", modelId: "provider-model", providerId: "provider", effort: "xhigh", mode: "plan", updatedAt: "2026-08-04T00:00:00Z" },
+        queue: { version: 1, sessionId: "session", updatedAt: "2026-08-04T00:00:00Z", entries: [{ id: "q", sessionId: "session", text: "queued", position: 0, createdAt: "2026-08-04T00:00:00Z", state: "queued" }] },
+      },
+    });
+    expect(state.views.session).toMatchObject({ currentModelId: "provider-model", effort: "xhigh", mode: "plan", queue: [{ id: "q", text: "queued" }] });
   });
 
   it("shows an explicit recovery state instead of promoting it to a global error", () => {

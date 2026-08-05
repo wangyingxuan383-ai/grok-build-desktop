@@ -175,7 +175,19 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   let next = { ...view, messages: [...view.messages] };
   switch (event.type) {
     case "session-reset":
-      next = emptyView();
+      // A transport reset replaces the ACP process, not the conversation.
+      // Keep the locally projected body/runtime/queue visible while the main
+      // process reloads and deterministically merges the fresh replay. Process
+      // local action request ids cannot survive, so only those cards expire.
+      next = {
+        ...view,
+        status: "cold",
+        models: [],
+        commands: [],
+        messages: view.messages.map((message) => isActionMessage(message) && !message.resolved
+          ? { ...message, resolved: true, resolution: "请求已随连接重建结束" }
+          : message),
+      };
       break;
     case "conversation-projection-restore": {
       let projectedState: AppState = {
@@ -194,7 +206,13 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         next.messages = projected.messages.map((message) => isActionMessage(message) && !message.resolved
           ? { ...message, resolved: true, resolution: "请求已随上次连接结束" }
           : message);
-        next.turnPresentations = mergeTurnPresentations(next.turnPresentations, projected.turnPresentations);
+      }
+      if (projected) next.turnPresentations = mergeTurnPresentations(next.turnPresentations, projected.turnPresentations);
+      if (event.projection.queue) next.queue = event.projection.queue.entries;
+      if (event.projection.runtime) {
+        next.currentModelId = event.projection.runtime.modelId ?? next.currentModelId;
+        next.effort = event.projection.runtime.effort;
+        next.mode = event.projection.runtime.mode;
       }
       break;
     }

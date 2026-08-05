@@ -89,4 +89,24 @@ describe("SessionCatalog", () => {
     await catalog.delete(cwd, sessionId);
     expect(await catalog.has(cwd, sessionId)).toBe(false);
   });
+
+  it("preserves concurrent metadata mutations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-concurrent-"));
+    const catalog = new SessionCatalog(join(root, "app-data"), join(root, ".grok"));
+    await Promise.all([
+      catalog.rename("session", "并发会话"),
+      catalog.pin("session", true),
+      catalog.archive("session", true),
+      catalog.markUnread("session", true),
+      catalog.recordFork("parent", "session"),
+    ]);
+    const metadata = JSON.parse(await readFile(join(root, "app-data", "session-metadata.json"), "utf8"));
+    expect(metadata).toMatchObject({
+      renames: { session: "并发会话" },
+      unread: { session: "error" },
+      pinned: { session: true },
+      archived: { session: true },
+      parents: { session: "parent" },
+    });
+  });
 });

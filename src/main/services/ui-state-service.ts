@@ -96,10 +96,10 @@ export class UiStateService {
   async appendPromptHistory(cwd: string, text: string): Promise<void> {
     const value = text.trim();
     if (!value) return;
-    const data = await this.store.get();
     const key = normalizeKey(cwd);
-    data.promptHistory[key] = [value, ...(data.promptHistory[key] ?? []).filter((entry) => entry !== value)].slice(0, 50);
-    await this.store.set(data);
+    await this.store.mutate((data) => {
+      data.promptHistory[key] = [value, ...(data.promptHistory[key] ?? []).filter((entry) => entry !== value)].slice(0, 50);
+    });
   }
 
   private draftDirectory(key: string): string {

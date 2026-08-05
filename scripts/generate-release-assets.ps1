@@ -7,6 +7,17 @@ $Release = Join-Path $Root 'release'
 if (-not (Test-Path -LiteralPath $Release -PathType Container)) { throw 'release 目录不存在，请先打包应用。' }
 $Version = (Get-Content (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json).version
 
+# `release:assets` can be invoked independently from package-win.ps1. Keep the
+# release boundary self-contained so stale Renderer output or an old packaged
+# shell cannot receive fresh checksums merely because the expected filenames
+# happen to exist.
+node (Join-Path $PSScriptRoot 'check-renderer-chunks.mjs')
+if ($LASTEXITCODE -ne 0) { throw '发布资产的 Renderer 分块预算或 Worker 命名门禁失败。' }
+$PackagedExecutable = Join-Path $Release 'win-unpacked\Grok Build Desktop.exe'
+if (-not (Test-Path -LiteralPath $PackagedExecutable -PathType Leaf)) { throw '发布资产缺少 win-unpacked 应用，无法执行当前 v0.7 UI 验收。' }
+& (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $PackagedExecutable
+if ($LASTEXITCODE -ne 0) { throw '发布资产的当前 v0.7 UI 验收失败。' }
+
 $Sbom = Join-Path $Release "Grok-Build-Desktop-$Version-SBOM.cdx.json"
 $SbomText = (& npm sbom --omit=dev --sbom-format cyclonedx 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw "SBOM 生成失败：$SbomText" }

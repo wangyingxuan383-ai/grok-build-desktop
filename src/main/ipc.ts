@@ -2,11 +2,13 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { AppController } from "./app-controller";
 import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, CapabilityApplicationSelection, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MediaCreationRequest, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, OpenTargetIntent, PersonaDefinitionSaveInput, ProviderConnectionDraft, ProviderDeepScanOptions, ProviderScanScope, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TokenActivityQuery, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
 import { isTrustedRendererFrame, type RendererTrustPolicy } from "./security-policy";
+import { validateIpcInvocation } from "./ipc-schema";
 
 export function registerIpc(controller: AppController, window: BrowserWindow, policy: RendererTrustPolicy): void {
   const handle = <Args extends unknown[]>(channel: string, action: (...args: Args) => unknown): void => {
     ipcMain.handle(channel, (event, ...args) => {
       assertTrustedIpcSender(event, window, policy);
+      validateIpcInvocation(channel, args, action.length);
       return action(...args as Args);
     });
   };
@@ -141,11 +143,13 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("plan:respond", (id: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string) => controller.respondPlan(id, requestId, verdict, comment));
   handle("attachments:pick", () => controller.pickAttachments());
   handle("attachments:pick-folders", () => controller.pickAttachmentFolders());
-  handle("attachments:paths", (paths: string[]) => controller.attachmentsFromPaths(paths));
+  handle("attachments:dropped", (paths: string[]) => controller.attachmentsFromDroppedPaths(paths));
+  handle("attachments:paths", (paths: string[], sessionId?: string) => controller.attachmentsFromPaths(paths, sessionId));
   handle("system:open-path", (path: string) => controller.openPath(path));
   handle("system:open-target", (intent: OpenTargetIntent) => controller.openTarget(intent));
   handle("system:copy-image", (source: string) => controller.copyImage(source));
   handle("system:save-image", (source: string) => controller.saveImage(source));
+  handle("system:open-media", (source: string) => controller.openMedia(source));
   handle("system:open-external", (url: string) => controller.openExternal(url));
   handle("settings:get", () => controller.getSettings());
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
@@ -195,6 +199,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:delete", (id: string) => controller.deleteAutomation(id));
   handle("automations:pause", (id: string, paused: boolean) => controller.pauseAutomation(id, paused));
   handle("automations:run-now", (id: string) => controller.runAutomationNow(id));
+  handle("automations:run:cancel", (id: string) => controller.cancelAutomationRun(id));
   handle("automations:runs", (taskId?: string) => controller.listAutomationRuns(taskId));
   handle("automations:policy:get", () => controller.getAutomationGlobalPolicy());
   handle("automations:policy:update", (patch: Partial<AutomationGlobalPolicy>) => controller.updateAutomationGlobalPolicy(patch));

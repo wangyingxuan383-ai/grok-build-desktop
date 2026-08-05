@@ -51,6 +51,8 @@ describe("Plan Gate", () => {
   it.each([
     "git diff --output=changes.txt",
     "git diff --ext-diff",
+    "git diff --textconv -- README.md",
+    "git show --textconv HEAD:README.md",
     "git branch feature/new-branch",
     "npm test",
     "rg --pre malicious pattern",
@@ -92,6 +94,10 @@ describe("Plan Gate", () => {
     expect(isPlanSafeToolCall({ kind: "read_file", title: "Read package.json" })).toBe(true);
     expect(isPlanSafeToolCall({ kind: "list_directory", title: "List src" })).toBe(true);
     expect(isPlanSafeToolCall({ kind: "search_files", title: "Search source" })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "search_code", title: "Search source" })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "read_many_files", title: "Read sources" })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "list_files", title: "List sources" })).toBe(true);
+    expect(isPlanSafeToolCall({ kind: "web_search", title: "Search documentation" })).toBe(true);
     expect(isPlanSafeToolCall({ kind: "search", title: "Search source" })).toBe(true);
     expect(isPlanSafeToolCall({ kind: "execute", rawInput: { command: "git status --short" } })).toBe(true);
     expect(isPlanSafeToolCall({ kind: "execute", content: [{ type: "content", content: { type: "text", text: "Get-Content README.md" } }] })).toBe(true);

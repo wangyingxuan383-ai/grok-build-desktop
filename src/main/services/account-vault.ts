@@ -56,15 +56,16 @@ export class AccountVault {
       createdAt: now,
       updatedAt: now,
     };
-    const data = await this.store.get();
-    const index = data.entries.findIndex((value) => value.profile.id === profile.id);
-    if (index >= 0) {
-      const existing = data.entries[index]!;
-      profile.createdAt = existing.profile.createdAt;
-      data.entries[index] = { profile, encrypted: this.encrypt({ kind: "oauth", authJson }) };
-    } else data.entries.push({ profile, encrypted: this.encrypt({ kind: "oauth", authJson }) });
-    if (makeActive) data.activeId = profile.id;
-    await this.store.set(data);
+    const encrypted = this.encrypt({ kind: "oauth", authJson });
+    await this.store.mutate((data) => {
+      const index = data.entries.findIndex((value) => value.profile.id === profile.id);
+      if (index >= 0) {
+        const existing = data.entries[index]!;
+        profile.createdAt = existing.profile.createdAt;
+        data.entries[index] = { profile, encrypted };
+      } else data.entries.push({ profile, encrypted });
+      if (makeActive) data.activeId = profile.id;
+    });
     return profile;
   }
 
@@ -78,40 +79,40 @@ export class AccountVault {
       createdAt: now,
       updatedAt: now,
     };
-    const data = await this.store.get();
-    data.entries.push({ profile, encrypted: this.encrypt({ kind: "api-key", apiKey }) });
-    data.activeId = profile.id;
-    await this.store.set(data);
+    const encrypted = this.encrypt({ kind: "api-key", apiKey });
+    await this.store.mutate((data) => {
+      data.entries.push({ profile, encrypted });
+      data.activeId = profile.id;
+    });
     return profile;
   }
 
   async updateOAuth(id: string, authJson: string): Promise<void> {
-    const data = await this.store.get();
-    const entry = data.entries.find((value) => value.profile.id === id && value.profile.kind === "oauth");
-    if (!entry) return;
-    entry.encrypted = this.encrypt({ kind: "oauth", authJson });
-    entry.profile.updatedAt = new Date().toISOString();
-    await this.store.set(data);
+    const encrypted = this.encrypt({ kind: "oauth", authJson });
+    await this.store.mutate((data) => {
+      const entry = data.entries.find((value) => value.profile.id === id && value.profile.kind === "oauth");
+      if (!entry) return;
+      entry.encrypted = encrypted;
+      entry.profile.updatedAt = new Date().toISOString();
+    });
   }
 
   async setActive(id: string): Promise<void> {
-    const data = await this.store.get();
-    if (!data.entries.some((value) => value.profile.id === id)) throw new Error("账号不存在");
-    data.activeId = id;
-    await this.store.set(data);
+    await this.store.mutate((data) => {
+      if (!data.entries.some((value) => value.profile.id === id)) throw new Error("账号不存在");
+      data.activeId = id;
+    });
   }
 
   async clearActive(): Promise<void> {
-    const data = await this.store.get();
-    data.activeId = "";
-    await this.store.set(data);
+    await this.store.mutate((data) => { data.activeId = ""; });
   }
 
   async remove(id: string): Promise<void> {
-    const data = await this.store.get();
-    data.entries = data.entries.filter((value) => value.profile.id !== id);
-    if (data.activeId === id) data.activeId = "";
-    await this.store.set(data);
+    await this.store.mutate((data) => {
+      data.entries = data.entries.filter((value) => value.profile.id !== id);
+      if (data.activeId === id) data.activeId = "";
+    });
   }
 
   async importFile(path: string): Promise<AccountProfile> {
@@ -119,14 +120,15 @@ export class AccountVault {
   }
 
   async setMcpSecrets(serverName: string, values: Record<string, string>): Promise<Record<string, string>> {
-    const data = await this.store.get(); data.mcpSecrets ??= {};
     const names: Record<string, string> = {};
+    const encrypted: Record<string, string> = {};
     for (const [key, value] of Object.entries(values)) {
       if (!value) continue;
       const envName = `GROK_DESKTOP_MCP_${serverName}_${key}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
-      data.mcpSecrets[envName] = this.encrypt({ kind: "api-key", apiKey: value }); names[key] = envName;
+      encrypted[envName] = this.encrypt({ kind: "api-key", apiKey: value }); names[key] = envName;
     }
-    await this.store.set(data); return names;
+    await this.store.mutate((data) => { data.mcpSecrets = { ...(data.mcpSecrets ?? {}), ...encrypted }; });
+    return names;
   }
 
   async mcpSecretEnvironment(): Promise<Record<string, string>> {
@@ -136,9 +138,10 @@ export class AccountVault {
   }
 
   async removeMcpSecrets(serverName: string): Promise<void> {
-    const data = await this.store.get(); const prefix = `GROK_DESKTOP_MCP_${serverName}_`.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
-    for (const name of Object.keys(data.mcpSecrets ?? {})) if (name.startsWith(prefix)) delete data.mcpSecrets![name];
-    await this.store.set(data);
+    const prefix = `GROK_DESKTOP_MCP_${serverName}_`.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+    await this.store.mutate((data) => {
+      for (const name of Object.keys(data.mcpSecrets ?? {})) if (name.startsWith(prefix)) delete data.mcpSecrets![name];
+    });
   }
 
   private encrypt(payload: VaultPayload): string {

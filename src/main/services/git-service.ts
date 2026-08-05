@@ -87,11 +87,11 @@ export class GitService {
   async setRepositoryTrust(workspacePath: string, repositoryRoot: string, trusted: boolean): Promise<GitRepositoryTrust> {
     const context = await this.repositoryContext(workspacePath);
     if (!samePath(context.repositoryRoot, await realpath(repositoryRoot))) throw new Error("仓库范围已变化，请刷新后重试");
-    const state = await this.trustStore.get();
     const key = pathKey(context.repositoryRoot);
-    if (trusted) state.repositories[key] = { workspacePath: context.workspacePath, trustedAt: new Date().toISOString() };
-    else delete state.repositories[key];
-    await this.trustStore.set(state);
+    await this.trustStore.mutate((state) => {
+      if (trusted) state.repositories[key] = { workspacePath: context.workspacePath, trustedAt: new Date().toISOString() };
+      else delete state.repositories[key];
+    });
     return this.getRepositoryTrust(workspacePath);
   }
 

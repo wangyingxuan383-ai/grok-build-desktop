@@ -1,4 +1,4 @@
-/* 0.6.16 interaction guarantees: chat content is selectable; only controls
+/* Conversation interaction guarantees: chat content is selectable; only controls
    keep the native app-shell selection behavior. */
 .conversation,
 .conversation *,
@@ -185,8 +185,17 @@
   background: var(--panel);
   color: var(--text-secondary);
   font-size: 11px;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   box-shadow: var(--shadow-lg);
+}
+.open-location-feedback.success {
+  border-color: color-mix(in srgb, var(--success) 48%, var(--border));
+  color: var(--success);
+}
+.open-location-feedback.error {
+  border-color: color-mix(in srgb, var(--danger) 52%, var(--border));
+  color: var(--danger);
 }
 
 .media-job-state {
@@ -304,3 +313,4 @@
   border-radius: 9px;
   background: #0d1015e8;
 }
+
