@@ -2,12 +2,20 @@
 
 ## 0.7.0 ACP 0.2.120 前向适配 A–D（2026-08-06）
 
+### 推荐顺序补充：能力门控 Session/旁路提问/Mermaid（当前已实现）
+
+- [x] **旁路提问**：按运行时命令证据显示 `/btw`；主进程发送官方 `session_id` + `question`，返回 `answer` 回执，不创建伪队列回合；未声明能力明确降级。
+- [x] **Session 元数据**：增加标准 `session/list` 与可选 `x.ai/session/info`、`x.ai/session/usage` 的主进程归一化、IPC Schema、Preload 和右侧“会话信息”工具；缺失能力不从全局默认推算。
+- [x] **Mermaid Plan**：严格渲染成功后提供复制源码、复制图像、打开图像；失败/流式未完成时按钮保持禁用。
+- [x] **验证**：受影响测试 59 项通过；完整套件 94 个测试文件、676 项通过、9 项按设计跳过；TypeScript 与生产构建通过。
+- [ ] **稳定实机门槛**：本机 stable 仍为 0.2.118；0.2.119/0.2.120 的旁路提问、Session 私有扩展和 MCP/插件/Git/doctor 新接口须待 stable 下发后再做实机验收；验收前不推送、不创建 Release。
+
 - [x] **A 运行时证据**：将标准 `session/list`、`session/resume`、`session/close` 纳入脱敏 `initialize-0.2.120` Fixture 与能力证据测试；未下发版本不进入安装目标。
 - [x] **B 会话生命周期**：重开优先 `session/resume`，仅能力错误回退 `session/load`；resume 缺少会话/模型字段时使用请求 ID和握手回退；退出前尽力 `session/close`，不阻塞进程释放。
 - [x] **C Plan 模型切换**：Plan 决策尚未提交时允许切换模型，权限/问题等待保持锁定；自定义 Provider 本地模型 ID、上游别名和握手状态继续隔离。
 - [x] **D 回放与图片**：用户回放保留 client/message ID、附件预览和资源链接；直接图片、MCP 提取图片和重复 ACP 回放合并去重；无稳定媒体来源的独立事件不被 Renderer 误折叠。
 - [x] 聚焦验证：8 个测试文件、121 项通过；TypeScript 通过。
-- [x] 候选复核：94 个测试文件、673 项通过（9 项按设计跳过）；TypeScript、生产/资源构建、公开扫描和 Renderer 分块门禁通过。首次打包发现离线媒体夹具的非 RGBA PNG 被 Electron `nativeImage` 拒绝，已换成真实 RGBA PNG 并重新进入打包门禁。
+- [x] 候选复核：94 个测试文件、676 项通过（9 项按设计跳过）；TypeScript、生产/资源构建、公开扫描和 Renderer 分块门禁通过。首次打包发现离线媒体夹具的非 RGBA PNG 被 Electron `nativeImage` 拒绝，已换成真实 RGBA PNG 并重新进入打包门禁。
 - [x] 最终本地产物复核：Setup/Portable 从同一最新构建生成，SHA-256、SBOM、许可证报告、Fuses、Task Scheduler、中文/空格 Portable 冷启动及当前 0.7.0 UI 门禁通过；验收前不推送、不创建 Release。
 
 ## v0.7.0 Grok Build CLI 0.2.118 安全适配（2026-08-05）
@@ -34,11 +42,11 @@
 - [x] 前向解析 `x.ai/follow_ups`、`x.ai/models/update`、`x.ai/settings/update`，保持自定义 Provider 本地模型身份和当前努力档位；控件只在运行时证据出现后启用。
 - [x] 解析 Goal、Workflow、Subagent、Retry、后台任务、模型自动切换与运行时间线事件，后台事件按会话隔离。
 - [x] `/btw`、Recap 等能力从实际命令或已观察扩展获得，不按版本号猜测。
-- [ ] 0.7.1 在 stable 实际下发后完成 `/btw` 旁路提问、完整 Session 管理、Mermaid Plan、MCP/插件状态、官方 Git 接口与 `doctor fix` 预览确认；0.7.0 不显示未经验证的控件。
+- [ ] 0.7.1 在 stable 实际下发后完成 MCP/插件状态、官方 Git 接口与 `doctor fix` 预览，并对 `/btw`、Session 与 Mermaid 面做完整实机确认；0.7.0 不显示未经验证的控件。
 
 ### 0.7.0 候选门禁与本地交付
 
-- [x] 最终候选运行一次完整离线门禁：94 个测试文件、670 项测试通过；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块和 `npm audit` 通过。
+- [x] 最终候选运行一次完整离线门禁：94 个测试文件、676 项测试通过；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块和 `npm audit` 通过。
 - [x] 正式生成且只生成一组 0.7.0 Setup、Portable、SHA-256、SBOM 和许可证报告；打包版及安装版分别通过 0.7.0 UI 探针。
 - [x] 完成 per-user 安装、File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式检查；安装版保持本地等待用户验收。
 - [ ] 用户验收现有长会话 Plan/Stop、两个真实并行模型会话和已配置自定义 Provider；通过前不推送、不创建 Release。

@@ -8,7 +8,10 @@
 | Resume-first session lifecycle | Contract verified | Resume is attempted only when declared, falls back to `session/load` only for capability errors, preserves the requested ID when the resume response omits it, and sends best-effort standard close before child teardown. |
 | Plan model switching | Contract verified | The model selector remains enabled only while an interactive Plan decision is pending; permission/question waits remain locked and managed Provider identity is retained. |
 | ACP attachment/media replay | Focused + renderer verified | User-message replay carries stable IDs and attachment previews; resource links/direct images/MCP extracted images are merged and content-deduplicated; source-less media events remain independent. |
-| Current milestone boundary | Source-only | 8 focused files/120 tests and TypeScript pass. Full offline/package/install gates must be rerun for a release candidate; no push or Release is made. |
+| Capability-gated `/btw` | Contract + focused verified | Official `session_id`/`question` wire shape, answer receipt and unsupported fallback are covered; the Composer exposes the action only when the current runtime advertises the command. |
+| Official Session surfaces | Contract + UI verified | `session/list`, `x.ai/session/info` and `x.ai/session/usage` are normalized in the main process and exposed in the right-side Session tool; missing declarations remain an explicit empty state. |
+| Mermaid Plan actions | Source + build verified | Strict Mermaid rendering now offers copy source, copy image and open image after successful render; no claim is made that every future CLI emits Mermaid blocks. |
+| Current milestone boundary | Local candidate | 94 test files/676 tests pass, 9 tests skip by design; TypeScript and production build pass. Stable 0.2.119/0.2.120 live evidence, provider acceptance and `doctor fix` remain deferred; no push or Release is made. |
 
 ## v0.7.0 comprehensive audit candidate (local, not released)
 
@@ -18,7 +21,7 @@
 | CLI runtime capability snapshot | Fixture + live handshake verified | Sanitized real 0.2.117/0.2.118 handshakes plus 0.2.118 lifecycle and official-source 0.2.120 forward fixtures cover Session/Prompt/MCP, models/efforts, commands, Recap/Rewind/plugins and unknown fields. Runtime declaration/probe/event evidence outranks version hints. |
 | CLI 0.2.118 lifecycle | Focused + minimal Plan live verified | Completion-before-background, Compact cancellation, Recap hash dedupe, unknown-event redaction and official-first session deletion are covered. One read-only Plan turn completed in 19.28s with no permission card and no workspace writes. |
 | CLI 0.2.118 custom-model TOML | Focused verified | Managed `reasoning_efforts` use CLI-native strings rather than rejected array-of-table output; upstream-only `auto/none` remain Desktop metadata and legacy object arrays are migrated on managed Provider launch. |
-| CLI 0.2.119–0.2.120 forward parse | Fixture verified; UI deferred to 0.7.1 | Follow-ups, models/settings updates and runtime timeline events parse only when observed; custom Provider identity is preserved. `/btw`, official Session/MCP/Git UI and doctor fixes are not claimed in 0.7.0. |
+| CLI 0.2.119–0.2.120 forward parse | Fixture + capability-gated UI | Follow-ups, models/settings updates and runtime timeline events parse only when observed; `/btw` and Session info/usage/list surfaces are now wired behind evidence. MCP/plugin status, official Git UI and doctor fixes remain deferred until stable runtime evidence. |
 | Session runtime identity | Focused verified | Session-scoped Provider/local model/upstream alias/effort/mode/profile; failed managed-provider launch is fail-closed; fork inherits parent runtime. |
 | Plan/permission/stop lifecycle | Focused + live Plan + installed fixture verified | Plan receipt closes the old gate before async mode reconciliation; stable turn IDs settle duplicate/late terminal events; isolated responder covers three Plan decisions, permission allow/deny and Stop. CLI 0.2.118 minimal read-only Plan passed live; an existing long-session Stop remains user acceptance. |
 | Persisted queue | Focused verified | accepted/running entries survive restart and move atomically to terminal; late snapshots cannot resurrect or duplicate user messages. |
@@ -26,7 +29,7 @@
 | Store/automation concurrency | Focused verified | Cross-process transaction lock/owner fencing and explicit cancellation API; no fixed 24-hour total runtime, optional ACP inactivity is separate. |
 | IPC/path/media boundaries | Focused verified | Runtime schemas, Picker/session/workspace binding, junction/symlink checks, executable-open rejection, session-bound media handles and explicit Provider-Origin remote fetch. |
 | UI and delivery gates | Packaged + installed verified | Current v0.7 probe, Plan/permission/Stop fixture wiring, physical 125%–200% scaling, layout regression and renderer chunk/worker gates pass against the packaged and per-user installed binaries. |
-| Release/install | Installed locally for acceptance | 94 test files/670 offline tests pass; 6 live files/9 tests skip by design. Production/resources, 341-file scan, Native/Computer Host, 24/24 Computer Use, Fuses, package/install/cold start, ASAR, File/Product/About/diagnostics and both shortcuts pass. Setup SHA-256 is `61877c2f7585352877a704ac8b06ade61818baa36a06d03a4b05488fdf53bfda`; Portable is `3532c406bbfefc41f3af1d727f654d5a434e481a98462d4170cc52b47730395d`. No push or Release before user acceptance. |
+| Release/install | Installed locally for acceptance | 94 test files/676 offline tests pass; 6 live files/9 tests skip by design. Production/resources and the previous package/install checks remain valid; the current source/build still needs the final post-change package refresh. No push or Release before user acceptance. |
 
 ## v0.6.25 local Plan permission and terminal-recovery hotfix
 

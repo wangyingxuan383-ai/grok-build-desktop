@@ -1515,6 +1515,60 @@ export interface CliRuntimeUpdate {
   data?: Record<string, unknown>;
 }
 
+/**
+ * Capability-gated session surfaces exposed by newer Grok Build CLIs.  These
+ * are intentionally normalized at the main-process boundary so the renderer
+ * never consumes arbitrary ACP payloads or assumes a version is sufficient.
+ */
+export interface CliSessionListItem {
+  sessionId: string;
+  cwd?: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  modelId?: string;
+  messageCount?: number;
+}
+
+export interface CliSessionListResult {
+  supported: boolean;
+  sessions: CliSessionListItem[];
+  nextCursor?: string;
+  source: "acp" | "unsupported";
+}
+
+export interface CliSessionInfo {
+  supported: boolean;
+  sessionId: string;
+  cwd?: string;
+  title?: string;
+  modelId?: string;
+  mode?: SessionMode;
+  effort?: ReasoningEffort;
+  createdAt?: string;
+  updatedAt?: string;
+  source: "acp" | "unsupported";
+}
+
+export interface CliSessionUsage {
+  supported: boolean;
+  sessionId: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  source: "acp" | "unsupported";
+}
+
+export interface CliBtwReceipt {
+  accepted: boolean;
+  sessionId: string;
+  requestId?: string;
+  message?: string;
+  source: "acp" | "unsupported";
+}
+
 export interface LoginState {
   running: boolean;
   url?: string;
@@ -1655,8 +1709,12 @@ export interface GrokDesktopApi {
   clearAgentDashboardRecord(nodeId?: string): Promise<void>;
   inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]>;
   listSessions(cwd?: string, query?: string): Promise<SessionSummary[]>;
+  listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult>;
   createSession(input: string | import("./workbench-types").ExecutionProfileLaunchInput): Promise<import("./workbench-types").SessionLaunchResult>;
   openSession(cwd: string, sessionId: string): Promise<{ sessionId: string }>;
+  getCliSessionInfo(sessionId: string): Promise<CliSessionInfo>;
+  getCliSessionUsage(sessionId: string): Promise<CliSessionUsage>;
+  sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt>;
   renameSession(sessionId: string, title: string): Promise<void>;
   deleteSession(cwd: string, sessionId: string): Promise<void>;
   deleteDesktopSessionData(cwd: string, sessionId: string): Promise<void>;

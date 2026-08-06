@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 0.7.0 capability-gated Session surfaces and Mermaid controls (2026-08-06)
+
+- 接入官方 `/btw` 旁路提问线：仅当运行时命令/扩展证据声明能力时显示，使用官方 `session_id` + `question` 字段，不把旁路问题伪装成排队回合；旧 CLI 显示明确“不支持”。
+- 增加主进程能力门控的官方 `session/list`、`x.ai/session/info` 和 `x.ai/session/usage` 归一化接口；右侧“会话信息”只展示 CLI 实际返回的模型、模式、思考档位和 Token，不用全局默认或推算值补齐。
+- Mermaid 计划块增加复制源码、复制图像和打开图像操作，保持严格渲染；工具仅在图表已成功生成后可用。
+- IPC、Preload 和运行时 Schema 已覆盖上述入口，扩展参数按官方 wire shape 发送并对未知/未声明能力降级。
+- 本轮受影响测试 59 项通过；完整离线套件现为 94 个测试文件、676 项通过、9 项按设计跳过，TypeScript 与生产构建通过。0.2.119/0.2.120 stable 实机能力及 `doctor fix` 仍未宣称完成。
+
 ### 0.7.0 ACP 0.2.120 前向适配补充（2026-08-06）
 
 - `initialize` 能力证据现在记录标准 `session/list`、`session/resume` 与 `session/close`；官方 0.2.120 源码形态以脱敏 Fixture 固定，仍不会把尚未进入本机 stable 通道的版本当作可安装版本。
@@ -10,13 +18,13 @@
 - ACP 回放的用户消息现在保留稳定消息 ID、附件预览和文件/图片资源；MCP 提取图片、直接图片块和重复回放按内容去重并合并到现有消息，不再生成空白或重复图片消息。
 - Windows 文件锁在短暂 `EPERM/EBUSY` 竞争窗口内按锁争用重试，避免并行投影写入偶发失败；真正的权限错误仍立即报告。
 - 离线媒体夹具改用 Electron `nativeImage` 可解码的 RGBA PNG，修复打包 UI 探针中生成媒体卡被误判为“图片数据无效”的候选门禁问题。
-- A–D 变更已通过 94 个测试文件、673 项测试（9 项按设计跳过）、TypeScript、生产/资源构建、公开扫描和分块门禁；本地 0.7.0 打包已重新执行，验收前仍不推送 GitHub、不创建 Release。
+- A–D 变更已通过 94 个测试文件、676 项测试（9 项按设计跳过）、TypeScript、生产/资源构建、公开扫描和分块门禁；本地 0.7.0 打包已重新执行，验收前仍不推送 GitHub、不创建 Release。
 
 ### 0.7.0 本地候选最终复核（2026-08-06）
 
 - Setup、Portable、SBOM、许可证报告、SHA-256、Electron Fuses、Task Scheduler 和中文/空格 Portable 冷启动均通过；Portable 已从最新构建同步，避免旧压缩包掩盖 IPC 修复。
 - 当前 0.7.0 UI 门禁覆盖 Plan/权限四种组合、Stop 恢复、多会话隔离、导航、右栏五工具、非 Git Review、文件预览、结构化错误、Token 活动、诊断动作、响应式 Composer/窄栏抽屉和 Provider 管理。
-- Setup `release/Grok-Build-Desktop-Setup-v0.7.0-x64.exe` SHA-256：`72570af030c79cc691bf6413eb9f80c49b15282b1eed46863cc52acb71eab851`；Portable `release/Grok-Build-Desktop-Portable-v0.7.0-x64.zip`：`85fbcf62aab193d0277ab47d81424c89ce181494b79413d2db92c09dc186bc7c`；SBOM：`5c4a9d715a2262a6101c6a748ee0738defac4dc48d670bdd547b9e5e08f06553`；许可证报告：`382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。
+- Setup `release/Grok-Build-Desktop-Setup-v0.7.0-x64.exe` SHA-256：`04f6894dea09c900f9dbae1c38d3ca6316bfd07b52da35cb97a56b57c6109a7c`；Portable `release/Grok-Build-Desktop-Portable-v0.7.0-x64.zip`：`c1f2e74685e7f03db937141efdf6fe70c571bb328525249791055128c81a6c4f`；SBOM：`a7a47e9a7fdb668f165f9f3813a4bd3807d99ba119155715ab0c129d36790561`；许可证报告：`382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。
 - 仍按锁定策略仅交付本地候选，不推送 GitHub、不创建 Release、不覆盖 0.6.x 资产；真实长会话、Provider 与双并行回合继续由用户桌面验收。
 
 ### 0.7.0 全面审计与稳定性候选（已本地安装，等待验收）
@@ -26,7 +34,7 @@
 - 区分本机 stable 目标和官方已公布版本：公开 Changelog 高于 stable 时仅提示分批发布状态，不会越过更新通道强制安装。
 - 适配 0.2.118 生命周期：快速后台任务完成先于 backgrounded 时不复活任务；Auto Compact 可见且可取消；Recap 按内容哈希去重；未知事件只记录名称、结构版本和大小。
 - 会话删除优先使用官方 `grok sessions delete`，成功后才清理 Desktop 投影/附件/媒体/Token；失败时必须显式选择“仅清理 Desktop 数据”。诊断中心增加受限脱敏的 `grok doctor --json` 摘要。
-- 为 0.2.119/0.2.120 增加按运行时事件启用的前向解析：follow-ups、模型/设置热更新、Goal、Workflow、Subagent、Retry 和后台任务。自定义 Provider 的本地模型身份不会被上游别名改回官方模型；完整 `/btw`、Session/MCP/Git 新界面延期到 0.7.1 且须 stable 实机证据。
+- 为 0.2.119/0.2.120 增加按运行时事件启用的前向解析：follow-ups、模型/设置热更新、Goal、Workflow、Subagent、Retry 和后台任务。自定义 Provider 的本地模型身份不会被上游别名改回官方模型；`/btw`、Session 元数据和 Mermaid 操作已按运行时证据门控接入，MCP/插件/Git 新界面与 doctor 修复仍延期到 stable 实机证据。
 - 本机已按 stable 精确升级到 `grok 0.2.118 (1e1687c1cf)`；真实 `initialize/session/new` 与空会话官方删除完成，最小只读 Plan 回合在 19.28 秒内通过，未出现权限卡或工作区写入。升级过程未安装 0.2.119/0.2.120。
 - 0.2.118 收紧了自定义模型 TOML 思考档位解析。Desktop 不再把对象数组序列化成 CLI 拒绝的 `[[model.*.reasoning_efforts]]`，而是写入原生字符串列表，并把 `auto/none` 留在 Desktop 上游能力层而非 CLI 模型菜单。
 - 会话运行时按会话保存 Provider、本地模型 ID、上游别名、思考档位、模式和执行档案；恢复旧会话时不再被全局默认模型覆盖。受管 Provider 初始化失败会明确阻止发送，不静默回退到官方模型；分叉会话继承父会话运行时。
@@ -35,8 +43,8 @@
 - JsonStore 使用跨进程事务锁和 owner fencing；自动化任务取消改为显式 API，取消/进程退出/可选 ACP 无活动超时均有持久终态，不再设置 24 小时总时限。支持包日志、IPC 参数、文件路径、媒体和 CLI 路径增加运行时边界校验。
 - 附件、媒体、打开位置和系统路径统一绑定会话/工作区/Picker 签发句柄；阻断任意 Renderer 路径、符号链接越界、可执行文件打开和未经允许的远端媒体。媒体远端默认拒绝，只有显式 Provider Origin 才能进入受限抓取。
 - Provider Chat/Responses/Messages/Gemini 翻译、SSE 错误/EOF/Usage、工具名称映射和扫描状态保留现有成果；未验证能力不伪造模型档位或媒体能力。
-- 最终候选一次完整门禁通过 94 个测试文件、670 项离线测试；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、打包版与安装版 0.7.0 UI、`npm audit`（0 漏洞）均通过。
-- 已生成并 per-user 安装唯一一组 0.7.0 本地产物。Setup SHA-256 为 `61877c2f7585352877a704ac8b06ade61818baa36a06d03a4b05488fdf53bfda`，Portable 为 `3532c406bbfefc41f3af1d727f654d5a434e481a98462d4170cc52b47730395d`；File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式通过。现有长会话 Stop、双真实模型并行和已配置 Provider 留给用户验收；验收前不推送、不创建 Release。
+- 最终候选一次完整离线套件通过 94 个测试文件、676 项测试；9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、打包版与安装版 0.7.0 UI、`npm audit`（0 漏洞）均通过。
+- 已生成并 per-user 安装最新源码对应的唯一一组 0.7.0 本地产物。File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式通过；现有长会话 Stop、双真实模型并行和已配置 Provider 留给用户验收。验收前不推送、不创建 Release。
 
 ### 0.6.25 Plan permission hardening and terminal recovery
 

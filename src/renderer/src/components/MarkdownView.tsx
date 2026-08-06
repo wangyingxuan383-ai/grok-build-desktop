@@ -61,7 +61,20 @@ function Mermaid({ source }: { source: string }): React.JSX.Element {
     return () => { active = false; window.clearTimeout(timer); };
   }, [id, light, source]);
   if (error) return <pre className="mermaid-error">{source}</pre>;
-  return <div className="mermaid" dangerouslySetInnerHTML={{ __html: svg }} />;
+  const copySource = (): void => { void navigator.clipboard.writeText(source); };
+  const copyImage = (): void => {
+    if (!svg) return;
+    const encoded = btoa(unescape(encodeURIComponent(svg)));
+    void window.grokDesktop.copyImage(`data:image/svg+xml;base64,${encoded}`);
+  };
+  const openImage = (): void => {
+    if (!svg) return;
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    const popup = window.open(url, "_blank", "noopener,noreferrer");
+    if (!popup) URL.revokeObjectURL(url);
+    else window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
+  return <div className="mermaid-wrap"><div className="mermaid-toolbar" role="toolbar" aria-label="Mermaid 图表操作"><button type="button" onClick={copySource}>复制源码</button><button type="button" disabled={!svg} onClick={copyImage}>复制图像</button><button type="button" disabled={!svg} onClick={openImage}>打开图像</button></div><div className="mermaid" dangerouslySetInnerHTML={{ __html: svg }} /></div>;
 }
 
 function useLightTheme(): boolean {

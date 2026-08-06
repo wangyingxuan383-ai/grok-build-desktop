@@ -352,7 +352,7 @@ export function compatibilityEvidence(
   declared("voice", handshake.features.voiceMode);
   if (handshake.commands.length) evidence.push({ name: "commands", state: "supported", source: "runtime-declaration", observedAt: at });
   if (handshake.models.length) evidence.push({ name: "models", state: "supported", source: "runtime-declaration", observedAt: at });
-  for (const extension of ["x.ai/btw", "x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update", "x.ai/session/usage", "x.ai/session/delete", "x.ai/git/status", "x.ai/mcp/status", "x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
+  for (const extension of ["x.ai/btw", "x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update", "x.ai/session/info", "x.ai/session/usage", "x.ai/session/delete", "x.ai/git/status", "x.ai/mcp/status", "x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
     const declared = declaredExtensions.has(extension);
     const probed = successfulExtensions.has(extension);
     evidence.push({

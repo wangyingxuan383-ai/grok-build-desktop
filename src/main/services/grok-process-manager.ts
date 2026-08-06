@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AppSettings, ChatEvent, CommandInfo, LiveStatus, ProviderLaunchContext, ReasoningEffort, SessionMode } from "../../shared/types";
+import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, ProviderLaunchContext, ReasoningEffort, SessionMode } from "../../shared/types";
 import { buildCliEnv, detectEffortFlag, locateGrokCli } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
 import type { LogService } from "./log-service";
@@ -56,6 +56,24 @@ export class GrokProcessManager {
     }
     if (!adapter) return undefined;
     return adapter.extension(method, params);
+  }
+
+  async listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult> {
+    const adapter = this.findIdleExtensionAdapter();
+    if (!adapter) return { supported: false, sessions: [], source: "unsupported" };
+    return adapter.officialSessionList(cwd, cursor);
+  }
+
+  async sessionInfo(sessionId: string): Promise<CliSessionInfo> {
+    return this.get(sessionId).sessionInfo();
+  }
+
+  async sessionUsage(sessionId: string): Promise<CliSessionUsage> {
+    return this.get(sessionId).sessionUsage();
+  }
+
+  async btw(sessionId: string, text: string): Promise<CliBtwReceipt> {
+    return this.get(sessionId).btw(text);
   }
 
   private findIdleExtensionAdapter(): GrokAcpAdapter | undefined {

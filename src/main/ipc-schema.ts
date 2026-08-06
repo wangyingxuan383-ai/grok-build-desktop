@@ -155,8 +155,15 @@ const RULES: Record<string, Rule> = {
     if (args[0] !== undefined && args[0] !== null && args[0] !== "") pathArg(args, 0);
     if (args[1] !== undefined && args[1] !== null) stringArgAllowEmpty(args, 1, 16_384);
   },
+  "session:official-list": (args) => {
+    if (args[0] !== undefined && args[0] !== null && args[0] !== "") pathArg(args, 0);
+    if (args[1] !== undefined && args[1] !== null) stringArg(args, 1, 4_096);
+  },
   "session:create": (args) => stringOrObjectArg(args, 0, 32_767),
   "session:open": (args) => { pathArg(args, 0); idArg(args, 1); },
+  "session:info": (args) => idArg(args, 0),
+  "session:usage": (args) => idArg(args, 0),
+  "session:btw": (args) => { idArg(args, 0); stringArg(args, 1, 64 * 1024); },
   "session:rename": (args) => { idArg(args, 0); stringArg(args, 1, 4_096); },
   "session:delete": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:delete-desktop-data": (args) => { pathArg(args, 0); idArg(args, 1); },

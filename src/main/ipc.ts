@@ -105,8 +105,12 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("dashboard:clear", (nodeId?: string) => controller.clearAgentDashboardRecord(nodeId));
   handle("attachment:inspect-privacy", (cwd: string, attachments: Attachment[]) => controller.inspectAttachmentPrivacy(cwd, attachments));
   handle("session:list", (cwd?: string, query?: string) => controller.listSessions(cwd, query));
+  handle("session:official-list", (cwd?: string, cursor?: string) => controller.listOfficialSessions(cwd, cursor));
   handle("session:create", (input: string | ExecutionProfileLaunchInput) => controller.createSession(input));
   handle("session:open", (cwd: string, id: string) => controller.openSession(cwd, id));
+  handle("session:info", (id: string) => controller.getCliSessionInfo(id));
+  handle("session:usage", (id: string) => controller.getCliSessionUsage(id));
+  handle("session:btw", (id: string, text: string) => controller.sendBtwPrompt(id, text));
   handle("session:rename", (id: string, title: string) => controller.renameSession(id, title));
   handle("session:delete", (cwd: string, id: string) => controller.deleteSession(cwd, id));
   handle("session:delete-desktop-data", (cwd: string, id: string) => controller.deleteDesktopSessionData(cwd, id));

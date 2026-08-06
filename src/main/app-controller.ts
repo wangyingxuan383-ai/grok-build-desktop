@@ -74,6 +74,10 @@ import type {
   NotificationInboxItem,
   OfflineUiFixture,
   CliCapabilitySnapshot,
+  CliBtwReceipt,
+  CliSessionInfo,
+  CliSessionListResult,
+  CliSessionUsage,
   WorkspaceTreeNode,
   WorkspaceTreeOptions,
   EditorDocument,
@@ -690,6 +694,22 @@ export class AppController {
       const assignment = assignmentBySession.get(row.id);
       return assignment ? { ...row, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : row;
     }).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index).sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult> {
+    return this.processes.listOfficialSessions(cwd, cursor);
+  }
+
+  getCliSessionInfo(sessionId: string): Promise<CliSessionInfo> {
+    return this.processes.sessionInfo(sessionId);
+  }
+
+  getCliSessionUsage(sessionId: string): Promise<CliSessionUsage> {
+    return this.processes.sessionUsage(sessionId);
+  }
+
+  sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt> {
+    return this.processes.btw(sessionId, text);
   }
 
   private async syncSessionOrigins(cwd: string): Promise<void> {
