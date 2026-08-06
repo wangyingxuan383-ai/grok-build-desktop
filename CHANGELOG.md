@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### 0.7.0 ACP 0.2.120 前向适配补充（2026-08-06）
+
+- `initialize` 能力证据现在记录标准 `session/list`、`session/resume` 与 `session/close`；官方 0.2.120 源码形态以脱敏 Fixture 固定，仍不会把尚未进入本机 stable 通道的版本当作可安装版本。
+- 重开会话优先使用运行时声明的 `session/resume`，仅在明确的“方法不存在/参数不支持”错误时回退 `session/load`；传输超时不会盲目重复挂载。退出时尽力发送标准 `session/close`，超时仍会释放 CLI 进程。
+- Plan 决策卡等待期间允许切换模型，其他权限/问题等待仍保持锁定；自定义 Provider 的本地模型身份和上游模型状态继续分离，不会切回全局 Grok 4.5。
+- ACP 回放的用户消息现在保留稳定消息 ID、附件预览和文件/图片资源；MCP 提取图片、直接图片块和重复回放按内容去重并合并到现有消息，不再生成空白或重复图片消息。
+- Windows 文件锁在短暂 `EPERM/EBUSY` 竞争窗口内按锁争用重试，避免并行投影写入偶发失败；真正的权限错误仍立即报告。
+- 离线媒体夹具改用 Electron `nativeImage` 可解码的 RGBA PNG，修复打包 UI 探针中生成媒体卡被误判为“图片数据无效”的候选门禁问题。
+- A–D 变更已通过 94 个测试文件、673 项测试（9 项按设计跳过）、TypeScript、生产/资源构建、公开扫描和分块门禁；本地 0.7.0 打包已重新执行，验收前仍不推送 GitHub、不创建 Release。
+
+### 0.7.0 本地候选最终复核（2026-08-06）
+
+- Setup、Portable、SBOM、许可证报告、SHA-256、Electron Fuses、Task Scheduler 和中文/空格 Portable 冷启动均通过；Portable 已从最新构建同步，避免旧压缩包掩盖 IPC 修复。
+- 当前 0.7.0 UI 门禁覆盖 Plan/权限四种组合、Stop 恢复、多会话隔离、导航、右栏五工具、非 Git Review、文件预览、结构化错误、Token 活动、诊断动作、响应式 Composer/窄栏抽屉和 Provider 管理。
+- Setup `release/Grok-Build-Desktop-Setup-v0.7.0-x64.exe` SHA-256：`72570af030c79cc691bf6413eb9f80c49b15282b1eed46863cc52acb71eab851`；Portable `release/Grok-Build-Desktop-Portable-v0.7.0-x64.zip`：`85fbcf62aab193d0277ab47d81424c89ce181494b79413d2db92c09dc186bc7c`；SBOM：`5c4a9d715a2262a6101c6a748ee0738defac4dc48d670bdd547b9e5e08f06553`；许可证报告：`382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。
+- 仍按锁定策略仅交付本地候选，不推送 GitHub、不创建 Release、不覆盖 0.6.x 资产；真实长会话、Provider 与双并行回合继续由用户桌面验收。
+
 ### 0.7.0 全面审计与稳定性候选（已本地安装，等待验收）
 
 - Grok Build CLI 适配改为运行时证据驱动：保存脱敏的 `initialize` 能力快照，消费 Agent/协议版本、Session/Prompt/MCP 能力、模型/努力档位、命令、Recap、Rewind 与插件目录；版本号仅作为最后一级提示。

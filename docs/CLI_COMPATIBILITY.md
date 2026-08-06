@@ -1,5 +1,13 @@
 # Grok CLI Compatibility
 
+## ACP session resume/close forward shape (0.2.120 source, Desktop 0.7.0)
+
+- The official 0.2.120 source advertises standard `session/list`, `session/resume` and `session/close` capabilities. The sanitized `initialize-0.2.120.json` fixture records those declarations without retaining account, prompt or filesystem data.
+- `session/resume` is capability-gated and is the preferred re-attach path. Its current response may contain only modes/configuration and no `sessionId` or model list; Desktop keeps the requested session identity and uses the runtime handshake as a model fallback.
+- A resume failure falls back to `session/load` only for explicit method/parameter capability errors (`-32601`, `-32602` or equivalent unsupported-method text). Timeouts and transport failures are surfaced instead of issuing a second attach that could create an ambiguous session.
+- `session/close` is a best-effort resource release before an ACP child is terminated. It is not session deletion; the existing official-first `grok sessions delete` path remains responsible for deletion and local projection cleanup.
+- The local stable CLI remains `0.2.118`; 0.2.119/0.2.120 source behavior is forward-parsed and contract-tested only until the stable channel actually offers it.
+
 ## 0.2.118 stable adapter / 0.2.119–0.2.120 forward compatibility (Desktop 0.7.0)
 
 - Desktop-managed Grok processes use `--no-auto-update`. Only the update service may mutate the CLI, and it requires an exact version that still matches the stable feed immediately before installation. Public Changelog versions are display-only until the stable feed offers them.

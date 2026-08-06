@@ -148,7 +148,13 @@ const RULES: Record<string, Rule> = {
   "automations:health:check": noArgs,
   "automations:health:repair": noArgs,
   "automations:clear-context": (args) => idArg(args, 0),
-  "session:list": (args) => { optionalPathArg(args, 0); optionalStringArg(args, 1, 16_384); },
+  // The renderer may ask for the initial catalog before settings hydration and
+  // pass an empty workspace sentinel. The controller deliberately resolves
+  // that sentinel from active settings; do not reject it as a forged path.
+  "session:list": (args) => {
+    if (args[0] !== undefined && args[0] !== null && args[0] !== "") pathArg(args, 0);
+    if (args[1] !== undefined && args[1] !== null) stringArgAllowEmpty(args, 1, 16_384);
+  },
   "session:create": (args) => stringOrObjectArg(args, 0, 32_767),
   "session:open": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:rename": (args) => { idArg(args, 0); stringArg(args, 1, 4_096); },

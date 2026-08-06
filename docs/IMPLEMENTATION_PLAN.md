@@ -1,5 +1,15 @@
 # Grok Build Desktop 实施计划
 
+## 0.7.0 ACP 0.2.120 前向适配 A–D（2026-08-06）
+
+- [x] **A 运行时证据**：将标准 `session/list`、`session/resume`、`session/close` 纳入脱敏 `initialize-0.2.120` Fixture 与能力证据测试；未下发版本不进入安装目标。
+- [x] **B 会话生命周期**：重开优先 `session/resume`，仅能力错误回退 `session/load`；resume 缺少会话/模型字段时使用请求 ID和握手回退；退出前尽力 `session/close`，不阻塞进程释放。
+- [x] **C Plan 模型切换**：Plan 决策尚未提交时允许切换模型，权限/问题等待保持锁定；自定义 Provider 本地模型 ID、上游别名和握手状态继续隔离。
+- [x] **D 回放与图片**：用户回放保留 client/message ID、附件预览和资源链接；直接图片、MCP 提取图片和重复 ACP 回放合并去重；无稳定媒体来源的独立事件不被 Renderer 误折叠。
+- [x] 聚焦验证：8 个测试文件、121 项通过；TypeScript 通过。
+- [x] 候选复核：94 个测试文件、673 项通过（9 项按设计跳过）；TypeScript、生产/资源构建、公开扫描和 Renderer 分块门禁通过。首次打包发现离线媒体夹具的非 RGBA PNG 被 Electron `nativeImage` 拒绝，已换成真实 RGBA PNG 并重新进入打包门禁。
+- [x] 最终本地产物复核：Setup/Portable 从同一最新构建生成，SHA-256、SBOM、许可证报告、Fuses、Task Scheduler、中文/空格 Portable 冷启动及当前 0.7.0 UI 门禁通过；验收前不推送、不创建 Release。
+
 ## v0.7.0 Grok Build CLI 0.2.118 安全适配（2026-08-05）
 
 ### 受控更新与运行时握手

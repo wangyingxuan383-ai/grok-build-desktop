@@ -363,6 +363,7 @@ export default function App(): React.JSX.Element {
   const activeSession = store.sessions.find((value) => value.id === store.activeSessionId);
   const activeCodex = store.codexSessions.find((value) => value.id === activeCodexId);
   const activeClaude = store.claudeSessions.find((value) => value.id === activeClaudeId);
+  const planWaiting = Boolean(view?.messages.some((message) => message.kind === "plan" && message.interactive && !message.resolved));
   const turns = useMemo(() => buildChatTurns(view?.messages ?? [], view?.status, view?.turnPresentations), [view?.messages, view?.status, view?.turnPresentations]);
   const executionRoot = executionAssignment?.cwd || activeSession?.cwd || store.settings?.activeWorkspace || "";
   const lastTurnPaths = useMemo(() => {
@@ -828,6 +829,7 @@ export default function App(): React.JSX.Element {
           setText={setComposer}
           busy={view?.status === "working" || view?.compacting === true}
           controlsDisabled={operationBusy || activeSending || view?.status === "needs-user"}
+          modelControlsDisabled={operationBusy || activeSending || (view?.status === "needs-user" && !planWaiting) || ((view?.status === "working" || view?.compacting === true) && !planWaiting)}
           sessionId={store.activeSessionId}
           attachments={store.attachments}
           reviewComments={reviewComments}

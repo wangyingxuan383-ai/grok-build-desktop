@@ -360,6 +360,8 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         : message);
       break;
     case "media":
+      if (typeof event.source === "string" && event.source.length > 0
+        && next.messages.some((message) => message.kind === "media" && message.media === event.media && message.source === event.source)) break;
       next.messages.push({ id: crypto.randomUUID(), kind: "media", media: event.media, source: event.source, isData: event.isData, mimeType: event.mimeType });
       break;
     case "commands":

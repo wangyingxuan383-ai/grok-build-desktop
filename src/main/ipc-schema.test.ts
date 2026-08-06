@@ -50,6 +50,14 @@ describe("IPC runtime schemas", () => {
     expect(() => validateIpcInvocation("session:send", ["session", "hello", [{ id: "a", name: "x", kind: "executable" }]], 4)).toThrow("类型无效");
   });
 
+  it("allows the pre-settings empty workspace sentinel for session listing", () => {
+    expect(() => validateIpcInvocation("session:list", [""], 2)).not.toThrow();
+    expect(() => validateIpcInvocation("session:list", [undefined], 2)).not.toThrow();
+    expect(() => validateIpcInvocation("session:list", ["C:\\workspace", null], 2)).not.toThrow();
+    expect(() => validateIpcInvocation("session:list", ["C:\\workspace", ""], 2)).not.toThrow();
+    expect(() => validateIpcInvocation("session:list", ["C:\\workspace", "query"], 2)).not.toThrow();
+  });
+
   it("validates sensitive object payload fields instead of trusting TypeScript casts", () => {
     expect(() => validateIpcInvocation("editor:save", [{ workspacePath: "D:\\repo", path: "a.ts", content: "", encoding: "utf8", lineEnding: "lf", expectedHash: "", expectedModifiedAt: "" }], 1)).not.toThrow();
     expect(() => validateIpcInvocation("editor:save", [{ workspacePath: "D:\\repo", path: "a.ts", content: "", encoding: "utf16", lineEnding: "lf", expectedHash: "", expectedModifiedAt: "" }], 1)).toThrow("encoding");

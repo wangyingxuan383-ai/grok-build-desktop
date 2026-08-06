@@ -1,5 +1,15 @@
 # Feature Matrix
 
+## v0.7.0 ACP 0.2.120 forward-compatibility A–D (2026-08-06)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Runtime session capability evidence | Focused verified | Sanitized 0.2.120 initialize fixture and CLI update tests record `session/list`, `session/resume` and `session/close`; the installed stable CLI is still 0.2.118. |
+| Resume-first session lifecycle | Contract verified | Resume is attempted only when declared, falls back to `session/load` only for capability errors, preserves the requested ID when the resume response omits it, and sends best-effort standard close before child teardown. |
+| Plan model switching | Contract verified | The model selector remains enabled only while an interactive Plan decision is pending; permission/question waits remain locked and managed Provider identity is retained. |
+| ACP attachment/media replay | Focused + renderer verified | User-message replay carries stable IDs and attachment previews; resource links/direct images/MCP extracted images are merged and content-deduplicated; source-less media events remain independent. |
+| Current milestone boundary | Source-only | 8 focused files/120 tests and TypeScript pass. Full offline/package/install gates must be rerun for a release candidate; no push or Release is made. |
+
 ## v0.7.0 comprehensive audit candidate (local, not released)
 
 | Area | Status | Evidence / boundary |

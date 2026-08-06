@@ -15,6 +15,8 @@ describe.skipIf(process.platform !== "win32")("Grok ACP contract", () => {
     const argsMarker = join(root, "args.json");
     const effortMarker = join(root, "effort-request.json");
     const modelMarker = join(root, "model-request.json");
+    const resumeMarker = join(root, "resume-request.json");
+    const closeMarker = join(root, "close-request.json");
     const queueMarker = join(root, "queue-request.json");
     const queueEditMarker = join(root, "queue-edit.json");
     const queueInterjectMarker = join(root, "queue-interject.json");
@@ -28,6 +30,8 @@ const marker = ${JSON.stringify(marker)};
 const argsMarker = ${JSON.stringify(argsMarker)};
 const effortMarker = ${JSON.stringify(effortMarker)};
 const modelMarker = ${JSON.stringify(modelMarker)};
+const resumeMarker = ${JSON.stringify(resumeMarker)};
+const closeMarker = ${JSON.stringify(closeMarker)};
 const queueMarker = ${JSON.stringify(queueMarker)};
 const queueEditMarker = ${JSON.stringify(queueEditMarker)};
 const queueInterjectMarker = ${JSON.stringify(queueInterjectMarker)};
@@ -44,7 +48,7 @@ rl.on("line", async (line) => {
     await writeFile(marker, JSON.stringify(message));
     return;
   }
-  if (message.method === "initialize") return send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1 } });
+  if (message.method === "initialize") return send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } }, _meta: { modelState: { currentModelId: "grok-4.5", availableModels: [{ modelId: "grok-4.5", name: "Official Grok" }, { modelId: "openai-compatible-grok-4.5", name: "CPA Grok" }] } } } });
   if (message.method === "session/new") {
     send({ jsonrpc: "2.0", id: "server-unknown", method: "x.test/future_request", params: {} });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "imagine", description: "Create media" }] } } });
@@ -52,6 +56,14 @@ rl.on("line", async (line) => {
   }
   if (message.method === "session/load") {
     return send({ jsonrpc: "2.0", id: message.id, result: { sessionId: message.params.sessionId, models: { currentModelId: "grok-4.5", availableModels: [{ modelId: "grok-4.5", name: "Official Grok" }, { modelId: "openai-compatible-grok-4.5", name: "CPA Grok" }] } } });
+  }
+  if (message.method === "session/resume") {
+    await writeFile(resumeMarker, JSON.stringify(message.params));
+    return send({ jsonrpc: "2.0", id: message.id, result: { modes: { availableModes: [{ id: "default" }] } } });
+  }
+  if (message.method === "session/close") {
+    await writeFile(closeMarker, JSON.stringify(message.params));
+    return send({ jsonrpc: "2.0", id: message.id, result: {} });
   }
   if (message.method === "session/set_mode") return send({ jsonrpc: "2.0", id: message.id, result: {} });
   if (message.method === "session/set_model") {
@@ -67,10 +79,11 @@ rl.on("line", async (line) => {
       send({ jsonrpc: "2.0", method: "_x.ai/queue/changed", params: { sessionId: "fake-session", entries: [{ id: message.params._meta.promptId, version: 2, owner: "grok-build-desktop", kind: "prompt", text: "queued text", position: 0 }] } });
       return send({ jsonrpc: "2.0", id: message.id, result: { queued: true } });
     }
+    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "user_message_chunk", message_id: "client-replayed", content: { type: "resource_link", uri: ${JSON.stringify(join(root, "notes.md"))}, name: "notes.md" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "call-image", title: "image_gen", status: "in_progress" } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "call-image", title: "image_gen", status: "completed", content: [{ type: "content", content: { type: "text", text: JSON.stringify({ path: generatedImage }) } }] } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "call-image", title: "image_gen", status: "completed", content: [{ type: "content", content: { type: "image", data: "aGVsbG8=", mimeType: "image/png" } }, { type: "content", content: { type: "text", text: JSON.stringify({ path: generatedImage }) } }] } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "task_backgrounded", tool_call_id: "call-bg", task_id: "task-1", command: "echo hello", description: "Background echo" } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "task_completed", task_snapshot: { task_id: "task-1", command: "echo hello", completed: true, exit_code: 0, output: "hello", truncated: true } } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "turn_completed", usage: { totalTokens: 41 } } } });
@@ -182,6 +195,8 @@ rl.on("line", async (line) => {
       });
       try {
         await resumed.start("persisted-session");
+        await waitForFile(resumeMarker);
+        expect(JSON.parse(await readFile(resumeMarker, "utf8"))).toMatchObject({ sessionId: "persisted-session", cwd: root });
         await waitForFile(modelMarker);
         expect(JSON.parse(await readFile(modelMarker, "utf8"))).toEqual({
           sessionId: "persisted-session",
@@ -191,10 +206,13 @@ rl.on("line", async (line) => {
       } finally {
         await resumed.dispose(500);
       }
+      expect(JSON.parse(await readFile(closeMarker, "utf8"))).toEqual({ sessionId: "persisted-session" });
       expect(events).toEqual(expect.arrayContaining([
         expect.objectContaining({ type: "thought-chunk", sessionId: "fake-session", text: "thinking" }),
+        expect.objectContaining({ type: "user-message", sessionId: "fake-session", clientMessageId: "client-replayed", attachments: [expect.objectContaining({ name: "notes.md", kind: "file" })] }),
         expect.objectContaining({ type: "message-chunk", sessionId: "fake-session", text: "hello" }),
         expect.objectContaining({ type: "commands", sessionId: "fake-session", commands: [expect.objectContaining({ name: "imagine" })] }),
+        expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: "aGVsbG8=", isData: true }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: join(root, "images", "generated.jpg") }),
         // turn_completed is the authoritative terminal payload. A later/absent
         // prompt response must not keep the adapter working or replace its usage.

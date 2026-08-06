@@ -1,16 +1,24 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-05，0.7.0 本地候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-06，0.7.0 本地候选）
 
 > **CLI 0.2.118 适配进度：** 已建立受控更新、运行时能力快照、官方优先会话删除、Compact/Recap/后台任务乱序兼容，以及 0.2.119/0.2.120 的事件前向解析。所有受管子进程已禁用 CLI 自更新；本机已从 `grok 0.2.117 (f1c0609308)` 精确升级到 stable `0.2.118 (1e1687c1cf)`。真实握手、空会话删除及一次最小 Plan 已通过；0.7.0 已完成全量离线门禁、正式打包、per-user 安装和安装版冷启动，当前是等待用户桌面验收的本地候选，不是公开发布版。
 
 > **接手顺序：** 先由用户验收已安装的 0.7.0，重点检查现有长会话的 Plan/Stop、两个真实并行模型会话和已配置自定义 Provider。受管 Provider 下一次启动时会把旧 `reasoning_efforts` 数组表迁移为 0.2.118 接受的字符串列表。0.2.119/0.2.120 未由 stable 下发时禁止强装；0.7.1 功能只保留 Fixture 前向解析。验收前不要推送或创建 Release。
 
+## 2026-08-06 ACP 0.2.120 前向适配 A–D 已完成
+
+- A：能力证据覆盖标准 `session/list`、`session/resume`、`session/close`，使用脱敏 0.2.120 源码形态 Fixture；本机 stable 仍为 0.2.118。
+- B：重开会话优先 `session/resume`，只有明确能力错误才回退 `session/load`；resume 缺字段时保留请求的 session ID并从握手恢复模型；退出尽力 `session/close` 后再释放子进程。
+- C：Plan 决策卡等待时允许改模型，权限/问题等待不解锁；Provider 本地模型身份不被上游别名覆盖。
+- D：ACP 用户回放携带稳定消息 ID、附件预览、资源链接；直接图片/MCP 提取图片和重复事件合并去重，缺少稳定媒体来源的事件不会被误删。
+- 当前证据：8 个聚焦测试文件、121 项通过；随后完整门禁 94 个测试文件、673 项通过（9 项按设计跳过），TypeScript、生产/资源构建、公开扫描和 Renderer 分块门禁通过。首次候选打包暴露离线媒体夹具 PNG 不被 Electron `nativeImage` 接受，已替换为真实 RGBA PNG；同轮还将 Windows `EPERM/EBUSY` 短暂锁竞争纳入重试。最新 Setup/Portable 已从同一构建重新生成，打包版 UI、Fuses、Task Scheduler、中文/空格 Portable 冷启动均通过；未推送、未创建 Release。
+
 > **0.7.0 当前状态：** 工作分支为 `codex/v0.7.0-audit-hardening`，已在 `19cff12 chore: checkpoint v0.7.0 audit candidate` 保存实施前基线，未重置既有改动。源码、lockfile、File/Product、安装版及 About 均为 **0.7.0**；尚未推送、未创建 Release、未覆盖既有 0.6.x 资产。
 
 > **本轮已完成的关键审计修复：** 会话运行时按会话保存 Provider/本地模型/上游别名/思考档位/模式/执行档案，Provider 失败不回退；Plan 决定立即关闭旧交互门并异步切模式；稳定 turnId 结算迟到/重复终态；accepted/running 队列持久化；ConversationProjection V2 对 ACP 回放做缺失尾部合并；JsonStore/自动化采用事务锁和显式取消；附件、媒体句柄、打开位置、CLI 路径及符号链接做主进程可信边界校验。
 
-> **验证证据：** 最终候选一次完整门禁通过 94 个测试文件、670 项离线测试；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、0.7.0 打包 UI 及 `npm audit`（0 漏洞）通过。真实 CLI 0.2.118 最小只读 Plan 在 19.28 秒内完成，无权限卡、无工作区写入。安装版又独立通过 1280/1440/1920、125%–200% 的 0.7.0 UI 冷启动探针。真实自定义 Provider、双模型并行及既有长会话 Stop 仍是用户验收边界。
+> **验证证据：** 最新候选完整门禁通过 94 个测试文件、673 项离线测试；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、0.7.0 打包 UI、Task Scheduler、中文/空格 Portable 冷启动及 `npm audit`（0 漏洞）通过。真实 CLI 0.2.118 最小只读 Plan 在 19.28 秒内完成，无权限卡、无工作区写入。真实自定义 Provider、双模型并行及既有长会话 Stop 仍是用户验收边界。
 
-> **0.7.0 本地产物：** Setup SHA-256 `61877c2f7585352877a704ac8b06ade61818baa36a06d03a4b05488fdf53bfda`；Portable SHA-256 `3532c406bbfefc41f3af1d727f654d5a434e481a98462d4170cc52b47730395d`；SBOM SHA-256 `94f0d554c708f1fbdc731918fde88582ba94f525050b6bebd3fdb2500e7192c8`；许可证报告 SHA-256 `382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。桌面和开始菜单快捷方式均指向 `%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`，ASAR 与 Fuses 已验证。
+> **0.7.0 本地产物：** Setup SHA-256 `72570af030c79cc691bf6413eb9f80c49b15282b1eed46863cc52acb71eab851`；Portable SHA-256 `85fbcf62aab193d0277ab47d81424c89ce181494b79413d2db92c09dc186bc7c`；SBOM SHA-256 `5c4a9d715a2262a6101c6a748ee0738defac4dc48d670bdd547b9e5e08f06553`；许可证报告 SHA-256 `382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。桌面和开始菜单快捷方式均指向 `%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`，ASAR 与 Fuses 已验证。
 
 > **下一步顺序：** 用户在桌面安装版验收 0.7.0；仅对验收暴露的问题运行受影响测试。通过后再更新公开发布状态、推送分支并创建 Release。0.7.1 继续等待 stable 实际下发 0.2.119/0.2.120 后再做真实能力验收。
 
