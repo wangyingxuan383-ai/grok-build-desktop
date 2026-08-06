@@ -647,6 +647,21 @@ export default function App(): React.JSX.Element {
     }
   };
 
+  const sendBtw = async (): Promise<void> => {
+    const text = composer.trim();
+    const sessionId = store.activeSessionId;
+    if (!text || !sessionId || !view?.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "btw")) return;
+    try {
+      const receipt = await window.grokDesktop.sendBtwPrompt(sessionId, text);
+      if (receipt.accepted) setComposer("");
+      setComposerNotice(receipt.message || (receipt.accepted ? "旁路提问已发送，不会打断当前回合。" : "当前 CLI 不支持旁路提问。"));
+      window.setTimeout(() => setComposerNotice(""), 4_000);
+    } catch (error) {
+      setComposerNotice(`旁路提问失败：${errorMessage(error)}`);
+      window.setTimeout(() => setComposerNotice(""), 6_000);
+    }
+  };
+
   const navigatePromptHistory = (direction: -1 | 1): void => {
     if (!promptHistory.length) return;
     const next = direction === -1 ? Math.min(promptHistory.length - 1, historyIndex + 1) : Math.max(-1, historyIndex - 1);
@@ -840,6 +855,8 @@ export default function App(): React.JSX.Element {
           view={view}
           onSend={() => void send(view?.status === "working" ? "queue" : "normal")}
           onInterject={() => void send("interject")}
+          btwAvailable={Boolean(view?.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "btw"))}
+          onBtw={() => void sendBtw()}
           onBlockedSubmit={() => {
             const reason = view?.status === "needs-user" ? "请先处理当前的计划、权限或问题卡片，然后再发送。"
               : activeSending ? "当前会话的消息正在提交，稍后会自动恢复。"

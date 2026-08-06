@@ -322,6 +322,18 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .file-line-stats i { color: var(--success); font-style: normal; }
 .file-line-stats b { color: var(--danger); font-weight: 600; }
 .mermaid { padding: 12px; overflow: auto; background: var(--panel); border-radius: 8px; }
+.mermaid-wrap { position: relative; }
+.mermaid-toolbar { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px 0; background: var(--panel); border-radius: 8px 8px 0 0; }
+.mermaid-toolbar button { border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); padding: 3px 8px; font-size: 12px; cursor: pointer; }
+.mermaid-toolbar button:hover:not(:disabled), .mermaid-toolbar button:focus-visible { color: var(--text); border-color: var(--accent); }
+.mermaid-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
+.session-tool section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.session-tool section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.session-tool section > header span { color: var(--muted); font-size: 12px; }
+.session-tool section > header button { border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-secondary); padding: 4px 8px; cursor: pointer; }
+.session-detail-list { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 8px 12px; margin: 0; font-size: 12px; }
+.session-detail-list dt { color: var(--muted); }
+.session-detail-list dd { margin: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-row, .thinking-placeholder, .thought-card, .tool-card, .action-card, .plan-card, .error-card {
   width: min(var(--content-width), calc(100% - 48px));
   margin-left: auto;

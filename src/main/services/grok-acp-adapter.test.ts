@@ -2,10 +2,44 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, extractAcpToolDiff, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizePromptQueue, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
+import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, extractAcpToolDiff, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
+  it("normalizes capability-gated official session surfaces without preserving raw payloads", () => {
+    expect(normalizeCliSessionList({ sessions: [{ id: "s1", cwd: "C:\\work", name: "审计", model_id: "grok-4.5", message_count: 3 }], next_cursor: "next" })).toEqual({
+      supported: true,
+      sessions: [{ sessionId: "s1", cwd: "C:\\work", title: "审计", modelId: "grok-4.5", messageCount: 3 }],
+      nextCursor: "next",
+      source: "acp",
+    });
+    expect(normalizeCliSessionInfo("s1", { session: { id: "s1", mode_id: "plan", reasoning_effort: "high", title: "计划" } })).toMatchObject({ supported: true, sessionId: "s1", title: "计划", mode: "plan", effort: "high", source: "acp" });
+    expect(normalizeCliSessionUsage("s1", { usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 } })).toEqual({ supported: true, sessionId: "s1", inputTokens: 10, outputTokens: 4, totalTokens: 14, source: "acp" });
+  });
+
+  it("does not infer unsupported official session features", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    Object.assign(adapter, { sessionId: "s1", runtimeHandshake: { extensions: [], sessionCapabilities: {} } });
+    expect(await adapter.btw("hello")).toMatchObject({ accepted: false, source: "unsupported", sessionId: "s1" });
+    expect(await adapter.sessionInfo()).toMatchObject({ supported: false, source: "unsupported", sessionId: "s1" });
+    expect(await adapter.sessionUsage()).toMatchObject({ supported: false, source: "unsupported", sessionId: "s1" });
+  });
+
+  it("calls x.ai/btw and ACP session/list only after runtime evidence", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    adapter.sessionId = "s1";
+    adapter.runtimeHandshake = { extensions: ["x.ai/btw", "x.ai/session/info", "x.ai/session/usage"], sessionCapabilities: { list: true } };
+    adapter.extension = vi.fn(async (method: string) => method === "x.ai/btw" ? { result: { answer: "侧边回答", request_id: "btw-1" } } : { result: { title: "T" } });
+    adapter.request = vi.fn(async () => ({ sessions: [{ id: "s1", title: "T" }] }));
+    expect(await adapter.btw("侧边问题")).toMatchObject({ accepted: true, requestId: "btw-1", message: "侧边回答", source: "acp" });
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/btw", { session_id: "s1", question: "侧边问题" });
+    expect(await adapter.officialSessionList("C:\\work")).toMatchObject({ supported: true, sessions: [{ sessionId: "s1", title: "T" }] });
+    expect(adapter.request).toHaveBeenCalledWith("session/list", { cwd: "C:\\work" }, 20_000);
+    await adapter.sessionInfo();
+    await adapter.sessionUsage();
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/info", { session_id: "s1" });
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/usage", { session_id: "s1" });
+  });
   it("does not impose a Desktop wall-clock ceiling on interactive turns", () => {
     expect(INTERACTIVE_PROMPT_TIMEOUT_MS).toBeNull();
   });

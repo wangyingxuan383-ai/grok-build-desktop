@@ -10,6 +10,11 @@ import { fileURLToPath } from "node:url";
 import {
   REASONING_EFFORTS,
   type Attachment,
+  type CliBtwReceipt,
+  type CliSessionInfo,
+  type CliSessionListItem,
+  type CliSessionListResult,
+  type CliSessionUsage,
   type ChatEvent,
   type CliRuntimeHandshake,
   type CommandInfo,
@@ -556,6 +561,77 @@ export class GrokAcpAdapter extends EventEmitter {
     const result = await this.request(method, { sessionId: this.sessionId, ...params }) as Record<string, unknown>;
     this.observeRuntimeExtension(method);
     return result;
+  }
+
+  /**
+   * Submit a non-blocking side question through the official x.ai/btw
+   * extension.  The command is only exposed after the runtime advertises it
+   * (or a previous observed event proved it); older CLIs return an explicit
+   * unsupported receipt instead of silently turning it into a queue item.
+   */
+  async btw(text: string): Promise<CliBtwReceipt> {
+    const value = text.trim();
+    if (!value) throw new Error("旁路提问不能为空");
+    if (!this.runtimeSupportsExtension("x.ai/btw")) {
+      return { accepted: false, sessionId: this.sessionId, source: "unsupported", message: "当前 Grok CLI 未声明 /btw 旁路提问能力" };
+    }
+    // The official CLI calls this a side question and requires the owning
+    // session id plus `question`; `text` is not a recognized wire field.
+    const result = await this.extension("x.ai/btw", { session_id: this.sessionId, question: value });
+    const payload = unwrapExtResult(result);
+    return {
+      accepted: payload.accepted !== false && payload.ok !== false && payload.success !== false,
+      sessionId: this.sessionId,
+      requestId: firstNonEmptyString(payload.requestId, payload.request_id, payload.id),
+      // 0.2.119+ returns the side answer as `answer`. Keep it in the
+      // receipt so the renderer can show the result without creating a fake
+      // assistant turn or queue entry.
+      message: firstNonEmptyString(payload.answer, payload.message, payload.status),
+      source: "acp",
+    };
+  }
+
+  /** Official ACP session/list, when advertised by initialize. */
+  async officialSessionList(cwd?: string, cursor?: string): Promise<CliSessionListResult> {
+    if (!this.runtimeHandshake?.sessionCapabilities?.list) {
+      return { supported: false, sessions: [], source: "unsupported" };
+    }
+    try {
+      const result = await this.request(acpMethods.agent.session.list, {
+        ...(cwd ? { cwd } : {}),
+        ...(cursor ? { cursor } : {}),
+      }, 20_000) as Record<string, unknown>;
+      return normalizeCliSessionList(result);
+    } catch (error) {
+      if (isAcpCapabilityError(error)) return { supported: false, sessions: [], source: "unsupported" };
+      throw error;
+    }
+  }
+
+  /** x.ai/session/info is an optional read-only extension. */
+  async sessionInfo(): Promise<CliSessionInfo> {
+    if (!this.runtimeSupportsExtension("x.ai/session/info")) {
+      return { supported: false, sessionId: this.sessionId, source: "unsupported" };
+    }
+    try {
+      return normalizeCliSessionInfo(this.sessionId, unwrapExtResult(await this.extension("x.ai/session/info", { session_id: this.sessionId })));
+    } catch (error) {
+      if (isAcpCapabilityError(error)) return { supported: false, sessionId: this.sessionId, source: "unsupported" };
+      throw error;
+    }
+  }
+
+  /** x.ai/session/usage is optional; never infer token detail when absent. */
+  async sessionUsage(): Promise<CliSessionUsage> {
+    if (!this.runtimeSupportsExtension("x.ai/session/usage")) {
+      return { supported: false, sessionId: this.sessionId, source: "unsupported" };
+    }
+    try {
+      return normalizeCliSessionUsage(this.sessionId, unwrapExtResult(await this.extension("x.ai/session/usage", { session_id: this.sessionId })));
+    } catch (error) {
+      if (isAcpCapabilityError(error)) return { supported: false, sessionId: this.sessionId, source: "unsupported" };
+      throw error;
+    }
   }
 
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
@@ -1487,6 +1563,16 @@ export class GrokAcpAdapter extends EventEmitter {
     }
   }
 
+  private runtimeSupportsExtension(method: string): boolean {
+    if (!this.runtimeHandshake) return false;
+    if (this.runtimeHandshake.extensions.includes(method)) return true;
+    // Some 0.2.x builds expose private extensions as boolean capability keys
+    // rather than the flat extension list.  Treat only an explicit true as
+    // support; version numbers and command names alone are not enough here.
+    return this.runtimeHandshake.sessionCapabilities?.[method] === true
+      || this.runtimeHandshake.promptCapabilities?.[method] === true;
+  }
+
   private applyModelStateUpdate(state: Record<string, unknown>): void {
     const available = arrayValue(state.availableModels) ?? arrayValue(state.available_models) ?? [];
     const models = available.flatMap((item): ModelInfo[] => {
@@ -2267,6 +2353,69 @@ function unwrapExtResult(value: Record<string, unknown>): Record<string, unknown
     throw new Error(String(error ?? "Grok 扩展请求失败"));
   }
   return value.result && typeof value.result === "object" ? value.result as Record<string, unknown> : value;
+}
+
+export function normalizeCliSessionList(value: Record<string, unknown>): CliSessionListResult {
+  const rows = Array.isArray(value.sessions) ? value.sessions : Array.isArray(value.items) ? value.items : [];
+  const sessions: CliSessionListItem[] = rows.flatMap((item): CliSessionListItem[] => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const sessionId = firstNonEmptyString(row.sessionId, row.session_id, row.id);
+    if (!sessionId) return [];
+    return [{
+      sessionId,
+      cwd: firstNonEmptyString(row.cwd, row.workspace, row.directory),
+      title: firstNonEmptyString(row.title, row.name, row.label),
+      createdAt: firstNonEmptyString(row.createdAt, row.created_at),
+      updatedAt: firstNonEmptyString(row.updatedAt, row.updated_at, row.lastActivityAt),
+      modelId: firstNonEmptyString(row.modelId, row.model_id),
+      messageCount: optionalNonNegativeInteger(row.messageCount ?? row.message_count),
+    }];
+  });
+  return {
+    supported: true,
+    sessions,
+    nextCursor: firstNonEmptyString(value.nextCursor, value.next_cursor, value.cursor),
+    source: "acp",
+  };
+}
+
+export function normalizeCliSessionInfo(sessionId: string, value: Record<string, unknown>): CliSessionInfo {
+  const row = recordValue(value.session) ?? value;
+  const data = recordValue(row.data) ?? {};
+  const rawMode = firstNonEmptyString(row.mode, row.modeId, row.mode_id, data.mode, data.modeId, data.mode_id);
+  const rawEffort = normalizeReasoningEffort(row.effort ?? row.reasoningEffort ?? row.reasoning_effort ?? data.effort ?? data.reasoningEffort ?? data.reasoning_effort);
+  return {
+    supported: true,
+    sessionId: firstNonEmptyString(row.sessionId, row.session_id, row.id) ?? sessionId,
+    cwd: firstNonEmptyString(row.cwd, row.workspace, row.directory),
+    title: firstNonEmptyString(row.title, row.name, row.label, data.title),
+    modelId: firstNonEmptyString(row.modelId, row.model_id, data.modelId, data.model_id, data.resolvedModelId, data.resolved_model_id, data.model),
+    mode: rawMode === "agent" || rawMode === "plan" || rawMode === "auto" ? rawMode : undefined,
+    effort: rawEffort,
+    createdAt: firstNonEmptyString(row.createdAt, row.created_at),
+    updatedAt: firstNonEmptyString(row.updatedAt, row.updated_at, row.lastActivityAt),
+    source: "acp",
+  };
+}
+
+export function normalizeCliSessionUsage(sessionId: string, value: Record<string, unknown>): CliSessionUsage {
+  const row = recordValue(value.usage) ?? value;
+  return {
+    supported: true,
+    sessionId: firstNonEmptyString(row.sessionId, row.session_id, row.id) ?? sessionId,
+    inputTokens: optionalNonNegativeInteger(row.inputTokens ?? row.input_tokens ?? row.promptTokens ?? row.prompt_tokens),
+    outputTokens: optionalNonNegativeInteger(row.outputTokens ?? row.output_tokens ?? row.completionTokens ?? row.completion_tokens),
+    cachedReadTokens: optionalNonNegativeInteger(row.cachedReadTokens ?? row.cached_read_tokens ?? row.cacheReadTokens),
+    reasoningTokens: optionalNonNegativeInteger(row.reasoningTokens ?? row.reasoning_tokens),
+    totalTokens: optionalNonNegativeInteger(row.totalTokens ?? row.total_tokens ?? row.tokens),
+    source: "acp",
+  };
+}
+
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isInteger(number) && number >= 0 ? number : undefined;
 }
 
 function isMethodNotFound(error: unknown): boolean {
