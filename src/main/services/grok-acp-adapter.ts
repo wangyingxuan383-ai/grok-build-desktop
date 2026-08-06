@@ -5,7 +5,8 @@ import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sd
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { createInterface, type Interface } from "node:readline";
-import { dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   REASONING_EFFORTS,
   type Attachment,
@@ -265,6 +266,7 @@ interface SessionResponse {
   };
   modes?: { currentModeId?: string; availableModes?: unknown[] };
 }
+type SessionModel = NonNullable<NonNullable<SessionResponse["models"]>["availableModels"]>[number];
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".webm", ".m4v"]);
@@ -295,6 +297,8 @@ export class GrokAcpAdapter extends EventEmitter {
   private readonly terminal: TerminalService;
   private readonly terminalCommands = new Map<string, string>();
   private readonly mediaToolIds = new Set<string>();
+  /** Prevent MCP/image replay from rendering the same artifact twice. */
+  private readonly emittedMediaKeys = new Set<string>();
   private readonly backgroundTasks = new Map<string, BackgroundTask>();
   private readonly completedBackgroundTasks = new Map<string, { update: Record<string, any>; at: number }>();
   private readonly recapHashes = new Set<string>();
@@ -358,6 +362,10 @@ export class GrokAcpAdapter extends EventEmitter {
   }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
   get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
+  /** Official Grok allows a model change while the Plan decision card is
+   * waiting. This is deliberately narrower than `needsUser`, which also
+   * covers permission/question prompts that must remain locked. */
+  get planDecisionPending(): boolean { return this.pendingPlanRequest !== undefined; }
   setNextTurnOrdinal(value: number): void { this.nextTurnOrdinal = Math.max(this.nextTurnOrdinal, Math.max(0, Math.floor(value))); }
 
   async waitForCommands(timeoutMs = 2_000): Promise<CommandInfo[]> {
@@ -433,15 +441,47 @@ export class GrokAcpAdapter extends EventEmitter {
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
     this.emit("runtime-handshake", this.runtimeHandshake);
-    if (resumeSessionId) this.sessionId = resumeSessionId;
-    const response = await this.request(resumeSessionId ? acpMethods.agent.session.load : acpMethods.agent.session.new, {
+    const sessionParams = {
       ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
       cwd: this.options.cwd,
       mcpServers: this.options.sessionMcpServers ?? [],
       ...((this.options.pluginDirs?.length || this.options.sessionMeta) ? { _meta: { ...(this.options.sessionMeta ?? {}), ...(this.options.pluginDirs?.length ? { pluginDirs: this.options.pluginDirs } : {}) } } : {}),
-    }, 120_000) as SessionResponse;
+    };
+    let response: SessionResponse;
+    if (!resumeSessionId) {
+      response = await this.request(acpMethods.agent.session.new, sessionParams, 120_000) as SessionResponse;
+    } else if (this.runtimeHandshake?.sessionCapabilities?.resume) {
+      // `session/resume` re-attaches without replaying the complete transcript.
+      // This is important for a second Desktop window and for long sessions;
+      // the local projection remains the source of visible history.
+      try {
+        const resumed = await this.request(acpMethods.agent.session.resume, sessionParams, 120_000) as SessionResponse | undefined;
+        // ACP 0.2.120 currently returns only modes/configuration for resume;
+        // tolerate an empty result and keep the requested identity rather than
+        // turning a successful re-attach into a renderer-visible crash.
+        response = { ...(resumed ?? {}), sessionId: resumed?.sessionId || resumeSessionId };
+      } catch (error) {
+        // A rolling CLI may advertise the capability before its worker is
+        // upgraded. Only method/parameter capability failures fall back to
+        // load; timeouts and transport errors are not retried against another
+        // session method because the server may already have resumed it.
+        if (!isAcpCapabilityError(error)) throw error;
+        await this.options.log.log(`session/resume 不可用，回退 session/load：${error instanceof Error ? error.message : String(error)}`);
+        response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
+      }
+    } else {
+      response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
+    }
+    if (resumeSessionId) this.sessionId = resumeSessionId;
     this.sessionId = response.sessionId || resumeSessionId || "";
-    this.models = (response.models?.availableModels ?? []).map((model) => {
+    const availableModels: SessionModel[] = response.models?.availableModels?.length
+      ? response.models.availableModels
+      : ((this.runtimeHandshake?.models ?? []).map((model) => ({
+        modelId: model.modelId,
+        name: model.name ?? model.modelId,
+        ...(model.reasoningEfforts?.length ? { _meta: { supportsReasoningEffort: true, reasoningEfforts: model.reasoningEfforts.map((value) => ({ value })) } } : {}),
+      })) as SessionModel[]);
+    this.models = availableModels.map((model) => {
       const reasoningEfforts = (model._meta?.reasoningEfforts ?? []).flatMap((item) => {
         const effort = normalizeReasoningEffort(item.value);
         if (!effort) return [];
@@ -461,7 +501,7 @@ export class GrokAcpAdapter extends EventEmitter {
         reasoningEfforts,
       };
     });
-    const reportedModelId = response.models?.currentModelId;
+    const reportedModelId = response.models?.currentModelId ?? this.runtimeHandshake?.currentModelId;
     this.upstreamModelId = reportedModelId || "";
     this.currentModelId = this.providerLocalModelId ?? resolveModelId(reportedModelId, this.models, this.requestedModelId) ?? "";
     if (this.runtimeHandshake) {
@@ -1080,9 +1120,20 @@ export class GrokAcpAdapter extends EventEmitter {
       this.pendingQueueOperations.clear();
     }
     this.finishEffortChange(false);
-    this.lines?.close();
     await this.terminal.disposeAll();
     const child = this.process;
+    if (child && child.exitCode === null && this.sessionId && this.runtimeHandshake?.sessionCapabilities?.close) {
+      // Standard ACP close is a resource release, not permanent session
+      // deletion. It also cancels a live turn before the child is terminated.
+      // Best effort is intentional: a dead or wedged CLI must never prevent
+      // Desktop shutdown.
+      try {
+        await this.request(acpMethods.agent.session.close, { sessionId: this.sessionId }, Math.min(5_000, timeoutMs));
+      } catch (error) {
+        await this.options.log.log(`session/close 未完成，继续释放 CLI 进程：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    this.lines?.close();
     // Emit before the early return: a process that never spawned, or already
     // exited, still owns a lease that nothing else will ever release.
     if (!child || child.exitCode !== null) { this.emitClosed(); return; }
@@ -1139,26 +1190,21 @@ export class GrokAcpAdapter extends EventEmitter {
         else this.emitMediaFromContent(update.content);
         break;
       }
-      case "user_message_chunk":
-        if (update.content?.type === "image" && typeof update.content.data === "string") {
-          this.emitEvent({
-            type: "user-message",
-            sessionId: this.sessionId,
-            text: "",
-            attachments: [{
-              id: crypto.randomUUID(),
-              name: "会话图片",
-              kind: "image",
-              mimeType: typeof update.content.mimeType === "string" ? update.content.mimeType : "image/png",
-              size: Math.floor(update.content.data.length * 0.75),
-              source: update.content.data,
-              isData: true,
-              availability: "ready",
-            }],
-            delivery: "sent",
-          });
-        } else this.emitEvent({ type: "user-message", sessionId: this.sessionId, text: update.content?.text || "", delivery: "sent" });
+      case "user_message_chunk": {
+        const content = update.content ?? {};
+        const attachments = acpAttachmentPreviews(content);
+        const text = typeof content.text === "string" ? content.text : "";
+        const clientMessageId = firstNonEmptyString(update.clientMessageId, update.client_message_id, update.messageId, update.message_id, update.promptId, update.prompt_id);
+        this.emitEvent({
+          type: "user-message",
+          sessionId: this.sessionId,
+          text,
+          ...(clientMessageId ? { id: clientMessageId, clientMessageId } : {}),
+          ...(attachments.length ? { attachments } : {}),
+          delivery: "sent",
+        });
         break;
+      }
       case "agent_thought_chunk":
         this.emitEvent({ type: "thought-chunk", sessionId: this.sessionId, text: update.content?.text || "" });
         break;
@@ -2090,8 +2136,21 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private emitMediaFromContent(content: any): void {
     if (!content) return;
-    if (content.type === "image" && typeof content.data === "string") {
-      this.emitEvent({ type: "media", sessionId: this.sessionId, media: "image", source: content.data, isData: true, mimeType: content.mimeType || "image/png" });
+    const emitImage = (data: unknown, mimeType: unknown): void => {
+      if (typeof data !== "string" || !data) return;
+      const mime = typeof mimeType === "string" && mimeType.startsWith("image/") ? mimeType : "image/png";
+      const key = `image:${createHash("sha256").update(`${mime}\u0000${data}`).digest("hex")}`;
+      if (this.emittedMediaKeys.has(key)) return;
+      this.emittedMediaKeys.add(key);
+      if (this.emittedMediaKeys.size > 512) this.emittedMediaKeys.delete(this.emittedMediaKeys.values().next().value!);
+      this.emitEvent({ type: "media", sessionId: this.sessionId, media: "image", source: data, isData: true, mimeType: mime });
+    };
+    if (content.type === "image") emitImage(content.data, content.mimeType ?? content.mime_type);
+    // Grok Build extracts MCP/file images before truncating the text payload.
+    // They arrive as side-channel arrays on the tool result rather than as an
+    // ACP `content` image block, so consume both current spellings here.
+    for (const item of [...(Array.isArray(content.extracted_images) ? content.extracted_images : []), ...(Array.isArray(content.extractedImages) ? content.extractedImages : []), ...(Array.isArray(content.images) ? content.images : [])]) {
+      if (item && typeof item === "object") emitImage(item.data, item.mime_type ?? item.mimeType);
     }
     const uri = content.uri || content.resource?.uri;
     if (typeof uri === "string") {
@@ -2284,6 +2343,32 @@ function optionalNonNegativeNumber(value: unknown): number | undefined {
 
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === "string" && Boolean(value.trim()))?.trim();
+}
+
+function isAcpCapabilityError(error: unknown): boolean {
+  const value = error as { code?: unknown; message?: unknown } | undefined;
+  const code = typeof value?.code === "number" ? value.code : undefined;
+  const message = typeof value?.message === "string" ? value.message.toLowerCase() : "";
+  return code === -32601 || code === -32602 || /method not found|unknown method|unsupported.*(resume|session)/i.test(message);
+}
+
+function acpAttachmentPreviews(content: Record<string, any>): UserMessageAttachmentPreview[] {
+  const value = content.type === "content" && content.content && typeof content.content === "object" ? content.content : content;
+  const imageData = typeof value.data === "string" && value.type === "image" ? value.data : undefined;
+  const uri = firstNonEmptyString(value.uri, value.resource?.uri, value.path, value.resource?.path);
+  const mimeType = firstNonEmptyString(value.mimeType, value.mime_type);
+  if (imageData) {
+    const id = `acp-image-${createHash("sha256").update(`${mimeType ?? "image/png"}\u0000${imageData}`).digest("hex").slice(0, 24)}`;
+    return [{ id, name: "会话图片", kind: "image", mimeType: mimeType ?? "image/png", size: Math.floor(imageData.length * 0.75), source: imageData, isData: true, availability: "ready" }];
+  }
+  if (!uri || (value.type !== "resource_link" && value.type !== "resource" && value.type !== "file" && !value.path)) return [];
+  let path = uri;
+  if (uri.startsWith("file://")) {
+    try { path = fileURLToPath(uri); } catch { path = uri.slice("file://".length); }
+  }
+  const name = firstNonEmptyString(value.name, value.title, basename(path)) ?? "会话附件";
+  const id = `acp-file-${createHash("sha256").update(path).digest("hex").slice(0, 24)}`;
+  return [{ id, name, kind: "file", mimeType, source: path, availability: "ready" }];
 }
 
 export function normalizeRuntimeHandshake(value: Record<string, unknown>): CliRuntimeHandshake {

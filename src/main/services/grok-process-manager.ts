@@ -357,7 +357,7 @@ export class GrokProcessManager {
 
   async setModel(sessionId: string, modelId: string, identity: ModelSwitchIdentity = { target: {}, previous: {} }): Promise<void> {
     const current = this.get(sessionId);
-    if (current.working || current.needsUser) throw new Error("当前会话正在运行或等待操作，完成后再更改模型");
+    if ((current.working || current.needsUser) && !current.planDecisionPending) throw new Error("当前会话正在运行或等待操作，完成后再更改模型");
     const previousModelId = current.currentModelId;
     try {
       await current.setModel(modelId, { localModelId: identity.target.localModelId, persistRuntime: false });

@@ -163,11 +163,19 @@ export async function withCrossProcessFileLock<R>(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       // Windows can surface an already-open `wx` target as EPERM/EBUSY
-      // instead of EEXIST. Only treat those codes as contention when the
-      // lock path is still present; unrelated permission failures must escape.
-      const lockExists = code === "EEXIST" || ((code === "EPERM" || code === "EBUSY" || code === "EACCES")
+      // instead of EEXIST. A holder may close and unlink the file between
+      // open() and stat(), so a missing path is still a transient contention
+      // signal for these two Windows-specific codes. Keep EACCES strict so a
+      // real directory permission problem is not hidden behind a lock retry.
+      const windowsContention = code === "EPERM" || code === "EBUSY";
+      const lockExists = code === "EEXIST" || (windowsContention
         && Boolean(await stat(lockPath).catch(() => undefined)));
-      if (!lockExists) throw error;
+      if (!lockExists && !windowsContention) throw error;
+      if (!lockExists && Date.now() >= deadline) throw error;
+      if (!lockExists) {
+        await delay(10);
+        continue;
+      }
       if (await reclaimDeadLock(lockPath, staleMs)) continue;
       if (Date.now() >= deadline) throw new Error(`等待配置存储锁超时：${basename(lockPath)}`);
       await delay(15 + Math.floor(Math.random() * 35));

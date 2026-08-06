@@ -37,11 +37,12 @@ rl.on("line", async (line) => {
   }
   if (message.method === "initialize") return send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1 } });
   if (message.method === "session/new") {
-    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "plan-session", models: { currentModelId: "fixture", availableModels: [{ modelId: "fixture", name: "Fixture" }] } } });
+    send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "plan-session", models: { currentModelId: "fixture", availableModels: [{ modelId: "fixture", name: "Fixture" }, { modelId: "fixture-plan-model", name: "Fixture plan model" }] } } });
     setTimeout(() => send({ jsonrpc: "2.0", id: "server-plan", method: "x.ai/exit_plan_mode", params: { planContent: "# Fixture plan" } }), 20);
     return;
   }
   if (message.method === "session/set_mode") return send({ jsonrpc: "2.0", id: message.id, result: {} });
+  if (message.method === "session/set_model") return send({ jsonrpc: "2.0", id: message.id, result: { _meta: { model: { Ok: message.params.modelId } } } });
   if (message.method === "session/prompt") {
     const count = Number(await readFile(promptMarker, "utf8")) + 1;
     await writeFile(promptMarker, String(count));
@@ -60,6 +61,8 @@ rl.on("line", async (line) => {
     try {
       await adapter.start();
       await waitFor(() => events.some((event) => event.type === "plan" && event.requestId === "server-plan"));
+      await adapter.setModel("fixture-plan-model");
+      expect(adapter.currentModelId).toBe("fixture-plan-model");
       const first = await adapter.respondPlan("server-plan", verdict, "fixture note");
       const duplicate = await adapter.respondPlan("server-plan", verdict, "duplicate note");
       expect(first).toMatchObject({ verdict, state: "accepted" });

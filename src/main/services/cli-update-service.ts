@@ -327,7 +327,7 @@ function normalizedVersion(value: string, label: string): string {
   return parsed;
 }
 
-function compatibilityEvidence(
+export function compatibilityEvidence(
   handshake?: CliRuntimeHandshake,
   declaredExtensions = new Set(handshake?.extensions ?? []),
   successfulExtensions = new Set<string>(),
@@ -342,6 +342,8 @@ function compatibilityEvidence(
     evidence.push({ name, state: value === undefined ? "unknown" : value ? "supported" : "unsupported", source: "runtime-declaration", observedAt: at });
   };
   declared("session.list", handshake.sessionCapabilities?.list);
+  declared("session.resume", handshake.sessionCapabilities?.resume);
+  declared("session.close", handshake.sessionCapabilities?.close);
   declared("session.recap", handshake.features.recap);
   declared("session.rewind", handshake.features.rewind || handshake.features.cancelRewind);
   declared("mcp", Boolean(handshake.mcpCapabilities && Object.values(handshake.mcpCapabilities).some(Boolean)));

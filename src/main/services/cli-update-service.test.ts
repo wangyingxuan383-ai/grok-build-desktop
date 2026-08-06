@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, CliCompatibilitySnapshot, CliVersionStatus } from "../../shared/types";
-import { CliUpdateService, type CliUpdateServiceRuntime } from "./cli-update-service";
+import { CliUpdateService, compatibilityEvidence, type CliUpdateServiceRuntime } from "./cli-update-service";
+import { normalizeRuntimeHandshake } from "./grok-acp-adapter";
 
 const roots: string[] = [];
 
@@ -70,6 +71,12 @@ function createUpdateHarness(root: string, options: { failTarget?: boolean; fail
 }
 
 describe("CliUpdateService", () => {
+  it("records standard session resume/close from the runtime declaration", async () => {
+    const handshake = normalizeRuntimeHandshake(JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "initialize-0.2.120.json"), "utf8")));
+    const names = compatibilityEvidence(handshake).filter((item) => item.state === "supported").map((item) => item.name);
+    expect(names).toEqual(expect.arrayContaining(["session.list", "session.resume", "session.close"]));
+  });
+
   it("coalesces concurrent apply requests into one update operation", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);

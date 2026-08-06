@@ -1433,7 +1433,10 @@ export class AppController {
     this.offlineUiSessionResponder?.reset();
     const sessionId = OFFLINE_UI_SESSION_IDS.conversation;
     const workspace = (await this.settingsStore.get()).activeWorkspace || process.cwd();
-    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlWQAAAAASUVORK5CYII=";
+    // Keep the offline fixture as a real RGBA PNG. Electron's nativeImage
+    // rejects the older grayscale/alpha sample even though some decoders
+    // accept it, which made the generated-media card disappear as an error.
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMIWPDhPwAGBALgx3AGRgAAAABJRU5ErkJggg==";
     const imageAttachments: Attachment[] = ["architecture.png", "result.png", "detail.png"].map((name, index) => ({ id: `fixture-image-${index + 1}`, name, kind: "image", mimeType: "image/png", size: 68, data: png }));
     const prepared = await this.attachmentCache.prepare(sessionId, imageAttachments);
     await this.attachmentCache.record(sessionId, "fixture-client-images", "请检查这些界面截图。", prepared.previews, "sent");

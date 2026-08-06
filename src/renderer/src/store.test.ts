@@ -68,6 +68,12 @@ describe("session event reducer", () => {
     expect(state.views.session.messages[0].attachments).toEqual([first]);
   });
 
+  it("does not collapse distinct media events that have no stable source", () => {
+    let state = apply(baseState(), { type: "media", sessionId: "session", media: "image", source: "" });
+    state = apply(state, { type: "media", sessionId: "session", media: "image", source: "" });
+    expect(state.views.session.messages.filter((message: { kind: string }) => message.kind === "media")).toHaveLength(2);
+  });
+
   it("merges duplicate turn completion metadata without inventing legacy durations", () => {
     let state = apply(baseState(), { type: "turn-started", sessionId: "session", presentation: { turnId: "turn-1", clientMessageId: "message-1", ordinal: 0, startedAt: "2026-07-22T00:00:00.000Z" } });
     state = apply(state, { type: "turn-completed", sessionId: "session", presentation: { turnId: "turn-1", clientMessageId: "message-1", ordinal: 0, startedAt: "2026-07-22T00:00:00.000Z", completedAt: "2026-07-22T00:00:01.250Z", durationMs: 1250, outcome: "completed" } });
