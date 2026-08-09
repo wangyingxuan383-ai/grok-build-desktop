@@ -37,7 +37,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, run
   return <aside className="right-utility-pane" style={{ width }} aria-label={toolTitle(tool)}>
     <div className="review-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧栏宽度" onPointerDown={beginResize}/>
     <header><div><strong>{toolTitle(tool)}</strong><span>{toolSubtitle(tool)}</span></div><button className="icon-button" aria-label="关闭侧栏" onClick={onClose}><UiIcon name="close"/></button></header>
-    {tool === "launcher" ? <ToolLauncher onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
+    {tool === "launcher" ? <ToolLauncher cwd={cwd} onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
     {tool === "document" && <DocumentTool turn={turn} onExpand={onExpandResult}/>}
     {tool === "files" && <FilesTool cwd={cwd} sessionId={sessionId} paths={paths} onNavigate={onNavigate} onError={onError}/>}
     {tool === "tasks" && <TasksTool sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError}/>}
@@ -45,16 +45,24 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, run
   </aside>;
 }
 
-function ToolLauncher({ onTool }: { onTool(tool: RightTool): void }): React.JSX.Element {
+function ToolLauncher({ cwd, onTool }: { cwd: string; onTool(tool: RightTool): void }): React.JSX.Element {
+  const [gitAvailable, setGitAvailable] = useState<boolean>();
+  useEffect(() => {
+    let cancelled = false;
+    if (!cwd) { setGitAvailable(false); return; }
+    void window.grokDesktop.getGitWorkspaceCapability(cwd).then((value) => { if (!cancelled) setGitAvailable(value.available); }).catch(() => { if (!cancelled) setGitAvailable(false); });
+    return () => { cancelled = true; };
+  }, [cwd]);
+  const reviewSurface = reviewSurfaceForCapability(gitAvailable);
   const tools: Array<{ id: RightTool; icon: UiIconName; title: string; text: string }> = [
-    { id: "review", icon: "git", title: "审阅", text: "Git 变更、逐文件 Diff 与行级批注" },
-    { id: "agent-changes", icon: "file", title: "Agent 改动", text: "非 Git 工作区：本回合/本会话的真实写入" },
+    ...(reviewSurface === "review" ? [{ id: "review" as const, icon: "git" as const, title: "审阅", text: "Git 变更、逐文件 Diff 与行级批注" }] : []),
+    ...(reviewSurface === "agent-changes" ? [{ id: "agent-changes" as const, icon: "file" as const, title: "Agent 改动", text: "非 Git 工作区：本回合/本会话的真实写入" }] : []),
     { id: "document", icon: "file", title: "计划与结果", text: "当前回合的真实计划和最终回答" },
     { id: "files", icon: "folder", title: "最近文件", text: "最近回合写入文件及只读预览" },
     { id: "tasks", icon: "tasks", title: "侧边任务", text: "Agent、后台任务、队列与等待状态" },
     { id: "session", icon: "history", title: "会话信息", text: "官方 CLI 会话元数据与精确用量" },
   ];
-  return <div className="right-tool-launcher"><p>按需打开真实工具。未实现的终端或浏览器不会作为占位入口出现。</p>{tools.map((item) => <button key={item.id} onClick={() => onTool(item.id)}><UiIcon name={item.icon}/><span><strong>{item.title}</strong><small>{item.text}</small></span><UiIcon name="chevron-right"/></button>)}</div>;
+  return <div className="right-tool-launcher"><p>{gitAvailable === undefined ? "正在确认当前工作区的审核能力…" : "按需打开当前工作区真实可用的工具。"}</p>{tools.map((item) => <button key={item.id} onClick={() => onTool(item.id)}><UiIcon name={item.icon}/><span><strong>{item.title}</strong><small>{item.text}</small></span><UiIcon name="chevron-right"/></button>)}</div>;
 }
 
 function DocumentTool({ turn, onExpand }: { turn?: UiChatTurn; onExpand(): void }): React.JSX.Element {
@@ -109,6 +117,10 @@ function TasksTool({ sessionId, queue, runtimeUpdates, sessionStatus, onError }:
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [onError, sessionId]);
   return <div className="right-tool-scroll tasks-tool"><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{runtimeUpdates.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{runtimeUpdates.length}</span></header>{runtimeUpdates.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
+}
+
+export function reviewSurfaceForCapability(available?: boolean): "review" | "agent-changes" | undefined {
+  return available === true ? "review" : available === false ? "agent-changes" : undefined;
 }
 
 function SessionTool({ sessionId, onError }: { sessionId?: string; onError(message: string): void }): React.JSX.Element {

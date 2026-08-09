@@ -155,6 +155,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("attachments:paths", (paths: string[], sessionId?: string) => controller.attachmentsFromPaths(paths, sessionId));
   handle("system:open-path", (path: string) => controller.openPath(path));
   handle("system:open-target", (intent: OpenTargetIntent) => controller.openTarget(intent));
+  handle("system:list-open-tools", () => controller.listOpenTargetTools());
   handle("system:copy-image", (source: string) => controller.copyImage(source));
   handle("system:save-image", (source: string) => controller.saveImage(source));
   handle("system:open-media", (source: string) => controller.openMedia(source));
@@ -261,7 +262,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("computer:settings:update", (patch: Partial<ComputerUseSettings>) => controller.updateComputerSettings(patch));
   handle("cli:check-update", () => controller.checkCliUpdate());
   handle("cli:update-preview", () => controller.previewCliUpdate());
-  handle("cli:apply-update", (input: { targetVersion: string; expectedCurrentVersion: string }) => controller.applyCliUpdate(input));
+  handle("cli:apply-update", (input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) => controller.applyCliUpdate(input));
   handle("cli:compatibility", () => controller.getCliCompatibilitySnapshot());
   handle("cli:update-history", () => controller.getCliUpdateHistory());
   handle("logs:export", () => controller.exportLogs());

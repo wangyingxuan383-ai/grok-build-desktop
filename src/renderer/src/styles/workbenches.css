@@ -45,7 +45,7 @@
 .review-toolbar button:hover, .review-file-actions button:hover, .review-hunk header button:hover { background: var(--hover); color: var(--text); }
 .review-body { min-width: 0; min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 34%); overflow: hidden; }
 .review-selected-file { min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--border); }
-.review-file-detail { min-width: max-content; }
+.review-file-detail { min-width: 0; width: 100%; }
 .review-file-detail > header { position: sticky; z-index: 2; top: 0; min-width: 0; display: grid; gap: 7px; padding: 9px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 96%, transparent); }
 .review-file-detail > header > div:first-child { min-width: 0; display: grid; gap: 2px; }
 .review-file-detail > header strong { max-width: 100%; overflow: hidden; font: .7em "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
@@ -81,7 +81,7 @@ button.danger-text { color: var(--danger); }
 .review-hunk > header { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 5px 7px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 88%, transparent); }
 .review-hunk > header code { overflow: hidden; color: var(--muted); font-size: .61em; text-overflow: ellipsis; white-space: nowrap; }
 .review-hunk > header span { display: flex; gap: 4px; }
-.review-lines { min-width: max-content; }
+.review-lines { min-width: 0; max-width: 100%; overflow-x: auto; }
 .review-line { position: relative; display: grid; grid-template-columns: 20px 32px 32px minmax(300px, 1fr); min-height: 21px; font: .67em/21px "Cascadia Code", Consolas, monospace; }
 .review-line.addition { background: color-mix(in srgb, var(--success) 11%, transparent); }.review-line.deletion { background: color-mix(in srgb, var(--danger) 11%, transparent); }
 .review-line > code { padding: 0 8px; color: var(--text-secondary); white-space: pre; }
@@ -184,6 +184,8 @@ button.danger-text { color: var(--danger); }
 .agent-change-pane .review-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
 .agent-change-pane .review-header > div { display: grid; gap: 2px; }
 .agent-change-pane .review-header span { color: var(--muted); font-size: .7em; }
+.review-file-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--surface) 78%, transparent); color: var(--muted); }
+.review-file-search input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); }
 .agent-change-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 2px; padding: 6px; border-right: 1px solid var(--border); }
 .agent-change-list > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; text-align: left; }
 .agent-change-list > button:hover, .agent-change-list > button.active { background: var(--hover); color: var(--text); }

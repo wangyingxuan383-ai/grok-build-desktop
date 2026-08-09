@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import type { AppSettings, CliCapabilityEvidence, CliCompatibilitySnapshot, CliRuntimeHandshake, CliUpdatePreview, CliUpdateReceipt, CliUpdateRecord, CliVersionStatus } from "../../shared/types";
-import { buildCliEnv, checkCliUpdate, CLI_CHANGELOG_URL, compareVersions, isLockedBinaryError, locateGrokCli, parseVersion, readCliVersion } from "./cli-locator";
+import { buildCliEnv, checkCliUpdate, CLI_CHANGELOG_URL, compareVersions, isLockedBinaryError, isMajorUpgrade, locateGrokCli, parseVersion, readCliVersion } from "./cli-locator";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
 import { redactSecrets, type LogService } from "./log-service";
 import type { LiveSessionSnapshot } from "./grok-process-manager";
@@ -61,16 +61,20 @@ export class CliUpdateService {
       changelogUrl: status.changelogUrl ?? CLI_CHANGELOG_URL,
       publicLatestVersion: status.publicLatestVersion,
       publicVersionAhead: compareVersions(status.publicLatestVersion, status.latestVersion) > 0,
+      majorUpgrade: status.majorUpgrade ?? isMajorUpgrade(status.currentVersion, status.latestVersion),
     };
   }
 
-  async apply(input: { targetVersion: string; expectedCurrentVersion: string }): Promise<CliUpdateReceipt> {
+  async apply(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }): Promise<CliUpdateReceipt> {
     const targetVersion = normalizedVersion(input.targetVersion, "目标版本");
     const expectedCurrentVersion = normalizedVersion(input.expectedCurrentVersion, "当前版本");
     const key = `${expectedCurrentVersion}->${targetVersion}`;
     if (this.activeApply) {
       if (this.activeApply.key !== key) throw new Error(`另一个 CLI 更新正在执行（${this.activeApply.key}）`);
       return this.activeApply.operation;
+    }
+    if (isMajorUpgrade(expectedCurrentVersion, targetVersion) && input.allowMajorUpgrade !== true) {
+      throw new Error(`Grok CLI ${targetVersion} 是跨主版本更新；请重新预览并明确确认后再安装`);
     }
     const operation = this.applyOnce({ targetVersion, expectedCurrentVersion });
     this.activeApply = { key, operation };

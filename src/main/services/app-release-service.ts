@@ -67,6 +67,7 @@ export function parseGitHubRelease(value: unknown, build: BuildInfo, checkedAt =
     currentVersion: build.version,
     latestVersion,
     updateAvailable: compareVersions(latestVersion, build.version) > 0,
+    currentAhead: compareVersions(build.version, latestVersion) > 0,
     checkedAt,
     publishedAt: release.published_at,
     releaseUrl: release.html_url,

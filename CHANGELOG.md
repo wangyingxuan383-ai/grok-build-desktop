@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+
+### 0.7.3 0.7.x 总体改进合并候选（2026-08-10）
+
+- 不再逐阶段重复打包：将原 0.7.1–0.7.3 计划合并为唯一 0.7.3 本地候选，复用既有项目身份、草稿优先、ConversationProjection V2、统一会话导航、Provider Gateway 与 IPC 安全边界。
+- 会话阅读加入仅作用于正文的 640–1040px 宽度和 90%–135% 字号设置；新增回合导航轨道，按请求、Plan、权限、错误、过程和最终回答定位，并可一键折叠所有已完成过程。运行中过程保持展开，完成后继续按回合压缩。
+- 主进程新增受限的已安装工具发现与“打开方式”：资源管理器、VS Code、Cursor、记事本、Windows Terminal 和 Codex CLI 只有在真实可用且有固定参数契约时才显示；文件/目录仍经过会话、Worktree 和可信路径校验，Renderer 不启动任意程序。
+- 右栏在 Git 工作区只展示 Git Review，在非 Git 工作区只展示 Agent 真实写入；Agent 改动支持文件搜索、单文件 Diff、独立滚动和 420–760px 持久化宽度。修复窄栏与 unified Diff 的横向溢出。
+- 从 App Shell 中抽出虚拟会话视口、会话派生状态和导航控制器；App/TopBar 改为 Zustand 选择器订阅，后台会话流式事件不再因读取完整 Store 而重渲染全部壳层。Monaco、Markdown 高亮、Mermaid 和大型工作台继续按需加载并受分块门禁约束。
+- 应用更新检查会区分“发现新 Release”“当前等于公开版本”和“本地候选高于公开 Release”，不会把 0.7.3 候选误报为需要降级。2026-08-10 只读实测 GitHub Latest 为 v0.6.22。
+- Grok CLI 更新检查已适配 stable 1.0.0：0.2.118 → 1.0.0 被标记为跨主版本更新，必须显式二次确认，仍固定目标、验证 ACP/会话创建并在失败时回滚；本轮没有擅自升级用户 CLI。官方 1.0.0 Changelog 仅作为能力提示，控件继续服从运行时声明/探测证据。
+- 最终完整门禁通过：98 个测试文件/697 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、351 文件公开扫描、Renderer 分块、Native Host、Fuses、Task Scheduler、当前 0.7.3 UI、覆盖层及中文/空格 Portable 冷启动通过，`npm audit` 为 0 漏洞。旧 0.4/0.6 UI 探针从现行发布门禁移除，避免已退役信息架构误报。
+- 已生成并 per-user 安装 0.7.3；安装版主进程/About/诊断、ASAR、Fuses、桌面/开始菜单快捷方式均验证。Setup SHA-256 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19163f7e5948ac`；Portable `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`；SBOM `96c5307ea15185f11194d0150a175ed5c16a91bb352faeef28eb8229b44abc1f`；许可证报告 `668db4dc469c6d4dd9616429ef14daa1032e93ffc6fece8355863b85ecbe21dc`。用户验收前不推送、不创建 GitHub Release。
+
 ### 0.7.1 会话与项目基础（2026-08-09）
 
 - 工作区目录引入稳定 `ProjectIdentity`：Windows 大小写、尾部分隔符和可解析重解析点统一到同一项目；置顶、最近项目及 Grok/Codex/Claude 会话来源合并计数，重复项目不再并列显示。

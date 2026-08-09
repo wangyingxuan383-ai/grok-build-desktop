@@ -1,5 +1,20 @@
 # Grok Build Desktop 实施计划
 
+
+## 0.7.3 单一总体改进候选（2026-08-10）
+
+- [x] 合并 0.7.x 里程碑，不再为 M1/M2/M3/M4 分别构建、打包或安装；版本、lockfile 与现行离线 UI Fixture 统一到 0.7.3。
+- [x] 保留并复核 0.7.1 项目去重/隐藏、草稿优先、本地投影先显、后台 ACP 恢复、权威侧栏状态和统一会话入口。
+- [x] 完成会话正文宽度/字号设置、回合导航轨道、已完成过程全部折叠及运行中/完成状态分离。
+- [x] 完成 Windows 已安装工具发现、受信任 OpenTarget 路由、位置/文件打开方式和行列定位；不显示未安装或无固定调用契约的应用。
+- [x] 完成右栏能力映射：Git Review 与非 Git Agent 改动互斥显示；Agent 改动文件搜索、单文件懒呈现、宽度持久化、独立滚动和窄栏 Diff 收口。
+- [x] 从 App 单体中拆出 ConversationViewport、会话派生状态和 Navigation Controller，并将主壳层/TopBar 改为选择器订阅；保留大型依赖按需加载和分块预算。
+- [x] 应用更新区分本地领先公开 Release；CLI stable 1.0.0 检测增加跨主版本标记、主进程强制确认和 Renderer 明确风险提示。
+- [x] 受影响 TypeScript、更新/IPC/外部工具/会话导航聚焦测试和 diff check 通过。
+- [x] 最终完整门禁与正式打包已合并执行：98 文件/697 项测试通过，6 个 live 文件/9 项跳过；TypeScript、生产/资源构建、公开扫描、分块、Native/Fuses、Task Scheduler、打包/UI/Portable 探针和 `npm audit` 通过。两个探针缺陷修正后复用同一打包产物，没有重复构建或重复打包。
+- [x] 已生成 Setup/Portable/SHA-256/SBOM/许可证报告并 per-user 安装；安装版主进程/About/诊断、ASAR、Fuses 及桌面/开始菜单快捷方式均为 0.7.3。Setup/Portable SHA-256 分别为 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19163f7e5948ac` / `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`。
+- [ ] 用户桌面验收 0.7.3；验收前不推送、不创建 Release。
+
 ## 0.7.1 会话与项目基础（2026-08-09）
 
 - [x] 新增稳定 `ProjectIdentity`，对 Windows 大小写、尾斜杠和可解析链接目标规范化；Workspace Catalog 按项目 ID 合并来源及会话计数。

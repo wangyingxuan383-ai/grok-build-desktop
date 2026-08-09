@@ -1,5 +1,18 @@
 # Feature Matrix
 
+
+## 0.7.3 consolidated 0.7.x candidate (2026-08-10)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Conversation reading and timeline | Packaged UI verified | Conversation-only width/font controls, virtualized request navigation markers and completed-process collapse pass component tests and the packaged 0.7.3 UI probe. |
+| External open targets | Focused verified | Main process discovers only installed Windows tools with deterministic fixed-argument contracts. Runtime schemas validate tool ID, target, line and column; trusted-root and realpath checks still run before launch. |
+| Git/non-Git review mapping | Packaged UI verified | Launcher exposes Git Review only when Git capability exists, otherwise Agent Changes. The non-Git packaged fixture verifies file search/single-Diff surface and absence of staging/commit/branch controls. |
+| Renderer architecture/performance | Source + focused verified | Conversation viewport, active-session derivation and navigation controller are separate modules; App Shell and TopBar subscribe through Zustand selectors instead of the complete store. Heavy workbenches remain lazy. |
+| Application update detection | Live source + unit verified | GitHub API returned public latest v0.6.22 on 2026-08-10; a 0.7.3 local candidate is represented as current-ahead, never as a downgrade. Network timeout/size and stable release parsing tests pass. |
+| CLI update detection | Live source + unit verified | Installed 0.2.118 reports stable 1.0.0. Cross-major preview/IPC/service require explicit acknowledgement; no 1.0.0 installation or runtime compatibility is claimed yet. Prior exact 0.2.118 update/rollback pipeline remains the last live apply evidence. |
+| 0.7.3 candidate gate | Packaged + installed verified | 98 test files/697 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 351-file public scan, chunks, Native/Fuses, Task Scheduler, current packaged UI, overlays, Portable Chinese/space path, Setup/SBOM/licenses, installed About/diagnostics/ASAR and shortcuts pass. Real long-session/Provider workloads remain user acceptance. |
+
 ## 0.7.1 session and project foundation (2026-08-09)
 
 | Area | Status | Evidence / boundary |

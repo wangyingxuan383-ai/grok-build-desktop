@@ -95,6 +95,28 @@ describe("CliUpdateService", () => {
     await expect(second).resolves.toMatchObject({ toVersion: "0.2.118" });
   });
 
+  it("requires an explicit acknowledgement before crossing a CLI major version", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const service = createService(root);
+    const applyOnce = vi.fn();
+    (service as any).applyOnce = applyOnce;
+    await expect(service.apply({ targetVersion: "1.0.0", expectedCurrentVersion: "0.2.118" }))
+      .rejects.toThrow("跨主版本更新");
+    expect(applyOnce).not.toHaveBeenCalled();
+  });
+
+  it("marks a stable 1.0 target as a major upgrade in the preview", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const harness = createUpdateHarness(root, { stableTarget: "1.0.0" });
+    await expect(harness.service.preview()).resolves.toMatchObject({
+      fromVersion: "0.2.117",
+      targetVersion: "1.0.0",
+      majorUpgrade: true,
+    });
+  });
+
   it("redacts secrets before persisting update history", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);

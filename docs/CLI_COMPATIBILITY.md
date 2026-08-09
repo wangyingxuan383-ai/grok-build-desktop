@@ -1,5 +1,14 @@
 # Grok CLI Compatibility
 
+
+## Desktop 0.7.3 / Grok Build 1.0.0 stable detection (2026-08-10)
+
+- The installed CLI remains `0.2.118 (1e1687c1cf)`. A live read-only `grok update --check --json` now reports `1.0.0` on the stable channel; Desktop does not auto-install it.
+- The official Changelog lists 1.0.0 on 2026-08-07, including queue/stop, Plan/permission, mode synchronization, API-error and large-session fixes. These are compatibility hints only: Desktop surfaces remain gated by runtime declaration, bounded probes and observed events.
+- `CliVersionStatus` and `CliUpdatePreview` mark a semantic major-version boundary. IPC accepts an `allowMajorUpgrade` boolean, and the main-process update service rejects 0.x → 1.x unless that explicit acknowledgement is present.
+- If acknowledged, the established exact-target path still rechecks stable metadata, suspends sessions, runs a pinned update, probes initialize/session/new and official deletion, and attempts an exact rollback on failure. 1.0.0 has not yet passed that live apply path, so no 1.0.0 compatibility claim is made.
+- All managed ACP/media/automation/probe launches continue to disable CLI self-update; only the update service may mutate the installed binary.
+
 ## Desktop 0.7.1 session-foundation note (2026-08-09)
 
 - No new ACP method or wire shape is introduced. New Task remains Desktop-local until first send, then uses the existing configured `session/new` path exactly once.

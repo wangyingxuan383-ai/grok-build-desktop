@@ -1,4 +1,17 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-09，0.7.1 本地候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-10，0.7.3 单一总体候选）
+
+## 2026-08-10 0.7.3 单一总体改进
+
+- 用户要求停止逐阶段打包，当前分支为 `codex/v0.7.3-overall-improvements`；只在所有 0.7.x 改进完成后运行一次正式门禁、打包和安装。
+- 已保留 0.7.1 的项目身份、隐藏/恢复、草稿优先、本地投影先显、后台 ACP 恢复、侧栏状态和统一导航，没有新建平行会话存储。
+- 新增会话正文宽度/字号、回合导航轨道、全部折叠；右栏按 Git 能力显示 Git Review 或 Agent 改动，非 Git 文件支持搜索与单文件 Diff，窄栏不再被宽 Diff 撑出窗口。
+- 新增主进程 ExternalOpenToolService，动态发现资源管理器、VS Code、Cursor、记事本、Windows Terminal 和 Codex CLI；只有真实安装且固定参数契约可用的工具出现在“打开位置”。所有目标继续经过受信任根与 realpath 校验。
+- App Shell 已不再订阅完整 Zustand Store；ConversationViewport、会话派生状态与 Navigation Controller 已拆分，后台会话更新不会直接让整个 App 订阅失效。
+- 2026-08-10 只读实测：GitHub 公开 Latest 仍是 v0.6.22；本机 Grok CLI 是 0.2.118，stable 检测已返回 1.0.0。应用会把本地 0.7.3 标为领先公开版，把 CLI 1.0.0 标为跨主版本并要求显式确认。本轮未升级 CLI。
+- 最终统一门禁已通过：98 个测试文件/697 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、351 文件公开扫描、分块、Native/Fuses、Task Scheduler、当前 UI、覆盖层、Portable 和 `npm audit` 通过。探针时序/旧版假设修正后复用同一产物，没有第二次打包。
+- 0.7.3 已 per-user 安装；安装版主进程/About/诊断、ASAR、Fuses 及桌面/开始菜单快捷方式通过。Setup SHA-256 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19163f7e5948ac`；Portable `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`。
+- 用户验收前不推送、不创建 GitHub Release。
+
 
 ## 2026-08-09 0.7.1 会话与项目基础
 

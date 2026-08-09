@@ -1,11 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import type { VirtuosoHandle } from "react-virtuoso";
 import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, ClaudeSessionDetail, ClaudeSessionSummary, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, CustomProviderProfile, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution, NavigationIntent, NewTaskDraft, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
 import { resolveComputerMention } from "../../shared/computer-mentions";
 import { buildComposerCommand, normalizeSkillCommand } from "../../shared/composer-capability";
 import { LazyMarkdownView } from "./components/LazyMarkdownView";
-import { TurnCard } from "./components/TurnCard";
 import { buildChatTurns, useAppStore } from "./store";
 import { resolveMediaSessionTarget } from "./media-session-target";
 import { hasSessionSubmission, sessionSubmissionKeys, updateSessionSubmissions } from "./session-submission-state";
@@ -27,6 +26,10 @@ import { ActionDialog, ComputerPermissionDialog, ComputerRiskDialog, type Dialog
 import { ControlPanel, SessionHistoryPanel } from "./components/AppAuxiliaryPanels";
 import { RightDock } from "./components/RightDock";
 import { useSessionDraft } from "./hooks/use-session-draft";
+import { ConversationViewport } from "./components/ConversationViewport";
+import { useShallow } from "zustand/react/shallow";
+import { useConversationDerivedState } from "./hooks/use-conversation-derived-state";
+import { useNavigationController } from "./hooks/use-navigation-controller";
 
 const LazyExtensionsPanel = lazy(() => import("./components/ExtensionsPanel").then((module) => ({ default: module.ExtensionsPanel })));
 const LazyDiagnosticsPanel = lazy(() => import("./components/DiagnosticsPanel").then((module) => ({ default: module.DiagnosticsPanel })));
@@ -45,7 +48,36 @@ const LazyMediaStudioPanel = lazy(() => import("./components/MediaStudioPanel").
 
 type Panel = "settings" | "accounts" | "providers" | "about" | "media" | "extensions" | "diagnostics" | "onboarding" | "tasks" | "history" | null;
 export default function App(): React.JSX.Element {
-  const store = useAppStore();
+  const store = useAppStore(useShallow((state) => ({
+    accounts: state.accounts,
+    activeSessionId: state.activeSessionId,
+    addAttachments: state.addAttachments,
+    appVersion: state.appVersion,
+    attachments: state.attachments,
+    claudeSessions: state.claudeSessions,
+    clearAttachments: state.clearAttachments,
+    cli: state.cli,
+    codexSessions: state.codexSessions,
+    error: state.error,
+    handleEvent: state.handleEvent,
+    loading: state.loading,
+    onboarding: state.onboarding,
+    removeAttachment: state.removeAttachment,
+    resolveMessage: state.resolveMessage,
+    sessions: state.sessions,
+    setActiveSession: state.setActiveSession,
+    setClaudeSessions: state.setClaudeSessions,
+    setCodexSessions: state.setCodexSessions,
+    setError: state.setError,
+    setOnboarding: state.setOnboarding,
+    setSessions: state.setSessions,
+    setSettings: state.setSettings,
+    settings: state.settings,
+    setWorkspaces: state.setWorkspaces,
+    workspaces: state.workspaces,
+  })));
+  const view = useAppStore((state) => state.views[state.activeSessionId]);
+  const draftModels = useAppStore(useShallow((state) => Array.from(new Map(Object.values(state.views).flatMap((candidate) => candidate.models).map((model) => [model.modelId, model])).values())));
   const activeWorkbenchView = useWorkbenchStore((state) => state.activeView);
   const setWorkbenchView = useWorkbenchStore((state) => state.setActiveView);
   const [panel, setPanel] = useState<Panel>(null);
@@ -284,6 +316,11 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     applyShellPreferencesToDocument(store.settings?.fontScale ?? 100, store.settings?.uiDensity ?? "balanced");
   }, [store.settings?.fontScale, store.settings?.uiDensity]);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--conversation-content-width", `${store.settings?.conversationContentWidth ?? 780}px`);
+    root.style.setProperty("--conversation-font-scale", `${(store.settings?.conversationFontScale ?? 100) / 100}`);
+  }, [store.settings?.conversationContentWidth, store.settings?.conversationFontScale]);
 
   useEffect(() => {
     const onFocus = (): void => {
@@ -361,49 +398,12 @@ export default function App(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [offlineFixtureActive, search, store.settings?.activeWorkspace]);
 
-  const view = store.views[store.activeSessionId];
   const activeSession = store.sessions.find((value) => value.id === store.activeSessionId);
   const activeCodex = store.codexSessions.find((value) => value.id === activeCodexId);
   const activeClaude = store.claudeSessions.find((value) => value.id === activeClaudeId);
-  const draftModels = useMemo(() => Array.from(new Map(Object.values(store.views).flatMap((value) => value.models).map((model) => [model.modelId, model])).values()), [store.views]);
-  const planWaiting = Boolean(view?.messages.some((message) => message.kind === "plan" && message.interactive && !message.resolved));
-  const turns = useMemo(() => buildChatTurns(view?.messages ?? [], view?.status, view?.turnPresentations), [view?.messages, view?.status, view?.turnPresentations]);
   const executionRoot = executionAssignment?.cwd || activeSession?.cwd || store.settings?.activeWorkspace || "";
-  const lastTurnPaths = useMemo(() => {
-    for (let index = turns.length - 1; index >= 0; index--) {
-      const paths = Array.from(new Set(turns[index]!.groups.filter((group) => group.kind === "files").flatMap((group) => group.items.flatMap((message) => message.kind === "tool" ? (message.tool.locations ?? []).map((location) => location.path).filter((path): path is string => typeof path === "string" && path.length > 0 && isPathInExecutionRoot(path, executionRoot)) : []))));
-      if (paths.length) return paths;
-    }
-    return [];
-  }, [executionRoot, turns]);
-  const utilityTurn = useMemo(() => [...turns].reverse().find((turn) => turn.final || turn.pending.some((item) => item.kind === "plan") || turn.groups.some((group) => group.items.some((item) => item.kind === "plan"))) ?? turns.at(-1), [turns]);
-  const navigate = useCallback(async (intent: NavigationIntent): Promise<void> => {
-    if (intent.surface === "review") {
-      setWorkbenchView("chat");
-      const capability = await window.grokDesktop.getGitWorkspaceCapability(intent.executionRoot);
-      if (capability.available) { setReviewInitialScope("last-turn"); setRightTool("review"); }
-      else setRightTool("files");
-      return;
-    }
-    if (intent.surface === "diff") {
-      const status = await window.grokDesktop.getGitStatus(intent.executionRoot);
-      const change = status.changes.find((value) => value.path === intent.targetPath || value.oldPath === intent.targetPath);
-      const staged = Boolean(change?.staged && !change.workingTree);
-      useGitStore.getState().setRepository(intent.executionRoot, undefined, status);
-      useGitStore.getState().setSelection({ path: change?.path || intent.targetPath, staged });
-      useGitStore.getState().setDiff(await window.grokDesktop.getGitDiff(intent.executionRoot, staged, change?.path || intent.targetPath));
-      setWorkbenchView("source-control");
-      return;
-    }
-    const result = await window.grokDesktop.openEditorDocument(intent.executionRoot, intent.targetPath);
-    if (result.kind === "external") { await window.grokDesktop.openPath(result.path); return; }
-    if (!result.document) return;
-    useWorkbenchStore.getState().openDocument(result.document);
-    useWorkbenchStore.getState().setSelectedPath(result.relativePath);
-    const activeKey = useWorkbenchStore.getState().activeTabKey;
-    useWorkbenchStore.getState().updateCursor(activeKey, { lineNumber: Math.max(1, intent.line ?? 1), column: Math.max(1, intent.column ?? 1) });
-    setWorkbenchView("files");
-  }, [setWorkbenchView]);
+  const { planWaiting, turns, lastTurnPaths, utilityTurn } = useConversationDerivedState(view, executionRoot);
+  const navigate = useNavigationController({ setWorkbenchView, setRightTool, setReviewInitialScope });
   const currentComputerTask = computerTasks[store.activeSessionId];
   const activeComputerTask = currentComputerTask && ["running", "paused", "awaiting-risk-confirmation"].includes(currentComputerTask.status) ? currentComputerTask : null;
   const lastMessageRevision = useMemo(() => {
@@ -881,7 +881,26 @@ export default function App(): React.JSX.Element {
           : activeCodexId ? <ForeignSessionMirror source="Codex" detail={codexDetail} busy={operationBusy} onRefresh={async () => setCodexDetail(await window.grokDesktop.refreshCodexSession(activeCodexId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueCodexSession(activeCodexId); await openConversationTarget(result); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideCodexSession(activeCodexId, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(store.settings?.activeWorkspace || "", store.settings?.showArchivedCodex, true)); setActiveCodexId(""); setCodexDetail(null); }} />
           : activeClaudeId ? <ForeignSessionMirror source="Claude" detail={claudeDetail} busy={operationBusy} onRefresh={async () => setClaudeDetail(await window.grokDesktop.refreshClaudeSession(activeClaudeId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueClaudeSession(activeClaudeId); await openConversationTarget(result); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideClaudeSession(activeClaudeId, true); store.setClaudeSessions(await window.grokDesktop.listClaudeSessions(store.settings?.activeWorkspace || "", true)); setActiveClaudeId(""); setClaudeDetail(null); }} />
           : !activeSession && !view ? <WorkspaceEmptyState workspaces={store.workspaces} onNew={() => void openNewSessionDialog()} onOpen={async (cwd) => { store.setSessions(await window.grokDesktop.setWorkspace(cwd)); store.setSettings(await window.grokDesktop.getSettings()); }} />
-          : <div className="conversation-wrap" onWheelCapture={(event) => { if (event.deltaY < 0) { followTurnRef.current = false; forceFollowRef.current = false; } }}><Virtuoso ref={virtuosoRef} className="conversation" data={turns} computeItemKey={(_index, turn) => turn.id} followOutput={(isAtBottom) => (isAtBottom || forceFollowRef.current) ? "auto" : false} atBottomStateChange={(value) => { atBottomRef.current = value; if (value && !followTurnRef.current) forceFollowRef.current = false; setAtBottom(value); }} itemContent={(index, turn) => <div className={conversationMatches[conversationMatch] === index ? "conversation-match-active" : ""}><TurnCard turn={turn} sessionId={store.activeSessionId} navigationRoot={executionRoot} showThinking={store.settings?.showThinking ?? false} expandTools={store.settings?.expandToolDetails ?? false} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onOpenReview={() => void window.grokDesktop.getGitWorkspaceCapability(executionRoot).then((capability) => { if (capability.available) { setReviewInitialScope("last-turn"); setRightTool("review"); } else setRightTool("agent-changes"); }).catch((error) => store.setError(errorMessage(error)))} onFork={index === turns.length - 1 ? () => setPanel("history") : undefined} onResolved={(id) => store.resolveMessage(store.activeSessionId, id)} onDiagnose={setDiagnosingFailure} onRetry={(message) => { setComposer(message.text); store.clearAttachments(); store.addAttachments((message.attachments ?? []).filter((attachment) => attachment.availability === "ready" && Boolean(attachment.source)).map((attachment) => ({ id: attachment.id, name: attachment.name, kind: attachment.kind, mimeType: attachment.mimeType, size: attachment.size, ...(attachment.isData ? { data: attachment.source } : { path: attachment.source }) }))); focusComposer(); }} /></div>} />{!atBottom && !!turns.length && <button className="scroll-to-bottom" onClick={() => { followTurnRef.current = false; forceFollowRef.current = true; atBottomRef.current = true; setAtBottom(true); scrollConversationNow("smooth"); }}>↓ 回到底部</button>}</div>}</div>
+          : <ConversationViewport
+            turns={turns}
+            sessionId={store.activeSessionId}
+            navigationRoot={executionRoot}
+            showThinking={store.settings?.showThinking ?? false}
+            expandTools={store.settings?.expandToolDetails ?? false}
+            matchIndex={conversationMatches[conversationMatch]}
+            atBottom={atBottom}
+            virtuosoRef={virtuosoRef}
+            shouldFollow={(isAtBottom) => isAtBottom || forceFollowRef.current}
+            onAtBottom={(value) => { atBottomRef.current = value; if (value && !followTurnRef.current) forceFollowRef.current = false; setAtBottom(value); }}
+            onWheelUp={() => { followTurnRef.current = false; forceFollowRef.current = false; }}
+            onScrollBottom={() => { followTurnRef.current = false; forceFollowRef.current = true; atBottomRef.current = true; setAtBottom(true); scrollConversationNow("smooth"); }}
+            onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))}
+            onOpenReview={() => void window.grokDesktop.getGitWorkspaceCapability(executionRoot).then((capability) => { if (capability.available) { setReviewInitialScope("last-turn"); setRightTool("review"); } else setRightTool("agent-changes"); }).catch((error) => store.setError(errorMessage(error)))}
+            onFork={() => setPanel("history")}
+            onResolved={(id) => store.resolveMessage(store.activeSessionId, id)}
+            onDiagnose={setDiagnosingFailure}
+            onRetry={(message, attachments) => { setComposer(message.text); store.clearAttachments(); store.addAttachments(attachments); focusComposer(); }}
+          />}</div>
         {diagnosingFailure && createPortal(<LazyFailureDiagnosisPanel failure={diagnosingFailure} onClose={() => setDiagnosingFailure(undefined)} />, document.getElementById("overlay-root")!)}
         {!activeCodexId && !activeClaudeId && Boolean(view?.followUps.length) && <div className="follow-up-suggestions" aria-label="CLI 跟进建议"><span>跟进建议</span>{view!.followUps.map((suggestion) => <button key={suggestion.id} onClick={() => { setComposer(suggestion.text); focusComposer(); }}>{suggestion.text}</button>)}</div>}
         {!activeCodexId && !activeClaudeId && view && view.hydration !== "ready" && view.hydration !== "local" && <div className={`session-hydration-banner ${view.hydration}`} role="status"><span>{view.hydration === "connecting" ? "正在连接 CLI，已先显示本地历史…" : view.hydration === "synchronizing" ? "正在合并 CLI 回放…" : `本地历史仍可用；连接${view.hydration === "offline" ? "离线" : "失败"}${view.hydrationMessage ? `：${view.hydrationMessage}` : ""}`}</span>{(view.hydration === "offline" || view.hydration === "failed") && activeSession && <button onClick={() => void openSession(activeSession)}>重新连接</button>}</div>}
@@ -1017,14 +1036,6 @@ function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string
 function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
 function normalizedWorkspacePath(value: string): string { return value.replace(/[\\/]+$/, "").toLocaleLowerCase(); }
 function sameWorkspacePath(left: string, right: string): boolean { return normalizedWorkspacePath(left) === normalizedWorkspacePath(right); }
-function isPathInExecutionRoot(path: string, root: string): boolean {
-  if (!root) return false;
-  const normalize = (value: string): string => value.replace(/^\\\\\?\\/, "").replace(/\//g, "\\").replace(/\\+$/, "").toLocaleLowerCase();
-  const target = normalize(path);
-  const base = normalize(root);
-  if (!/^[a-z]:\\|^\\\\/.test(target)) return true;
-  return target === base || target.startsWith(`${base}\\`);
-}
 function shortPath(value: string): string { const parts = value.split(/[\\/]/).filter(Boolean); return parts.at(-1) || value; }
 function relativeTime(value: string): string { const time = Date.parse(value); if (!Number.isFinite(time)) return "未知时间"; const delta = Date.now() - time; if (delta < 60_000) return "刚刚"; if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`; if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`; return `${Math.floor(delta / 86_400_000)} 天前`; }
 function formatTokens(value: number): string { return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${Math.round(value / 1_000)}K` : String(value); }
