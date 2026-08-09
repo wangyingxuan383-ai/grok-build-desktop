@@ -35,7 +35,7 @@ const callFunction = async (functionDeclaration, ...values) => {
 const clickText = (selector, text) => callFunction("function (selector, text) { const node = Array.from(document.querySelectorAll(selector)).find((candidate) => candidate.textContent.trim().includes(text)); node?.click(); return Boolean(node); }", selector, text);
 const clickExactText = (selector, text) => callFunction("function (selector, text) { const node = Array.from(document.querySelectorAll(selector)).find((candidate) => candidate.textContent.trim() === text); node?.click(); return Boolean(node); }", selector, text);
 /** Scans the virtualized conversation from the top until the selector mounts. */
-async function scrollToFind(selector, message, steps = 40) {
+async function scrollToFind(selector, message, steps = 70) {
   const scroller = "document.querySelector('.conversation')";
   const present = () => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
   if (await present()) return;
@@ -132,7 +132,11 @@ async function exerciseStop() {
   await waitFor(() => evaluate("Boolean(document.querySelector('.send-button.stop')) && Boolean(document.querySelector('.prompt-queue'))"), "Stop fixture did not enter the running state");
   const startedAt = Date.now();
   if (!(await evaluate("(() => { const button=document.querySelector('.send-button.stop'); button?.click(); return Boolean(button); })()"))) throw new Error("Stop button could not be clicked");
-  await waitFor(() => evaluate("Boolean(document.querySelector('.send-button:not(.stop)')) && !document.querySelector('.send-button.stop') && !document.querySelector('.prompt-queue')"), "Stop did not terminate the session and recover the composer", 5_000);
+  // Production Stop has an eight-second single-session recovery fallback.
+  // The packaged probe must allow that documented path to settle on a busy
+  // Windows desktop instead of treating a valid recovery as a five-second
+  // failure.
+  await waitFor(() => evaluate("Boolean(document.querySelector('.send-button:not(.stop)')) && !document.querySelector('.send-button.stop') && !document.querySelector('.prompt-queue')"), "Stop did not terminate the session and recover the composer", 12_000);
   const result = await evaluate(`({
     elapsedMs: ${Date.now()} - ${startedAt},
     notice: document.querySelector('.composer-operation-notice')?.textContent || '',

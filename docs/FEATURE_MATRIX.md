@@ -1,5 +1,13 @@
 # Feature Matrix
 
+## 0.7.0 C-drive refreshed baseline (2026-08-09)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Removed-drive tool cache | Installed verified | User-level npm cache now resolves to `%LOCALAPPDATA%\\npm-cache`; dependency and packaging commands no longer target the removed E drive. |
+| Dependency audit refresh | Offline verified | Vite/plugin/Mermaid and patched transitive overrides remove the newly published DOMPurify/PostCSS/NanoID/js-yaml findings; `npm audit` reports zero vulnerabilities. |
+| C-drive baseline | Packaged + installed verified | 94 files/677 tests, TypeScript, production/resources, 342-file public scan, chunks, native host, Fuses, packaged UI, per-user install, File/Product and shortcuts pass. A second redundant release-asset UI fixture remains timing-sensitive, so no public Release is claimed. |
+
 ## 0.7.0 累计变更一致性审计（2026-08-09）
 
 | Area | Status | Evidence / boundary |

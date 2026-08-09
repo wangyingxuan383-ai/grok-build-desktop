@@ -1,5 +1,13 @@
 # Grok Build Desktop 下一会话完整交接（2026-08-09，0.7.0 源码候选）
 
+## 2026-08-09 C 盘基线刷新
+
+- 已将用户 npm 缓存从故障 E 盘迁移到 `%LOCALAPPDATA%\\npm-cache`。新的 shell 仍需继承更新后的用户环境；脚本运行时可显式设置同一路径。
+- 新公布的高危 npm 公告曾让 0.7.0 门禁中止；Vite/React 插件/Mermaid 与 DOMPurify、PostCSS、NanoID、js-yaml 安全版本更新后，`npm audit` 为 0。
+- C 盘完整门禁通过：94 个测试文件/677 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、342 文件公开扫描、分块、Native Host、Fuses、打包 UI 通过。
+- 最新 0.7.0 Setup/Portable 已在 C 盘生成，Setup 已 per-user 安装；File/Product 0.7.0、冷启动、桌面和开始菜单快捷方式通过。
+- `generate-release-assets.ps1` 会再次运行完整 v0.7 UI 交互夹具；该重复运行出现 Plan/Stop 时序波动，故尚未生成新的 SBOM/SHA 文件，也没有 Release。0.7.1 会话 hydration/generation 改造需同时消除该夹具不确定性。
+
 ## 2026-08-09 累计变更一致性审计（本轮）
 
 - 已审计 `origin/main...codex/v0.7.0-audit-hardening` 的 5 个提交、150 个变更文件及 Provider/ACP/投影/IPC/Renderer/CSS/打包链路；审计报告见 `docs/V070_CUMULATIVE_AUDIT.md`。

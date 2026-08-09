@@ -1,5 +1,14 @@
 # Grok Build Desktop 实施计划
 
+## 0.7.0 C 盘基线刷新与 0.7.1 启动（2026-08-09）
+
+- [x] 将已失效的用户级 npm E 盘缓存迁移到 `%LOCALAPPDATA%\\npm-cache`，依赖查询/安装不再访问已拔出的 E 盘。
+- [x] 处理新出现的高危 npm 公告：Vite、React 插件、Mermaid 与安全覆盖项更新后 `npm audit` 为 0。
+- [x] 在 C 盘完成 94 文件/677 项离线测试、TypeScript、生产/资源构建、公开扫描、分块、Native Host、Fuses、打包 UI 与目录打包。
+- [x] 重新生成 0.7.0 Setup/Portable、per-user 安装并验证 File/Product、冷启动和快捷方式。
+- [ ] Release 资产生成阶段第二次重复 v0.7 UI 探针仍有夹具时序波动；0.7.1 必须把会话恢复与交互夹具改为显式 hydration/generation 状态后再生成正式资产。
+- [ ] 从该安全基线创建 `codex/v0.7.1-session-foundation`，实现项目规范化、草稿优先、本地预览和后台恢复；不创建 0.7.0 Release。
+
 ## 0.7.0 累计变更一致性审计（2026-08-09）
 
 - [x] 审计自 `origin/main` 以来的 5 个提交、150 个变更文件，核对 Provider 扫描、ACP/投影回放、运行时能力门控、IPC/Preload、Renderer 壳层和 CSS 是否存在冲突或重复生产实现。

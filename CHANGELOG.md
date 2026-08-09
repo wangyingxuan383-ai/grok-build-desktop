@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 0.7.0 C 盘基线刷新（2026-08-09）
+
+- 将 npm 缓存从已移除的 `E:\\ToolCaches\\npm-cache` 迁回 `%LOCALAPPDATA%\\npm-cache`，恢复依赖查询和打包链路；仓库与构建流程不再访问故障 E 盘。
+- 针对新公布的高危依赖公告，最小更新 Vite/React 插件/Mermaid，并覆盖到已修复的 DOMPurify、PostCSS、NanoID 和 js-yaml；`npm audit` 由 17 项告警恢复为 0。
+- 在 C 盘重新完成 94 个测试文件/677 项离线测试、TypeScript、生产/资源构建、342 文件公开扫描、分块、Native Host、Fuses、打包版 UI 与目录打包门禁。
+- 重新生成 Setup/Portable 并执行 per-user 安装；安装版 File/Product 均为 0.7.0，冷启动和桌面/开始菜单快捷方式通过。Release 资产的第二次重复 UI 探针仍暴露夹具时序波动，因此没有创建公开 Release。
+
 ### 0.7.0 累计变更一致性审计（2026-08-09）
 
 - 审计 `origin/main...codex/v0.7.0-audit-hardening` 的 5 个提交、150 个变更文件，确认 Provider 扫描、会话投影/ACP 回放、CLI 前向能力和 CSS 壳层没有并行重复生产实现；旧 `deep-scan` IPC 仅保留兼容包装并标记为后续弃用入口。
