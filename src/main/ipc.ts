@@ -191,6 +191,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("providers:scan:get", (jobId: string) => controller.getProviderScanJob(jobId));
   handle("providers:scan:list", (providerId?: string) => controller.listProviderScanJobs(providerId));
   handle("providers:scan:cancel", (jobId: string) => controller.cancelProviderScan(jobId));
+  // Deprecated compatibility channels. They intentionally delegate to the
+  // same ProviderService core and must not be used by new Renderer code.
   handle("providers:deep-scan", (id: string, options?: ProviderDeepScanOptions) => controller.deepScanProvider(id, options));
   handle("providers:cancel-scan", (id: string) => controller.cancelProviderDeepScan(id));
   handle("providers:capabilities:application", (id: string) => controller.getProviderCapabilityApplication(id));

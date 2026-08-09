@@ -596,10 +596,21 @@ export class ProviderService {
       this.scanControllers.delete(job.providerId);
       this.scanGenerations.set(job.providerId, job.generation + 1);
     }
-    const generation = job.updatedAt;
+    // A queued job may not have installed its AbortController yet because
+    // `startScan()` deliberately returns before the worker is scheduled. Do
+    // not key the cancellation grace period off `updatedAt`: the worker will
+    // publish a `running` update and change that field before the timer fires,
+    // which used to leave queued cancellations stuck in `cancelling` forever.
     setTimeout(() => {
       const current = this.scanJobs.get(jobId);
-      if (!current || current.updatedAt !== generation || isTerminalScanStatus(current.status)) return;
+      if (!current || isTerminalScanStatus(current.status)) return;
+      const active = this.scanControllers.get(current.providerId);
+      if (current.status === "cancelling" && active?.jobId === jobId && active.generation === current.generation) {
+        active.controller.abort(new Error("用户取消了兼容扫描"));
+        this.scanControllers.delete(current.providerId);
+        this.scanGenerations.set(current.providerId, current.generation + 1);
+      }
+      if (current.status !== "cancelling") return;
       current.status = "cancelled";
       current.stage = "complete";
       current.completedAt = new Date().toISOString();
@@ -728,6 +739,14 @@ export class ProviderService {
     if (this.scanControllers.has(id)) throw new Error("该提供商正在执行兼容扫描");
     const provider = (await this.store.get()).providers.find((value) => value.id === id);
     if (!provider) throw new Error("提供商不存在或为只读外部配置");
+    // `runScanJob()` enters this method before the first store read settles.
+    // A cancellation can therefore arrive while there is not yet an
+    // AbortController to abort. Re-check the persisted job state before any
+    // compatibility request is allowed to leave the process.
+    const queuedJob = jobId ? this.scanJobs.get(jobId) : undefined;
+    if (queuedJob && (queuedJob.status === "cancelling" || queuedJob.status === "cancelled")) {
+      throw new Error("用户取消了兼容扫描");
+    }
     const protocols = Array.from(new Set(options.protocols?.length ? options.protocols : PROVIDER_PROTOCOLS));
     const models = provider.models.filter((model) => !options.modelIds?.length || options.modelIds.includes(model.id));
     if (!models.length) throw new Error("扫描范围中没有模型");
@@ -855,6 +874,18 @@ export class ProviderService {
   private async runScanJob(jobId: string): Promise<void> {
     const job = this.scanJobs.get(jobId);
     if (!job) return;
+    // Cancellation can arrive between `startScan()` returning and this
+    // asynchronous worker getting its first turn. Never start network probes
+    // for a job the user already cancelled.
+    if (job.status === "cancelling" || job.status === "cancelled") {
+      job.status = "cancelled";
+      job.stage = "complete";
+      job.completedAt = new Date().toISOString();
+      job.updatedAt = job.completedAt;
+      job.message = "扫描已取消；未发送探测请求";
+      this.publishScan(job);
+      return;
+    }
     job.status = "running";
     job.updatedAt = new Date().toISOString();
     this.publishScan(job);
@@ -868,7 +899,11 @@ export class ProviderService {
       current.stage = "complete";
       current.status = result.cancelled || current.status === "cancelling" || current.status === "cancelled" ? "cancelled" : "completed";
       current.completed = Math.min(current.total, Math.max(current.completed, result.cancelled ? current.completed : current.total));
-      current.message = current.status === "cancelled" ? "扫描已取消；已完成结果已保存" : "兼容扫描完成";
+      current.message = current.status === "cancelled"
+        ? result.completed > 0
+          ? "扫描已取消；已完成结果已保存"
+          : "扫描已取消；未发送探测请求"
+        : "兼容扫描完成";
       this.publishScan(current);
     } catch (error) {
       const current = this.scanJobs.get(jobId);
@@ -879,7 +914,11 @@ export class ProviderService {
       current.completedAt = new Date().toISOString();
       current.updatedAt = current.completedAt;
       current.error = cancelled ? undefined : sanitizeProbeMessage(error instanceof Error ? error.message : String(error));
-      current.message = cancelled ? "扫描已取消" : `扫描失败：${current.error}`;
+      current.message = cancelled
+        ? current.completed > 0
+          ? "扫描已取消；已完成结果已保存"
+          : "扫描已取消；未发送探测请求"
+        : `扫描失败：${current.error}`;
       this.publishScan(current);
     }
   }

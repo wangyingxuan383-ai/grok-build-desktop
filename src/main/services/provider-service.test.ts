@@ -723,6 +723,34 @@ describe("ProviderService deep compatibility scan", () => {
     }
   });
 
+  it("cancels a queued scan before the worker sends any provider request", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-provider-scan-pre-worker-cancel-")); roots.push(root);
+    const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");
+    let requests = 0;
+    const service = new ProviderService(join(root, "data"), new LogService(join(root, "scan.log")), {
+      grokHome,
+      environment: new FakeEnvironment(),
+      fetcher: async () => {
+        requests += 1;
+        return new Response(JSON.stringify({ data: [{ id: "remote" }] }), { status: 200, headers: { "content-type": "application/json" } });
+      },
+    });
+    try {
+      await service.upsert(input({ id: "pre-worker-cancel", name: "Pre-worker cancel", credentialMode: "none", credentialValue: undefined, models: [{ id: "remote", model: "remote", name: "Remote" }] }));
+      const started = await service.startScan({ providerId: "pre-worker-cancel", modelIds: ["remote"], protocols: ["responses"], includeReasoning: false, includeTools: false, context: { mode: "off" } });
+      expect(service.cancelScan(started.jobId).status).toBe("cancelling");
+      let cancelled = service.getScanJob(started.jobId);
+      for (let attempt = 0; attempt < 40 && cancelled?.status !== "cancelled"; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        cancelled = service.getScanJob(started.jobId);
+      }
+      expect(cancelled).toMatchObject({ status: "cancelled", message: "扫描已取消；未发送探测请求" });
+      expect(requests).toBe(0);
+    } finally {
+      await service.dispose();
+    }
+  });
+
   it("discards a late inference response after cancellation instead of persisting evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-provider-scan-late-")); roots.push(root);
     const grokHome = join(root, ".grok"); await mkdir(grokHome, { recursive: true }); await writeFile(join(grokHome, "config.toml"), "");

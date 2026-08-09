@@ -224,6 +224,9 @@ const api: GrokDesktopApi = {
     providerScanProgressListeners.add(listener);
     return () => providerScanProgressListeners.delete(listener);
   },
+  // Compatibility-only blocking surface. The production Renderer uses the
+  // Job API above so progress, cancellation receipts and generation fencing
+  // remain observable.
   deepScanProvider: (id, options) => ipcRenderer.invoke("providers:deep-scan", id, options),
   cancelProviderDeepScan: (id) => ipcRenderer.invoke("providers:cancel-scan", id),
   getProviderCapabilityApplication: (id) => ipcRenderer.invoke("providers:capabilities:application", id),

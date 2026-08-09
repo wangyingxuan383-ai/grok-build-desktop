@@ -1,3 +1,6 @@
+/* Structural baseline. shell.css intentionally applies the final compact
+   product-shell values after this file; feature styles must not add another
+   shell layer here. */
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 * { scrollbar-color: var(--border-strong) transparent; }
