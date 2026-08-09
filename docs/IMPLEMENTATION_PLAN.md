@@ -1,5 +1,19 @@
 # Grok Build Desktop 实施计划
 
+## 0.7.1 会话与项目基础（2026-08-09）
+
+- [x] 新增稳定 `ProjectIdentity`，对 Windows 大小写、尾斜杠和可解析链接目标规范化；Workspace Catalog 按项目 ID 合并来源及会话计数。
+- [x] 新增项目隐藏/恢复 IPC 与设置入口；隐藏不删除会话、投影、附件或源文件，失效路径保留诊断。
+- [x] 新建任务改为草稿优先；模型、Provider、思考档位、模式、执行档案、正文和附件在首次发送前均只保存于 Desktop。
+- [x] 首次发送成功后将草稿和附件迁移到真实 Session ID；目标冲突、存储写入失败或会话创建失败均不覆盖原内容，附件目录写入失败时回滚。
+- [x] 打开历史会话时先恢复 ConversationProjection V2、附件及回合展示，再后台恢复 ACP；增加 hydration 状态与 generation 隔离，离线时保留正文和 Composer。
+- [x] 统一侧栏、任务中心、Dashboard、分叉、Codex/Claude 接力及 Worktree 的 `openConversationTarget()` 导航；恢复尺寸、滚动和输入框焦点。
+- [x] 左栏使用运行、等待、排队、未读、失败或空闲的单一权威状态，并显示项目活动会话/草稿/总会话计数。
+- [x] 完整离线回归：95 个测试文件/686 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产构建、公开扫描及开发版 0.7.1 UI 探针通过。
+- [x] 最终资源/分块/Native/Fuses/依赖门禁通过；正式生成 0.7.1 Setup/Portable/SHA-256/SBOM/许可证候选并完成 per-user 安装。
+- [x] 安装版冷启动、主进程/About 0.7.1、诊断中心、支持包隐私预览、桌面和开始菜单快捷方式通过；打包版 UI 覆盖 Plan/权限/停止、草稿重启、多会话隔离、导航和响应式布局。
+- [ ] 用户桌面验收项目去重、草稿重启、长会话二/三次打开、CLI 离线降级和两个以上后台会话；验收前不推送、不创建 Release。
+
 ## 0.7.0 C 盘基线刷新与 0.7.1 启动（2026-08-09）
 
 - [x] 将已失效的用户级 npm E 盘缓存迁移到 `%LOCALAPPDATA%\\npm-cache`，依赖查询/安装不再访问已拔出的 E 盘。
@@ -7,7 +21,7 @@
 - [x] 在 C 盘完成 94 文件/677 项离线测试、TypeScript、生产/资源构建、公开扫描、分块、Native Host、Fuses、打包 UI 与目录打包。
 - [x] 重新生成 0.7.0 Setup/Portable、per-user 安装并验证 File/Product、冷启动和快捷方式。
 - [ ] Release 资产生成阶段第二次重复 v0.7 UI 探针仍有夹具时序波动；0.7.1 必须把会话恢复与交互夹具改为显式 hydration/generation 状态后再生成正式资产。
-- [ ] 从该安全基线创建 `codex/v0.7.1-session-foundation`，实现项目规范化、草稿优先、本地预览和后台恢复；不创建 0.7.0 Release。
+- [x] 从该安全基线创建 `codex/v0.7.1-session-foundation`，实现项目规范化、草稿优先、本地预览和后台恢复；不创建 0.7.0 Release。
 
 ## 0.7.0 累计变更一致性审计（2026-08-09）
 

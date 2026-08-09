@@ -29,6 +29,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("workspace:set", (cwd: string) => controller.setWorkspace(cwd));
   handle("workspace:discover", (force?: boolean) => controller.discoverWorkspaces(force));
   handle("workspace:pin", (cwd: string, pinned: boolean) => controller.pinWorkspace(cwd, pinned));
+  handle("workspace:hidden:list", () => controller.listHiddenWorkspaces());
+  handle("workspace:hidden:set", (cwd: string, hidden: boolean) => controller.setWorkspaceHidden(cwd, hidden));
   handle("workspace:search-files", (cwd: string, query: string, limit?: number) => controller.searchWorkspaceFiles(cwd, query, limit));
   handle("workspace:tree:list", (cwd: string, directoryPath?: string, options?: WorkspaceTreeOptions) => controller.listWorkspaceTree(cwd, directoryPath, options));
   handle("editor:open", (cwd: string, path: string) => controller.openEditorDocument(cwd, path));
@@ -107,6 +109,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:list", (cwd?: string, query?: string) => controller.listSessions(cwd, query));
   handle("session:official-list", (cwd?: string, cursor?: string) => controller.listOfficialSessions(cwd, cursor));
   handle("session:create", (input: string | ExecutionProfileLaunchInput) => controller.createSession(input));
+  handle("session:preview", (cwd: string, id: string) => controller.previewSession(cwd, id));
   handle("session:open", (cwd: string, id: string) => controller.openSession(cwd, id));
   handle("session:info", (id: string) => controller.getCliSessionInfo(id));
   handle("session:usage", (id: string) => controller.getCliSessionUsage(id));
@@ -217,7 +220,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:health:repair", () => controller.checkAutomationHealth(true));
   handle("automations:clear-context", (id: string) => controller.clearAutomationContext(id));
   handle("draft:get", (key: string) => controller.getDraft(key));
-  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]) => controller.setDraft(key, text, capability, attachments));
+  handle("draft:list", () => controller.listDrafts());
+  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: import("../shared/types").NewTaskDraft) => controller.setDraft(key, text, capability, attachments, newTask));
+  handle("draft:move", (sourceKey: string, targetKey: string) => controller.moveDraft(sourceKey, targetKey));
   handle("draft:clear", (key: string) => controller.clearDraft(key));
   handle("draft:text:create", (key: string, text: string) => controller.createTextDraftAttachment(key, text));
   handle("draft:text:read", (path: string) => controller.readTextDraftAttachment(path));

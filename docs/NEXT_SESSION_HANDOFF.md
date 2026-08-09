@@ -1,4 +1,17 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-09，0.7.0 源码候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-09，0.7.1 本地候选）
+
+## 2026-08-09 0.7.1 会话与项目基础
+
+- 当前分支为 `codex/v0.7.1-session-foundation`，基于已安装验证的 C 盘 0.7.0 基线；版本、lockfile 和离线夹具已提升到 0.7.1，尚未推送或创建 Release。
+- 工作区通过 `ProjectIdentity` 统一大小写、尾斜杠和可解析链接目标；目录按稳定项目 ID 去重并合并 Grok/Codex/Claude 来源。项目隐藏只写元数据，设置中可恢复，源会话与文件不删除。
+- 新建任务现在先创建 `NewTaskDraft`，不启动 CLI；草稿持久化工作区、正文、附件、模型、Provider、思考、模式和执行档案。首次发送创建唯一会话，再通过 `UiStateService.moveDraft()` 迁移；目标冲突与存储失败不会覆盖内容，附件移动可回滚。
+- 历史会话打开时先发 ConversationProjection V2、附件与 TurnPresentation，再后台连接 ACP。Renderer 使用 `local/connecting/synchronizing/ready/offline/failed` 与 generation 过滤迟到事件；有本地投影时连接失败仍保留正文和 Composer。
+- 所有主要会话入口已经统一到 `openConversationTarget()`；左栏增加排队状态、活动会话数和草稿数，后台会话不会接管当前 Composer/停止按钮。
+- 当前完整离线套件为 **95 个测试文件/686 项通过，6 个 live 文件/9 项按设计跳过**；TypeScript、生产构建、公开扫描和开发版 0.7.1 UI 草稿/重载/多会话隔离探针通过。
+- 最终资源、分块、Native Host、Fuses、依赖和 diff 门禁已通过。打包版 UI 首次发现 Plan 虚拟列表夹具未等待目标会话提交，改为确定性会话等待和真实滚动事件后重新打包通过；同一打包流程不再重复运行相同 UI 探针。
+- 0.7.1 Setup、Portable、SHA-256、SBOM 和许可证已生成；per-user 安装完成，安装版主进程/About/诊断、File/Product、桌面与开始菜单快捷方式均为 0.7.1。
+- 本地资产：`release/Grok-Build-Desktop-Setup-v0.7.1-x64.exe`（SHA-256 `df4d9ff006a6260e0bc2fa24b2dcb3ca0b91ea98fbefefe8ba919552c188f10e`）和 `release/Grok-Build-Desktop-Portable-v0.7.1-x64.zip`（SHA-256 `1fc9898761aec4bd07f17cd6b9a35b420a970c3702eb9d97e0f973c5a2ebba18`）。
+- 下一步仅为用户桌面验收：项目去重与隐藏恢复、未发送草稿重启、长会话第二/第三次打开、CLI 离线降级及两个以上真实后台会话。验收前不推送、不创建 GitHub Release。
 
 ## 2026-08-09 C 盘基线刷新
 

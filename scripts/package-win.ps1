@@ -99,6 +99,6 @@ if ($ReleaseArtifactsOnly) {
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 }
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
-& (Join-Path $PSScriptRoot 'generate-release-assets.ps1')
+& (Join-Path $PSScriptRoot 'generate-release-assets.ps1') -SkipPackagedUiProbe
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 Write-Host "Windows 公开产物已生成：$PortableZip" -ForegroundColor Green

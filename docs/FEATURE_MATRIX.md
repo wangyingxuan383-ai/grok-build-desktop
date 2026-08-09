@@ -1,5 +1,17 @@
 # Feature Matrix
 
+## 0.7.1 session and project foundation (2026-08-09)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Stable project identity | Offline verified | Existing Windows paths are realpath-normalized and compared case-insensitively without trailing separators; missing paths retain a lexical identity and diagnostic. Unit/catalog tests cover case, trailing separators, links, deduplication and source counts. |
+| Project hide and restore | Offline verified | Hiding is metadata-only and survives restart; restoring preserves original sessions. Renderer IPC is runtime-schema validated. No project, projection or source directory is deleted. |
+| Draft-first New Task | Offline + UI probe verified | Opening New Task creates no CLI session. Text, attachments and per-draft runtime choices persist locally; first send creates one session and moves the draft without overwriting an existing target. Rollback keeps attachment files when store migration fails. |
+| Local-first session hydration | Contract + UI verified | Projection V2, attachments and presentations render before ACP reconnect. Hydration states and generation fencing keep stale reconnects from replacing the active session; a failed reconnect with local content returns offline rather than blanking the view. |
+| Authoritative sidebar status | Offline verified | Running, waiting, queued, unread, failed and idle are represented as one status per session. Draft and active counts are enriched per project; background sessions do not own the active Composer controls. |
+| Unified conversation navigation | Source + UI verified | Sidebar, task center, Dashboard/deep targets, history forks, Codex/Claude continuations and Worktree sessions route through `openConversationTarget()` and share workspace/session activation, scroll settlement and focus behavior. |
+| Current candidate gate | Packaged + installed verified | 95 test files/686 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, public scan, chunks, Native Host, Fuses and packaged 0.7.1 UI pass. Setup/Portable/SHA-256/SBOM/licenses were generated; installed main/About/diagnostics and both shortcuts report 0.7.1. Real user CLI/provider acceptance remains pending. |
+
 ## 0.7.0 C-drive refreshed baseline (2026-08-09)
 
 | Area | Status | Evidence / boundary |

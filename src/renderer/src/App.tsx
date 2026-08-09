@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, ClaudeSessionDetail, ClaudeSessionSummary, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, CustomProviderProfile, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution, NavigationIntent, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
+import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, ClaudeSessionDetail, ClaudeSessionSummary, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, CustomProviderProfile, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution, NavigationIntent, NewTaskDraft, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
 import { resolveComputerMention } from "../../shared/computer-mentions";
 import { buildComposerCommand, normalizeSkillCommand } from "../../shared/composer-capability";
 import { LazyMarkdownView } from "./components/LazyMarkdownView";
@@ -39,12 +39,11 @@ const LazyWorktreeWorkbench = lazy(() => import("./components/WorktreeWorkbench"
 const LazyMemoryWorkbench = lazy(() => import("./components/MemoryWorkbench").then((module) => ({ default: module.MemoryWorkbench })));
 const LazyAgentPersonaWorkbench = lazy(() => import("./components/AgentPersonaWorkbench").then((module) => ({ default: module.AgentPersonaWorkbench })));
 const LazyExecutionProfileWorkbench = lazy(() => import("./components/ExecutionProfileWorkbench").then((module) => ({ default: module.ExecutionProfileWorkbench })));
-const LazySessionLaunchDialog = lazy(() => import("./components/ExecutionProfileWorkbench").then((module) => ({ default: module.SessionLaunchDialog })));
 const LazyAgentDashboardWorkbench = lazy(() => import("./components/AgentDashboardWorkbench").then((module) => ({ default: module.AgentDashboardWorkbench })));
 const LazyFailureDiagnosisPanel = lazy(() => import("./components/FailureDiagnosisPanel").then((module) => ({ default: module.FailureDiagnosisPanel })));
 const LazyMediaStudioPanel = lazy(() => import("./components/MediaStudioPanel").then((module) => ({ default: module.MediaStudioPanel })));
 
-type Panel = "settings" | "accounts" | "providers" | "about" | "media" | "extensions" | "diagnostics" | "onboarding" | "tasks" | "history" | "new-session" | null;
+type Panel = "settings" | "accounts" | "providers" | "about" | "media" | "extensions" | "diagnostics" | "onboarding" | "tasks" | "history" | null;
 export default function App(): React.JSX.Element {
   const store = useAppStore();
   const activeWorkbenchView = useWorkbenchStore((state) => state.activeView);
@@ -255,9 +254,12 @@ export default function App(): React.JSX.Element {
     setReviewComments([]);
     setDiagnosingFailure(undefined);
   }, []);
-  const { draftKey, activeSending, composer, setComposer, capability, setCapability } = useSessionDraft({
+  const activeWorkspaceSummary = store.workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, store.settings?.activeWorkspace || ""));
+  const newDraftKey = activeWorkspaceSummary ? `new:${activeWorkspaceSummary.projectId}` : store.settings?.activeWorkspace ? `new:${normalizedWorkspacePath(store.settings.activeWorkspace)}` : "";
+  const { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask } = useSessionDraft({
     activeSessionId: store.activeSessionId,
     workspace: store.settings?.activeWorkspace || "",
+    newDraftKey,
     foreignSessionOpen: Boolean(activeCodexId || activeClaudeId),
     sendingSessionIds,
     attachments: store.attachments,
@@ -363,6 +365,7 @@ export default function App(): React.JSX.Element {
   const activeSession = store.sessions.find((value) => value.id === store.activeSessionId);
   const activeCodex = store.codexSessions.find((value) => value.id === activeCodexId);
   const activeClaude = store.claudeSessions.find((value) => value.id === activeClaudeId);
+  const draftModels = useMemo(() => Array.from(new Map(Object.values(store.views).flatMap((value) => value.models).map((model) => [model.modelId, model])).values()), [store.views]);
   const planWaiting = Boolean(view?.messages.some((message) => message.kind === "plan" && message.interactive && !message.resolved));
   const turns = useMemo(() => buildChatTurns(view?.messages ?? [], view?.status, view?.turnPresentations), [view?.messages, view?.status, view?.turnPresentations]);
   const executionRoot = executionAssignment?.cwd || activeSession?.cwd || store.settings?.activeWorkspace || "";
@@ -482,7 +485,35 @@ export default function App(): React.JSX.Element {
       store.setSettings(await window.grokDesktop.getSettings());
       store.setSessions(await window.grokDesktop.listSessions(cwd));
     }
-    setPanel("new-session");
+    setWorkbenchView("chat");
+    setPanel(null);
+    setRightTool(null);
+    setActiveCodexId(""); setCodexDetail(null);
+    setActiveClaudeId(""); setClaudeDetail(null);
+    store.setActiveSession("");
+    const workspaces = await window.grokDesktop.discoverWorkspaces(true).catch(() => useAppStore.getState().workspaces);
+    store.setWorkspaces(workspaces);
+    const project = workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, cwd));
+    const profiles = await window.grokDesktop.listExecutionProfiles(cwd).catch(() => []);
+    const profileId = profiles.find((profile) => profile.effective && profile.id === "builtin-normal")?.id
+      ?? profiles.find((profile) => profile.effective)?.id;
+    const settings = useAppStore.getState().settings;
+    const projectId = project?.projectId ?? normalizedWorkspacePath(cwd);
+    const existingDraft = await window.grokDesktop.getDraft(`new:${projectId}`).catch(() => null);
+    if (!existingDraft) {
+      setNewTask({
+        projectId,
+        workspacePath: project?.canonicalPath ?? cwd,
+        profileId,
+        modelId: settings?.defaultModel || undefined,
+        effort: settings?.defaultEffort,
+        mode: settings?.defaultMode,
+      });
+      store.setWorkspaces(workspaces.map((workspace) => workspace.projectId === projectId
+        ? { ...workspace, draftCount: Math.max(1, workspace.draftCount) }
+        : workspace));
+    }
+    window.setTimeout(focusComposer, 0);
   };
 
   const openSession = async (session: SessionSummary): Promise<void> => {
@@ -496,12 +527,18 @@ export default function App(): React.JSX.Element {
     atBottomRef.current = true;
     setAtBottom(true);
     try {
-      await window.grokDesktop.openSession(session.cwd, session.id);
+      const preview = await window.grokDesktop.previewSession(session.cwd, session.id).catch(() => undefined);
       if (requestId !== openRequestRef.current) return;
+      if (preview?.projection) store.handleEvent({ type: "conversation-projection-restore", sessionId: session.id, projection: preview.projection });
+      if (preview?.presentations.length) store.handleEvent({ type: "turn-presentations-restore", sessionId: session.id, presentations: preview.presentations });
+      setOperationBusy(false);
+      const result = await window.grokDesktop.openSession(session.cwd, session.id);
+      if (requestId !== openRequestRef.current) return;
+      if (result.hydration === "offline") setComposerNotice(`已显示本地历史；CLI 暂未连接：${result.message || "可稍后重试"}`);
       settleConversationBottom(session.id);
       focusComposer();
       void refreshSessions().catch((error) => store.setError(errorMessage(error)));
-    } catch (error) { store.setError(errorMessage(error)); }
+    } catch (error) { if (requestId === openRequestRef.current) store.setError(errorMessage(error)); }
     finally { if (requestId === openRequestRef.current) setOperationBusy(false); }
   };
 
@@ -516,7 +553,7 @@ export default function App(): React.JSX.Element {
       window.requestAnimationFrame(() => { window.dispatchEvent(new Event("resize")); focusComposer(); });
       return;
     }
-    if (useAppStore.getState().settings?.activeWorkspace.toLocaleLowerCase() !== target.cwd.toLocaleLowerCase()) {
+    if (!sameWorkspacePath(useAppStore.getState().settings?.activeWorkspace || "", target.cwd)) {
       useAppStore.getState().setSessions(await window.grokDesktop.setWorkspace(target.cwd));
       useAppStore.getState().setSettings(await window.grokDesktop.getSettings());
     }
@@ -579,8 +616,9 @@ export default function App(): React.JSX.Element {
     let sessionId = store.activeSessionId;
     const submittedCapability = capability;
     try {
-      if (!sessionId) sessionId = await createSession() || "";
+      if (!sessionId) sessionId = await createSession(newTask ? { ...newTask } : undefined) || "";
       if (!sessionId) return;
+      if (sourceDraftKey && sourceDraftKey !== sessionId) await window.grokDesktop.moveDraft(sourceDraftKey, sessionId);
       for (const key of sessionSubmissionKeys(sessionId, sourceDraftKey)) trackedSubmissionKeys.add(key);
       updateSendingSessions(trackedSubmissionKeys, true);
       const cwd = store.settings?.activeWorkspace || activeSession?.cwd || "";
@@ -603,6 +641,9 @@ export default function App(): React.JSX.Element {
       setReviewComments([]);
       if (sourceDraftKey) await window.grokDesktop.clearDraft(sourceDraftKey);
       if (sessionId !== sourceDraftKey) await window.grokDesktop.clearDraft(sessionId);
+      if (sourceDraftKey.startsWith("new:")) {
+        void window.grokDesktop.discoverWorkspaces(true).then(store.setWorkspaces).catch(() => undefined);
+      }
       if (delivery === "normal") { forceFollowRef.current = true; followTurnRef.current = true; atBottomRef.current = true; setAtBottom(true); }
       focusComposer();
       const reviewText = formatReviewComments(reviewComments);
@@ -629,9 +670,10 @@ export default function App(): React.JSX.Element {
       if (delivery !== "normal") window.setTimeout(() => setComposerNotice(""), 4_000);
     }
     catch (error) {
-      await window.grokDesktop.setDraft(sessionId || sourceDraftKey, text, submittedCapability, attachments).catch(() => undefined);
+      await window.grokDesktop.setDraft(sessionId || sourceDraftKey, text, submittedCapability, attachments, sessionId ? undefined : newTask).catch(() => undefined);
       const current = useAppStore.getState();
-      const currentDraftKey = current.activeSessionId || (current.settings?.activeWorkspace ? `new:${current.settings.activeWorkspace}` : "");
+      const currentWorkspace = current.workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, current.settings?.activeWorkspace || ""));
+      const currentDraftKey = current.activeSessionId || (currentWorkspace ? `new:${currentWorkspace.projectId}` : current.settings?.activeWorkspace ? `new:${normalizedWorkspacePath(current.settings.activeWorkspace)}` : "");
       if (currentDraftKey === sessionId || currentDraftKey === sourceDraftKey) {
         setComposer(text);
         setCapability(submittedCapability);
@@ -758,6 +800,7 @@ export default function App(): React.JSX.Element {
         onSearch={setSearch}
         onNew={() => { setWorkbenchView("chat"); void openNewSessionDialog(); }}
         onOpen={(session) => { void openConversationTarget({ cwd: session.cwd, sessionId: session.id }).catch((error) => store.setError(errorMessage(error))); }}
+        onOpenConversationTarget={(target) => { void openConversationTarget(target).catch((error) => store.setError(errorMessage(error))); }}
         onOpenCodex={(session) => { setWorkbenchView("chat"); void openCodexSession(session); }}
         onOpenClaude={(session) => { setWorkbenchView("chat"); void openClaudeSession(session); }}
         onChooseWorkspace={async () => {
@@ -779,6 +822,7 @@ export default function App(): React.JSX.Element {
           store.setActiveSession("");
           setActiveCodexId(""); setCodexDetail(null);
           setActiveClaudeId(""); setClaudeDetail(null);
+          store.setWorkspaces(await window.grokDesktop.discoverWorkspaces(true));
         }}
         onRename={async (session) => {
           const title = await askText("输入新的会话名称。", session.title);
@@ -814,6 +858,8 @@ export default function App(): React.JSX.Element {
         onToggleSessionGroup={async (kind, collapsed) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ sessionGroupCollapsed: { ...store.settings.sessionGroupCollapsed, [kind]: collapsed } })); }}
         onToggleArchived={async (value) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ showArchivedCodex: value })); }}
         onPinWorkspace={async (workspace) => store.setWorkspaces(await window.grokDesktop.pinWorkspace(workspace.cwd, !workspace.pinned))}
+        onHideWorkspace={async (workspace) => store.setWorkspaces(await window.grokDesktop.setWorkspaceHidden(workspace.cwd, true))}
+        onDeleteDraft={() => { void (async () => { if (!newDraftKey) return; if (!await askConfirm("删除这个尚未发送的本地草稿？不会影响任何 Grok 会话。", { title: "删除草稿", confirmLabel: "删除", danger: true })) return; await window.grokDesktop.clearDraft(newDraftKey); if (!store.activeSessionId) { setComposer(""); setCapability(undefined); setNewTask(undefined); store.clearAttachments(); } store.setWorkspaces(await window.grokDesktop.discoverWorkspaces(true)); })().catch((error) => store.setError(errorMessage(error))); }}
         onClear={async () => {
           const cwd = store.settings?.activeWorkspace;
           if (cwd && await askConfirm("永久清空当前工作区的全部 Grok 会话？", { title: "清空会话", confirmLabel: "永久清空", danger: true })) {
@@ -829,15 +875,16 @@ export default function App(): React.JSX.Element {
         <TopBar session={activeSession} codex={activeCodex} claude={activeClaude} workspace={executionRoot || store.settings?.activeWorkspace || ""} workbenchView={activeWorkbenchView} view={view} busy={operationBusy || activeSending || view?.status === "working" || view?.compacting === true} rightToolOpen={Boolean(rightTool)} onView={setWorkbenchView} onPanel={setPanel} onToggleSidebar={() => setSidebarCollapsed((value) => !value)} onToggleRightTool={() => setRightTool((value) => value ? null : "launcher")} onReturnToChat={() => { setWorkbenchView("chat"); window.requestAnimationFrame(() => { window.dispatchEvent(new Event("resize")); focusComposer(); }); }} />
         {activeComputerTask && <ComputerLiveStrip task={activeComputerTask} onPause={() => void window.grokDesktop.pauseComputer(activeComputerTask.sessionId)} onResume={() => void window.grokDesktop.resumeComputer(activeComputerTask.sessionId)} onStop={() => void window.grokDesktop.stopComputer(activeComputerTask.sessionId)} />}
         <Suspense fallback={<div className="workbench-loading" role="status"><div className="spinner"/><span>正在加载工作台…</span></div>}>
-        {activeWorkbenchView === "files" ? <LazyFileWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} onChatReference={({ prompt, path }) => { setWorkbenchView("chat"); setComposer((value) => `${value}${value && !/\s$/.test(value) ? " " : ""}${prompt}`); if (path) void window.grokDesktop.attachmentsFromPaths([path]).then(store.addAttachments).catch((error) => store.setError(errorMessage(error))); window.setTimeout(focusComposer, 0); }} /> : activeWorkbenchView === "source-control" ? <LazyGitWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} /> : activeWorkbenchView === "worktrees" ? <LazyWorktreeWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} /> : activeWorkbenchView === "memory" ? <LazyMemoryWorkbench workspace={store.settings?.activeWorkspace || ""} activeSessionId={store.activeSessionId} dialogs={workbenchDialogs} /> : activeWorkbenchView === "agents" ? <LazyAgentPersonaWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} /> : activeWorkbenchView === "profiles" ? <LazyExecutionProfileWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={profileDialogs} /> : activeWorkbenchView === "dashboard" ? <LazyAgentDashboardWorkbench workspace={store.settings?.activeWorkspace || ""} setError={store.setError} onOpenSession={(sessionId) => { void openConversationTarget({ cwd: store.settings?.activeWorkspace || "", sessionId }).catch((error) => store.setError(errorMessage(error))); }} onOpenWorktree={(worktreeId) => { useWorktreeStore.getState().setSelected(worktreeId); setWorkbenchView("worktrees"); }} onOpenDefinition={() => setWorkbenchView("agents")} /> : <div className="conversation-surface"><div className="conversation-content">
+        {activeWorkbenchView === "files" ? <LazyFileWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} onChatReference={({ prompt, path }) => { setWorkbenchView("chat"); setComposer((value) => `${value}${value && !/\s$/.test(value) ? " " : ""}${prompt}`); if (path) void window.grokDesktop.attachmentsFromPaths([path]).then(store.addAttachments).catch((error) => store.setError(errorMessage(error))); window.setTimeout(focusComposer, 0); }} /> : activeWorkbenchView === "source-control" ? <LazyGitWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} /> : activeWorkbenchView === "worktrees" ? <LazyWorktreeWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} onOpenConversation={(target) => { void openConversationTarget(target).catch((error) => store.setError(errorMessage(error))); }} /> : activeWorkbenchView === "memory" ? <LazyMemoryWorkbench workspace={store.settings?.activeWorkspace || ""} activeSessionId={store.activeSessionId} dialogs={workbenchDialogs} /> : activeWorkbenchView === "agents" ? <LazyAgentPersonaWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={workbenchDialogs} /> : activeWorkbenchView === "profiles" ? <LazyExecutionProfileWorkbench workspace={store.settings?.activeWorkspace || ""} dialogs={profileDialogs} /> : activeWorkbenchView === "dashboard" ? <LazyAgentDashboardWorkbench workspace={store.settings?.activeWorkspace || ""} setError={store.setError} onOpenSession={(sessionId) => { void openConversationTarget({ cwd: store.settings?.activeWorkspace || "", sessionId }).catch((error) => store.setError(errorMessage(error))); }} onOpenWorktree={(worktreeId) => { useWorktreeStore.getState().setSelected(worktreeId); setWorkbenchView("worktrees"); }} onOpenDefinition={() => setWorkbenchView("agents")} /> : <div className="conversation-surface"><div className="conversation-content">
         {conversationSearchOpen && <div className="conversation-search-bar"><input id="conversation-search" value={conversationSearch} onChange={(event) => setConversationSearch(event.target.value)} placeholder="搜索当前会话"/><span>{conversationMatches.length ? `${conversationMatch + 1}/${conversationMatches.length}` : "0 项"}</span><button disabled={!conversationMatches.length} onClick={() => setConversationMatch((value) => (value - 1 + conversationMatches.length) % conversationMatches.length)}>↑</button><button disabled={!conversationMatches.length} onClick={() => setConversationMatch((value) => (value + 1) % conversationMatches.length)}>↓</button><button onClick={() => { setConversationSearchOpen(false); setConversationSearch(""); focusComposer(); }}>×</button></div>}
         {!store.cli?.found ? <EmptyState title="未找到 Grok CLI" text="请在设置中指定 grok.exe 路径。" action="打开设置" onAction={() => setPanel("settings")} />
-          : activeCodexId ? <ForeignSessionMirror source="Codex" detail={codexDetail} busy={operationBusy} onRefresh={async () => setCodexDetail(await window.grokDesktop.refreshCodexSession(activeCodexId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueCodexSession(activeCodexId); store.setSessions(await window.grokDesktop.setWorkspace(result.cwd)); store.setSettings(await window.grokDesktop.getSettings()); setActiveCodexId(""); setCodexDetail(null); store.setActiveSession(result.sessionId); await refreshSessions(); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideCodexSession(activeCodexId, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(store.settings?.activeWorkspace || "", store.settings?.showArchivedCodex, true)); setActiveCodexId(""); setCodexDetail(null); }} />
-          : activeClaudeId ? <ForeignSessionMirror source="Claude" detail={claudeDetail} busy={operationBusy} onRefresh={async () => setClaudeDetail(await window.grokDesktop.refreshClaudeSession(activeClaudeId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueClaudeSession(activeClaudeId); store.setSessions(await window.grokDesktop.setWorkspace(result.cwd)); store.setSettings(await window.grokDesktop.getSettings()); setActiveClaudeId(""); setClaudeDetail(null); store.setActiveSession(result.sessionId); await refreshSessions(); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideClaudeSession(activeClaudeId, true); store.setClaudeSessions(await window.grokDesktop.listClaudeSessions(store.settings?.activeWorkspace || "", true)); setActiveClaudeId(""); setClaudeDetail(null); }} />
+          : activeCodexId ? <ForeignSessionMirror source="Codex" detail={codexDetail} busy={operationBusy} onRefresh={async () => setCodexDetail(await window.grokDesktop.refreshCodexSession(activeCodexId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueCodexSession(activeCodexId); await openConversationTarget(result); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideCodexSession(activeCodexId, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(store.settings?.activeWorkspace || "", store.settings?.showArchivedCodex, true)); setActiveCodexId(""); setCodexDetail(null); }} />
+          : activeClaudeId ? <ForeignSessionMirror source="Claude" detail={claudeDetail} busy={operationBusy} onRefresh={async () => setClaudeDetail(await window.grokDesktop.refreshClaudeSession(activeClaudeId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueClaudeSession(activeClaudeId); await openConversationTarget(result); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideClaudeSession(activeClaudeId, true); store.setClaudeSessions(await window.grokDesktop.listClaudeSessions(store.settings?.activeWorkspace || "", true)); setActiveClaudeId(""); setClaudeDetail(null); }} />
           : !activeSession && !view ? <WorkspaceEmptyState workspaces={store.workspaces} onNew={() => void openNewSessionDialog()} onOpen={async (cwd) => { store.setSessions(await window.grokDesktop.setWorkspace(cwd)); store.setSettings(await window.grokDesktop.getSettings()); }} />
           : <div className="conversation-wrap" onWheelCapture={(event) => { if (event.deltaY < 0) { followTurnRef.current = false; forceFollowRef.current = false; } }}><Virtuoso ref={virtuosoRef} className="conversation" data={turns} computeItemKey={(_index, turn) => turn.id} followOutput={(isAtBottom) => (isAtBottom || forceFollowRef.current) ? "auto" : false} atBottomStateChange={(value) => { atBottomRef.current = value; if (value && !followTurnRef.current) forceFollowRef.current = false; setAtBottom(value); }} itemContent={(index, turn) => <div className={conversationMatches[conversationMatch] === index ? "conversation-match-active" : ""}><TurnCard turn={turn} sessionId={store.activeSessionId} navigationRoot={executionRoot} showThinking={store.settings?.showThinking ?? false} expandTools={store.settings?.expandToolDetails ?? false} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onOpenReview={() => void window.grokDesktop.getGitWorkspaceCapability(executionRoot).then((capability) => { if (capability.available) { setReviewInitialScope("last-turn"); setRightTool("review"); } else setRightTool("agent-changes"); }).catch((error) => store.setError(errorMessage(error)))} onFork={index === turns.length - 1 ? () => setPanel("history") : undefined} onResolved={(id) => store.resolveMessage(store.activeSessionId, id)} onDiagnose={setDiagnosingFailure} onRetry={(message) => { setComposer(message.text); store.clearAttachments(); store.addAttachments((message.attachments ?? []).filter((attachment) => attachment.availability === "ready" && Boolean(attachment.source)).map((attachment) => ({ id: attachment.id, name: attachment.name, kind: attachment.kind, mimeType: attachment.mimeType, size: attachment.size, ...(attachment.isData ? { data: attachment.source } : { path: attachment.source }) }))); focusComposer(); }} /></div>} />{!atBottom && !!turns.length && <button className="scroll-to-bottom" onClick={() => { followTurnRef.current = false; forceFollowRef.current = true; atBottomRef.current = true; setAtBottom(true); scrollConversationNow("smooth"); }}>↓ 回到底部</button>}</div>}</div>
         {diagnosingFailure && createPortal(<LazyFailureDiagnosisPanel failure={diagnosingFailure} onClose={() => setDiagnosingFailure(undefined)} />, document.getElementById("overlay-root")!)}
         {!activeCodexId && !activeClaudeId && Boolean(view?.followUps.length) && <div className="follow-up-suggestions" aria-label="CLI 跟进建议"><span>跟进建议</span>{view!.followUps.map((suggestion) => <button key={suggestion.id} onClick={() => { setComposer(suggestion.text); focusComposer(); }}>{suggestion.text}</button>)}</div>}
+        {!activeCodexId && !activeClaudeId && view && view.hydration !== "ready" && view.hydration !== "local" && <div className={`session-hydration-banner ${view.hydration}`} role="status"><span>{view.hydration === "connecting" ? "正在连接 CLI，已先显示本地历史…" : view.hydration === "synchronizing" ? "正在合并 CLI 回放…" : `本地历史仍可用；连接${view.hydration === "offline" ? "离线" : "失败"}${view.hydrationMessage ? `：${view.hydrationMessage}` : ""}`}</span>{(view.hydration === "offline" || view.hydration === "failed") && activeSession && <button onClick={() => void openSession(activeSession)}>重新连接</button>}</div>}
         {!activeCodexId && !activeClaudeId && <Composer
           inputRef={composerRef}
           text={composer}
@@ -853,6 +900,9 @@ export default function App(): React.JSX.Element {
           commandMatches={commandMatches}
           fileMatches={fileMatches}
           view={view}
+          draft={store.activeSessionId ? undefined : newTask}
+          draftModels={draftModels}
+          onDraftChange={(patch) => setNewTask((current) => current ? { ...current, ...patch } : current)}
           onSend={() => void send(view?.status === "working" ? "queue" : "normal")}
           onInterject={() => void send("interject")}
           btwAvailable={Boolean(view?.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "btw"))}
@@ -920,10 +970,9 @@ export default function App(): React.JSX.Element {
         {panel === "diagnostics" && <LazyDiagnosticsPanel onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "onboarding" && store.onboarding && <LazyOnboardingPanel state={store.onboarding} onState={store.setOnboarding} onClose={() => { setReturnToOnboarding(false); setPanel(null); focusComposer(); }} onAccounts={() => { setReturnToOnboarding(true); setPanel("accounts"); }} onWorkspace={() => void window.grokDesktop.chooseWorkspace().then(async (cwd) => { if (cwd) { store.setSettings(await window.grokDesktop.getSettings()); store.setSessions(await window.grokDesktop.listSessions(cwd)); } })} />}
         {panel === "tasks" && <LazyTaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task) => { if (!task.sessionId) return; void openConversationTarget({ cwd: task.workspace, sessionId: task.sessionId }).catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
-        {panel === "history" && store.activeSessionId && <SessionHistoryPanel sessionId={store.activeSessionId} confirmAction={askConfirm} onForked={async (result) => { setPanel(null); await window.grokDesktop.openSession(result.cwd, result.sessionId); store.setSessions(await window.grokDesktop.listSessions(store.settings?.activeWorkspace || result.cwd)); store.setActiveSession(result.sessionId); settleConversationBottom(result.sessionId); }} onRewound={() => { setPanel(null); settleConversationBottom(store.activeSessionId); }} onClose={() => { setPanel(null); focusComposer(); }} />}
-        {panel === "new-session" && store.settings?.activeWorkspace && <LazySessionLaunchDialog workspace={store.settings.activeWorkspace} onClose={() => { setPanel(null); focusComposer(); }} onLaunch={async (input) => { const sessionId = await createSession(input); if (sessionId) setPanel(null); }}/>}
+        {panel === "history" && store.activeSessionId && <SessionHistoryPanel sessionId={store.activeSessionId} confirmAction={askConfirm} onForked={async (result) => { setPanel(null); await openConversationTarget(result); }} onRewound={() => { setPanel(null); settleConversationBottom(store.activeSessionId); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "providers" && <LazyProviderManagerDialog confirmAction={askConfirm} onError={store.setError} onSettingsChanged={() => void window.grokDesktop.getSettings().then(store.setSettings)} onClose={() => setPanel(null)}/>}
-        {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history", "new-session", "providers"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onProviders={() => setPanel("providers")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
+        {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history", "providers"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onProviders={() => setPanel("providers")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
         {activeComputerPermission && <ComputerPermissionDialog request={activeComputerPermission} onRespond={async (decision) => { try { await window.grokDesktop.respondComputerAppPermission(activeComputerPermission.requestId, decision); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerPermissions((current) => omitRecordKey(current, activeComputerPermission.sessionId)); focusComposer(); } }} />}
         {activeComputerRisk && <ComputerRiskDialog request={activeComputerRisk} onRespond={async (approved) => { try { await window.grokDesktop.respondComputerRisk(activeComputerRisk.requestId, approved); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerRisks((current) => omitRecordKey(current, activeComputerRisk.sessionId)); focusComposer(); } }} />}
         {dialog && <ActionDialog dialog={dialog} onClose={closeDialog} />}
@@ -966,6 +1015,8 @@ function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string
   return copy;
 }
 function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+function normalizedWorkspacePath(value: string): string { return value.replace(/[\\/]+$/, "").toLocaleLowerCase(); }
+function sameWorkspacePath(left: string, right: string): boolean { return normalizedWorkspacePath(left) === normalizedWorkspacePath(right); }
 function isPathInExecutionRoot(path: string, root: string): boolean {
   if (!root) return false;
   const normalize = (value: string): string => value.replace(/^\\\\\?\\/, "").replace(/\//g, "\\").replace(/\\+$/, "").toLocaleLowerCase();

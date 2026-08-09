@@ -715,7 +715,7 @@ export interface AccountProfile {
   updatedAt: string;
 }
 
-export type LiveStatus = "idle" | "working" | "needs-user" | "unread" | "error" | "cold";
+export type LiveStatus = "idle" | "working" | "needs-user" | "queued" | "unread" | "error" | "cold";
 export type SessionOriginKind = "normal" | "fork" | "worktree" | "codex-continuation" | "claude-continuation" | "automation" | "other";
 
 export interface SessionSummary {
@@ -740,16 +740,33 @@ export interface SessionSummary {
 
 export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex" | "claude";
 
-export interface WorkspaceSummary {
-  cwd: string;
+export interface ProjectIdentity {
+  id: string;
+  displayPath: string;
+  canonicalPath: string;
+  comparisonPath: string;
   name: string;
   exists: boolean;
+  diagnostic?: string;
+}
+
+export interface WorkspaceSummary {
+  projectId: string;
+  cwd: string;
+  displayPath: string;
+  canonicalPath: string;
+  name: string;
+  exists: boolean;
+  hidden: boolean;
   pinned: boolean;
   sources: WorkspaceSource[];
   lastUsedAt?: string;
   grokSessions: number;
   codexSessions: number;
   claudeSessions: number;
+  draftCount: number;
+  activeSessions: number;
+  diagnostic?: string;
 }
 
 export interface CodexSessionSummary {
@@ -860,7 +877,35 @@ export interface ComposerDraftState {
   text: string;
   capability?: ComposerCapabilitySelection;
   attachments?: Attachment[];
+  newTask?: NewTaskDraft;
   updatedAt: string;
+}
+
+export interface NewTaskDraft {
+  projectId: string;
+  workspacePath: string;
+  profileId?: string;
+  worktreeName?: string;
+  worktreeRef?: string;
+  modelId?: string;
+  providerId?: string;
+  effort?: ReasoningEffort;
+  mode?: SessionMode;
+}
+
+export type SessionHydrationState = "local" | "connecting" | "synchronizing" | "ready" | "offline" | "failed";
+
+export interface SessionPreviewSnapshot {
+  sessionId: string;
+  title: string;
+  lastActivityAt?: string;
+  visibleSummary: string;
+  status: LiveStatus;
+  modelId?: string;
+  attachmentCount: number;
+  projectionUpdatedAt?: string;
+  projection?: ConversationProjection;
+  presentations: TurnPresentation[];
 }
 
 export interface PluginSummary {
@@ -1399,6 +1444,7 @@ export interface ConversationProjection {
 
 export type ChatEvent =
   | { type: "session-reset"; sessionId: string }
+  | { type: "session-hydration"; sessionId: string; state: SessionHydrationState; generation: number; message?: string }
   | { type: "conversation-projection-restore"; sessionId: string; projection: ConversationProjection }
   | { type: "history-recovery"; sessionId: string; status: "recovered" | "unavailable"; message: string }
   | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[] }
@@ -1635,6 +1681,8 @@ export interface GrokDesktopApi {
   setWorkspace(cwd: string): Promise<SessionSummary[]>;
   discoverWorkspaces(force?: boolean): Promise<WorkspaceSummary[]>;
   pinWorkspace(cwd: string, pinned: boolean): Promise<WorkspaceSummary[]>;
+  listHiddenWorkspaces(): Promise<WorkspaceSummary[]>;
+  setWorkspaceHidden(cwd: string, hidden: boolean): Promise<WorkspaceSummary[]>;
   searchWorkspaceFiles(cwd: string, query: string, limit?: number): Promise<WorkspaceFileCandidate[]>;
   listWorkspaceTree(cwd: string, directoryPath?: string, options?: import("./workbench-types").WorkspaceTreeOptions): Promise<import("./workbench-types").WorkspaceTreeNode[]>;
   openEditorDocument(cwd: string, path: string): Promise<import("./workbench-types").EditorOpenResult>;
@@ -1711,7 +1759,8 @@ export interface GrokDesktopApi {
   listSessions(cwd?: string, query?: string): Promise<SessionSummary[]>;
   listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult>;
   createSession(input: string | import("./workbench-types").ExecutionProfileLaunchInput): Promise<import("./workbench-types").SessionLaunchResult>;
-  openSession(cwd: string, sessionId: string): Promise<{ sessionId: string }>;
+  previewSession(cwd: string, sessionId: string): Promise<SessionPreviewSnapshot>;
+  openSession(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: SessionHydrationState; message?: string }>;
   getCliSessionInfo(sessionId: string): Promise<CliSessionInfo>;
   getCliSessionUsage(sessionId: string): Promise<CliSessionUsage>;
   sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt>;
@@ -1821,7 +1870,9 @@ export interface GrokDesktopApi {
   markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]>;
   clearInbox(): Promise<NotificationInboxItem[]>;
   getDraft(key: string): Promise<ComposerDraftState | null>;
-  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]): Promise<void>;
+  listDrafts(): Promise<ComposerDraftState[]>;
+  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: NewTaskDraft): Promise<void>;
+  moveDraft(sourceKey: string, targetKey: string): Promise<ComposerDraftState | null>;
   clearDraft(key: string): Promise<void>;
   createTextDraftAttachment(key: string, text: string): Promise<Attachment>;
   readTextDraftAttachment(path: string): Promise<string>;

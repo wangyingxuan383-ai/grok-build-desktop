@@ -31,6 +31,7 @@ import type {
   UserMessageDeliveryState,
   TurnPresentation,
   CliRuntimeUpdate,
+  SessionHydrationState,
 } from "../../shared/types";
 
 export type UiMessage =
@@ -77,6 +78,9 @@ export interface SessionView {
   turnPresentations: TurnPresentation[];
   followUps: Array<{ id: string; text: string }>;
   runtimeUpdates: CliRuntimeUpdate[];
+  hydration: SessionHydrationState;
+  hydrationGeneration: number;
+  hydrationMessage?: string;
 }
 
 interface AppState {
@@ -122,7 +126,7 @@ interface AppState {
   handleEvents(events: ChatEvent[]): void;
 }
 
-export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", compacting: false, queue: [], turnPresentations: [], followUps: [], runtimeUpdates: [] });
+export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", compacting: false, queue: [], turnPresentations: [], followUps: [], runtimeUpdates: [], hydration: "local", hydrationGeneration: 0 });
 
 export const useAppStore = create<AppState>((set) => ({
   loading: true,
@@ -180,6 +184,12 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   const view = state.views[sessionId] ?? emptyView();
   let next = { ...view, messages: [...view.messages] };
   switch (event.type) {
+    case "session-hydration":
+      if (event.generation < view.hydrationGeneration) return {};
+      next.hydration = event.state;
+      next.hydrationGeneration = event.generation;
+      next.hydrationMessage = event.message;
+      break;
     case "session-reset":
       // A transport reset replaces the ACP process, not the conversation.
       // Keep the locally projected body/runtime/queue visible while the main

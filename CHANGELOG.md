@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### 0.7.1 会话与项目基础（2026-08-09）
+
+- 工作区目录引入稳定 `ProjectIdentity`：Windows 大小写、尾部分隔符和可解析重解析点统一到同一项目；置顶、最近项目及 Grok/Codex/Claude 会话来源合并计数，重复项目不再并列显示。
+- 项目支持只隐藏目录记录、不删除会话或源文件，并在设置中的“已隐藏项目”恢复；旧路径元数据按路径兼容迁移，无法访问的路径保留诊断而不是丢弃。
+- “新建任务”改为本地草稿优先：进入空白画布时不启动 CLI，正文、附件、模型、Provider、思考档位、模式和执行档案持久化；首次发送成功后再创建唯一会话并将草稿及附件原子迁移，失败或冲突时保留源草稿。
+- 历史会话先恢复 ConversationProjection V2、附件和回合展示，再在后台连接/同步 ACP；`local/connecting/synchronizing/ready/offline/failed` 状态和 generation 隔离防止快速切换后的迟到事件覆盖当前会话，离线时保留本地正文与 Composer。
+- 左栏统一运行、等待、排队、未读完成、失败和空闲状态；项目显示活动会话数、草稿数和总会话数。侧栏、任务中心、Dashboard、历史分叉、Codex/Claude 接力和 Worktree 会话全部走统一 `openConversationTarget()`。
+- 0.7.1 完整离线套件为 95 个测试文件/686 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、公开扫描、分块、Native Host、Fuses 和打包版 0.7.1 UI 草稿/恢复/多会话探针通过。
+- 正式生成 Setup、Portable、SHA-256、SBOM 和许可证报告并完成 per-user 安装；安装版 File/Product、About、诊断、冷启动以及桌面/开始菜单快捷方式均验证为 0.7.1。首次打包探针暴露虚拟会话切换未等待 React 提交的时序问题，夹具改为等待目标会话并派发真实滚动事件后，重新打包通过；没有上传或创建 Release。
+
 ### 0.7.0 C 盘基线刷新（2026-08-09）
 
 - 将 npm 缓存从已移除的 `E:\\ToolCaches\\npm-cache` 迁回 `%LOCALAPPDATA%\\npm-cache`，恢复依赖查询和打包链路；仓库与构建流程不再访问故障 E 盘。

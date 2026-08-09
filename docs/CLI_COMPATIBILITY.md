@@ -1,5 +1,12 @@
 # Grok CLI Compatibility
 
+## Desktop 0.7.1 session-foundation note (2026-08-09)
+
+- No new ACP method or wire shape is introduced. New Task remains Desktop-local until first send, then uses the existing configured `session/new` path exactly once.
+- Reopening sends the existing local ConversationProjection V2 to the Renderer before the established capability-gated `session/resume` / `session/load` flow starts. ACP replay is still merged by stable block identity.
+- A reconnect failure with a valid local projection is reported as `offline`; it does not create a replacement session or silently change the persisted Provider/model identity. Hydration generations discard late UI state from older navigation attempts.
+- The 0.7.1 offline suite passes 95 test files/686 tests with 6 live files/9 tests skipped by design. Installed CLI/provider acceptance remains a separate user-verification boundary.
+
 ## Cumulative 0.7.0 audit note (2026-08-09)
 
 - The legacy `providers:deep-scan` IPC is retained only for compatibility and delegates to the same `ProviderService.deepScan()` implementation used by the asynchronous Job API; it is not a second network scanner.

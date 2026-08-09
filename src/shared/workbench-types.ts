@@ -605,6 +605,11 @@ export interface ExecutionProfileLaunchInput {
   profileId?: string;
   worktreeName?: string;
   worktreeRef?: string;
+  /** Per-draft overrides. They do not mutate the stored execution profile. */
+  modelId?: string;
+  providerId?: string;
+  effort?: ReasoningEffort;
+  mode?: SessionMode;
 }
 
 export interface ExecutionProfileForkInput extends ExecutionProfileLaunchInput {
