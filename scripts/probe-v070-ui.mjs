@@ -3,7 +3,7 @@ if (!endpoint) throw new Error("Usage: node scripts/probe-v070-ui.mjs <cdp-endpo
 // This is the v0.7 acceptance gate, not a generic "whatever package.json
 // currently says" smoke test. Keeping the expected release explicit prevents
 // an older 0.6.x build from silently satisfying the current UI contract.
-const expectedVersion = "0.7.0";
+const expectedVersion = "0.7.1";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(120); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
 const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer unavailable");
@@ -40,12 +40,19 @@ async function scrollToFind(selector, message, steps = 70) {
   const present = () => evaluate(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);
   if (await present()) return;
   await evaluate(`(() => { const s=${scroller}; if (s) s.scrollTop = 0; return true; })()`);
-  await sleep(400);
+  // Navigation can schedule several late Virtuoso measurements. Wait for the
+  // active session commit, then dispatch real scroll events so a packaged
+  // Renderer mounts each virtual row instead of sampling a stale viewport.
+  await sleep(750);
+  await evaluate(`(() => { const s=${scroller}; if (s) { s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); } return true; })()`);
+  await sleep(350);
+  let stagnant = 0;
   for (let step = 0; step < steps; step += 1) {
     if (await present()) return;
-    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); return s.scrollTop === before; })()`);
-    await sleep(300);
-    if (atEnd) break;
+    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); s.dispatchEvent(new Event('scroll')); return s.scrollTop === before; })()`);
+    await sleep(220);
+    stagnant = atEnd ? stagnant + 1 : 0;
+    if (stagnant >= 3) break;
   }
   if (!(await present())) throw new Error(message);
 }
@@ -156,14 +163,35 @@ try {
   const fixtureSessions = await evaluate(`Array.from(document.querySelectorAll('.session-row')).map((node) => ({ text: node.textContent || '', active: node.classList.contains('active') }))`);
   if (fixtureSessions.length < 3 || !fixtureSessions.some((row) => row.text.includes('后台并行队列')) || !fixtureSessions.some((row) => row.text.includes('Plan 与权限交互'))) throw new Error(`Current-version multi-session fixture is incomplete: ${JSON.stringify(fixtureSessions)}`);
 
+  // A new task is a persisted local draft. Opening it must not create a CLI
+  // session, remove history rows or inherit the previously active lifecycle.
+  await waitFor(() => callFunction("function () { return Array.from(document.querySelectorAll('.session-row.draft')).some((node) => (node.textContent || '').includes('未发送草稿')); }"), "Draft-first row did not appear");
+  const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length");
+  if (!(await clickExactText('.new-task-button', '新建任务'))) throw new Error('New-task button did not open the local draft');
+  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.7.1 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
+  const draftState = await evaluate(`({
+    historyCount: document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length,
+    stop: Boolean(document.querySelector('.send-button.stop')),
+    waiting: Boolean(document.querySelector('.composer-operation-notice.waiting')),
+    model: document.querySelector('.draft-model-controls select')?.value || ''
+  })`);
+  if (draftState.historyCount !== historyCountBeforeDraft || draftState.stop || draftState.waiting || draftState.model !== 'fixture-draft-model') throw new Error(`Draft-first state is not isolated from CLI sessions: ${JSON.stringify(draftState)}`);
+  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.7.1 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
+  await sleep(700);
+  await reloadFixture();
+  await waitFor(() => evaluate("Boolean(document.querySelector('.session-row.draft'))"), "Persisted draft row was lost after restart");
+  await evaluate("document.querySelector('.session-row.draft')?.click()");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.7.1 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
+  if ((await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
+
   // A background running conversation owns its own Stop button, queue and
   // draft. Switching to a waiting foreground conversation must not leak any
   // of those controls or text, then switching back must restore the draft.
-  await clickText('.session-row', '后台并行队列');
+  await openFixtureSession('后台并行队列');
   await waitFor(() => evaluate("Boolean(document.querySelector('.send-button.stop')) && Boolean(document.querySelector('.prompt-queue'))"), "Background session did not expose its own running/queue state");
   await evaluate(`(() => { const input=document.querySelector('.composer textarea'); input.focus(); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'后台会话独立草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
   await sleep(500);
-  await clickText('.session-row', 'Plan 与权限交互');
+  await openFixtureSession('Plan 与权限交互');
   await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === ''"), "Foreground session inherited the background draft");
   const foregroundControls = await evaluate(`({ stop:Boolean(document.querySelector('.send-button.stop')), queue:Boolean(document.querySelector('.prompt-queue')), waiting:Boolean(document.querySelector('.composer-operation-notice.waiting')) })`);
   if (foregroundControls.stop || foregroundControls.queue || !foregroundControls.waiting) throw new Error(`Background lifecycle leaked into foreground composer: ${JSON.stringify(foregroundControls)}`);
@@ -171,7 +199,7 @@ try {
   await scrollToFind('.codex-request-card[aria-label="权限确认"]', 'Permission decision card did not render');
   const requestCards = await evaluate(`({ plan:Array.from(document.querySelectorAll('.codex-plan-request button')).map((node)=>node.textContent.trim()), permission:Array.from(document.querySelectorAll('[aria-label="权限确认"] button')).map((node)=>node.textContent.trim()) })`);
   if (!requestCards.plan.includes('实施计划') || !requestCards.plan.includes('继续规划') || !requestCards.permission.includes('仅本次允许') || !requestCards.permission.includes('拒绝并说明原因')) throw new Error(`Codex-style decision controls mismatch: ${JSON.stringify(requestCards)}`);
-  await clickText('.session-row', '后台并行队列');
+  await openFixtureSession('后台并行队列');
   await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '后台会话独立草稿'"), "Background draft was not restored after session switch");
   const decisionReceipts = [];
   decisionReceipts.push(await exercisePlanAndPermission('实施计划', '仅本次允许'));

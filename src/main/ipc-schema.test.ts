@@ -106,4 +106,16 @@ describe("IPC runtime schemas", () => {
     expect(() => validateIpcInvocation("automations:policy:update", [{ inactivityTimeoutMinutes: 0 }], 1)).not.toThrow();
     expect(() => validateIpcInvocation("automations:policy:update", [{ inactivityTimeoutMinutes: -1 }], 1)).toThrow("0-10080");
   });
+
+  it("validates draft-first session launch and persisted new-task fields", () => {
+    const launch = { workspacePath: "D:\\repo", profileId: "builtin-normal", modelId: "provider-model", providerId: "provider", effort: "xhigh", mode: "plan" };
+    expect(() => validateIpcInvocation("session:create", [launch], 1)).not.toThrow();
+    expect(() => validateIpcInvocation("session:create", [{ ...launch, mode: "unsafe" }], 1)).toThrow("mode");
+    expect(() => validateIpcInvocation("session:create", [{ ...launch, extra: true }], 1)).toThrow("未知字段");
+    expect(() => validateIpcInvocation("session:create", [{ ...launch, workspacePath: "relative\\repo" }], 1)).toThrow("绝对路径");
+
+    const newTask = { projectId: "project-abc", workspacePath: "D:\\repo", modelId: "provider-model", effort: "high", mode: "agent" };
+    expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], newTask], 5)).not.toThrow();
+    expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], { ...newTask, providerSecret: "forged" }], 5)).toThrow("未知字段");
+  });
 });

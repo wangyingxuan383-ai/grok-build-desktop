@@ -23,6 +23,14 @@ function apply(state: any, event: ChatEvent): any {
 }
 
 describe("session event reducer", () => {
+  it("ignores stale hydration updates after a newer open generation", () => {
+    let state = apply(baseState(), { type: "session-hydration", sessionId: "session", state: "connecting", generation: 4 });
+    state = apply(state, { type: "session-hydration", sessionId: "session", state: "ready", generation: 5 });
+    state = apply(state, { type: "session-hydration", sessionId: "session", state: "failed", generation: 4, message: "late failure" });
+    expect(state.views.session).toMatchObject({ hydration: "ready", hydrationGeneration: 5 });
+    expect(state.views.session.hydrationMessage).toBeUndefined();
+  });
+
   it("settles a subagent when its parent turn completes", () => {
     let state = baseState();
     state = apply(state, { type: "subagent", sessionId: "session", update: { sessionUpdate: "subagent_spawned", subagent_id: "child-1" } });

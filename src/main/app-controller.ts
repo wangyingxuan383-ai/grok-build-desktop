@@ -26,6 +26,8 @@ import type {
   MediaGenerationJob,
   MediaArtifact,
   ComposerDraftState,
+  NewTaskDraft,
+  SessionPreviewSnapshot,
   PluginSummary,
   PluginDetails,
   PluginInstallPreview,
@@ -162,6 +164,7 @@ import { ClaudeSessionCatalog } from "./services/claude-session-catalog";
 import { WorkspaceCatalog } from "./services/workspace-catalog";
 import { GrokQuotaService } from "./services/grok-quota-service";
 import { UiStateService } from "./services/ui-state-service";
+import { resolveProjectIdentity } from "./services/project-identity";
 import { isAllowedExternalUrl } from "./security-policy";
 import { ExtensionService } from "./services/extension-service";
 import { CodexPluginService } from "./services/codex-plugin-service";
@@ -279,6 +282,8 @@ export class AppController {
   private readonly projectionOpenSessions = new Set<string>();
   private readonly projectionReplayBuffers = new Map<string, ChatEvent[]>();
   private readonly projectionReplayTimers = new Map<string, NodeJS.Timeout>();
+  private readonly sessionHydrationGenerations = new Map<string, number>();
+  private nextHydrationGeneration = 0;
   private readonly mediaJobs = new Map<string, MediaGenerationJob>();
   private readonly mediaJobControls = new Map<string, { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string } }>();
   private readonly trustedPickedPaths = new Set<string>();
@@ -664,6 +669,7 @@ export class AppController {
     const canonical = await canonicalExistingPath(result.filePaths[0], "directory");
     rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
     await this.setWorkspace(canonical);
+    await this.workspaces.setHidden(canonical, false, await this.settingsStore.get());
     return canonical;
   }
 
@@ -690,9 +696,11 @@ export class AppController {
     const roots = [...new Set([workspace, ...assignments.map((value) => value.cwd)])];
     const rows = (await Promise.all(roots.map((root) => this.catalog.list(root, query, this.processes.liveStatuses())))).flat();
     const assignmentBySession = new Map(assignments.map((value) => [value.sessionId, value]));
+    const queuedSessions = new Set(this.processes.promptQueues().filter((value) => value.entries.some((entry) => entry.state === "queued")).map((value) => value.sessionId));
     return rows.map((row) => {
       const assignment = assignmentBySession.get(row.id);
-      return assignment ? { ...row, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : row;
+      const status = queuedSessions.has(row.id) && row.status !== "working" && row.status !== "needs-user" ? "queued" as const : row.status;
+      return assignment ? { ...row, status, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : { ...row, status };
     }).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index).sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.updatedAt.localeCompare(left.updatedAt));
   }
 
@@ -746,7 +754,9 @@ export class AppController {
   }
 
   async discoverWorkspaces(force = false): Promise<WorkspaceSummary[]> {
-    const workspaces = await this.workspaces.discover(await this.settingsStore.get(), force);
+    const settings = await this.settingsStore.get();
+    const workspaces = await this.workspaces.discover(settings, force);
+    await this.enrichWorkspaceActivity(workspaces);
     for (const workspace of workspaces) {
       const canonical = await canonicalExistingPath(workspace.cwd, "directory").catch(() => undefined);
       if (canonical) rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
@@ -755,7 +765,33 @@ export class AppController {
   }
 
   async pinWorkspace(cwd: string, pinned: boolean): Promise<WorkspaceSummary[]> {
-    return this.workspaces.pin(cwd, pinned, await this.settingsStore.get());
+    const rows = await this.workspaces.pin(cwd, pinned, await this.settingsStore.get());
+    await this.enrichWorkspaceActivity(rows);
+    return rows;
+  }
+
+  async listHiddenWorkspaces(): Promise<WorkspaceSummary[]> {
+    const rows = (await this.workspaces.discover(await this.settingsStore.get(), true, true)).filter((row) => row.hidden);
+    await this.enrichWorkspaceActivity(rows);
+    return rows;
+  }
+
+  async setWorkspaceHidden(cwd: string, hidden: boolean): Promise<WorkspaceSummary[]> {
+    const rows = await this.workspaces.setHidden(cwd, hidden, await this.settingsStore.get());
+    await this.enrichWorkspaceActivity(rows);
+    return rows;
+  }
+
+  private async enrichWorkspaceActivity(rows: WorkspaceSummary[]): Promise<void> {
+    const drafts = await this.uiState.listDrafts();
+    const snapshots = this.processes.snapshots();
+    const statuses = this.processes.liveStatuses();
+    for (const row of rows) {
+      row.draftCount = drafts.filter((draft) => draft.newTask?.projectId === row.projectId
+        || draft.newTask?.workspacePath && samePath(draft.newTask.workspacePath, row.cwd)
+        || draft.key.toLocaleLowerCase().startsWith("new:") && samePath(draft.key.slice(4), row.cwd)).length;
+      row.activeSessions = snapshots.filter((snapshot) => samePath(snapshot.cwd, row.cwd) && (statuses.get(snapshot.sessionId) === "working" || statuses.get(snapshot.sessionId) === "needs-user")).length;
+    }
   }
 
   searchWorkspaceFiles(cwd: string, query: string, limit = 12): Promise<WorkspaceFileCandidate[]> { return this.workspaceFiles.search(cwd, query, limit); }
@@ -916,11 +952,13 @@ export class AppController {
       targetCwd = worktree.path;
     }
     const settings = await this.settingsStore.get();
-    const modelId = compiled.modelId || settings.defaultModel;
-    const providerId = await this.resolveManagedProviderSelection(modelId);
+    const modelId = launch.modelId || compiled.modelId || settings.defaultModel;
+    const providerId = launch.providerId || await this.resolveManagedProviderSelection(modelId);
+    const effort = launch.effort ?? (compiled.effort || settings.defaultEffort);
+    const mode = launch.mode ?? compiled.mode;
     let result: { sessionId: string };
     try {
-      result = await this.processes.createConfigured(targetCwd, compiled.effort || settings.defaultEffort, compiled.mode, modelId, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+      result = await this.processes.createConfigured(targetCwd, effort, mode, modelId, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: mode === "auto" });
     } catch (error) {
       if (worktree) await this.worktrees.remove(workspace, worktree.id, true).catch(() => undefined);
       throw error;
@@ -935,27 +973,64 @@ export class AppController {
     return { sessionId: result.sessionId, cwd: targetCwd, profileId: compiled.profile.id, worktreeId: worktree?.id };
   }
 
-  async openSession(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
+  async previewSession(cwd: string, sessionId: string): Promise<SessionPreviewSnapshot> {
+    const [projection, presentations, attachments, sessions] = await Promise.all([
+      this.conversationProjections.restore(sessionId),
+      this.turnPresentations.list(sessionId),
+      this.attachmentCache.restore(sessionId).catch(() => []),
+      this.catalog.list(cwd, "", this.processes.liveStatuses()).catch(() => []),
+    ]);
+    const summary = sessions.find((value) => value.id === sessionId);
+    return {
+      sessionId,
+      title: summary?.title || "历史会话",
+      lastActivityAt: summary?.updatedAt,
+      visibleSummary: projectionVisibleSummary(projection),
+      status: summary?.status ?? "cold",
+      modelId: projection?.runtime?.modelId ?? summary?.modelId,
+      attachmentCount: attachments.length,
+      projectionUpdatedAt: projection?.updatedAt,
+      projection,
+      presentations,
+    };
+  }
+
+  async openSession(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
+    const generation = ++this.nextHydrationGeneration;
+    this.sessionHydrationGenerations.set(sessionId, generation);
+    const emitHydration = (state: import("../shared/types").SessionHydrationState, message?: string): void => {
+      if (this.sessionHydrationGenerations.get(sessionId) !== generation) return;
+      this.window?.webContents.send("grok:event", { type: "session-hydration", sessionId, state, generation, message } satisfies ChatEvent);
+    };
     this.focusedSessionId = sessionId;
     await this.catalog.markRead(sessionId);
     const assignment = await this.profiles.assignment(sessionId);
     const targetCwd = assignment?.cwd ?? cwd;
+    const presentations = await this.turnPresentations.list(sessionId);
+    let projection = await this.conversationProjections.restore(sessionId);
+    let recoveryMessage = "";
+    if (!projection && presentations.length) {
+      const recovery = await this.conversationProjections.recoverLegacy(sessionId, targetCwd);
+      projection = recovery.projection;
+      if (recovery.status !== "recovered") recoveryMessage = recovery.message;
+    }
+    if (projection) {
+      emitHydration("local");
+      this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent));
+    }
+    const attachmentEntries = await this.attachmentCache.restore(sessionId);
+    if (attachmentEntries.length) await this.handleEvent({ type: "user-attachments-restore", sessionId, entries: attachmentEntries });
+    await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
+
     this.projectionOpenSessions.add(sessionId);
     this.projectionReplaying.add(sessionId);
     this.projectionReplayBuffers.set(sessionId, []);
-    let result: { sessionId: string };
+    emitHydration("connecting");
     try {
-      result = assignment
+      const result = assignment
         ? await this.openAssignedSession(assignment)
         : await this.processes.open(cwd, sessionId);
-      const presentations = await this.turnPresentations.list(sessionId);
-      let projection = await this.conversationProjections.restore(sessionId);
-      let recoveryMessage = "";
-      if (!projection && presentations.length) {
-        const recovery = await this.conversationProjections.recoverLegacy(sessionId, targetCwd);
-        projection = recovery.projection;
-        if (recovery.status !== "recovered") recoveryMessage = recovery.message;
-      }
+      emitHydration("synchronizing");
       const replayed = [...(this.projectionReplayBuffers.get(sessionId) ?? [])];
       if (replayed.length) {
         try {
@@ -967,34 +1042,25 @@ export class AppController {
       if (projection) {
         this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent));
       } else {
-        // A pre-0.6.16 session may have no local projection yet. Do not discard
-        // the ACP replay merely because the new projection layer is active:
-        // deliver the buffered replay once, then seed the durable projection so
-        // second and third reopens no longer depend on CLI replay completeness.
+        // Seed V2 from the only replay available, but never invent history.
         for (const event of replayed) {
           this.window?.webContents.send("grok:event", event);
           await this.conversationProjections.record(event)
             .catch((error) => this.log.log(`会话回放投影失败：${error instanceof Error ? error.message : String(error)}`));
         }
-        if (!replayed.length && recoveryMessage) {
-          this.window?.webContents.send("grok:event", {
-            type: "history-recovery",
-            sessionId,
-            status: "unavailable",
-            message: recoveryMessage,
-          } satisfies ChatEvent);
-        }
+        if (!replayed.length && recoveryMessage) this.window?.webContents.send("grok:event", { type: "history-recovery", sessionId, status: "unavailable", message: recoveryMessage } satisfies ChatEvent);
       }
-      // ACP replay reconciliation is complete. The attachment and presentation
-      // restores below are Desktop-owned events and must reach the renderer
-      // normally rather than being mistaken for late CLI replay.
       this.finishProjectionReplay(sessionId);
-      const attachmentEntries = await this.attachmentCache.restore(sessionId);
-      if (attachmentEntries.length) await this.handleEvent({ type: "user-attachments-restore", sessionId, entries: attachmentEntries });
       this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
-      await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
+      emitHydration("ready");
       void this.cliCapabilities.recordRuntimeSupport(["acp.initialize"]).catch((error) => this.log.log(error));
-      return result;
+      return { ...result, hydration: "ready" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const state = projection ? "offline" as const : "failed" as const;
+      emitHydration(state, message);
+      if (projection) return { sessionId, hydration: state, message };
+      throw error;
     } finally {
       this.finishProjectionReplay(sessionId);
       this.projectionOpenSessions.delete(sessionId);
@@ -1041,6 +1107,7 @@ export class AppController {
   }
 
   private async cleanupSessionState(sessionId: string, forgetTokens = true): Promise<void> {
+    this.sessionHydrationGenerations.delete(sessionId);
     await this.profiles.removeAssignment(sessionId);
     if (forgetTokens) await this.tokenActivity.forgetSession(sessionId).catch((error) => this.log.log(`Token 活动明细清理失败：${error instanceof Error ? error.message : String(error)}`));
     this.agentChanges.clear(sessionId);
@@ -1453,6 +1520,18 @@ export class AppController {
     this.offlineUiSessionResponder?.reset();
     const sessionId = OFFLINE_UI_SESSION_IDS.conversation;
     const workspace = (await this.settingsStore.get()).activeWorkspace || process.cwd();
+    const fixtureProject = await resolveProjectIdentity(workspace);
+    const fixtureDraftKey = `new:${fixtureProject.id}`;
+    if (!(await this.uiState.getDraft(fixtureDraftKey))) {
+      await this.uiState.setDraft(fixtureDraftKey, "0.7.1 本地草稿（尚未启动 CLI）", undefined, [], {
+        projectId: fixtureProject.id,
+        workspacePath: fixtureProject.canonicalPath,
+        profileId: "builtin-normal",
+        modelId: "fixture-draft-model",
+        effort: "high",
+        mode: "agent",
+      });
+    }
     // Keep the offline fixture as a real RGBA PNG. Electron's nativeImage
     // rejects the older grayscale/alpha sample even though some decoders
     // accept it, which made the generated-media card disappear as an error.
@@ -1463,11 +1542,11 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.7.0 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.7.1 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
     const waitingSessionId = OFFLINE_UI_SESSION_IDS.waiting;
     const backgroundSessionId = OFFLINE_UI_SESSION_IDS.background;
-    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.7.0 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
-    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.7.0 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
+    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.7.1 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
+    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.7.1 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -2084,7 +2163,22 @@ export class AppController {
     }
     return draft;
   }
-  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]): Promise<void> { return this.uiState.setDraft(key, text, capability, attachments); }
+  listDrafts(): Promise<ComposerDraftState[]> { return this.uiState.listDrafts(); }
+  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = [], newTask?: NewTaskDraft): Promise<void> {
+    const safeAttachments: Attachment[] = [];
+    for (const attachment of attachments) {
+      if (!attachment.path) continue;
+      if (attachment.draftText) { safeAttachments.push(attachment); continue; }
+      const path = await resolveTrustedRendererPath(attachment.path, {
+        roots: [...this.trustedWorkspacePaths],
+        issuedPaths: this.trustedPickedPaths,
+        kind: attachment.kind === "folder" ? "directory" : "file",
+      });
+      safeAttachments.push({ ...attachment, path });
+    }
+    return this.uiState.setDraft(key, text, capability, safeAttachments, newTask);
+  }
+  moveDraft(sourceKey: string, targetKey: string): Promise<ComposerDraftState | null> { return this.uiState.moveDraft(sourceKey, targetKey); }
   clearDraft(key: string): Promise<void> { return this.uiState.clearDraft(key); }
   async createTextDraftAttachment(key: string, text: string): Promise<Attachment> {
     const attachment = await this.uiState.createTextDraftAttachment(key, text);
@@ -2921,6 +3015,19 @@ function profileSlug(value: string): string { return value.normalize("NFKC").toL
 
 function mimeForExtension(extension: string): string | undefined {
   return extension === ".png" ? "image/png" : extension === ".jpg" || extension === ".jpeg" ? "image/jpeg" : extension === ".gif" ? "image/gif" : extension === ".webp" ? "image/webp" : undefined;
+}
+
+function projectionVisibleSummary(projection?: ConversationProjection): string {
+  if (!projection) return "";
+  for (let index = projection.events.length - 1; index >= 0; index--) {
+    const event = projection.events[index];
+    if (!event || typeof event !== "object") continue;
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type !== "message-chunk" && type !== "user-message" && type !== "recap") continue;
+    const text = typeof event.text === "string" ? event.text.replace(/\s+/g, " ").trim() : "";
+    if (text) return text.slice(0, 240);
+  }
+  return "";
 }
 
 function isUiDensity(value: unknown): value is UiDensity {

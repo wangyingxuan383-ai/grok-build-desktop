@@ -8,6 +8,7 @@ const MAX_IPC_STRING_BYTES = 32 * 1024 * 1024;
 const BLOCKED_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const BLOCKED_OPEN_EXTENSIONS = new Set([".appx", ".bat", ".chm", ".cmd", ".com", ".cpl", ".exe", ".hta", ".inf", ".ins", ".isp", ".js", ".jse", ".lnk", ".msc", ".msi", ".msix", ".msp", ".ps1", ".reg", ".scr", ".sct", ".url", ".vbe", ".vbs", ".ws", ".wsc", ".wsf", ".wsh"]);
 const BLOCKED_ATTACHMENT_EXTENSIONS = new Set([".appx", ".com", ".cpl", ".dll", ".drv", ".exe", ".msi", ".msix", ".msp", ".ocx", ".scr", ".sys"]);
+const isAbsoluteWindowsPath = (value: string): boolean => win32.isAbsolute(value) || posix.isAbsolute(value);
 
 type Rule = (args: unknown[]) => void;
 
@@ -28,6 +29,8 @@ const RULES: Record<string, Rule> = {
   "workspace:set": (args) => absoluteFilesystemPathArg(args, 0, "工作区"),
   "workspace:discover": (args) => optionalBooleanArg(args, 0),
   "workspace:pin": (args) => { pathArg(args, 0); booleanArg(args, 1); },
+  "workspace:hidden:list": noArgs,
+  "workspace:hidden:set": (args) => { pathArg(args, 0); booleanArg(args, 1); },
   "workspace:search-files": (args) => { pathArg(args, 0); stringArg(args, 1, 16_384); optionalIntegerArg(args, 2, 1, 10_000); },
   "workspace:tree:list": (args) => { pathArg(args, 0); optionalRelativePathArg(args, 1); optionalObjectArg(args, 2); },
   "editor:open": (args) => { pathArg(args, 0); pathArg(args, 1); },
@@ -159,7 +162,8 @@ const RULES: Record<string, Rule> = {
     if (args[0] !== undefined && args[0] !== null && args[0] !== "") pathArg(args, 0);
     if (args[1] !== undefined && args[1] !== null) stringArg(args, 1, 4_096);
   },
-  "session:create": (args) => stringOrObjectArg(args, 0, 32_767),
+  "session:create": (args) => sessionLaunchArg(args, 0),
+  "session:preview": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:open": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:info": (args) => idArg(args, 0),
   "session:usage": (args) => idArg(args, 0),
@@ -227,7 +231,9 @@ const RULES: Record<string, Rule> = {
   "claude:continue": (args) => idArg(args, 0),
   "quota:get": (args) => optionalBooleanArg(args, 0),
   "draft:get": (args) => stringArg(args, 0, 32_767),
-  "draft:set": (args) => { stringArg(args, 0, 32_767); stringArgAllowEmpty(args, 1, 2 * 1024 * 1024); optionalObjectArg(args, 2); optionalAttachmentArrayArg(args, 3); },
+  "draft:list": noArgs,
+  "draft:set": (args) => { stringArg(args, 0, 32_767); stringArgAllowEmpty(args, 1, 2 * 1024 * 1024); optionalObjectArg(args, 2); optionalAttachmentArrayArg(args, 3); if (args[4] !== undefined) newTaskDraftArg(args, 4); },
+  "draft:move": (args) => { stringArg(args, 0, 32_767); stringArg(args, 1, 32_767); },
   "draft:clear": (args) => stringArg(args, 0, 32_767),
   "draft:text:create": (args) => { stringArg(args, 0, 32_767); stringArg(args, 1, 32 * 1024 * 1024); },
   "draft:text:read": (args) => pathArg(args, 0),
@@ -407,6 +413,34 @@ function attachmentPathArrayArg(args: unknown[], index: number, maxLength: numbe
 function stringOrObjectArg(args: unknown[], index: number, maxBytes: number): void {
   if (typeof args[index] === "string") stringArg(args, index, maxBytes);
   else objectArg(args, index);
+}
+
+function sessionLaunchArg(args: unknown[], index: number): void {
+  if (typeof args[index] === "string") { absoluteFilesystemPathArg(args, index, "工作区"); return; }
+  const value = strictRecordArg(args, index, ["workspacePath", "profileId", "worktreeName", "worktreeRef", "modelId", "providerId", "effort", "mode"]);
+  const workspacePath = requiredRecordString(value, "workspacePath", 32_767);
+  if (!isAbsoluteWindowsPath(workspacePath)) throw new Error("IPC 字段 workspacePath 必须是绝对路径");
+  optionalRecordString(value, "profileId", 512);
+  optionalRecordString(value, "worktreeName", 512);
+  optionalRecordString(value, "worktreeRef", 4_096);
+  optionalRecordString(value, "modelId", 4_096);
+  optionalRecordString(value, "providerId", 512);
+  optionalRecordEnum(value, "effort", ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  optionalRecordEnum(value, "mode", ["agent", "plan", "auto"]);
+}
+
+function newTaskDraftArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, ["projectId", "workspacePath", "profileId", "worktreeName", "worktreeRef", "modelId", "providerId", "effort", "mode"]);
+  requiredRecordString(value, "projectId", 512);
+  const workspacePath = requiredRecordString(value, "workspacePath", 32_767);
+  if (!isAbsoluteWindowsPath(workspacePath)) throw new Error("IPC 字段 workspacePath 必须是绝对路径");
+  optionalRecordString(value, "profileId", 512);
+  optionalRecordString(value, "worktreeName", 512);
+  optionalRecordString(value, "worktreeRef", 4_096);
+  optionalRecordString(value, "modelId", 4_096);
+  optionalRecordString(value, "providerId", 512);
+  optionalRecordEnum(value, "effort", ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  optionalRecordEnum(value, "mode", ["agent", "plan", "auto"]);
 }
 function optionalHttpUrlArg(args: unknown[], index: number): void {
   if (args[index] === undefined) return;

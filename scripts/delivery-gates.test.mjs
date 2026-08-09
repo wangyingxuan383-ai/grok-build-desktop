@@ -15,14 +15,18 @@ test("package and release paths enforce the current chunk and v0.7 UI gates", as
   }
   assert.ok(packaging.indexOf("npm run check:chunks") < packaging.indexOf("electron-builder"), "packaging must reject chunks before electron-builder");
   assert.ok(releaseAssets.indexOf("probe-v070-ui.ps1") < releaseAssets.indexOf("npm sbom"), "release metadata must wait for the current UI gate");
+  assert.match(packaging, /generate-release-assets\.ps1'\) -SkipPackagedUiProbe/, "one package flow must not run the identical packaged UI probe twice");
+  assert.match(releaseAssets, /\[switch\]\$SkipPackagedUiProbe/, "standalone release assets must keep the UI gate while allowing verified package reuse");
 });
 
 test("the v0.7 probe cannot inherit the legacy dynamic version override", async () => {
-  const source = await load("./smoke-app.ps1");
+  const [source, probe] = await Promise.all([load("./smoke-app.ps1"), load("./probe-v070-ui.mjs")]);
   assert.match(source, /if \(\$ProbeScript -eq 'probe-v070-ui\.mjs'\) \{ Remove-Item Env:GROK_EXPECTED_APP_VERSION/);
   assert.match(source, /if \(\$ProbeScript -eq 'probe-v070-ui\.mjs'\) \{[\s\S]*?GROK_DESKTOP_UI_RESPONDER'\] = '1'[\s\S]*?\}/);
   assert.equal(source.match(/GROK_DESKTOP_UI_RESPONDER/g)?.length, 1, "the controllable responder must be scoped to the v0.7 fixture only");
   assert.match(source, /PreviousExpectedAppVersion/);
+  assert.match(probe, /s\.dispatchEvent\(new Event\('scroll'\)\)/, "virtualized fixture navigation must dispatch real scroll events");
+  assert.match(probe, /await openFixtureSession\('Plan 与权限交互'\)/, "Plan assertions must wait for the target session commit");
 });
 
 test("offline verify runs current Renderer gates even when compilation is skipped", async () => {

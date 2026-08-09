@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Attachment, ComposerCapabilitySelection } from "../../../shared/types";
+import type { Attachment, ComposerCapabilitySelection, NewTaskDraft } from "../../../shared/types";
 import { hasSessionSubmission } from "../session-submission-state";
 import { shouldApplyDraftHydration } from "../session-ui-guards";
 
@@ -7,6 +7,7 @@ import { shouldApplyDraftHydration } from "../session-ui-guards";
 export function useSessionDraft(input: {
   activeSessionId: string;
   workspace: string;
+  newDraftKey?: string;
   foreignSessionOpen: boolean;
   sendingSessionIds: ReadonlySet<string>;
   attachments: Attachment[];
@@ -20,9 +21,12 @@ export function useSessionDraft(input: {
   setComposer: React.Dispatch<React.SetStateAction<string>>;
   capability: ComposerCapabilitySelection | undefined;
   setCapability: React.Dispatch<React.SetStateAction<ComposerCapabilitySelection | undefined>>;
+  newTask: NewTaskDraft | undefined;
+  setNewTask: React.Dispatch<React.SetStateAction<NewTaskDraft | undefined>>;
 } {
   const [composer, setComposerState] = useState("");
   const [capability, setCapabilityState] = useState<ComposerCapabilitySelection>();
+  const [newTask, setNewTaskState] = useState<NewTaskDraft>();
   const [loadedKey, setLoadedKey] = useState("");
   const loadGenerationRef = useRef(0);
   const touchedGenerationRef = useRef(0);
@@ -30,7 +34,7 @@ export function useSessionDraft(input: {
   const attachmentFingerprint = fingerprintAttachments(input.attachments);
   const previousAttachmentFingerprintRef = useRef(attachmentFingerprint);
   const ignoredAttachmentFingerprintsRef = useRef(new Set<string>());
-  const draftKey = input.activeSessionId || (input.workspace ? `new:${input.workspace}` : "");
+  const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
   const activeSending = hasSessionSubmission(input.sendingSessionIds, input.activeSessionId, draftKey);
 
   const setComposer = useCallback<React.Dispatch<React.SetStateAction<string>>>((value) => {
@@ -40,6 +44,10 @@ export function useSessionDraft(input: {
   const setCapability = useCallback<React.Dispatch<React.SetStateAction<ComposerCapabilitySelection | undefined>>>((value) => {
     if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
     setCapabilityState(value);
+  }, []);
+  const setNewTask = useCallback<React.Dispatch<React.SetStateAction<NewTaskDraft | undefined>>>((value) => {
+    if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
+    setNewTaskState(value);
   }, []);
 
   useLayoutEffect(() => {
@@ -57,12 +65,19 @@ export function useSessionDraft(input: {
     input.onSessionChange();
     setComposerState("");
     setCapabilityState(undefined);
+    setNewTaskState(undefined);
     ignoredAttachmentFingerprintsRef.current.clear();
     ignoredAttachmentFingerprintsRef.current.add("");
     input.clearAttachments();
     const baselineAttachmentRevision = attachmentRevisionRef.current;
     if (!draftKey || input.foreignSessionOpen) return () => { cancelled = true; };
-    void window.grokDesktop.getDraft(draftKey).then((draft) => {
+    void (async () => {
+      let draft = await window.grokDesktop.getDraft(draftKey);
+      const legacyKey = !input.activeSessionId && input.workspace ? `new:${input.workspace}` : "";
+      if (!draft && legacyKey && legacyKey.toLocaleLowerCase() !== draftKey.toLocaleLowerCase()) {
+        const legacy = await window.grokDesktop.getDraft(legacyKey);
+        if (legacy) draft = await window.grokDesktop.moveDraft(legacyKey, draftKey);
+      }
       if (shouldApplyDraftHydration({
         cancelled,
         generation,
@@ -73,6 +88,7 @@ export function useSessionDraft(input: {
       })) {
         setComposerState(draft?.text || "");
         setCapabilityState(draft?.capability);
+        setNewTaskState(draft?.newTask);
         const restoredAttachments = draft?.attachments ?? [];
         ignoredAttachmentFingerprintsRef.current.add("");
         ignoredAttachmentFingerprintsRef.current.add(fingerprintAttachments(restoredAttachments));
@@ -80,7 +96,7 @@ export function useSessionDraft(input: {
         if (restoredAttachments.length) input.addAttachments(restoredAttachments);
       }
       if (!cancelled && generation === loadGenerationRef.current) setLoadedKey(draftKey);
-    }).catch(() => {
+    })().catch(() => {
       if (!cancelled && generation === loadGenerationRef.current) setLoadedKey(draftKey);
     });
     return () => { cancelled = true; };
@@ -88,11 +104,11 @@ export function useSessionDraft(input: {
 
   useEffect(() => {
     if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || activeSending) return;
-    const timer = window.setTimeout(() => void window.grokDesktop.setDraft(draftKey, composer, capability, input.attachments), 250);
+    const timer = window.setTimeout(() => void window.grokDesktop.setDraft(draftKey, composer, capability, input.attachments, newTask), 250);
     return () => window.clearTimeout(timer);
-  }, [composer, capability, input.attachments, draftKey, loadedKey, input.foreignSessionOpen, activeSending]);
+  }, [composer, capability, input.attachments, newTask, draftKey, loadedKey, input.foreignSessionOpen, activeSending]);
 
-  return { draftKey, activeSending, composer, setComposer, capability, setCapability };
+  return { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask };
 }
 
 function fingerprintAttachments(values: Attachment[]): string {

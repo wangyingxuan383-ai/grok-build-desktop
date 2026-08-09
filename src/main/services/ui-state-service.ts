@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import type { Attachment, ComposerCapabilitySelection, ComposerDraftState } from "../../shared/types";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import type { Attachment, ComposerCapabilitySelection, ComposerDraftState, NewTaskDraft } from "../../shared/types";
 import { JsonStore } from "./json-store";
 
 const MAX_TEXT_DRAFT_BYTES = 5 * 1024 * 1024;
@@ -24,14 +24,55 @@ export class UiStateService {
     return (await this.store.get()).drafts[normalizeKey(key)] ?? null;
   }
 
-  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = []): Promise<void> {
+  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = [], newTask?: NewTaskDraft): Promise<void> {
     const normalized = normalizeKey(key);
-    const persistedAttachments = attachments.filter((attachment) => attachment.draftText && attachment.path && this.isDraftPathForKey(key, attachment.path));
+    const persistedAttachments = attachments.filter((attachment) => attachment.path && isAbsolute(attachment.path) && (!attachment.draftText || this.isDraftPathForKey(key, attachment.path)));
     await this.store.mutate((data) => {
-      if (!text && !capability && !persistedAttachments.length) delete data.drafts[normalized];
-      else data.drafts[normalized] = { key, text, capability, attachments: persistedAttachments, updatedAt: new Date().toISOString() };
+      if (!text && !capability && !persistedAttachments.length && !newTask) delete data.drafts[normalized];
+      else data.drafts[normalized] = { key, text, capability, attachments: persistedAttachments, newTask, updatedAt: new Date().toISOString() };
     });
-    await this.cleanupDraftDirectory(key, new Set(persistedAttachments.flatMap((attachment) => attachment.path ? [resolve(attachment.path)] : [])));
+    await this.cleanupDraftDirectory(key, new Set(persistedAttachments.flatMap((attachment) => attachment.draftText && attachment.path ? [resolve(attachment.path)] : [])));
+  }
+
+  async listDrafts(): Promise<ComposerDraftState[]> {
+    return structuredClone(Object.values((await this.store.get()).drafts).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+  }
+
+  async moveDraft(sourceKey: string, targetKey: string): Promise<ComposerDraftState | null> {
+    const sourceNormalized = normalizeKey(sourceKey);
+    const targetNormalized = normalizeKey(targetKey);
+    if (!sourceNormalized || sourceNormalized === targetNormalized) return this.getDraft(targetKey);
+    const snapshot = await this.store.get();
+    const source = snapshot.drafts[sourceNormalized];
+    if (!source) return null;
+    if (snapshot.drafts[targetNormalized]) throw new Error("目标会话已有草稿；未覆盖任何内容");
+    const sourceDirectory = this.draftDirectory(sourceKey);
+    const targetDirectory = this.draftDirectory(targetKey);
+    const movedAttachments = (source.attachments ?? []).map((attachment) => {
+      if (!attachment.draftText || !attachment.path || !this.isDraftPathForKey(sourceKey, attachment.path)) return attachment;
+      return { ...attachment, path: join(targetDirectory, relative(sourceDirectory, attachment.path)) };
+    });
+    let attachmentDirectoryMoved = false;
+    if (await stat(sourceDirectory).then((value) => value.isDirectory()).catch(() => false)) {
+      if (await stat(targetDirectory).then(() => true).catch(() => false)) throw new Error("目标草稿附件目录已存在；未覆盖任何文件");
+      await mkdir(dirname(targetDirectory), { recursive: true });
+      await rename(sourceDirectory, targetDirectory);
+      attachmentDirectoryMoved = true;
+    }
+    const moved: ComposerDraftState = { ...source, key: targetKey, attachments: movedAttachments, updatedAt: new Date().toISOString() };
+    try {
+      await this.store.mutate((data) => {
+        if (data.drafts[targetNormalized]) throw new Error("目标会话已有草稿；未覆盖任何内容");
+        delete data.drafts[sourceNormalized];
+        data.drafts[targetNormalized] = moved;
+      });
+    } catch (error) {
+      if (attachmentDirectoryMoved) {
+        await rename(targetDirectory, sourceDirectory).catch(() => undefined);
+      }
+      throw error;
+    }
+    return structuredClone(moved);
   }
 
   async clearDraft(key: string): Promise<void> {

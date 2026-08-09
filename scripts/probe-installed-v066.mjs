@@ -52,7 +52,8 @@ try {
   await evaluate(`(() => { [...document.querySelectorAll('.control-panel button')].find(node => node.textContent?.trim() === '兼容诊断中心')?.click(); return true; })()`);
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostics-panel'))"), "Diagnostics panel did not open");
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostic-overall:not(.checking)'))"), "Diagnostics did not complete", 45_000);
-  const diagnostics = await evaluate(`({ heading: document.querySelector('.diagnostics-panel h2')?.textContent || '', overall: document.querySelector('.diagnostic-overall')?.textContent || '', supportPreview: document.querySelector('.support-preview')?.innerText || '' })`);
+  await waitFor(() => evaluate("Array.from(document.querySelectorAll('.support-preview')).some(node => (node.textContent || '').includes('脱敏支持包') && (node.textContent || '').includes('会话附件正文'))"), "Support-bundle privacy preview did not complete", 45_000);
+  const diagnostics = await evaluate(`({ heading: document.querySelector('.diagnostics-panel h2')?.textContent || '', overall: document.querySelector('.diagnostic-overall')?.textContent || '', supportPreview: Array.from(document.querySelectorAll('.support-preview')).map(node => node.innerText || '').join('\\n') })`);
   if (diagnostics.heading !== "兼容诊断中心" || !diagnostics.overall.trim()) throw new Error(`Diagnostics surface incomplete: ${JSON.stringify(diagnostics)}`);
   if (!diagnostics.supportPreview.includes("会话附件正文") || !diagnostics.supportPreview.includes("完整路径")) throw new Error("Support-bundle exclusions are missing attachment privacy fields");
   console.log(JSON.stringify({

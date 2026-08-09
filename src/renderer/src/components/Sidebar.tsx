@@ -29,6 +29,7 @@ export function Sidebar(props: {
   onSearch(value: string): void;
   onNew(): void;
   onOpen(session: SessionSummary): void;
+  onOpenConversationTarget(target: { cwd: string; sessionId: string }): void;
   onOpenCodex(session: CodexSessionSummary): void;
   onOpenClaude(session: ClaudeSessionSummary): void;
   onChooseWorkspace(): void;
@@ -45,6 +46,8 @@ export function Sidebar(props: {
   onToggleSessionGroup(kind: SessionOriginKind, collapsed: boolean): void;
   onToggleArchived(value: boolean): void;
   onPinWorkspace(workspace: WorkspaceSummary): void;
+  onHideWorkspace(workspace: WorkspaceSummary): void;
+  onDeleteDraft(): void;
   onClear(): void;
   onPanel(panel: SidebarPanel): void;
 }): React.JSX.Element {
@@ -64,6 +67,7 @@ export function Sidebar(props: {
   const activeAccount = useAppStore((state) => state.accounts.find((value) => value.active));
   const sessionGroups = groupSessionsByOrigin(props.sessions);
   const liveSessionCount = props.sessions.filter((session) => session.status === "working" || session.status === "needs-user").length;
+  const activeWorkspace = props.workspaces.find((workspace) => samePath(workspace.cwd, props.settings?.activeWorkspace || ""));
   const projectTools: Array<{ view: WorkbenchView; label: string; icon: UiIconName }> = [
     { view: "worktrees", label: "Worktree", icon: "worktree" },
     { view: "memory", label: "Memory", icon: "memory" },
@@ -73,7 +77,7 @@ export function Sidebar(props: {
   ];
   const renderSession = (session: SessionSummary): React.JSX.Element => {
     const sourceLabel = sessionSourceLabel(session);
-    const liveLabel = session.status === "working" ? "运行中" : session.status === "needs-user" ? "等待操作" : session.status === "unread" ? "后台已完成" : session.status === "error" ? "运行失败" : "";
+    const liveLabel = session.status === "working" ? "运行中" : session.status === "needs-user" ? "等待操作" : session.status === "queued" ? "等待处理" : session.status === "unread" ? "后台已完成" : session.status === "error" ? "运行失败" : "";
     const runAction = (event: React.MouseEvent<HTMLButtonElement>, action: () => void): void => {
       event.stopPropagation();
       setOpenSessionMenu("");
@@ -86,12 +90,13 @@ export function Sidebar(props: {
     <button className="new-task-button" disabled={props.busy} onClick={props.onNew}><UiIcon name="plus"/><span>新建任务</span></button>
     <div className="sidebar-context"><button className="workspace-button" onClick={() => setShowRecent(!showRecent)}><UiIcon name="folder"/><span className="workspace-name">{shortPath(props.settings?.activeWorkspace || "选择工作区")}</span><UiIcon name="chevron-down" size={13}/></button></div>
     <section className="project-tools"><button className="project-tools-heading" onClick={() => setProjectToolsOpen((value) => { const next = !value; void window.grokDesktop.updateSettings({ projectToolsOpen: next }).catch(() => undefined); return next; })} aria-expanded={projectToolsOpen}><span><UiIcon name={projectToolsOpen ? "chevron-down" : "chevron-right"} size={13}/>开发工具</span></button>{projectToolsOpen && <nav>{projectTools.map((item) => <button key={item.view} className={item.view === props.activeView ? "active" : ""} onClick={() => props.onView(item.view)}><UiIcon name={item.icon}/><span>{item.label}</span></button>)}<button onClick={() => props.onPanel("tasks")}><UiIcon name="tasks"/><span>任务</span></button><button onClick={() => props.onPanel("extensions")}><UiIcon name="extensions"/><span>扩展</span></button></nav>}</section>
-    {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onClose={closeWorkspaceMenu} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onClear={props.onClear} />}
+    {showRecent && <WorkspaceMenu workspaces={props.workspaces} active={props.settings?.activeWorkspace || ""} onClose={closeWorkspaceMenu} onChoose={props.onChooseWorkspace} onSelect={(cwd) => { props.onRecent(cwd); setShowRecent(false); }} onPin={props.onPinWorkspace} onHide={props.onHideWorkspace} onClear={props.onClear} />}
     <Suspense fallback={<div className="sidebar-tool-loading" role="status"><div className="spinner"/>加载项目工具…</div>}>
-    {props.activeView === "files" ? <LazyFileExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "source-control" ? <LazyGitExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "worktrees" ? <LazyWorktreeExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : <>
+    {props.activeView === "files" ? <LazyFileExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "source-control" ? <LazyGitExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} /> : props.activeView === "worktrees" ? <LazyWorktreeExplorer workspace={props.settings?.activeWorkspace || ""} dialogs={props.dialogs} onOpenConversation={props.onOpenConversationTarget} /> : <>
     <div className="search"><UiIcon name="search" size={14}/><input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="搜索任务" /></div>
     <div className="session-list">
-      <div className="workspace-task-group current"><div><UiIcon name="chevron-down" size={12}/><strong>{shortPath(props.settings?.activeWorkspace || "当前项目")}</strong><span>{liveSessionCount ? `${liveSessionCount} 运行 · ${props.sessions.length}` : props.sessions.length}</span></div></div>
+      <div className="workspace-task-group current"><div><UiIcon name="chevron-down" size={12}/><strong>{shortPath(props.settings?.activeWorkspace || "当前项目")}</strong><span>{[liveSessionCount ? `${liveSessionCount} 运行` : "", activeWorkspace?.draftCount ? `${activeWorkspace.draftCount} 草稿` : "", `${props.sessions.length} 会话`].filter(Boolean).join(" · ")}</span></div></div>
+      {Boolean(activeWorkspace?.draftCount) && <div className={`session-row draft ${props.activeSessionId ? "" : "active"}`} onClick={props.onNew}><span className="status-dot cold"/><div className="session-copy"><strong>未发送草稿</strong><span>尚未启动 Grok CLI</span></div><div className="session-quick-actions"><button title="删除草稿" onClick={(event) => { event.stopPropagation(); props.onDeleteDraft(); }}><UiIcon name="trash" size={14}/></button></div></div>}
       {sessionGroups.filter((group) => group.kind === "normal" || group.sessions.length > 0).map((group) => { const collapsed = props.settings?.sessionGroupCollapsed?.[group.kind] ?? group.kind !== "normal"; return <div className={`session-origin-group ${group.kind}`} key={group.kind}><button className="session-group-heading" onClick={() => props.onToggleSessionGroup(group.kind, !collapsed)}><strong>{collapsed ? "›" : "⌄"} {group.label}</strong><span>{group.sessions.length}</span></button>{!collapsed && group.sessions.map(renderSession)}</div>; })}
       <button className="session-group-heading codex-toggle" onClick={() => props.onToggleCodex(!props.settings?.codexGroupCollapsed)}><strong>{props.settings?.codexGroupCollapsed ? "›" : "⌄"} Codex 会话</strong><span>{props.codexSessions.length}</span></button>
       {!props.settings?.codexGroupCollapsed && <><label className="archived-toggle"><input type="checkbox" checked={props.settings?.showArchivedCodex ?? false} onChange={(event) => props.onToggleArchived(event.target.checked)} />显示归档</label>{props.codexSessions.map((session) => <div key={session.id} className={`session-row codex ${props.activeCodexId === session.id ? "active" : ""}`} onClick={() => props.onOpenCodex(session)}><span className="codex-mark">C</span><div className="session-copy"><strong>{session.title}</strong><span>{relativeTime(session.updatedAt)}{session.archived ? " · 已归档" : ""}</span></div><div className="session-actions"><button title="从镜像列表隐藏" onClick={(event) => { event.stopPropagation(); props.onHideCodex(session); }}>×</button></div></div>)}</>}
@@ -104,7 +109,7 @@ export function Sidebar(props: {
   </aside>;
 }
 
-function WorkspaceMenu({ workspaces, active, onClose, onChoose, onSelect, onPin, onClear }: { workspaces: WorkspaceSummary[]; active: string; onClose(): void; onChoose(): void; onSelect(cwd: string): void; onPin(workspace: WorkspaceSummary): void; onClear(): void }): React.JSX.Element {
+function WorkspaceMenu({ workspaces, active, onClose, onChoose, onSelect, onPin, onHide, onClear }: { workspaces: WorkspaceSummary[]; active: string; onClose(): void; onChoose(): void; onSelect(cwd: string): void; onPin(workspace: WorkspaceSummary): void; onHide(workspace: WorkspaceSummary): void; onClear(): void }): React.JSX.Element {
   const [query, setQuery] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -128,12 +133,13 @@ function WorkspaceMenu({ workspaces, active, onClose, onChoose, onSelect, onPin,
   const seen = new Set<string>();
   return <div className="workspace-menu" ref={menuRef} role="dialog" aria-label="选择工作区"><header><strong>选择工作区</strong><button className="icon-button" aria-label="关闭工作区选择器" onClick={onClose}><UiIcon name="close"/></button></header><label className="workspace-menu-search"><UiIcon name="search" size={14}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目或路径" /></label><button className="choose-workspace" onClick={onChoose}><UiIcon name="folder"/>选择其他文件夹…</button><div className="workspace-menu-scroll">{groups.map((group) => {
     const needle = query.trim().toLocaleLowerCase();
-    const rows = workspaces.filter((row) => row.sources.includes(group.source) && !seen.has(row.cwd.toLocaleLowerCase()) && (!needle || `${row.name} ${row.cwd}`.toLocaleLowerCase().includes(needle)));
-    rows.forEach((row) => seen.add(row.cwd.toLocaleLowerCase()));
-    return rows.length ? <div className="workspace-group" key={group.source}><strong>{group.label}</strong>{rows.map((workspace) => <div className={`workspace-row ${workspace.cwd.toLocaleLowerCase() === active.toLocaleLowerCase() ? "active" : ""}`} key={workspace.cwd}><button disabled={!workspace.exists} title={workspace.exists ? workspace.cwd : "路径已失效"} onClick={() => onSelect(workspace.cwd)}><span>{workspace.name}</span><small>{workspace.exists ? `${workspace.grokSessions} Grok · ${workspace.codexSessions} Codex · ${workspace.claudeSessions} Claude` : "路径已失效"}</small></button><button title={workspace.pinned ? "取消置顶" : "置顶"} onClick={() => onPin(workspace)}>◆</button></div>)}</div> : null;
+    const rows = workspaces.filter((row) => row.sources.includes(group.source) && !seen.has(row.projectId) && (!needle || `${row.name} ${row.displayPath}`.toLocaleLowerCase().includes(needle)));
+    rows.forEach((row) => seen.add(row.projectId));
+    return rows.length ? <div className="workspace-group" key={group.source}><strong>{group.label}</strong>{rows.map((workspace) => <div className={`workspace-row ${samePath(workspace.cwd, active) ? "active" : ""}`} key={workspace.projectId}><button disabled={!workspace.exists} title={workspace.exists ? workspace.displayPath : workspace.diagnostic || "路径已失效"} onClick={() => onSelect(workspace.cwd)}><span>{workspace.name}</span><small>{workspace.exists ? `${workspace.grokSessions} Grok · ${workspace.codexSessions} Codex · ${workspace.claudeSessions} Claude${workspace.draftCount ? ` · ${workspace.draftCount} 草稿` : ""}` : "路径已失效"}</small></button><button title={workspace.pinned ? "取消置顶" : "置顶"} onClick={() => onPin(workspace)}>◆</button><button title={samePath(workspace.cwd, active) ? "当前项目不能隐藏" : "从项目列表隐藏"} disabled={samePath(workspace.cwd, active)} onClick={() => onHide(workspace)}>×</button></div>)}</div> : null;
   })}</div>{active && <button className="danger-link workspace-clear" onClick={onClear}>清空当前工作区会话…</button>}</div>;
 }
 
 
 function shortPath(value: string): string { const parts = value.split(/[\\/]/).filter(Boolean); return parts.at(-1) || value; }
+function samePath(left: string, right: string): boolean { return left.replace(/[\\/]+$/, "").toLocaleLowerCase() === right.replace(/[\\/]+$/, "").toLocaleLowerCase(); }
 function relativeTime(value: string): string { const time = Date.parse(value); if (!Number.isFinite(time)) return "未知时间"; const delta = Date.now() - time; if (delta < 60_000) return "刚刚"; if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`; if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`; return `${Math.floor(delta / 86_400_000)} 天前`; }
