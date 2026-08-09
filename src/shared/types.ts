@@ -1780,7 +1780,9 @@ export interface GrokDesktopApi {
   listProviderScanJobs(providerId?: string): Promise<ProviderScanJob[]>;
   cancelProviderScan(jobId: string): Promise<ProviderScanJob>;
   onProviderScanProgress(listener: (progress: ProviderScanProgress) => void): () => void;
+  /** @deprecated Compatibility-only blocking API. New callers must use startProviderScan(). */
   deepScanProvider(id: string, options?: ProviderDeepScanOptions): Promise<ProviderDeepScanResult>;
+  /** @deprecated Compatibility-only Provider-wide cancellation. New callers must cancel by Job ID. */
   cancelProviderDeepScan(id: string): Promise<boolean>;
   getProviderCapabilityApplication(id: string): Promise<CapabilityApplicationDraft>;
   applyProviderCapabilities(id: string, selection?: CapabilityApplicationSelection): Promise<CustomProviderProfile[]>;

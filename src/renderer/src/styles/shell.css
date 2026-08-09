@@ -1,4 +1,6 @@
-/* v0.6 Codex-aligned shell: quiet hierarchy, task-first navigation, compact controls. */
+/* Final product-shell layer: quiet hierarchy, task-first navigation and
+   compact controls. Exact-selector overrides here refine base.css structural
+   defaults; they are one ordered cascade, not a second mounted shell. */
 .app-shell {
   --sidebar-width: 274px;
   --topbar-height: 52px;

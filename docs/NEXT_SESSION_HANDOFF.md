@@ -1,4 +1,14 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-06，0.7.0 本地候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-09，0.7.0 源码候选）
+
+## 2026-08-09 累计变更一致性审计（本轮）
+
+- 已审计 `origin/main...codex/v0.7.0-audit-hardening` 的 5 个提交、150 个变更文件及 Provider/ACP/投影/IPC/Renderer/CSS/打包链路；审计报告见 `docs/V070_CUMULATIVE_AUDIT.md`。
+- 确认旧 `providers:deep-scan/cancel-scan` 与新 Job API 共用同一个 `deepScan()` 网络核心，不是两套扫描器；旧入口仅为兼容保留，新 Renderer 只走 `scan:start/get/list/cancel`。
+- 修复扫描取消竞态：取消不再依赖 `updatedAt`，Provider store await 之后、首个请求之前再次检查状态，generation 失效后迟到响应不会写入能力证据。
+- 修复媒体子进程启动静默被过短空闲阈值误杀；持续输出仍只受真实空闲超时约束，不增加总回合上限。
+- 离线重开夹具现在走真实附件账本恢复；虚拟列表探针主动定位图片回合，避免把未挂载 DOM 误报为附件丢失。
+- 本轮聚焦测试 4 文件/72 项通过；完整门禁 94 文件/677 项通过，6 个 live 文件/9 项按设计跳过。TypeScript、生产/资源构建、342 文件公开扫描、分块、Native Host、高危依赖门禁及 diff check 通过。
+- E 盘故障期间的打包资产不作为证据；仓库已迁移到 C 盘工作区。本轮仅提交/推送源码，不创建 Release，后续如需安装候选须在 C 盘重新打包并独立验收。
 
 ## 2026-08-06 继续实现：能力门控 Session/旁路提问/Mermaid
 

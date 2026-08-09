@@ -1518,6 +1518,12 @@ export class AppController {
       { type: "prompt-queue", sessionId: backgroundSessionId, entries: this.offlineUiSessionResponder?.backgroundQueue() ?? [{ id: "fixture-background-queue", sessionId: backgroundSessionId, text: "后台排队消息", position: 0, createdAt: now, state: "queued", clientMessageId: "fixture-background-queue" }] },
       { type: "status", sessionId: backgroundSessionId, status: "working", text: "后台处理中" },
     ];
+    // Exercise the same Desktop-owned attachment ledger restore path used by
+    // a real reopened session.  The fixture intentionally emits the restore
+    // after ACP-like replay so a dropped/partial user-message replay cannot
+    // make the image card disappear on a renderer reload.
+    const restoredAttachments = await this.attachmentCache.restore(sessionId);
+    if (restoredAttachments.length) events.push({ type: "user-attachments-restore", sessionId, entries: restoredAttachments });
     return {
       session,
       sessions: [session, waitingSession, backgroundSession],

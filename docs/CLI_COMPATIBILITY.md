@@ -1,5 +1,11 @@
 # Grok CLI Compatibility
 
+## Cumulative 0.7.0 audit note (2026-08-09)
+
+- The legacy `providers:deep-scan` IPC is retained only for compatibility and delegates to the same `ProviderService.deepScan()` implementation used by the asynchronous Job API; it is not a second network scanner.
+- Provider scan cancellation now uses Job ID/generation fencing rather than a mutable timestamp. The job state is checked again after the provider store read and before controller installation, so cancellation during that await cannot issue a probe; late responses are discarded.
+- The post-change offline gate passes 94 test files/677 tests with 6 live files/9 tests skipped by design, plus TypeScript, production/resources, public scan, chunk and high-severity dependency gates. Prior 0.7.0 package hashes do not include this source revision and are not reused as evidence.
+
 ## ACP session resume/close forward shape (0.2.120 source, Desktop 0.7.0)
 
 - The official 0.2.120 source advertises standard `session/list`, `session/resume` and `session/close` capabilities. The sanitized `initialize-0.2.120.json` fixture records those declarations without retaining account, prompt or filesystem data.

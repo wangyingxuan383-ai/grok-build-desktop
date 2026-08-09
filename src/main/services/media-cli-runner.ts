@@ -41,6 +41,12 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   let timedOut = false;
   let idleTimer: NodeJS.Timeout | undefined;
   const idleTimeoutMs = input.idleTimeoutMs === undefined ? 600_000 : input.idleTimeoutMs;
+  // Process startup (especially a packaged Node/Electron child) can take
+  // longer than a deliberately small test/inactivity interval. Give a
+  // silent child a bounded startup grace period, then apply the configured
+  // inactivity timeout after the first byte. This is not a wall-clock
+  // ceiling: continuous stdout/stderr keeps extending the idle timer.
+  const startupGraceMs = idleTimeoutMs === null ? null : Math.max(idleTimeoutMs, 1_000);
   const armIdleTimer = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     if (idleTimeoutMs === null) return;
@@ -72,7 +78,13 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   });
   const abort = (): void => { if (!child.killed) child.kill(); };
   input.signal.addEventListener("abort", abort, { once: true });
-  armIdleTimer();
+  if (startupGraceMs !== null) {
+    idleTimer = setTimeout(() => {
+      timedOut = true;
+      if (!child.killed) child.kill();
+    }, Math.max(1, startupGraceMs));
+    idleTimer.unref?.();
+  }
   try {
     const exitCode = await new Promise<number | null>((resolveExit, reject) => {
       child.once("error", reject);

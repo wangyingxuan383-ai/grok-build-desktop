@@ -1,5 +1,16 @@
 # Feature Matrix
 
+## 0.7.0 累计变更一致性审计（2026-08-09）
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Cumulative source audit | Source verified | Audited 5 commits / 150 changed files from `origin/main`; no parallel production scanner or projection replay store was found. CSS has one ordered entrypoint; 71 pre-existing base/shell selector overrides are documented cascade debt, not a second mounted shell. |
+| Provider scan cancellation | Focused verified | Cancellation no longer depends on `updatedAt`; Job ID/generation invalidates late responses and both queued and controller-not-yet-installed cancellation paths are checked before the first request. |
+| Compatibility IPC | Source verified | Legacy `deep-scan/cancel-scan` remains a compatibility wrapper around the single `deepScan()` core; new Renderer uses Job API. |
+| Media inactivity semantics | Focused verified | A bounded startup grace is separate from the configured post-output inactivity timer; continuous output re-arms inactivity and there is no wall-clock ceiling. |
+| Reopen attachment fixture | UI probe verified | Offline reopen restores through the same main-process attachment ledger as production; the virtualized probe scrolls to the image turn before asserting mounted previews. |
+| Post-fix source candidate | Offline verified | 94 test files/677 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 342-file public scan, chunks, native self-test and high-severity audit gate pass. Packaging/install is deliberately not claimed after the E-drive failure. |
+
 ## v0.7.0 ACP 0.2.120 forward-compatibility A–D (2026-08-06)
 
 | Area | Status | Evidence / boundary |

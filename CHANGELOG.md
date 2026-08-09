@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### 0.7.0 累计变更一致性审计（2026-08-09）
+
+- 审计 `origin/main...codex/v0.7.0-audit-hardening` 的 5 个提交、150 个变更文件，确认 Provider 扫描、会话投影/ACP 回放、CLI 前向能力和 CSS 壳层没有并行重复生产实现；旧 `deep-scan` IPC 仅保留兼容包装并标记为后续弃用入口。
+- 修复 Provider 异步扫描“取消发生在 Worker 安装 AbortController 之前”时可能永久停在 `cancelling` 或继续探测的竞态；取消现在按 Job ID/generation 隔离迟到响应，并在首次网络请求前二次检查任务状态。
+- 媒体子进程将“启动静默宽限”和“首字节后的空闲超时”分离，持续输出不会触发总时长上限；离线会话夹具改为走真实附件账本恢复，虚拟列表探针先定位目标回合再断言，避免把未挂载节点误判为图片丢失。
+- 聚焦回归 4 个文件、72 项通过；完整离线门禁为 94 个测试文件、677 项通过，6 个 live 文件/9 项按设计跳过。TypeScript、生产/资源构建、342 文件公开扫描、Renderer 分块、Native Host 自检、`git diff --check` 和高危依赖门禁通过；当前仅有 4 个无可用修复的 DOMPurify 传递中危项。
+- 本轮不复用故障 E 盘期间生成的 Setup/Portable 作为证据，也不创建 Release；正式打包、安装和桌面实机验收留待存储环境稳定后的独立候选流程。
+
 ### 0.7.0 capability-gated Session surfaces and Mermaid controls (2026-08-06)
 
 - 接入官方 `/btw` 旁路提问线：仅当运行时命令/扩展证据声明能力时显示，使用官方 `session_id` + `question` 字段，不把旁路问题伪装成排队回合；旧 CLI 显示明确“不支持”。
