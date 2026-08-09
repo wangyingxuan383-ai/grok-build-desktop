@@ -99,7 +99,7 @@
   background: rgb(var(--background-mask) / var(--background-dim));
   backdrop-filter: none;
 }
-.chat-turn { width: min(var(--content-width), calc(100% - 40px)); padding: 8px 0 14px; }
+.chat-turn { width: min(var(--conversation-content-width, var(--content-width)), calc(100% - 40px)); padding: 8px 0 14px; }
 .chat-turn:has(> .execution-process:first-child:last-child) { padding-block: 2px; }
 .message-row { margin: 10px 0 18px; }
 .message-row.user { padding-left: 24%; }

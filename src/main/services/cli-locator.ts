@@ -8,10 +8,10 @@ import type { AppSettings, CliVersionStatus } from "../../shared/types";
 const execFileAsync = promisify(execFile);
 const effortFlags = new Map<string, "--effort" | "--reasoning-effort">();
 export const CLI_CHANGELOG_URL = "https://x.ai/build/changelog";
-// Highest public release whose wire shape is covered by this Desktop build.
-// It is a display/forward-compatibility hint only; the stable update feed is
-// always the sole authority for an installable target.
-export const KNOWN_PUBLIC_CLI_VERSION = "0.2.120";
+// Highest public release observed in the official changelog when this build
+// was cut. It is display-only: it does not prove wire compatibility, and the
+// CLI stable feed remains the sole authority for an installable target.
+export const KNOWN_PUBLIC_CLI_VERSION = "1.0.0";
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
@@ -106,6 +106,7 @@ export async function checkCliUpdate(cliPath: string, env = process.env): Promis
       checkedAt: new Date().toISOString(),
       changelogUrl: CLI_CHANGELOG_URL,
       publicLatestVersion: KNOWN_PUBLIC_CLI_VERSION,
+      majorUpgrade: isMajorUpgrade(result.currentVersion, result.latestVersion),
       distributionState: result.error ? "error" : publicAhead ? "public-ahead" : result.updateAvailable ? "stable-update" : "current",
     };
   } catch (error) {
@@ -141,6 +142,12 @@ export function compareVersions(left?: string, right?: string): number {
     if (a[index]! !== b[index]!) return a[index]! > b[index]! ? 1 : -1;
   }
   return 0;
+}
+
+export function isMajorUpgrade(current?: string, target?: string): boolean {
+  const from = parseVersion(current);
+  const to = parseVersion(target);
+  return Boolean(from && to && to[0] > from[0]);
 }
 
 export function isLockedBinaryError(message: string): boolean {

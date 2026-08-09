@@ -240,7 +240,7 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .extensions-entry:hover { border-color: var(--border-strong); background: var(--hover); }
 .conversation-wrap { position: relative; min-width: 0; min-height: 0; flex: 1 1 auto; }
 .conversation { height: 100%; padding: 8px 0 20px; overflow-x: hidden !important; }
-.chat-turn { width: min(var(--content-width), calc(100% - 48px)); min-width: 0; margin: 0 auto; padding: 5px 0 18px; }
+.chat-turn { width: min(var(--conversation-content-width, var(--content-width)), calc(100% - 48px)); min-width: 0; margin: 0 auto; padding: 5px 0 18px; font-size: calc(1em * var(--conversation-font-scale, 1)); }
 .chat-turn .message-row, .chat-turn .thinking-placeholder, .chat-turn .thought-card, .chat-turn .tool-card, .chat-turn .action-card, .chat-turn .plan-card, .chat-turn .error-card { width: 100%; }
 .execution-process { margin: 3px 0 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); overflow: hidden; }
 .execution-process > summary { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 7px 11px; list-style: none; cursor: pointer; color: var(--text-secondary); }
@@ -805,11 +805,15 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .app-shell.sidebar-collapsed .sidebar { visibility: hidden; pointer-events: none; overflow: hidden; }
 .codex-mirror, .empty-state, .workspace-empty { flex: 1 1 auto; min-height: 0; }
 .composer-zone { flex: 0 0 auto; }
-.conversation-search-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px max(18px, calc((100% - var(--content-width)) / 2)); border-bottom: 1px solid var(--border); background: var(--panel); }
+.conversation-search-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px max(18px, calc((100% - var(--conversation-content-width, var(--content-width))) / 2)); border-bottom: 1px solid var(--border); background: var(--panel); }
 .conversation-search-bar input { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; color: var(--text); background: var(--input-bg); }
 .conversation-search-bar span { color: var(--muted); font-size: .75em; }
 .conversation-search-bar button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: var(--panel-3); cursor: pointer; }
 .conversation-match-active { border-radius: 10px; box-shadow: inset 0 0 0 1px #866c29; background: #3b32141f; }
+.conversation-reading-settings { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
+.conversation-reading-settings legend { padding: 0 6px; color: var(--text-strong); font-weight: 650; }
+.conversation-reading-settings label { display: grid; gap: 5px; }
+.open-location-menu .menu-section-label { display: block; padding: 8px 10px 3px; color: var(--muted); font-size: .62em; text-transform: uppercase; letter-spacing: .04em; }
 .file-menu { max-height: 310px; overflow: auto; }
 
 .diagnostics-panel, .onboarding-panel { width: min(900px, 95vw); height: min(800px, 94vh); }

@@ -46,6 +46,7 @@ import type {
   OnboardingState,
   OpenTargetIntent,
   OpenTargetResult,
+  ExternalOpenTool,
   SystemCompatibilityReport,
   SupportBundlePreview,
   AppReleaseStatus,
@@ -174,6 +175,7 @@ import { OnboardingService } from "./services/onboarding-service";
 import { DiagnosticsService } from "./services/diagnostics-service";
 import { AppReleaseService } from "./services/app-release-service";
 import { WorkspaceFileService } from "./services/workspace-file-service";
+import { ExternalOpenToolService } from "./services/external-open-tool-service";
 import { inspectAttachmentPrivacy } from "./services/attachment-privacy-service";
 import { verifyResourceManifest, type ResourceIntegrityResult } from "./services/resource-integrity";
 import { backupUiMetadataForVersion } from "./services/metadata-migration";
@@ -215,6 +217,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   expandToolDetails: false,
   fontScale: 100,
   uiDensity: "balanced",
+  conversationContentWidth: 780,
+  conversationFontScale: 100,
   recentWorkspaces: [],
   activeWorkspace: "",
   codexGroupCollapsed: true,
@@ -252,6 +256,7 @@ export class AppController {
   private readonly diagnostics: DiagnosticsService;
   private readonly appRelease: AppReleaseService;
   private readonly workspaceFiles = new WorkspaceFileService();
+  private readonly externalOpenTools = new ExternalOpenToolService();
   private readonly resourceIntegrity: ResourceIntegrityResult;
   private readonly themeService: ThemeService;
   private readonly providers: ProviderService;
@@ -1523,7 +1528,7 @@ export class AppController {
     const fixtureProject = await resolveProjectIdentity(workspace);
     const fixtureDraftKey = `new:${fixtureProject.id}`;
     if (!(await this.uiState.getDraft(fixtureDraftKey))) {
-      await this.uiState.setDraft(fixtureDraftKey, "0.7.1 本地草稿（尚未启动 CLI）", undefined, [], {
+      await this.uiState.setDraft(fixtureDraftKey, "0.7.3 本地草稿（尚未启动 CLI）", undefined, [], {
         projectId: fixtureProject.id,
         workspacePath: fixtureProject.canonicalPath,
         profileId: "builtin-normal",
@@ -1542,11 +1547,11 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.7.1 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.7.3 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
     const waitingSessionId = OFFLINE_UI_SESSION_IDS.waiting;
     const backgroundSessionId = OFFLINE_UI_SESSION_IDS.background;
-    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.7.1 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
-    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.7.1 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
+    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.7.3 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
+    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.7.3 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -1743,6 +1748,8 @@ export class AppController {
         : await validateGrokCliExecutable(patch.cliPath);
     }
     if (patch.fontScale !== undefined) patch.fontScale = Math.min(130, Math.max(85, patch.fontScale));
+    if (patch.conversationContentWidth !== undefined) patch.conversationContentWidth = Math.min(1040, Math.max(640, Math.round(patch.conversationContentWidth)));
+    if (patch.conversationFontScale !== undefined) patch.conversationFontScale = Math.min(135, Math.max(90, Math.round(patch.conversationFontScale)));
     if (patch.defaultEffort !== undefined && !REASONING_EFFORTS.includes(patch.defaultEffort)) throw new Error("不支持的默认推理强度");
     if (patch.uiDensity !== undefined && !isUiDensity(patch.uiDensity)) throw new Error("不支持的界面密度");
     if (patch.theme !== undefined) patch.theme = mergeThemeSettings(current.theme ?? DEFAULT_THEME, patch.theme);
@@ -2265,7 +2272,7 @@ export class AppController {
   async removeAccount(id: string) { const result = await this.auth.removeAccount(id); this.quota.clear(); return result; }
   checkCliUpdate() { return this.updater.check(); }
   previewCliUpdate() { return this.updater.preview(); }
-  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string }) { return this.updater.apply(input); }
+  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) { return this.updater.apply(input); }
   getCliCompatibilitySnapshot() { return this.updater.compatibility(); }
   getCliUpdateHistory() { return this.updater.history(); }
   async openPath(path: string): Promise<void> {
@@ -2319,6 +2326,16 @@ export class AppController {
     if (action === "open" && info.isFile() && UNSAFE_SYSTEM_OPEN_EXTENSIONS.has(extension)) {
       return { ok: false, target: canonicalTarget, kind, action, message: `为避免执行本地代码，应用不会直接打开 ${extension || "该"} 文件` };
     }
+    if (action === "open-with") {
+      if (!intent.applicationId) return { ok: false, target: canonicalTarget, kind, action, message: "请选择实际可用的打开工具" };
+      try {
+        await this.externalOpenTools.open(intent.applicationId, canonicalTarget, info.isDirectory() ? "directory" : "file", intent.line, intent.column);
+        const tool = (await this.externalOpenTools.list()).find((value) => value.id === intent.applicationId);
+        return { ok: true, target: canonicalTarget, kind, action, message: `已使用 ${tool?.label || intent.applicationId} 打开` };
+      } catch (error) {
+        return { ok: false, target: canonicalTarget, kind, action, message: error instanceof Error ? error.message : String(error) };
+      }
+    }
     if (action === "copy-path") {
       clipboard.writeText(canonicalTarget);
       return { ok: true, target: canonicalTarget, kind, action, message: "路径已复制" };
@@ -2334,6 +2351,7 @@ export class AppController {
     const error = await shell.openPath(canonicalTarget);
     return { ok: !error, target: canonicalTarget, kind, action, message: error || (info.isDirectory() ? "已打开执行目录" : "已打开目标文件") };
   }
+  listOpenTargetTools(): Promise<ExternalOpenTool[]> { return this.externalOpenTools.list(); }
   openExternal(url: string) {
     if (!isAllowedExternalUrl(url)) throw new Error("仅允许打开 HTTP/HTTPS 链接");
     return shell.openExternal(url);

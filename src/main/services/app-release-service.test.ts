@@ -15,6 +15,11 @@ describe("application releases", () => {
     expect(compareVersions("0.4.1", "0.4.0")).toBeGreaterThan(0);
     expect(compareVersions("0.4.0", "0.4.0")).toBe(0);
   });
+  it("reports an unreleased local candidate as ahead of the public release", () => {
+    const candidate = { ...build, version: "0.7.3" } satisfies BuildInfo;
+    const value = parseGitHubRelease({ tag_name: "v0.6.22", html_url: "https://github.com/owner/repo/releases/tag/v0.6.22" }, candidate);
+    expect(value).toMatchObject({ latestVersion: "0.6.22", updateAvailable: false, currentAhead: true });
+  });
   it("aborts an update check that never returns headers", async () => {
     const log = { log: vi.fn(async () => undefined) } as unknown as LogService;
     const service = new AppReleaseService(build, log, (_url, init) => new Promise((_resolve, reject) => {

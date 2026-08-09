@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppSettings } from "../../shared/types";
-import { buildCliEnv, isLockedBinaryError, parseVersion, validateGrokCliExecutable } from "./cli-locator";
+import { buildCliEnv, isLockedBinaryError, isMajorUpgrade, parseVersion, validateGrokCliExecutable } from "./cli-locator";
 import { DEFAULT_THEME } from "./theme-service";
 
 const settings: AppSettings = {
@@ -49,6 +49,12 @@ describe("CLI locator helpers", () => {
     expect(isLockedBinaryError("Access is denied. (os error 5)")).toBe(true);
     expect(isLockedBinaryError("locked executable")).toBe(true);
     expect(isLockedBinaryError("network timeout")).toBe(false);
+  });
+
+  it("distinguishes a stable channel major upgrade from a normal patch update", () => {
+    expect(isMajorUpgrade("0.2.118", "1.0.0")).toBe(true);
+    expect(isMajorUpgrade("1.0.0", "1.0.1")).toBe(false);
+    expect(isMajorUpgrade(undefined, "1.0.0")).toBe(false);
   });
 
   it("overrides proxy and API key without discarding the process environment", () => {

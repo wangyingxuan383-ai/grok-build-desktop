@@ -3,7 +3,7 @@ if (!endpoint) throw new Error("Usage: node scripts/probe-v070-ui.mjs <cdp-endpo
 // This is the v0.7 acceptance gate, not a generic "whatever package.json
 // currently says" smoke test. Keeping the expected release explicit prevents
 // an older 0.6.x build from silently satisfying the current UI contract.
-const expectedVersion = "0.7.1";
+const expectedVersion = "0.7.3";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(120); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
 const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer unavailable");
@@ -168,7 +168,7 @@ try {
   await waitFor(() => callFunction("function () { return Array.from(document.querySelectorAll('.session-row.draft')).some((node) => (node.textContent || '').includes('未发送草稿')); }"), "Draft-first row did not appear");
   const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length");
   if (!(await clickExactText('.new-task-button', '新建任务'))) throw new Error('New-task button did not open the local draft');
-  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.7.1 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
+  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.7.3 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
   const draftState = await evaluate(`({
     historyCount: document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length,
     stop: Boolean(document.querySelector('.send-button.stop')),
@@ -176,12 +176,12 @@ try {
     model: document.querySelector('.draft-model-controls select')?.value || ''
   })`);
   if (draftState.historyCount !== historyCountBeforeDraft || draftState.stop || draftState.waiting || draftState.model !== 'fixture-draft-model') throw new Error(`Draft-first state is not isolated from CLI sessions: ${JSON.stringify(draftState)}`);
-  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.7.1 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
+  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.7.3 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
   await sleep(700);
   await reloadFixture();
   await waitFor(() => evaluate("Boolean(document.querySelector('.session-row.draft'))"), "Persisted draft row was lost after restart");
   await evaluate("document.querySelector('.session-row.draft')?.click()");
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.7.1 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.7.3 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
   if ((await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
 
   // A background running conversation owns its own Stop button, queue and
@@ -212,6 +212,8 @@ try {
   await scrollToFindText('.turn-metrics', '1分23秒', 'Completed turn metrics were not reachable');
   const turnMetrics = await evaluate(`Array.from(document.querySelectorAll('.turn-metrics')).map((node) => node.textContent || '').join(' · ')`);
   if (!turnMetrics.includes("1分23秒") || !turnMetrics.includes("输入 120") || !turnMetrics.includes("输出 30")) throw new Error(`Turn metrics mismatch: ${turnMetrics}`);
+  const requestRail = await evaluate(`({ markers: document.querySelectorAll('.turn-navigation-rail button[data-turn-index]').length, collapse: Array.from(document.querySelectorAll('.turn-navigation-rail button')).some((node) => ((node.textContent || '') + ' ' + (node.getAttribute('aria-label') || '')).includes('折叠')) })`);
+  if (requestRail.markers < 1 || !requestRail.collapse) throw new Error(`Request navigation rail mismatch: ${JSON.stringify(requestRail)}`);
   // The conversation is a virtualized list, so a card outside the restored
   // viewport is simply not mounted. Walk the scroller instead of asserting on
   // whatever happens to be on screen.
@@ -233,12 +235,13 @@ try {
 
   await evaluate("document.querySelector('.review-toggle')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.right-tool-launcher'))"), "Right tool launcher did not open");
+  await waitFor(() => evaluate("!document.querySelector('.right-tool-launcher')?.textContent?.includes('正在确认')"), "Right tool capability detection did not finish");
   const launcher = await evaluate(`Array.from(document.querySelectorAll('.right-tool-launcher > button')).map((node) => node.textContent.trim())`);
   // Assert the entries by name. An exact count breaks on every addition, which
   // is how the preset count and the version literal rotted.
-  const requiredTools = ["审阅", "Agent 改动", "计划与结果", "最近文件", "侧边任务"];
+  const requiredTools = ["Agent 改动", "计划与结果", "最近文件", "侧边任务"];
   const missingTools = requiredTools.filter((label) => !launcher.some((value) => value.includes(label)));
-  if (missingTools.length) throw new Error(`Right launcher mismatch: ${JSON.stringify({ launcher, missingTools })}`);
+  if (missingTools.length || launcher.some((value) => value.includes("Git 变更"))) throw new Error(`Right launcher exposed an unavailable Git surface: ${JSON.stringify({ launcher, missingTools })}`);
   await clickText('.right-tool-launcher > button', '计划与结果');
   await waitFor(() => evaluate("Boolean(document.querySelector('.document-tool'))"), "Plan/result tool did not open");
   await clickText('.right-utility-tabs button', '工具');
@@ -256,14 +259,8 @@ try {
   await waitFor(() => evaluate("Boolean(document.querySelector('.composer textarea')) && !document.querySelector('.task-center')"), "Conversation did not recover after task center");
   await evaluate("document.querySelector('.right-utility-pane > header .icon-button')?.click()");
   await evaluate("document.querySelector('.review-toggle')?.click()");
-  await waitFor(() => evaluate("Boolean(document.querySelector('.right-tool-launcher'))"), "Right launcher did not reopen after navigation cycle");
-  await clickText('.right-tool-launcher > button', '审阅');
-  await waitFor(() => evaluate("Boolean(document.querySelector('.review-pane'))"), "Review did not open from launcher");
-  await waitFor(() => evaluate("Boolean(document.querySelector('.review-capability-empty'))"), "Non-Git Review did not become an ordinary empty state");
-  if (await evaluate("Boolean(document.querySelector('.error-toast'))")) throw new Error("Non-Git Review raised a global error");
-  await evaluate("document.querySelector('.review-header .icon-button')?.click()");
-  await evaluate("document.querySelector('.review-toggle')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.right-tool-launcher'))"), "Right launcher did not reopen for Agent changes");
+  await waitFor(() => evaluate("Array.from(document.querySelectorAll('.right-tool-launcher > button')).some((node) => (node.textContent || '').includes('Agent 改动'))"), "Agent change capability did not resolve after reopening the launcher");
   await clickText('.right-tool-launcher > button', 'Agent 改动');
   await waitFor(() => evaluate("Boolean(document.querySelector('.agent-change-pane'))"), "Non-Git Agent change surface did not open");
   const agentChangeUi = await evaluate(`(() => { const node=document.querySelector('.agent-change-pane'); return { text: node?.innerText || '', gitActions: Array.from(node?.querySelectorAll('button') || []).some((button) => /暂存|提交|分支/.test(button.textContent || '')) }; })()`);
@@ -297,6 +294,10 @@ try {
 
   await clickText('.sidebar-footer .icon-button', '');
   if (!await waitFor(() => evaluate("Boolean(document.querySelector('.settings-dialog'))"), "Settings did not open")) throw new Error("Settings did not open");
+  await clickText('.settings-layout > nav button', '常规');
+  await waitFor(() => evaluate("document.querySelectorAll('.conversation-reading-settings input[type=range]').length === 2"), "Conversation-only reading controls are missing");
+  const readingUi = await evaluate(`({ width: document.querySelector('.conversation-reading-settings input[type=range]')?.value, scale: document.querySelectorAll('.conversation-reading-settings input[type=range]')[1]?.value })`);
+  if (!readingUi.width || !readingUi.scale) throw new Error(`Conversation reading controls mismatch: ${JSON.stringify(readingUi)}`);
   await clickText('.settings-layout > nav button', 'Token 活动');
   await waitFor(() => evaluate("document.querySelectorAll('.token-heatmap-grid .token-cell').length === 371"), "Token activity did not render an exact 371-day heatmap");
   const tokenUi = await evaluate(`({ cells: document.querySelectorAll('.token-heatmap-grid .token-cell').length, windows: Array.from(document.querySelectorAll('.token-window-grid article strong')).map((node) => node.textContent.trim()), privacy: document.querySelector('.token-heatmap footer')?.textContent || '' })`);
@@ -323,5 +324,5 @@ try {
   const draftUi = await evaluate(`({ discover: Array.from(document.querySelectorAll('.provider-probe-actions button')).some((node) => node.textContent.includes('获取模型列表')), manual: Array.from(document.querySelectorAll('.provider-model-heading button')).some((node) => node.textContent.includes('手工添加')), address: Array.from(document.querySelectorAll('.provider-form-grid input')).some((node) => node.value.includes('127.0.0.1:11434')) })`);
   if (!draftUi.discover || !draftUi.manual || !draftUi.address) throw new Error(`Provider draft workflow mismatch: ${JSON.stringify(draftUi)}`);
 
-  console.log(JSON.stringify({ ok: true, version: initial.version, multiSessionIsolation: true, planPermissionActions: decisionReceipts, composerRecoveredAfterDecisions: true, stop: stopReceipt, composerRecoveredAfterStop: true, draftIsolation: true, navigation: "dashboard→chat→file→chat→tasks→chat", rightTools: launcher.length, recentFilePreview: true, nonGitReview: "empty-state", agentChanges: "real-writes-no-git-actions", structuredError: "collapsed-with-details", turnMetrics: true, tokenActivityDays: tokenUi.cells, updateActions: 4, diagnosticsNavigation: true, responsiveComposer: responsiveEvidence, narrowDrawerVisible: true, rightDockContainerQueries: true, lazyPanelsSettled: true, providerManager: true }, null, 2));
+  console.log(JSON.stringify({ ok: true, version: initial.version, multiSessionIsolation: true, planPermissionActions: decisionReceipts, composerRecoveredAfterDecisions: true, stop: stopReceipt, composerRecoveredAfterStop: true, draftIsolation: true, navigation: "dashboard→chat→file→chat→tasks→chat", rightTools: launcher.length, recentFilePreview: true, unavailableGitReviewHidden: true, agentChanges: "real-writes-no-git-actions", structuredError: "collapsed-with-details", turnMetrics: true, conversationReadingControls: true, tokenActivityDays: tokenUi.cells, updateActions: 4, diagnosticsNavigation: true, responsiveComposer: responsiveEvidence, narrowDrawerVisible: true, rightDockContainerQueries: true, lazyPanelsSettled: true, providerManager: true }, null, 2));
 } finally { socket.close(); }

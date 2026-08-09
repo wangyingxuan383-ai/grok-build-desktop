@@ -185,6 +185,7 @@ export interface AppReleaseStatus {
   currentVersion: string;
   latestVersion?: string;
   updateAvailable: boolean;
+  currentAhead?: boolean;
   checkedAt: string;
   publishedAt?: string;
   releaseUrl?: string;
@@ -219,6 +220,10 @@ export interface AppSettings {
   expandToolDetails: boolean;
   fontScale: number;
   uiDensity: UiDensity;
+  /** Conversation-only reading width. It must not resize workbenches or dialogs. */
+  conversationContentWidth?: number;
+  /** Conversation-only font scale. Shell/navigation text remains governed by fontScale. */
+  conversationFontScale?: number;
   recentWorkspaces: string[];
   activeWorkspace: string;
   codexGroupCollapsed?: boolean;
@@ -1271,7 +1276,20 @@ export interface OpenTargetIntent {
   target: string;
   sessionId?: string;
   executionRoot?: string;
-  action?: "open" | "reveal" | "copy-path";
+  action?: "open" | "reveal" | "copy-path" | "open-with";
+  applicationId?: ExternalOpenToolId;
+  line?: number;
+  column?: number;
+}
+
+export type ExternalOpenToolId = "explorer" | "vscode" | "cursor" | "notepad" | "terminal" | "codex-cli";
+
+export interface ExternalOpenTool {
+  id: ExternalOpenToolId;
+  label: string;
+  detail: string;
+  targetKinds: Array<"file" | "directory">;
+  supportsPosition: boolean;
 }
 
 export interface OpenTargetResult {
@@ -1491,6 +1509,8 @@ export interface CliVersionStatus {
   changelogUrl?: string;
   publicLatestVersion?: string;
   distributionState?: "current" | "stable-update" | "public-ahead" | "error";
+  /** True when the stable channel crosses a semantic major-version boundary. */
+  majorUpgrade?: boolean;
   updateAvailable?: boolean;
   error?: string | null;
 }
@@ -1542,6 +1562,7 @@ export interface CliUpdatePreview {
   changelogUrl: string;
   publicLatestVersion?: string;
   publicVersionAhead: boolean;
+  majorUpgrade: boolean;
 }
 
 export interface CliUpdateReceipt {
@@ -1789,6 +1810,7 @@ export interface GrokDesktopApi {
   attachmentsFromPaths(paths: string[], sessionId?: string): Promise<Attachment[]>;
   openPath(path: string): Promise<void>;
   openTarget(intent: OpenTargetIntent): Promise<OpenTargetResult>;
+  listOpenTargetTools(): Promise<ExternalOpenTool[]>;
   copyImage(source: string): Promise<void>;
   saveImage(source: string): Promise<string | null>;
   openMedia(source: string): Promise<void>;
@@ -1911,7 +1933,7 @@ export interface GrokDesktopApi {
   updateComputerSettings(patch: Partial<ComputerUseSettings>): Promise<ComputerUseSettings>;
   checkCliUpdate(): Promise<CliVersionStatus>;
   previewCliUpdate(): Promise<CliUpdatePreview>;
-  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string }): Promise<CliUpdateReceipt>;
+  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }): Promise<CliUpdateReceipt>;
   getCliCompatibilitySnapshot(): Promise<CliCompatibilitySnapshot>;
   getCliUpdateHistory(): Promise<CliUpdateRecord[]>;
   exportLogs(): Promise<string | null>;

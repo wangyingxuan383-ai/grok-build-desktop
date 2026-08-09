@@ -88,9 +88,9 @@ if ($ReleaseArtifactsOnly) {
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v062-ui.mjs'
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v066-ui.mjs'
+    # The current v0.7 probe supersedes the legacy v0.4/v0.6 probes. Those
+    # scripts encode retired information architecture (for example, exposing
+    # Git Review in a non-Git fixture) and must not gate the current release.
     foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {
         & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
     }

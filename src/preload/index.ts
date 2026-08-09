@@ -184,6 +184,7 @@ const api: GrokDesktopApi = {
   attachmentsFromPaths: (paths, sessionId) => ipcRenderer.invoke("attachments:paths", paths, sessionId),
   openPath: (path) => ipcRenderer.invoke("system:open-path", path),
   openTarget: (intent) => ipcRenderer.invoke("system:open-target", intent),
+  listOpenTargetTools: () => ipcRenderer.invoke("system:list-open-tools"),
   copyImage: (source) => ipcRenderer.invoke("system:copy-image", source),
   saveImage: (source) => ipcRenderer.invoke("system:save-image", source),
   openMedia: (source) => ipcRenderer.invoke("system:open-media", source),

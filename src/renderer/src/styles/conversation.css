@@ -189,6 +189,38 @@
   overflow-wrap: anywhere;
   box-shadow: var(--shadow-lg);
 }
+
+.turn-navigation-rail {
+  position: absolute;
+  z-index: 6;
+  top: 14px;
+  right: 10px;
+  bottom: 54px;
+  width: 32px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  padding: 6px 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: 0 8px 24px #0003;
+  backdrop-filter: blur(14px);
+}
+.turn-navigation-rail > header { display: grid; gap: 3px; color: var(--muted); font-size: .56em; text-align: center; white-space: nowrap; }
+.turn-navigation-rail > header button { width: 20px; height: 16px; }
+.turn-navigation-rail > div { min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; overflow-y: auto; scrollbar-width: none; }
+.turn-navigation-rail > div::-webkit-scrollbar { display: none; }
+.turn-navigation-rail button { width: 20px; height: 20px; flex: 0 0 auto; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
+.turn-navigation-rail button:hover, .turn-navigation-rail button.active { color: var(--text-strong); background: var(--hover); }
+.turn-navigation-rail button.error { color: var(--danger); }
+.turn-navigation-rail button.permission, .turn-navigation-rail button.plan { color: var(--warning); }
+.turn-navigation-rail button.answer { color: var(--success); }
+.turn-navigation-rail i { font-style: normal; font-size: .72em; line-height: 1; }
+
+@media (max-width: 900px) {
+  .turn-navigation-rail { display: none; }
+}
 .open-location-feedback.success {
   border-color: color-mix(in srgb, var(--success) 48%, var(--border));
   color: var(--success);

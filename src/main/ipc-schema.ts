@@ -41,6 +41,7 @@ const RULES: Record<string, Rule> = {
   "editor:reveal": (args) => { pathArg(args, 0); pathArg(args, 1); },
   "system:open-path": (args) => safeOpenPathArg(args, 0),
   "system:open-target": (args) => openTargetArg(args, 0),
+  "system:list-open-tools": noArgs,
   "system:copy-image": (args) => mediaSourceArg(args, 0, true),
   "system:save-image": (args) => mediaSourceArg(args, 0, true),
   "system:open-media": (args) => mediaSourceArg(args, 0, false),
@@ -540,7 +541,7 @@ function recordStringArray(record: Record<string, unknown>, key: string, maxLeng
 function settingsPatchArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, [
     "cliPath", "httpProxy", "httpsProxy", "defaultModel", "defaultEffort", "defaultMode",
-    "showThinking", "expandToolDetails", "fontScale", "uiDensity", "recentWorkspaces", "activeWorkspace",
+    "showThinking", "expandToolDetails", "fontScale", "uiDensity", "conversationContentWidth", "conversationFontScale", "recentWorkspaces", "activeWorkspace",
     "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme",
   ]);
   if (value.cliPath !== undefined) cliPathSetting(value.cliPath);
@@ -558,6 +559,8 @@ function settingsPatchArg(args: unknown[], index: number): void {
   optionalRecordBoolean(value, "showThinking");
   optionalRecordBoolean(value, "expandToolDetails");
   optionalRecordInteger(value, "fontScale", 85, 130);
+  optionalRecordInteger(value, "conversationContentWidth", 640, 1040);
+  optionalRecordInteger(value, "conversationFontScale", 90, 135);
   optionalRecordEnum(value, "uiDensity", ["compact", "balanced", "comfortable"]);
   if (value.recentWorkspaces !== undefined) {
     if (!Array.isArray(value.recentWorkspaces) || value.recentWorkspaces.length > 200) throw new Error("IPC 字段 recentWorkspaces 必须是受限路径数组");
@@ -615,11 +618,14 @@ function editorSaveArg(args: unknown[], index: number): void {
   optionalRecordBoolean(value, "overwrite");
 }
 function openTargetArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["target", "sessionId", "executionRoot", "action"]);
+  const value = strictRecordArg(args, index, ["target", "sessionId", "executionRoot", "action", "applicationId", "line", "column"]);
   requiredRecordString(value, "target", 32_767);
   optionalRecordString(value, "sessionId", 512);
   optionalRecordString(value, "executionRoot", 32_767);
-  optionalRecordEnum(value, "action", ["open", "reveal", "copy-path"]);
+  optionalRecordEnum(value, "action", ["open", "reveal", "copy-path", "open-with"]);
+  optionalRecordEnum(value, "applicationId", ["explorer", "vscode", "cursor", "notepad", "terminal", "codex-cli"]);
+  optionalRecordInteger(value, "line", 1, 10_000_000);
+  optionalRecordInteger(value, "column", 1, 10_000_000);
 }
 function gitReviewScopeArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["kind", "revision", "base", "paths"]);
@@ -798,10 +804,11 @@ function computerSettingsArg(args: unknown[], index: number): void {
   optionalRecordString(value, "emergencyShortcut", 128);
 }
 function cliUpdateInputArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["targetVersion", "expectedCurrentVersion"]);
+  const value = strictRecordArg(args, index, ["targetVersion", "expectedCurrentVersion", "allowMajorUpgrade"]);
   const target = requiredRecordString(value, "targetVersion", 64);
   const current = requiredRecordString(value, "expectedCurrentVersion", 64);
   if (!/^\d+\.\d+\.\d+$/.test(target) || !/^\d+\.\d+\.\d+$/.test(current)) throw new Error("IPC CLI 版本格式无效");
+  optionalRecordBoolean(value, "allowMajorUpgrade");
 }
 function mediaSourceArg(args: unknown[], index: number, allowData: boolean): void {
   const value = stringArg(args, index, allowData ? 28 * 1024 * 1024 : 32_767);
