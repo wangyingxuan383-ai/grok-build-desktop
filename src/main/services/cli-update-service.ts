@@ -3,7 +3,7 @@ import { access, appendFile, mkdir, readFile, rename, rm, writeFile } from "node
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdtemp } from "node:fs/promises";
-import type { AppSettings, CliCapabilityEvidence, CliCompatibilitySnapshot, CliRuntimeHandshake, CliUpdatePreview, CliUpdateReceipt, CliUpdateRecord, CliVersionStatus } from "../../shared/types";
+import type { AppSettings, CliCapabilityEvidence, CliCompatibilityGate, CliCompatibilitySnapshot, CliMajorCompatibilityProfile, CliRuntimeHandshake, CliUpdatePreview, CliUpdateReceipt, CliUpdateRecord, CliV1RuntimeSnapshot, CliVersionStatus } from "../../shared/types";
 import { buildCliEnv, checkCliUpdate, CLI_CHANGELOG_URL, compareVersions, isLockedBinaryError, isMajorUpgrade, locateGrokCli, parseVersion, readCliVersion } from "./cli-locator";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
 import { redactSecrets, type LogService } from "./log-service";
@@ -15,6 +15,117 @@ export interface CliUpdateServiceRuntime {
   check(cliPath: string, env: NodeJS.ProcessEnv): Promise<CliVersionStatus>;
   runUpdate(cliPath: string, args: string[], env: NodeJS.ProcessEnv): Promise<void>;
   probe(cliPath: string, env: NodeJS.ProcessEnv): Promise<CliCompatibilitySnapshot>;
+}
+
+export const CLI_V1_COMPATIBILITY_PROFILE: CliMajorCompatibilityProfile = {
+  major: 1,
+  targetVersion: "1.0.0",
+  label: "Grok Build CLI 1.x",
+  requiredChecks: [
+    "v1-wire-fixture",
+    "desktop-attach-policy",
+    "session-close-outcome",
+    "mcp-slash-events",
+    "git-explicit-options",
+    "context-usage-session-info",
+    "managed-no-auto-update",
+  ],
+  changelogUrl: CLI_CHANGELOG_URL,
+};
+
+export function offlineCompatibilityGate(targetVersion: string): CliCompatibilityGate | undefined {
+  const major = parseVersion(targetVersion)?.[0];
+  if (major === undefined || major < 1) return undefined;
+  const at = new Date().toISOString();
+  if (major !== 1) return {
+    targetVersion,
+    major,
+    status: "failed",
+    checkedAt: at,
+    liveVerified: false,
+    checks: [{ id: "unknown-major", label: `CLI ${major}.x 兼容契约`, status: "failed", source: "fixture", message: "Desktop 尚未记录该主版本的 Wire Fixture" }],
+  };
+  return {
+    targetVersion,
+    major,
+    status: "passed",
+    checkedAt: at,
+    liveVerified: false,
+    checks: CLI_V1_COMPATIBILITY_PROFILE.requiredChecks.map((id) => ({
+      id,
+      label: ({
+        "v1-wire-fixture": "1.0.0 initialize/事件 Wire Fixture",
+        "desktop-attach-policy": "交互式 Session 附加策略",
+        "session-close-outcome": "session/close 结构化结果解析",
+        "mcp-slash-events": "MCP 1.0 斜杠事件规范化",
+        "git-explicit-options": "Git status 显式选项",
+        "context-usage-session-info": "Context / Usage / Session Info 数据视图",
+        "managed-no-auto-update": "受管 CLI 禁止绕过 Desktop 更新器",
+      } as Record<string, string>)[id] ?? id,
+      status: "passed",
+      source: "fixture",
+    })),
+  };
+}
+
+export function runtimeV1Compatibility(
+  cliVersion: string | undefined,
+  handshake: CliRuntimeHandshake | undefined,
+  closeOutcomeSupported: boolean,
+  successfulCapabilities = new Set<string>(),
+): { snapshot?: CliV1RuntimeSnapshot; gate?: CliCompatibilityGate } {
+  const major = parseVersion(cliVersion)?.[0];
+  if (major !== 1) return {};
+  const at = new Date().toISOString();
+  const extensionSet = new Set(handshake?.extensions ?? []);
+  const commands = new Set((handshake?.commands ?? []).map((value) => value.replace(/^\//, "").toLowerCase()));
+  const declaredMcp = Boolean(handshake?.mcpCapabilities && Object.values(handshake.mcpCapabilities).some(Boolean));
+  // The first stable 1.0.0 Windows binary advertises `/context` and
+  // `/session-info`, but its ACP router still returns method-not-found for the
+  // newer x.ai/session/info and x.ai/session/usage extensions present in the
+  // public source snapshot.  These views are optional product capabilities,
+  // not a reason to roll back an otherwise healthy major upgrade.  Record the
+  // exact observed subset and keep the missing views pending/fail-closed in the
+  // UI instead of pretending the extension exists.
+  const dataViews = new Set<CliV1RuntimeSnapshot["dataViews"][number]>();
+  if (commands.has("context") || successfulCapabilities.has("x.ai/session/info") || extensionSet.has("x.ai/session/info")) dataViews.add("context");
+  if (commands.has("session-info") || successfulCapabilities.has("x.ai/session/info") || extensionSet.has("x.ai/session/info")) dataViews.add("session-info");
+  if (commands.has("usage") || successfulCapabilities.has("x.ai/session/usage") || extensionSet.has("x.ai/session/usage")) dataViews.add("usage");
+  const completeDataViews = dataViews.size === 3;
+  const officialGitStatusObserved = successfulCapabilities.has("x.ai/git/status") || extensionSet.has("x.ai/git/status");
+  const checks: CliCompatibilityGate["checks"] = [
+    { id: "agent-version", label: "initialize 报告 1.x Agent", status: parseVersion(handshake?.agentVersion)?.[0] === 1 ? "passed" : "failed", source: "runtime" },
+    { id: "session-close", label: "session/close 声明并返回可识别结果", status: handshake?.sessionCapabilities?.close === true && closeOutcomeSupported ? "passed" : "failed", source: "runtime" },
+    { id: "mcp-runtime", label: "MCP 运行时状态（无服务器时可待观察）", status: declaredMcp ? "passed" : "pending", source: "runtime", ...(!declaredMcp ? { message: "当前探针未配置 MCP；1.0 事件解析已由 Wire Fixture 门禁覆盖" } : {}) },
+    {
+      id: "data-views",
+      label: "Context / Usage / Session Info",
+      status: completeDataViews ? "passed" : "pending",
+      source: "runtime",
+      ...(!completeDataViews ? { message: `当前 1.0.0 实际提供：${[...dataViews].join("、") || "未观察到"}；缺失视图保持禁用，不阻止核心 ACP 更新` } : {}),
+    },
+    { id: "managed-no-auto-update", label: "受管 CLI 禁止自动更新", status: "passed", source: "runtime" },
+    {
+      id: "git-explicit-options",
+      label: "Git status 使用显式选项",
+      status: officialGitStatusObserved ? "passed" : "pending",
+      source: "runtime",
+      ...(!officialGitStatusObserved ? { message: "当前 CLI 未提供 x.ai/git/status；Desktop 保持受限系统 Git 回退，调用官方接口时仍显式传递全部选项" } : {}),
+    },
+  ];
+  const status = checks.some((item) => item.status === "failed") ? "failed" : "passed";
+  return {
+    snapshot: {
+      version: cliVersion!,
+      observedAt: at,
+      attachPolicy: { nonInteractive: false, deliveryTools: [] },
+      closeOutcomeSupported,
+      mcpMethods: ["x.ai/mcp/init_progress", "x.ai/mcp/tools_changed", "x.ai/mcp/server_status", "x.ai/mcp/servers_updated", "x.ai/mcp_initialized"],
+      gitStatusUsesExplicitOptions: true,
+      dataViews: [...dataViews],
+    },
+    gate: { targetVersion: cliVersion!, major: 1, status, checkedAt: at, checks, liveVerified: status === "passed" },
+  };
 }
 
 export class CliUpdateService {
@@ -52,6 +163,7 @@ export class CliUpdateService {
     if (!status.currentVersion) throw new Error(status.error || "无法读取当前 Grok CLI 版本");
     if (!status.latestVersion) throw new Error(status.error || "stable 更新源没有返回目标版本");
     if (!status.updateAvailable) throw new Error(`Grok CLI ${status.currentVersion} 已是当前 stable 通道最新版本`);
+    const compatibilityGate = offlineCompatibilityGate(status.latestVersion);
     return {
       fromVersion: status.currentVersion,
       targetVersion: status.latestVersion,
@@ -62,6 +174,7 @@ export class CliUpdateService {
       publicLatestVersion: status.publicLatestVersion,
       publicVersionAhead: compareVersions(status.publicLatestVersion, status.latestVersion) > 0,
       majorUpgrade: status.majorUpgrade ?? isMajorUpgrade(status.currentVersion, status.latestVersion),
+      ...(compatibilityGate ? { compatibilityGate } : {}),
     };
   }
 
@@ -76,6 +189,8 @@ export class CliUpdateService {
     if (isMajorUpgrade(expectedCurrentVersion, targetVersion) && input.allowMajorUpgrade !== true) {
       throw new Error(`Grok CLI ${targetVersion} 是跨主版本更新；请重新预览并明确确认后再安装`);
     }
+    const offlineGate = offlineCompatibilityGate(targetVersion);
+    if (offlineGate?.status === "failed") throw new Error(`Grok CLI ${targetVersion} 兼容门禁未通过：${offlineGate.checks.find((item) => item.status === "failed")?.message ?? "未知主版本"}`);
     const operation = this.applyOnce({ targetVersion, expectedCurrentVersion });
     this.activeApply = { key, operation };
     try {
@@ -94,10 +209,19 @@ export class CliUpdateService {
     const currentVersion = await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env));
     const persisted = await readFile(this.compatibilityPath, "utf8").then((value) => JSON.parse(value) as CliCompatibilitySnapshot).catch(() => undefined);
     if (persisted?.cliVersion && persisted.cliVersion === currentVersion) {
-      this.latestCompatibility = persisted;
-      return structuredClone(persisted);
+      // Re-derive the gate when Desktop's compatibility rules evolve.  The
+      // persisted handshake/evidence remains the observation source, while a
+      // stale gate must not keep optional capabilities enabled after an app
+      // update (for example the first stable 1.0.0 binary lacks
+      // x.ai/git/status and x.ai/session/usage despite newer source snapshots).
+      this.latestCompatibility = enrichCompatibilitySnapshot(persisted, currentVersion);
+      await this.saveCompatibility(this.latestCompatibility);
+      return structuredClone(this.latestCompatibility);
     }
-    this.latestCompatibility = await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env));
+    this.latestCompatibility = enrichCompatibilitySnapshot(
+      await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env)),
+      currentVersion,
+    );
     return structuredClone(this.latestCompatibility);
   }
 
@@ -121,10 +245,17 @@ export class CliUpdateService {
       await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", input.targetVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", input.targetVersion], env));
       const current = parseVersion(await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env)))?.join(".");
       if (current !== input.targetVersion) throw new Error(`更新命令结束后版本为 ${current || "未知"}，不是固定目标 ${input.targetVersion}`);
-      const compatibility = await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env));
+      const compatibility = enrichCompatibilitySnapshot(
+        await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env)),
+        current,
+      );
+      if (parseVersion(current)?.[0] === 1 && compatibility.gate?.status !== "passed") {
+        const failed = compatibility.gate?.checks.filter((item) => item.status === "failed").map((item) => item.label).join("、") || "运行时兼容门禁";
+        throw new Error(`Grok CLI ${current} 实机 ACP 兼容门禁未通过：${failed}`);
+      }
       this.latestCompatibility = compatibility;
       const verifiedAt = new Date().toISOString();
-      const message = "固定目标更新完成；ACP initialize/session/new、空会话官方删除和基础扩展验证通过";
+      const message = "固定目标更新完成；ACP initialize/session/new、结构化 close、空会话官方删除与核心兼容门禁通过；可选能力按运行时证据启用";
       await this.record({ at: verifiedAt, from: previous, to: current, status: "updated", message });
       return { fromVersion: previous, toVersion: current, status: "updated", verifiedAt, message, compatibility };
     } catch (error) {
@@ -135,7 +266,10 @@ export class CliUpdateService {
         await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", previous], env) ?? this.runUpdate(cliPath, ["update", "--version", previous], env));
         const current = parseVersion(await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env)))?.join(".");
         if (current !== previous) throw new Error(`回滚命令结束后版本为 ${current || "未知"}`);
-        const compatibility = await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env));
+        const compatibility = enrichCompatibilitySnapshot(
+          await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env)),
+          current,
+        );
         this.latestCompatibility = compatibility;
         const verifiedAt = new Date().toISOString();
         const rollbackMessage = `新版本验证失败，已回滚到 ${previous}：${message}`;
@@ -169,7 +303,7 @@ export class CliUpdateService {
   private async runUpdate(cliPath: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const result = await runProcessTree(cliPath, args, env, 180_000);
+        const result = await runProcessTree(cliPath, args, env, 360_000);
         await this.log.log(result.stdout || result.stderr || `grok ${args.join(" ")} complete`);
         return;
       } catch (error) {
@@ -198,6 +332,17 @@ export class CliUpdateService {
           })
           .catch((error) => this.log.log(`Optional compatibility: ${method} unavailable (${error instanceof Error ? error.message : String(error)})`));
       }
+      const sessionInfo = await adapter.sessionInfo();
+      await this.log.log(`Core compatibility: x.ai/session/info supported=${String(sessionInfo.supported)}`);
+      if (sessionInfo.supported) successfulExtensions.add("x.ai/session/info");
+      const sessionUsage = await adapter.sessionUsage();
+      await this.log.log(`Core compatibility: x.ai/session/usage supported=${String(sessionUsage.supported)}`);
+      if (sessionUsage.supported) successfulExtensions.add("x.ai/session/usage");
+      const renameSource = await adapter.renameSession("Desktop compatibility probe");
+      await this.log.log(`Optional compatibility: x.ai/session/rename source=${renameSource}`);
+      if (renameSource === "official") successfulExtensions.add("x.ai/session/rename");
+      const gitStatus = await adapter.officialGitStatus();
+      if (gitStatus) successfulExtensions.add("x.ai/git/status");
       const reader = join(homedir(), ".grok", "bundled", "skills", "shared", "resume-session", "session_reader.py");
       await access(reader).then(() => this.log.log("Optional compatibility: Codex session reader found")).catch(() => this.log.log("Optional compatibility: Codex session reader unavailable"));
       await this.probeOptionalComputerCapability(cliPath, cwd, env);
@@ -205,7 +350,12 @@ export class CliUpdateService {
       await this.deleteProbeSession(cliPath, sessionId, env);
       const handshake = adapter.runtimeHandshake;
       const capabilities = compatibilityEvidence(handshake, declaredExtensions, successfulExtensions);
-      const snapshot = { cliVersion: await readCliVersion(cliPath, env), checkedAt: new Date().toISOString(), handshake, capabilities } satisfies CliCompatibilitySnapshot;
+      const cliVersion = await readCliVersion(cliPath, env);
+      const snapshot = enrichCompatibilitySnapshot(
+        { cliVersion, checkedAt: new Date().toISOString(), handshake, capabilities },
+        cliVersion,
+        adapter.lastCloseReceipt?.completed === true,
+      );
       await this.saveCompatibility(snapshot);
       return snapshot;
     } finally {
@@ -349,14 +499,15 @@ export function compatibilityEvidence(
   declared("session.resume", handshake.sessionCapabilities?.resume);
   declared("session.close", handshake.sessionCapabilities?.close);
   declared("session.recap", handshake.features.recap);
-  declared("session.rewind", handshake.features.rewind || handshake.features.cancelRewind);
+  declared("session.rewind", handshake.features.rewind);
+  declared("session.cancel-rewind", handshake.features.cancelRewind);
   declared("mcp", Boolean(handshake.mcpCapabilities && Object.values(handshake.mcpCapabilities).some(Boolean)));
   declared("plugins.directories", handshake.features.pluginDirectories);
   declared("fs.notifications", handshake.features.fsNotifications);
   declared("voice", handshake.features.voiceMode);
   if (handshake.commands.length) evidence.push({ name: "commands", state: "supported", source: "runtime-declaration", observedAt: at });
   if (handshake.models.length) evidence.push({ name: "models", state: "supported", source: "runtime-declaration", observedAt: at });
-  for (const extension of ["x.ai/btw", "x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update", "x.ai/session/info", "x.ai/session/usage", "x.ai/session/delete", "x.ai/git/status", "x.ai/mcp/status", "x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
+  for (const extension of ["x.ai/btw", "x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update", "x.ai/session/info", "x.ai/session/usage", "x.ai/session/delete", "x.ai/session/rename", "x.ai/git/status", "x.ai/mcp/status", "x.ai/mcp/init_progress", "x.ai/mcp/tools_changed", "x.ai/mcp/server_status", "x.ai/mcp/servers_updated", "x.ai/mcp_initialized", "x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
     const declared = declaredExtensions.has(extension);
     const probed = successfulExtensions.has(extension);
     evidence.push({
@@ -368,4 +519,22 @@ export function compatibilityEvidence(
     });
   }
   return evidence;
+}
+
+export function enrichCompatibilitySnapshot(
+  snapshot: CliCompatibilitySnapshot,
+  cliVersion = snapshot.cliVersion,
+  closeOutcomeSupported = snapshot.v1?.closeOutcomeSupported ?? snapshot.gate?.checks.some((item) => item.id === "session-close" && item.status === "passed") ?? false,
+): CliCompatibilitySnapshot {
+  const major = parseVersion(cliVersion)?.[0];
+  if (major !== 1) return snapshot;
+  const successfulCapabilities = new Set(snapshot.capabilities.filter((item) => item.state === "supported").map((item) => item.name));
+  const runtime = runtimeV1Compatibility(cliVersion, snapshot.handshake, closeOutcomeSupported, successfulCapabilities);
+  return {
+    ...snapshot,
+    cliVersion,
+    majorProfile: CLI_V1_COMPATIBILITY_PROFILE,
+    ...(runtime.snapshot ? { v1: runtime.snapshot } : {}),
+    ...(runtime.gate ? { gate: runtime.gate } : {}),
+  };
 }

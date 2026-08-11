@@ -65,6 +65,7 @@ export class SessionCatalog {
           id: entry.name,
           cwd,
           title,
+          preview: summary.session_summary?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
           createdAt: summary.created_at || "",
           updatedAt: summary.last_active_at || summary.updated_at || summary.created_at || "",
           messageCount: summary.num_chat_messages ?? summary.num_messages ?? 0,
@@ -102,6 +103,17 @@ export class SessionCatalog {
 
   async rename(sessionId: string, title: string): Promise<void> {
     await this.meta.mutate((metadata) => { metadata.renames[sessionId] = title.trim() || "新会话"; });
+  }
+
+  async syncOfficialTitle(sessionId: string, title: string, manual: boolean): Promise<void> {
+    await this.meta.mutate((metadata) => {
+      if (!manual) {
+        delete metadata.renames[sessionId];
+        return;
+      }
+      const normalized = title.trim();
+      if (normalized) metadata.renames[sessionId] = normalized;
+    });
   }
 
   async markUnread(sessionId: string, error = false): Promise<void> {

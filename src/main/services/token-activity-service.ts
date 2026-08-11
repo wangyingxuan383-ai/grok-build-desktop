@@ -101,6 +101,18 @@ export class TokenActivityService {
     });
   }
 
+  /** Move per-turn ownership after an official cross-directory fork without
+   * changing the anonymous daily totals. */
+  async rebindSession(sourceSessionId: string, targetSessionId: string, workspace: string): Promise<void> {
+    await this.store.mutate((data) => {
+      for (const turn of data.turns) {
+        if (turn.sessionId !== sourceSessionId) continue;
+        turn.sessionId = targetSessionId;
+        turn.workspace = workspace;
+      }
+    });
+  }
+
   async report(query: TokenActivityQuery = {}): Promise<TokenActivityReport> {
     const data = await this.store.get();
     const now = this.now();

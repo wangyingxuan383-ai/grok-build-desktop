@@ -66,6 +66,35 @@ export class AttachmentCacheService {
     })));
   }
 
+  async cloneSession(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    const entries = await this.restore(sourceSessionId);
+    for (const entry of entries) {
+      const prepared: UserMessageAttachmentPreview[] = [];
+      for (const preview of entry.attachments) {
+        if (preview.source && preview.availability === "ready" && (preview.kind === "image" || preview.mimeType === "text/plain")) {
+          try {
+            const materialized = await this.prepare(targetSessionId, [{
+              id: preview.id,
+              name: preview.name,
+              kind: preview.kind,
+              path: preview.source,
+              mimeType: preview.mimeType,
+              size: preview.size,
+              ...(preview.mimeType === "text/plain" ? { draftText: true } : {}),
+            }]);
+            prepared.push(materialized.previews[0]!);
+            continue;
+          } catch {
+            // Keep a visible missing-file card instead of failing the whole
+            // path migration because one historical attachment disappeared.
+          }
+        }
+        prepared.push({ ...preview, availability: "missing" });
+      }
+      await this.record(targetSessionId, entry.clientMessageId, entry.text, prepared, entry.delivery);
+    }
+  }
+
   async cleanupSession(sessionId: string): Promise<void> {
     await rm(this.sessionRoot(sessionId), { recursive: true, force: true });
     await this.ledger.mutate((ledger) => { delete ledger.sessions[sessionId]; });

@@ -220,6 +220,8 @@
 
 @media (max-width: 900px) {
   .turn-navigation-rail { display: none; }
+  .assistant-body th,
+  .assistant-body td { max-width: 26ch; }
 }
 .open-location-feedback.success {
   border-color: color-mix(in srgb, var(--success) 48%, var(--border));

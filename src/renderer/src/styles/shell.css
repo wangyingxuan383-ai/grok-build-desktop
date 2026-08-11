@@ -58,6 +58,7 @@
 .session-copy { gap: 2px; }
 .session-copy strong { font-size: .75em; font-weight: 520; }
 .session-copy span { font-size: .625em; }
+.session-copy .session-preview { display: -webkit-box; overflow: hidden; color: var(--text-secondary); font-size: .64em; line-height: 1.35; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .session-source-badge { padding: 0 4px; font-size: .67em; }
 .session-actions { position: absolute; z-index: var(--z-popover); right: 7px; display: none; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .session-row:hover .session-actions, .session-actions[open] { display: block; }
@@ -126,6 +127,10 @@
 .codex-request-card .request-card-eyebrow { color: var(--text-secondary); font-size: .72em; line-height: 1.35; }
 .codex-request-card .request-card-body > strong { color: var(--text); font-size: .9em; font-weight: 590; line-height: 1.45; overflow-wrap: anywhere; }
 .codex-request-card .request-card-body > p { margin: 0; color: var(--muted); font-size: .74em; line-height: 1.45; }
+.permission-script { min-width: 0; margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--main) 62%, transparent); }
+.permission-script summary { padding: 8px 10px; cursor: pointer; color: var(--text-secondary); font-size: .76em; }
+.permission-script pre { max-height: 220px; margin: 0; padding: 10px; overflow: auto; white-space: pre; overflow-wrap: normal; user-select: text; font-size: .78em; line-height: 1.5; }
+.permission-script button { margin: 0 10px 10px; }
 .codex-request-card .decision-status, .codex-request-card .plan-decision-status { margin: 0 16px 8px; }
 .request-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px 16px; }
 .request-leading-actions, .request-primary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

@@ -86,6 +86,8 @@ describe("IPC runtime schemas", () => {
     expect(() => validateIpcInvocation("settings:update", [{ unexpected: true }], 1)).toThrow("未知字段");
 
     expect(() => validateIpcInvocation("workspace:set", ["D:\\repo"], 1)).not.toThrow();
+    expect(() => validateIpcInvocation("workspace:open-offline", ["E:\\missing-repo"], 1)).not.toThrow();
+    expect(() => validateIpcInvocation("workspace:open-offline", ["E:\\missing-repo\0escape"], 1)).toThrow("NUL");
     expect(() => validateIpcInvocation("workspace:set", ["relative\\repo"], 1)).toThrow("绝对路径");
     expect(() => validateIpcInvocation("workspace:set", ["file:///C:/repo"], 1)).toThrow("URL");
     expect(() => validateIpcInvocation("workspace:set", ["\\\\?\\C:\\repo"], 1)).toThrow("设备命名空间");

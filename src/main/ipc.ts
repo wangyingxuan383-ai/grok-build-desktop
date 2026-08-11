@@ -19,6 +19,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("onboarding:update", (patch: Partial<OnboardingState>) => controller.updateOnboarding(patch));
   handle("onboarding:reset", () => controller.resetOnboarding());
   handle("diagnostics:run", () => controller.runDiagnostics());
+  handle("diagnostics:doctor-fix-preview", () => controller.previewGrokDoctorFixes());
+  handle("diagnostics:doctor-fix", (id: string, confirmationToken: string, confirmed: boolean) => controller.applyGrokDoctorFix(id, confirmationToken, confirmed));
   handle("diagnostics:failure", (failure: TurnFailure) => controller.diagnoseFailure(failure));
   handle("diagnostics:cli-capabilities", (force?: boolean) => controller.getCliCapabilities(force));
   handle("diagnostics:support-preview", () => controller.previewSupportBundle());
@@ -26,7 +28,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("app-update:check", (force?: boolean) => controller.checkAppUpdate(force));
   handle("app-update:open", (url?: string) => controller.openAppRelease(url));
   handle("workspace:choose", () => controller.chooseWorkspace());
+  handle("workspace:create-temporary", () => controller.createTemporaryWorkspace());
   handle("workspace:set", (cwd: string) => controller.setWorkspace(cwd));
+  handle("workspace:open-offline", (cwd: string) => controller.openWorkspaceOffline(cwd));
   handle("workspace:discover", (force?: boolean) => controller.discoverWorkspaces(force));
   handle("workspace:pin", (cwd: string, pinned: boolean) => controller.pinWorkspace(cwd, pinned));
   handle("workspace:hidden:list", () => controller.listHiddenWorkspaces());
@@ -113,7 +117,13 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:open", (cwd: string, id: string) => controller.openSession(cwd, id));
   handle("session:info", (id: string) => controller.getCliSessionInfo(id));
   handle("session:usage", (id: string) => controller.getCliSessionUsage(id));
+  handle("session:runtime", (id: string) => controller.getSessionRuntimePreferences(id));
+  handle("session:compaction-policy", (id: string, policy: import("../shared/types").SessionCompactionPolicy) => controller.setSessionCompactionPolicy(id, policy));
+  handle("session:compact", (id: string) => controller.compactSession(id));
   handle("session:btw", (id: string, text: string) => controller.sendBtwPrompt(id, text));
+  handle("feedback:capability", (id: string) => controller.getOfficialFeedbackCapability(id));
+  handle("feedback:preview", (text: string) => controller.previewOfficialFeedback(text));
+  handle("feedback:submit", (id: string, text: string) => controller.submitOfficialFeedback(id, text));
   handle("session:rename", (id: string, title: string) => controller.renameSession(id, title));
   handle("session:delete", (cwd: string, id: string) => controller.deleteSession(cwd, id));
   handle("session:delete-desktop-data", (cwd: string, id: string) => controller.deleteDesktopSessionData(cwd, id));
@@ -134,6 +144,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:queue:clear", (sessionId: string) => controller.clearPromptQueue(sessionId));
   handle("session:queue:interject", (sessionId: string, id: string, text?: string) => controller.interjectQueuedPrompt(sessionId, id, text));
   handle("session:fork", (sessionId: string, pointId?: string, launch?: ExecutionProfileLaunchInput) => controller.forkSession(sessionId, pointId, launch));
+  handle("workspace:rebind-sessions", (sourceCwd: string, targetCwd: string) => controller.rebindWorkspaceSessions(sourceCwd, targetCwd));
   handle("session:rewind-points", (sessionId: string) => controller.listRewindPoints(sessionId));
   handle("session:rewind", (sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files") => controller.rewindSession(sessionId, pointId, mode));
   handle("session:archive", (sessionId: string, archived: boolean) => controller.archiveSession(sessionId, archived));
@@ -261,6 +272,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("computer:settings:get", () => controller.getComputerSettings());
   handle("computer:settings:update", (patch: Partial<ComputerUseSettings>) => controller.updateComputerSettings(patch));
   handle("cli:check-update", () => controller.checkCliUpdate());
+  handle("updates:auto-check", () => controller.checkUpdatesAutomatically());
   handle("cli:update-preview", () => controller.previewCliUpdate());
   handle("cli:apply-update", (input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) => controller.applyCliUpdate(input));
   handle("cli:compatibility", () => controller.getCliCompatibilitySnapshot());

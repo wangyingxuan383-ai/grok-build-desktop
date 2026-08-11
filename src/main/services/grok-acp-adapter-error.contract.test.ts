@@ -68,12 +68,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     try {
       await adapter.start();
       expect(adapter.currentModelId).toBe("openai-compatible-grok-4.5");
-      await expect(adapter.prompt("test")).rejects.toThrow("Internal error");
+      await expect(adapter.prompt("test")).rejects.toThrow("inference rejected");
       expect(adapter.currentModelId).toBe("openai-compatible-grok-4.5");
       const failures = events.filter((event): event is Extract<ChatEvent, { type: "error" }> => event.type === "error");
       expect(failures).toHaveLength(1);
       expect(failures[0]?.failure).toMatchObject({
         classification: "auth-expired",
+        message: "inference rejected",
         httpStatus: 401,
         jsonRpcCode: -32603,
         modelId: "openai-compatible-grok-4.5",

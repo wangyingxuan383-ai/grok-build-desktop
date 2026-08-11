@@ -272,8 +272,9 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .assistant-body { width: 100%; min-width: 0; max-width: 100%; line-height: 1.72; color: var(--text); }
 .assistant-body h1, .assistant-body h2, .assistant-body h3 { color: var(--text-strong); }
 .assistant-body pre, .thought-card pre { overflow: auto; }
-.assistant-body table { width: 100%; border-collapse: collapse; }
-.assistant-body th, .assistant-body td { border: 1px solid var(--border); padding: 7px 9px; }
+.assistant-body table { display: block; width: 100%; max-width: 100%; overflow: auto; border-collapse: collapse; overscroll-behavior-x: contain; }
+.assistant-body th, .assistant-body td { min-width: 8ch; max-width: 42ch; border: 1px solid var(--border); padding: 7px 9px; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.assistant-body th > *, .assistant-body td > * { max-width: 100%; }
 .assistant-body a { color: var(--accent); }
 .markdown-loading { padding: 6px 0; color: var(--muted); font-size: .75em; }
 .thinking-placeholder { margin: 10px 0; color: var(--muted); font-size: .8125em; }
@@ -590,6 +591,19 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .extension-list article small { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
 .extension-list article p { margin: 5px 0 0; color: var(--text-secondary); line-height: 1.45; }
 .extension-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.extension-search { display: grid; gap: 6px; margin-bottom: 12px; color: var(--muted); }
+.extension-search input { min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--text); background: var(--input-bg); }
+.skill-groups { display: grid; gap: 10px; }
+.skill-groups > details { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel) 88%, transparent); overflow: hidden; }
+.skill-groups > details > summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; cursor: pointer; }
+.skill-groups > details > summary span { color: var(--muted); font-size: .8125em; }
+.skill-groups > details > .extension-list { padding: 0 8px 8px; }
+.official-feedback-panel { width: min(720px, calc(100vw - 40px)); }
+.official-feedback-panel textarea { width: 100%; min-height: 180px; resize: vertical; }
+.feedback-preview { margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--surface) 90%, transparent); }
+.feedback-preview > header { display: flex; gap: 10px; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.feedback-preview > header span { color: var(--muted); font-size: .75em; }
+.feedback-preview pre { max-height: 260px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .plugin-details { display: grid; gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .extension-status, .official-badge, .compat-badge { display: inline-flex; padding: 3px 7px; border-radius: 999px; font-size: .6875em; white-space: nowrap; }
 .extension-status.enabled, .official-badge, .compat-badge.adaptable { border: 1px solid #315e4d; background: #13251e; color: #91d3b4; }
@@ -832,6 +846,8 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .diagnostic-item code { display: block; color: var(--muted); overflow-wrap: anywhere; }
 .support-preview { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--input-bg); }
 .support-preview p { color: var(--text-secondary); line-height: 1.5; }
+.doctor-fix-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.doctor-fix-row > div { min-width: 0; }.doctor-fix-row p { margin: 4px 0; overflow-wrap: anywhere; }.doctor-fix-row small { color: var(--muted); }
 .panel-message { color: var(--accent); overflow-wrap: anywhere; }
 .diagnostics-panel > footer, .onboarding-panel > footer { padding: 12px 20px; border-top: 1px solid var(--border); }
 .button-row .spacer { flex: 1; }

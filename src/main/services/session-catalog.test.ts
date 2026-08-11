@@ -22,6 +22,7 @@ describe("SessionCatalog", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe(sessionId);
     expect(rows[0]?.title).toBe("Existing Grok session");
+    expect(rows[0]?.preview).toBe("Existing Grok session");
   });
 
   it("persists pin state and exports user/assistant history as Markdown", async () => {
@@ -108,5 +109,16 @@ describe("SessionCatalog", () => {
       archived: { session: true },
       parents: { session: "parent" },
     });
+  });
+
+  it("synchronizes explicit official manual-title and reset notifications", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-title-sync-"));
+    const appData = join(root, "app-data");
+    const catalog = new SessionCatalog(appData, join(root, ".grok"));
+    await catalog.rename("session", "Desktop title");
+    await catalog.syncOfficialTitle("session", "Official title", true);
+    expect(JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session).toBe("Official title");
+    await catalog.syncOfficialTitle("session", "", false);
+    expect(JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session).toBeUndefined();
   });
 });

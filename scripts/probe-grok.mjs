@@ -101,6 +101,14 @@ try {
   ]);
   sessionId = typeof created?.sessionId === "string" ? created.sessionId : "";
   if (!sessionId) throw new Error("session/new did not return a sessionId");
+  // The probe session is ephemeral, so this is a non-destructive way to
+  // detect the official title authority without touching a user conversation.
+  const renameProbe = await optionalRequest("x.ai/session/rename", {
+    sessionId,
+    title: "Desktop compatibility probe",
+    cwd,
+    kind: "build",
+  });
   let modeSwitch;
   if (mode) {
     if (mode !== "plan" && mode !== "default") throw new Error(`Unsupported probe mode: ${mode}`);
@@ -143,7 +151,7 @@ try {
       && value.params?.update?.reasoning_effort === effort);
     if (!confirmed) throw new Error(`session/set_model did not confirm reasoning effort ${effort}`);
   }
-  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, videoStrategy, extensionProbe, notifications: notifications.filter((value) => {
+  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, renameProbe: { supported: renameProbe.ok, ...(renameProbe.error ? { error: renameProbe.error } : {}) }, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, videoStrategy, extensionProbe, notifications: notifications.filter((value) => {
     const update = value.params?.update;
     return value.method === "_x.ai/session_notification" && (update?.sessionUpdate === "model_changed" || update?.sessionUpdate === "current_mode_update");
   }).slice(-5) })}\n`);

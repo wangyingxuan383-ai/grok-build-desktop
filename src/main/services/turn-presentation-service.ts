@@ -34,4 +34,11 @@ export class TurnPresentationService {
   async delete(sessionId: string): Promise<void> {
     await this.store.mutate((state) => { delete state.sessions[sessionId]; });
   }
+
+  async cloneSession(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    await this.store.mutate((state) => {
+      const source = state.sessions[sourceSessionId];
+      if (source?.length) state.sessions[targetSessionId] = structuredClone(source);
+    });
+  }
 }

@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, CliCompatibilitySnapshot, CliVersionStatus } from "../../shared/types";
-import { CliUpdateService, compatibilityEvidence, type CliUpdateServiceRuntime } from "./cli-update-service";
+import { CliUpdateService, compatibilityEvidence, offlineCompatibilityGate, runtimeV1Compatibility, type CliUpdateServiceRuntime } from "./cli-update-service";
 import { normalizeRuntimeHandshake } from "./grok-acp-adapter";
 
 const roots: string[] = [];
@@ -77,6 +77,89 @@ describe("CliUpdateService", () => {
     expect(names).toEqual(expect.arrayContaining(["session.list", "session.resume", "session.close"]));
   });
 
+  it("does not mistake cancel-rewind for rewind and tracks official rename separately", () => {
+    const handshake = normalizeRuntimeHandshake({
+      protocolVersion: 1,
+      agentCapabilities: { sessionCapabilities: {} },
+      _meta: { agentVersion: "1.0.0", cancelRewind: true, "x.ai/session/rename": true },
+    });
+    const evidence = compatibilityEvidence(handshake);
+    expect(evidence.find((item) => item.name === "session.rewind")?.state).toBe("unsupported");
+    expect(evidence.find((item) => item.name === "session.cancel-rewind")?.state).toBe("supported");
+    expect(evidence.find((item) => item.name === "x.ai/session/rename")?.state).toBe("supported");
+  });
+
+  it("loads the sanitized 1.0 handshake and passes the live runtime contract when close is observed", async () => {
+    const handshake = normalizeRuntimeHandshake(JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "initialize-1.0.0.json"), "utf8")));
+    const result = runtimeV1Compatibility("1.0.0", handshake, true, new Set(["x.ai/session/info", "x.ai/session/usage", "x.ai/git/status"]));
+    expect(handshake.agentVersion).toBe("1.0.0");
+    expect(handshake.sessionCapabilities).toMatchObject({ close: true, list: true, resume: true });
+    expect(handshake.mcpCapabilities).toMatchObject({ http: true, sse: true });
+    expect(result.gate).toMatchObject({ status: "passed", liveVerified: true, major: 1 });
+    expect(result.snapshot).toMatchObject({ closeOutcomeSupported: true, gitStatusUsesExplicitOptions: true });
+  });
+
+  it("accepts the stable 1.0.0 core contract when only context and session-info commands are present", async () => {
+    const handshake = normalizeRuntimeHandshake({
+      protocolVersion: 1,
+      agentCapabilities: {
+        sessionCapabilities: { list: {}, resume: {}, close: {} },
+        mcpCapabilities: { http: true, sse: true },
+      },
+      _meta: {
+        agentVersion: "1.0.0",
+        availableCommands: [{ name: "context" }, { name: "session-info" }],
+      },
+    });
+    const result = runtimeV1Compatibility("1.0.0", handshake, true, new Set());
+    expect(result.gate).toMatchObject({ status: "passed", liveVerified: true, major: 1 });
+    expect(result.gate?.checks.find((item) => item.id === "data-views")).toMatchObject({ status: "pending" });
+    expect(result.gate?.checks.find((item) => item.id === "git-explicit-options")).toMatchObject({ status: "pending" });
+    expect(result.snapshot?.dataViews).toEqual(["context", "session-info"]);
+  });
+
+  it("re-derives a persisted 1.0 gate when Desktop compatibility rules change", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const persisted: CliCompatibilitySnapshot = {
+      cliVersion: "1.0.0 (fixture)",
+      checkedAt: new Date().toISOString(),
+      handshake: normalizeRuntimeHandshake({
+        protocolVersion: 1,
+        agentCapabilities: { sessionCapabilities: { list: {}, resume: {}, close: {} }, mcpCapabilities: { http: true } },
+        _meta: { agentVersion: "1.0.0", availableCommands: [{ name: "context" }, { name: "session-info" }] },
+      }),
+      capabilities: [],
+      v1: {
+        version: "1.0.0 (fixture)", observedAt: new Date().toISOString(), attachPolicy: { nonInteractive: false, deliveryTools: [] },
+        closeOutcomeSupported: true, mcpMethods: [], gitStatusUsesExplicitOptions: true, dataViews: ["context", "session-info", "usage"],
+      },
+      gate: { targetVersion: "1.0.0", major: 1, status: "passed", checkedAt: new Date().toISOString(), liveVerified: true, checks: [] },
+    };
+    await writeFile(join(root, "cli-compatibility-snapshot.json"), JSON.stringify(persisted), "utf8");
+    const runtime: CliUpdateServiceRuntime = {
+      locateCli: vi.fn(async () => "C:\\fake\\grok.exe"),
+      readVersion: vi.fn(async () => "1.0.0 (fixture)"),
+      check: vi.fn(), runUpdate: vi.fn(), probe: vi.fn(),
+    };
+    const service = new CliUpdateService(root, vi.fn(async () => ({ cliPath: "C:\\fake\\grok.exe" }) as AppSettings), vi.fn(), vi.fn(), vi.fn(), { log: vi.fn() } as any, undefined, runtime);
+    const refreshed = await service.compatibility();
+    expect(runtime.probe).not.toHaveBeenCalled();
+    expect(refreshed.v1?.dataViews).toEqual(["context", "session-info"]);
+    expect(refreshed.gate?.checks.find((item) => item.id === "git-explicit-options")).toMatchObject({ status: "pending" });
+  });
+
+  it("parses but fails closed for an unknown future CLI major", async () => {
+    const handshake = normalizeRuntimeHandshake(JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "initialize-future-major.json"), "utf8")));
+    expect(handshake).toMatchObject({ protocolVersion: 2, agentVersion: "2.0.0" });
+    expect(offlineCompatibilityGate("2.0.0")).toMatchObject({
+      status: "failed",
+      major: 2,
+      liveVerified: false,
+      checks: [expect.objectContaining({ id: "unknown-major", status: "failed" })],
+    });
+  });
+
   it("coalesces concurrent apply requests into one update operation", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
@@ -114,6 +197,7 @@ describe("CliUpdateService", () => {
       fromVersion: "0.2.117",
       targetVersion: "1.0.0",
       majorUpgrade: true,
+      compatibilityGate: { status: "passed", liveVerified: false },
     });
   });
 
