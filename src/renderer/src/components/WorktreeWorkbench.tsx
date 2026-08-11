@@ -9,7 +9,7 @@ interface Dialogs {
   setError(message: string): void;
 }
 
-export function WorktreeExplorer({ workspace, dialogs }: { workspace: string; dialogs: Dialogs }): React.JSX.Element {
+export function WorktreeExplorer({ workspace, dialogs, onOpenConversation }: { workspace: string; dialogs: Dialogs; onOpenConversation?(target: { cwd: string; sessionId: string }): void }): React.JSX.Element {
   const store = useWorktreeStore();
   const refresh = useCallback(async (): Promise<void> => {
     if (!workspace) return useWorktreeStore.getState().reset();
@@ -53,7 +53,7 @@ export function WorktreeExplorer({ workspace, dialogs }: { workspace: string; di
   </section>;
 }
 
-export function WorktreeWorkbench({ workspace, dialogs }: { workspace: string; dialogs: Dialogs }): React.JSX.Element {
+export function WorktreeWorkbench({ workspace, dialogs, onOpenConversation }: { workspace: string; dialogs: Dialogs; onOpenConversation?(target: { cwd: string; sessionId: string }): void }): React.JSX.Element {
   const store = useWorktreeStore();
   const selected = store.items.find((item) => item.id === store.selectedId);
   const [cleanup, setCleanup] = useState(false);
@@ -103,12 +103,11 @@ export function WorktreeWorkbench({ workspace, dialogs }: { workspace: string; d
   const openSession = async (): Promise<void> => {
     if (!selected?.sourceSessionId) return;
     try {
-      const app = useAppStore.getState();
-      app.setSessions(await window.grokDesktop.setWorkspace(selected.path));
-      app.setSettings(await window.grokDesktop.getSettings());
-      await window.grokDesktop.openSession(selected.path, selected.sourceSessionId);
-      app.setActiveSession(selected.sourceSessionId);
-      useWorkbenchStore.getState().setActiveView("chat");
+      if (onOpenConversation) {
+        onOpenConversation({ cwd: selected.path, sessionId: selected.sourceSessionId });
+        return;
+      }
+      throw new Error("当前壳层未提供统一会话导航入口");
     } catch (error) { dialogs.setError(errorMessage(error)); }
   };
 

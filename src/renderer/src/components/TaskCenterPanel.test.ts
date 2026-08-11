@@ -6,6 +6,7 @@ const policy: AutomationGlobalPolicy = {
   defaultProfile: { modelId: "grok-4.5", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false },
   maxConcurrentRuns: 2,
   confirmationTimeoutMinutes: 30,
+  inactivityTimeoutMinutes: 0,
   notifyOnSuccess: true,
   notifyOnFailure: true,
 };

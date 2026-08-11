@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentChangeIndex, AgentFileChange, NavigationIntent } from "../../../shared/types";
 import { UiIcon } from "../ui-icons";
 
@@ -27,7 +27,18 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
   const [index, setIndex] = useState<AgentChangeIndex>();
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
   const [light, setLight] = useState(() => document.documentElement.dataset.themeResolved === "light");
+  const [width, setWidth] = useState(() => Math.max(420, Math.min(760, Number(localStorage.getItem("grok:right-width:agent-changes")) || 620)));
+  const mountedRef = useRef(true);
+  const refreshGenerationRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      refreshGenerationRef.current += 1;
+    };
+  }, []);
   useEffect(() => {
     const update = (): void => setLight(document.documentElement.dataset.themeResolved === "light");
     document.documentElement.addEventListener("grok-theme-change", update);
@@ -35,18 +46,51 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
   }, []);
 
   const refresh = async (next = scope): Promise<void> => {
-    if (!sessionId) { setIndex(undefined); return; }
+    const generation = ++refreshGenerationRef.current;
+    const isCurrent = (): boolean => mountedRef.current && generation === refreshGenerationRef.current;
+    if (!sessionId) {
+      if (isCurrent()) { setIndex(undefined); setLoading(false); }
+      return;
+    }
     setLoading(true);
-    try { setIndex(await window.grokDesktop.getAgentChanges(sessionId, next)); }
-    catch (error) { onError(error instanceof Error ? error.message : String(error)); }
-    finally { setLoading(false); }
+    setIndex(undefined);
+    try {
+      const value = await window.grokDesktop.getAgentChanges(sessionId, next);
+      if (isCurrent()) setIndex(value);
+    } catch (error) {
+      if (isCurrent()) onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
   };
-  useEffect(() => { void refresh(scope); }, [sessionId, scope]);
+  useEffect(() => {
+    void refresh(scope);
+    return () => { refreshGenerationRef.current += 1; };
+  }, [sessionId, scope]);
 
   const files = index?.files ?? [];
-  const selected = useMemo(() => files.find((file) => file.id === selectedId) ?? files[0], [files, selectedId]);
+  const filteredFiles = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return needle ? files.filter((file) => `${file.path}\n${file.status}`.toLocaleLowerCase().includes(needle)) : files;
+  }, [files, query]);
+  const selected = useMemo(() => filteredFiles.find((file) => file.id === selectedId) ?? filteredFiles[0], [filteredFiles, selectedId]);
 
-  return <aside className="review-pane agent-change-pane" aria-label="Agent 改动">
+  const beginResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = width;
+    const move = (value: PointerEvent): void => setWidth(Math.max(420, Math.min(760, startWidth + startX - value.clientX)));
+    const finish = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      setWidth((current) => { localStorage.setItem("grok:right-width:agent-changes", String(current)); return current; });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+  };
+
+  return <aside className="review-pane agent-change-pane" aria-label="Agent 改动" style={{ width }}>
+    <div className="review-resizer" role="separator" aria-orientation="vertical" aria-label="调整 Agent 改动宽度" onPointerDown={beginResize}/>
     <header className="review-header">
       <div><strong>Agent 改动</strong><span>非 Git 工作区 · 来自本会话真实写入</span></div>
       <button className="icon-button" aria-label="关闭 Agent 改动" onClick={onClose}><UiIcon name="close"/></button>
@@ -62,8 +106,10 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
       <strong>{scope === "last-turn" ? "最近一回合没有写入文件" : "本会话还没有写入文件"}</strong>
       <span>这里只显示 Agent 真实执行过的写入，不会读取工作区里你自己的改动。</span>
     </div>}
-    {!loading && files.length > 0 && <div className="review-body">
-      <nav className="agent-change-list">{files.map((file) => <button
+    {!loading && files.length > 0 && <>
+      <label className="review-file-search"><UiIcon name="search"/><input value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder={`筛选 ${files.length} 个文件`} aria-label="筛选 Agent 改动文件"/><span>{filteredFiles.length}/{files.length}</span></label>
+      <div className="review-body">
+      <nav className="agent-change-list">{filteredFiles.map((file) => <button
         key={file.id}
         className={`${selected?.id === file.id ? "active" : ""} ${file.status === "failed" ? "failed" : ""}`}
         title={file.absolutePath}
@@ -71,9 +117,9 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
       >
         <span className="agent-change-path">{file.path}</span>
         <span className="agent-change-tag">{file.additions !== undefined || file.deletions !== undefined ? <><i>+{file.additions ?? 0}</i> <b>-{file.deletions ?? 0}</b></> : baselineLabel(file)}</span>
-      </button>)}</nav>
+      </button>)}{filteredFiles.length === 0 && <p className="right-tool-empty">没有匹配的写入文件。</p>}</nav>
       <main className="review-selected-file">{selected ? <AgentChangeDetail file={selected} light={light} onNavigate={onNavigate} cwd={index?.cwd ?? ""} sessionId={sessionId}/> : null}</main>
-    </div>}
+    </div></>}
   </aside>;
 }
 

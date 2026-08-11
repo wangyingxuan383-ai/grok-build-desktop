@@ -1,4 +1,5 @@
 import { safeStorage } from "electron";
+import { randomUUID } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
 import { access, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, release as osRelease, tmpdir } from "node:os";
@@ -6,14 +7,17 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { strToU8, zipSync } from "fflate";
-import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, FailureDiagnosisReport, GrokQuotaSnapshot, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem, TurnFailure } from "../../shared/types";
+import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, FailureDiagnosisReport, GrokDoctorFixCandidate, GrokDoctorFixPreview, GrokDoctorFixReceipt, GrokQuotaSnapshot, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem, TurnFailure } from "../../shared/types";
 import { turnFailureActions, turnFailureLabel } from "../../shared/turn-failure";
 import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
 import { redactLogText, redactSecrets, type LogService } from "./log-service";
 
 const execFileAsync = promisify(execFile);
+type DoctorCommandOptions = { env: NodeJS.ProcessEnv; timeout: number; windowsHide: boolean; maxBuffer: number };
+export type DoctorCommandRunner = (cliPath: string, args: string[], options: DoctorCommandOptions) => Promise<{ stdout: string; stderr: string }>;
 
 export class DiagnosticsService {
+  private readonly doctorFixPreviews = new Map<string, { expiresAt: number; cliPath: string; ids: Set<string> }>();
   constructor(
     private readonly userDataPath: string,
     private readonly build: BuildInfo,
@@ -26,6 +30,8 @@ export class DiagnosticsService {
       providers?: () => Promise<CustomProviderProfile[]>;
       automations?: () => Promise<AutomationTask[]>;
       quota?: () => Promise<GrokQuotaSnapshot>;
+      /** Test seam for the fixed-argument Grok Doctor contract. */
+      doctorCommandRunner?: DoctorCommandRunner;
     } = {},
   ) {}
 
@@ -148,12 +154,13 @@ export class DiagnosticsService {
       cliVersion = await readCliVersion(cliPath, env);
       effortFlag = await detectEffortFlag(cliPath, env);
       items.push({ id: "cli", label: "Grok CLI", status: cliVersion ? "ok" : "error", summary: cliVersion ? `已找到 Grok CLI ${cliVersion}` : "CLI 存在但无法读取版本", details: [redactDiagnosticPath(cliPath), `推理参数：${effortFlag}`] });
-      const models = await execFileAsync(cliPath, ["models"], { env, timeout: 20_000, windowsHide: true }).then(() => true).catch(() => false);
+      const models = await execFileAsync(cliPath, ["--no-auto-update", "models"], { env, timeout: 20_000, windowsHide: true }).then(() => true).catch(() => false);
       items.push({ id: "models", label: "模型与登录", status: models ? "ok" : "warning", summary: models ? "CLI 可以读取模型列表" : "模型列表不可用；可能尚未登录或网络受限" });
       const acp = await probeAcpInitialize(cliPath, env);
       items.push({ id: "acp", label: "ACP 核心", status: acp.ok ? "ok" : "error", summary: acp.ok ? "initialize 握手通过" : "ACP initialize 握手失败", details: acp.message ? [redactDiagnosticText(acp.message)] : undefined });
-      const extensions = await execFileAsync(cliPath, ["plugin", "--help"], { env, timeout: 15_000, windowsHide: true }).then(() => true).catch(() => false);
+      const extensions = await execFileAsync(cliPath, ["--no-auto-update", "plugin", "--help"], { env, timeout: 15_000, windowsHide: true }).then(() => true).catch(() => false);
       items.push({ id: "extensions", label: "扩展与媒体", status: extensions ? "ok" : "warning", summary: extensions ? "插件命令可用；媒体能力将在会话中动态探测" : "插件命令不可用，扩展功能将降级" });
+      items.push(await runGrokDoctor(cliPath, env, this.optional.doctorCommandRunner));
     }
 
     const reader = join(homedir(), ".grok", "bundled", "skills", "shared", "resume-session", "session_reader.py");
@@ -177,6 +184,42 @@ export class DiagnosticsService {
     return { checkedAt: new Date().toISOString(), overall, items, cliPath: cliPath ? redactDiagnosticPath(cliPath) : undefined, cliVersion, effortFlag };
   }
 
+  async previewDoctorFixes(): Promise<GrokDoctorFixPreview> {
+    const settings = await this.getSettings();
+    const cliPath = this.mockCliPath || await locateGrokCli(settings.cliPath);
+    if (!cliPath) return { generatedAt: new Date().toISOString(), fixes: [], message: "未找到 Grok CLI" };
+    const env = buildCliEnv(settings, await this.getApiKey());
+    const report = await readGrokDoctorReport(cliPath, env, this.optional.doctorCommandRunner);
+    const fixes = parseGrokDoctorFixes(report);
+    if (!fixes.length) return { generatedAt: new Date().toISOString(), fixes, message: "当前诊断没有可用的官方自动修复" };
+    const confirmationToken = randomUUID();
+    this.doctorFixPreviews.clear();
+    this.doctorFixPreviews.set(confirmationToken, { expiresAt: Date.now() + 5 * 60_000, cliPath, ids: new Set(fixes.map((value) => value.id)) });
+    return { generatedAt: new Date().toISOString(), fixes, confirmationToken, message: `检测到 ${fixes.length} 项官方自动修复；执行前仍需逐项确认` };
+  }
+
+  async applyDoctorFix(id: string, confirmationToken: string, confirmed: boolean): Promise<GrokDoctorFixReceipt> {
+    const normalizedId = id.trim();
+    if (!confirmed) throw new Error("未确认 Grok Doctor 修复");
+    const preview = this.doctorFixPreviews.get(confirmationToken);
+    this.doctorFixPreviews.delete(confirmationToken);
+    if (!preview || preview.expiresAt < Date.now() || !preview.ids.has(normalizedId)) throw new Error("Grok Doctor 修复预览已失效，请重新检查");
+    const settings = await this.getSettings();
+    const cliPath = this.mockCliPath || await locateGrokCli(settings.cliPath);
+    if (!cliPath || cliPath !== preview.cliPath) throw new Error("Grok CLI 路径已变化，请重新检查");
+    const env = buildCliEnv(settings, await this.getApiKey());
+    const current = parseGrokDoctorFixes(await readGrokDoctorReport(cliPath, env, this.optional.doctorCommandRunner));
+    if (!current.some((value) => value.id === normalizedId)) throw new Error("该自动修复已不再适用，请重新检查");
+    const { stdout, stderr } = await runDoctorCommand(this.optional.doctorCommandRunner, cliPath, ["--no-auto-update", "doctor", "fix", normalizedId, "--yes"], {
+      env,
+      timeout: 60_000,
+      windowsHide: true,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const detail = redactDiagnosticText(`${stdout}\n${stderr}`.trim()).slice(0, 2_000);
+    return { id: normalizedId, applied: true, completedAt: new Date().toISOString(), message: detail || "Grok Doctor 修复已执行" };
+  }
+
   preview(): SupportBundlePreview {
     return {
       files: [
@@ -185,7 +228,7 @@ export class DiagnosticsService {
         { name: "README.txt", description: "支持包范围和隐私说明" },
       ],
       fields: ["应用版本/构建提交", "Windows 版本和架构", "CLI 版本和能力", "代理是否配置", "Computer Use 自检", "提供商数量/协议/凭据状态", "定时任务数量/注册状态"],
-      excluded: ["OAuth/API Key/Token", "提供商端点和环境变量值", "任务提示词/任务工作区和会话", "会话附件正文、Base64、缓存文件和完整路径", "Memory 内容、文件路径和索引", "文件内容、截图和主题背景图片", "主题背景原始路径或本地副本", "完整工作区/用户目录", "代理地址和认证"],
+      excluded: ["OAuth/API Key/Token", "提供商端点和环境变量值", "任务提示词/任务工作区和会话", "会话附件正文、Base64、缓存文件和完整路径", "会话重新绑定事务日志及其旧/新路径", "Memory 内容、文件路径和索引", "文件内容、截图和主题背景图片", "主题背景原始路径或本地副本", "完整工作区/用户目录", "代理地址和认证"],
       redacted: true,
     };
   }
@@ -193,15 +236,104 @@ export class DiagnosticsService {
   async createBundle(path: string): Promise<void> {
     const report = await this.run();
     const settings = await this.getSettings();
-    const log = redactDiagnosticText(redactSecrets(await this.log.read()));
-    const diagnostics = { build: this.build, report, proxy: { httpConfigured: Boolean(settings.httpProxy), httpsConfigured: Boolean(settings.httpsProxy) } };
-    const files = {
-      "diagnostics.json": strToU8(`${JSON.stringify(diagnostics, null, 2)}\n`),
-      "app.log": strToU8(log),
-      "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、Memory 内容或路径、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
-    };
-    await writeFile(path, zipSync(files, { level: 6 }));
+    const archive = buildSupportBundleArchive({
+      build: this.build,
+      report,
+      httpProxyConfigured: Boolean(settings.httpProxy),
+      httpsProxyConfigured: Boolean(settings.httpsProxy),
+      log: await this.log.read(),
+    });
+    await writeFile(path, archive);
   }
+}
+
+async function runGrokDoctor(cliPath: string, env: NodeJS.ProcessEnv, runner?: DoctorCommandRunner): Promise<SystemDiagnosticItem> {
+  try {
+    const report = await readGrokDoctorReport(cliPath, env, runner) as {
+      schemaVersion?: string;
+      findings?: Array<{ id?: string; disposition?: string; message?: string; note?: string }>;
+      counts?: { issues?: number; recommendations?: number; probeNotes?: number };
+    };
+    const issues = Number(report.counts?.issues ?? 0);
+    const recommendations = Number(report.counts?.recommendations ?? 0);
+    const details = (Array.isArray(report.findings) ? report.findings : []).slice(0, 8).map((finding) =>
+      redactDiagnosticText(`${finding.id || "finding"} · ${finding.disposition || "unknown"} · ${finding.message || finding.note || "无说明"}`),
+    );
+    return {
+      id: "grok-doctor",
+      label: "Grok Doctor",
+      status: issues > 0 ? "warning" : "ok",
+      summary: `schema ${report.schemaVersion || "未知"} · ${issues} 个问题 · ${recommendations} 条建议`,
+      ...(details.length ? { details } : {}),
+    };
+  } catch (error) {
+    return {
+      id: "grok-doctor",
+      label: "Grok Doctor",
+      status: "warning",
+      summary: "当前 CLI 未提供 doctor --json 或诊断执行失败",
+      details: [redactDiagnosticText(error instanceof Error ? error.message : String(error))],
+    };
+  }
+}
+
+async function readGrokDoctorReport(cliPath: string, env: NodeJS.ProcessEnv, runner?: DoctorCommandRunner): Promise<Record<string, unknown>> {
+  const { stdout } = await runDoctorCommand(runner, cliPath, ["--no-auto-update", "doctor", "--json"], {
+    env,
+    timeout: 30_000,
+    windowsHide: true,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  const value = JSON.parse(stdout) as unknown;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Grok Doctor 返回格式无效");
+  return value as Record<string, unknown>;
+}
+
+async function runDoctorCommand(runner: DoctorCommandRunner | undefined, cliPath: string, args: string[], options: DoctorCommandOptions): Promise<{ stdout: string; stderr: string }> {
+  if (runner) return runner(cliPath, args, options);
+  const { stdout, stderr } = await execFileAsync(cliPath, args, options);
+  return { stdout: String(stdout), stderr: String(stderr) };
+}
+
+export function parseGrokDoctorFixes(report: Record<string, unknown>): GrokDoctorFixCandidate[] {
+  const findings = Array.isArray(report.findings) ? report.findings : [];
+  const output: GrokDoctorFixCandidate[] = [];
+  for (const raw of findings) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const finding = raw as Record<string, unknown>;
+    const id = typeof finding.id === "string" ? finding.id.trim() : "";
+    if (!id || id.length > 128 || !/^[A-Za-z0-9._-]+$/.test(id)) continue;
+    const automatic = finding.automaticRemediation;
+    if (automatic === null || automatic === undefined || automatic === false) continue;
+    const message = redactDiagnosticText(typeof finding.message === "string" ? finding.message : `自动修复 ${id}`).slice(0, 1_000);
+    const note = typeof finding.note === "string" ? redactDiagnosticText(finding.note).slice(0, 1_000) : undefined;
+    output.push({ id, message, ...(note ? { note } : {}) });
+  }
+  return output.slice(0, 32);
+}
+
+export function buildSupportBundleArchive(input: {
+  build: BuildInfo;
+  report: SystemCompatibilityReport;
+  httpProxyConfigured: boolean;
+  httpsProxyConfigured: boolean;
+  log: string;
+}): Uint8Array {
+  const diagnostics = {
+    build: input.build,
+    report: input.report,
+    proxy: { httpConfigured: input.httpProxyConfigured, httpsConfigured: input.httpsProxyConfigured },
+  };
+  // Redact the serialized report as a second boundary. Diagnostic item labels
+  // and provider/model display names are user-controlled and must not be able
+  // to smuggle paths or credentials into a support archive.
+  const diagnosticJson = redactDiagnosticText(redactSecrets(JSON.stringify(diagnostics, null, 2)));
+  const files = {
+    "diagnostics.json": strToU8(`${diagnosticJson}\n`),
+    "app.log": strToU8(redactDiagnosticText(redactSecrets(input.log))),
+    "README.txt": strToU8("Grok Build Desktop 脱敏支持包\n不会包含账号、Token、提示词、会话、Memory 内容或路径、截图、文件内容、主题背景图片或其路径、完整用户路径或代理地址。\n"),
+  };
+  return zipSync(files, { level: 6 });
 }
 
 function windowsStatus(): SystemDiagnosticItem {
@@ -225,7 +357,7 @@ async function writableStatus(userDataPath: string): Promise<SystemDiagnosticIte
 
 async function probeAcpInitialize(cliPath: string, env: NodeJS.ProcessEnv): Promise<{ ok: boolean; message?: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cliPath, ["agent", "stdio"], { cwd: tmpdir(), env, windowsHide: true });
+    const child = spawn(cliPath, ["--no-auto-update", "agent", "stdio"], { cwd: tmpdir(), env, windowsHide: true });
     let buffer = "";
     let finished = false;
     const finish = (value: { ok: boolean; message?: string }): void => {

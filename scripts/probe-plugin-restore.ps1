@@ -19,7 +19,8 @@ if (-not (Test-Path -LiteralPath $GrokPath -PathType Leaf)) {
 
 function Invoke-GrokJson {
   param([string[]]$Arguments)
-  $raw = & $GrokPath @Arguments 2>&1
+  $ManagedArguments = @('--no-auto-update') + $Arguments
+  $raw = & $GrokPath @ManagedArguments 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw "grok $($Arguments -join ' ') failed: $($raw -join [Environment]::NewLine)"
   }
@@ -28,7 +29,8 @@ function Invoke-GrokJson {
 
 function Invoke-GrokMutation {
   param([string[]]$Arguments)
-  $raw = & $GrokPath @Arguments 2>&1
+  $ManagedArguments = @('--no-auto-update') + $Arguments
+  $raw = & $GrokPath @ManagedArguments 2>&1
   if ($LASTEXITCODE -ne 0) {
     throw "grok $($Arguments -join ' ') failed: $($raw -join [Environment]::NewLine)"
   }

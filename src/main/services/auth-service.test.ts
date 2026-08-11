@@ -150,7 +150,7 @@ describe("AuthService lifecycle", () => {
     const result = await harness.service.loginDevice();
 
     expect(result.error).toBeUndefined();
-    expect(loginArgs).toEqual(["login", "--device-auth", "--no-browser"]);
+    expect(loginArgs).toEqual(["--no-auto-update", "login", "--device-auth", "--no-browser"]);
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1));
     expect(openExternal).toHaveBeenCalledWith("https://auth.example.test/device?user_code=ABCD-EFGH");
   });
@@ -175,7 +175,7 @@ describe("AuthService lifecycle", () => {
     const result = await harness.service.loginDevice();
 
     expect(result.error).toBeUndefined();
-    expect(loginArgs).toEqual(["login", "--device-auth"]);
+    expect(loginArgs).toEqual(["--no-auto-update", "login", "--device-auth"]);
     expect(openExternal).not.toHaveBeenCalled();
   });
 

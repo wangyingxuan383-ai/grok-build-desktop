@@ -39,21 +39,20 @@ export class AttachmentCacheService {
 
   async record(sessionId: string, clientMessageId: string, text: string, previews: UserMessageAttachmentPreview[], delivery: UserMessageDeliveryState): Promise<void> {
     if (!previews.length) return;
-    const ledger = await this.ledger.get();
-    const entries = ledger.sessions[sessionId] ?? [];
     const value: AttachmentLedgerEntry = { clientMessageId, text, attachments: previews, delivery, createdAt: new Date().toISOString() };
-    const index = entries.findIndex((entry) => entry.clientMessageId === clientMessageId);
-    if (index >= 0) entries[index] = value; else entries.push(value);
-    ledger.sessions[sessionId] = entries.slice(-500);
-    await this.ledger.set(ledger);
+    await this.ledger.mutate((ledger) => {
+      const entries = ledger.sessions[sessionId] ?? [];
+      const index = entries.findIndex((entry) => entry.clientMessageId === clientMessageId);
+      if (index >= 0) entries[index] = value; else entries.push(value);
+      ledger.sessions[sessionId] = entries.slice(-500);
+    });
   }
 
   async updateDelivery(sessionId: string, clientMessageId: string, delivery: UserMessageDeliveryState): Promise<void> {
-    const ledger = await this.ledger.get();
-    const entry = ledger.sessions[sessionId]?.find((value) => value.clientMessageId === clientMessageId);
-    if (!entry || entry.delivery === delivery) return;
-    entry.delivery = delivery;
-    await this.ledger.set(ledger);
+    await this.ledger.mutate((ledger) => {
+      const entry = ledger.sessions[sessionId]?.find((value) => value.clientMessageId === clientMessageId);
+      if (entry && entry.delivery !== delivery) entry.delivery = delivery;
+    });
   }
 
   async restore(sessionId: string): Promise<UserMessageAttachmentRestore[]> {
@@ -67,26 +66,51 @@ export class AttachmentCacheService {
     })));
   }
 
+  async cloneSession(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    const entries = await this.restore(sourceSessionId);
+    for (const entry of entries) {
+      const prepared: UserMessageAttachmentPreview[] = [];
+      for (const preview of entry.attachments) {
+        if (preview.source && preview.availability === "ready" && (preview.kind === "image" || preview.mimeType === "text/plain")) {
+          try {
+            const materialized = await this.prepare(targetSessionId, [{
+              id: preview.id,
+              name: preview.name,
+              kind: preview.kind,
+              path: preview.source,
+              mimeType: preview.mimeType,
+              size: preview.size,
+              ...(preview.mimeType === "text/plain" ? { draftText: true } : {}),
+            }]);
+            prepared.push(materialized.previews[0]!);
+            continue;
+          } catch {
+            // Keep a visible missing-file card instead of failing the whole
+            // path migration because one historical attachment disappeared.
+          }
+        }
+        prepared.push({ ...preview, availability: "missing" });
+      }
+      await this.record(targetSessionId, entry.clientMessageId, entry.text, prepared, entry.delivery);
+    }
+  }
+
   async cleanupSession(sessionId: string): Promise<void> {
     await rm(this.sessionRoot(sessionId), { recursive: true, force: true });
-    const ledger = await this.ledger.get();
-    if (!(sessionId in ledger.sessions)) return;
-    delete ledger.sessions[sessionId];
-    await this.ledger.set(ledger);
+    await this.ledger.mutate((ledger) => { delete ledger.sessions[sessionId]; });
   }
 
   async sweep(existingSessionIds?: Set<string>, now = Date.now()): Promise<void> {
     await mkdir(this.root, { recursive: true });
-    const ledger = await this.ledger.get();
-    let ledgerChanged = false;
-    for (const [sessionId, entries] of Object.entries(ledger.sessions)) {
-      const newest = Math.max(0, ...entries.map((entry) => Date.parse(entry.createdAt) || 0));
-      if ((existingSessionIds && !existingSessionIds.has(sessionId)) || (newest && now - newest > MAX_CACHE_AGE_MS)) {
-        await rm(this.sessionRoot(sessionId), { recursive: true, force: true });
-        delete ledger.sessions[sessionId];
-        ledgerChanged = true;
+    await this.ledger.mutate(async (ledger) => {
+      for (const [sessionId, entries] of Object.entries(ledger.sessions)) {
+        const newest = Math.max(0, ...entries.map((entry) => Date.parse(entry.createdAt) || 0));
+        if ((existingSessionIds && !existingSessionIds.has(sessionId)) || (newest && now - newest > MAX_CACHE_AGE_MS)) {
+          await rm(this.sessionRoot(sessionId), { recursive: true, force: true });
+          delete ledger.sessions[sessionId];
+        }
       }
-    }
+    });
     const files = await collectFiles(this.root);
     let total = files.reduce((sum, file) => sum + file.size, 0);
     for (const file of files.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
@@ -94,7 +118,6 @@ export class AttachmentCacheService {
       await rm(file.path, { force: true });
       total -= file.size;
     }
-    if (ledgerChanged) await this.ledger.set(ledger);
   }
 
   private async materialize(sessionId: string, attachment: Attachment): Promise<Attachment> {

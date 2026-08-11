@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BackgroundTaskSummary, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
+import type { BackgroundTaskSummary, CliRuntimeUpdate, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
+import { canOpenRecentFileDiff } from "../session-ui-guards";
 import type { UiChatTurn } from "../store";
 import { UiIcon, type UiIconName } from "../ui-icons";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 
-export type RightUtilityTool = "launcher" | "document" | "files" | "tasks";
+export type RightUtilityTool = "launcher" | "document" | "files" | "tasks" | "session";
 export type RightTool = "review" | "agent-changes" | RightUtilityTool;
 
-export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
+export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, runtimeUpdates, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
   tool: RightUtilityTool;
   turn?: UiChatTurn;
   cwd: string;
   sessionId?: string;
   paths: string[];
   queue: PromptQueueEntry[];
+  runtimeUpdates: CliRuntimeUpdate[];
   sessionStatus?: string;
   onTool(tool: RightTool): void;
   onClose(): void;
@@ -35,22 +37,32 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, ses
   return <aside className="right-utility-pane" style={{ width }} aria-label={toolTitle(tool)}>
     <div className="review-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧栏宽度" onPointerDown={beginResize}/>
     <header><div><strong>{toolTitle(tool)}</strong><span>{toolSubtitle(tool)}</span></div><button className="icon-button" aria-label="关闭侧栏" onClick={onClose}><UiIcon name="close"/></button></header>
-    {tool === "launcher" ? <ToolLauncher onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button></nav>}
+    {tool === "launcher" ? <ToolLauncher cwd={cwd} onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
     {tool === "document" && <DocumentTool turn={turn} onExpand={onExpandResult}/>}
     {tool === "files" && <FilesTool cwd={cwd} sessionId={sessionId} paths={paths} onNavigate={onNavigate} onError={onError}/>}
-    {tool === "tasks" && <TasksTool sessionId={sessionId} queue={queue} sessionStatus={sessionStatus} onError={onError}/>}
+    {tool === "tasks" && <TasksTool sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError}/>}
+    {tool === "session" && <SessionTool sessionId={sessionId} onError={onError}/>}
   </aside>;
 }
 
-function ToolLauncher({ onTool }: { onTool(tool: RightTool): void }): React.JSX.Element {
+function ToolLauncher({ cwd, onTool }: { cwd: string; onTool(tool: RightTool): void }): React.JSX.Element {
+  const [gitAvailable, setGitAvailable] = useState<boolean>();
+  useEffect(() => {
+    let cancelled = false;
+    if (!cwd) { setGitAvailable(false); return; }
+    void window.grokDesktop.getGitWorkspaceCapability(cwd).then((value) => { if (!cancelled) setGitAvailable(value.available); }).catch(() => { if (!cancelled) setGitAvailable(false); });
+    return () => { cancelled = true; };
+  }, [cwd]);
+  const reviewSurface = reviewSurfaceForCapability(gitAvailable);
   const tools: Array<{ id: RightTool; icon: UiIconName; title: string; text: string }> = [
-    { id: "review", icon: "git", title: "审阅", text: "Git 变更、逐文件 Diff 与行级批注" },
-    { id: "agent-changes", icon: "file", title: "Agent 改动", text: "非 Git 工作区：本回合/本会话的真实写入" },
+    ...(reviewSurface === "review" ? [{ id: "review" as const, icon: "git" as const, title: "审阅", text: "Git 变更、逐文件 Diff 与行级批注" }] : []),
+    ...(reviewSurface === "agent-changes" ? [{ id: "agent-changes" as const, icon: "file" as const, title: "Agent 改动", text: "非 Git 工作区：本回合/本会话的真实写入" }] : []),
     { id: "document", icon: "file", title: "计划与结果", text: "当前回合的真实计划和最终回答" },
     { id: "files", icon: "folder", title: "最近文件", text: "最近回合写入文件及只读预览" },
     { id: "tasks", icon: "tasks", title: "侧边任务", text: "Agent、后台任务、队列与等待状态" },
+    { id: "session", icon: "history", title: "会话信息", text: "官方 CLI 会话元数据与精确用量" },
   ];
-  return <div className="right-tool-launcher"><p>按需打开真实工具。未实现的终端或浏览器不会作为占位入口出现。</p>{tools.map((item) => <button key={item.id} onClick={() => onTool(item.id)}><UiIcon name={item.icon}/><span><strong>{item.title}</strong><small>{item.text}</small></span><UiIcon name="chevron-right"/></button>)}</div>;
+  return <div className="right-tool-launcher"><p>{gitAvailable === undefined ? "正在确认当前工作区的审核能力…" : "按需打开当前工作区真实可用的工具。"}</p>{tools.map((item) => <button key={item.id} onClick={() => onTool(item.id)}><UiIcon name={item.icon}/><span><strong>{item.title}</strong><small>{item.text}</small></span><UiIcon name="chevron-right"/></button>)}</div>;
 }
 
 function DocumentTool({ turn, onExpand }: { turn?: UiChatTurn; onExpand(): void }): React.JSX.Element {
@@ -69,7 +81,17 @@ function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string
   const [externalPath, setExternalPath] = useState("");
   const [loading, setLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [gitAvailable, setGitAvailable] = useState<boolean>();
   useEffect(() => { setSelected((value) => paths.includes(value) ? value : paths[0] ?? ""); }, [paths]);
+  useEffect(() => {
+    let cancelled = false;
+    setGitAvailable(undefined);
+    if (!cwd) { setGitAvailable(false); return; }
+    void window.grokDesktop.getGitWorkspaceCapability(cwd)
+      .then((value) => { if (!cancelled) setGitAvailable(value.available); })
+      .catch(() => { if (!cancelled) setGitAvailable(false); });
+    return () => { cancelled = true; };
+  }, [cwd]);
   useEffect(() => {
     if (!cwd || !selected) { setDocument(undefined); setExternalPath(""); return; }
     let cancelled = false;
@@ -81,11 +103,11 @@ function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string
   }, [cwd, onError, selected]);
   return <div className="right-files-tool">
     <aside>{paths.map((path) => <button className={selected === path ? "active" : ""} key={path} title={path} onClick={() => setSelected(path)}><UiIcon name="file"/><span>{relativeDisplayPath(path, cwd)}</span></button>)}{!paths.length && <p className="right-tool-empty">最近回合没有可确认的写入文件。</p>}</aside>
-    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button aria-pressed={wrap} onClick={() => setWrap((value) => !value)}>{wrap ? "不换行" : "自动换行"}</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre className={wrap ? "wrap" : ""}>{document.content}</pre></> : selected ? <div className="right-tool-empty"><strong>无法预览此文件</strong><p>{previewError || "文件不存在、已移动或不在当前会话的受信任执行目录内。"}</p>{externalPath && <button onClick={() => void window.grokDesktop.openPath(externalPath).catch((error) => onError(message(error)))}>用系统默认应用打开</button>}</div> : null}</main>
+    <main>{loading ? <p className="right-tool-empty">正在读取文件…</p> : document ? <><header><strong>{document.relativePath}</strong><span><button aria-pressed={wrap} onClick={() => setWrap((value) => !value)}>{wrap ? "不换行" : "自动换行"}</button>{canOpenRecentFileDiff(gitAvailable) && <button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "diff" })}>查看 Diff</button>}<button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: document.relativePath, surface: "editor" })}>编辑文件</button></span></header><pre className={wrap ? "wrap" : ""}>{document.content}</pre></> : selected ? <div className="right-tool-empty"><strong>无法预览此文件</strong><p>{previewError || "文件不存在、已移动或不在当前会话的受信任执行目录内。"}</p>{externalPath && <button onClick={() => void window.grokDesktop.openPath(externalPath).catch((error) => onError(message(error)))}>用系统默认应用打开</button>}</div> : null}</main>
   </div>;
 }
 
-function TasksTool({ sessionId, queue, sessionStatus, onError }: { sessionId?: string; queue: PromptQueueEntry[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
+function TasksTool({ sessionId, queue, runtimeUpdates, sessionStatus, onError }: { sessionId?: string; queue: PromptQueueEntry[]; runtimeUpdates: CliRuntimeUpdate[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
   const [tasks, setTasks] = useState<BackgroundTaskSummary[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -94,12 +116,63 @@ function TasksTool({ sessionId, queue, sessionStatus, onError }: { sessionId?: s
     const timer = window.setInterval(refresh, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [onError, sessionId]);
-  return <div className="right-tool-scroll tasks-tool"><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section></div>;
+  return <div className="right-tool-scroll tasks-tool"><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{runtimeUpdates.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{runtimeUpdates.length}</span></header>{runtimeUpdates.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
+}
+
+export function reviewSurfaceForCapability(available?: boolean): "review" | "agent-changes" | undefined {
+  return available === true ? "review" : available === false ? "agent-changes" : undefined;
+}
+
+function SessionTool({ sessionId, onError }: { sessionId?: string; onError(message: string): void }): React.JSX.Element {
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.grokDesktop.getCliSessionInfo>>>();
+  const [usage, setUsage] = useState<Awaited<ReturnType<typeof window.grokDesktop.getCliSessionUsage>>>();
+  const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof window.grokDesktop.getSessionRuntimePreferences>>>();
+  const [loading, setLoading] = useState(false);
+  const [compacting, setCompacting] = useState(false);
+  const [compactMessage, setCompactMessage] = useState("");
+  const refresh = (): void => {
+    if (!sessionId) return;
+    setLoading(true);
+    void Promise.all([
+      window.grokDesktop.getCliSessionInfo(sessionId),
+      window.grokDesktop.getCliSessionUsage(sessionId),
+      window.grokDesktop.getSessionRuntimePreferences(sessionId),
+    ]).then(([nextInfo, nextUsage, nextRuntime]) => { setInfo(nextInfo); setUsage(nextUsage); setRuntime(nextRuntime); }).catch((error) => onError(message(error))).finally(() => setLoading(false));
+  };
+  useEffect(() => { setInfo(undefined); setUsage(undefined); setRuntime(undefined); refresh(); }, [sessionId]);
+  const compact = (): void => {
+    if (!sessionId || compacting) return;
+    setCompacting(true); setCompactMessage("正在请求 CLI 压缩会话…");
+    void window.grokDesktop.compactSession(sessionId)
+      .then((receipt) => { setCompactMessage(receipt.message); refresh(); })
+      .catch((error) => { const text = message(error); setCompactMessage(text); onError(text); })
+      .finally(() => setCompacting(false));
+  };
+  const contextPercent = info?.contextUsagePercent ?? (info?.contextUsedTokens !== undefined && info.contextWindowTokens
+    ? Math.min(100, info.contextUsedTokens / info.contextWindowTokens * 100)
+    : undefined);
+  const compactionPolicy = runtime?.compaction ?? { mode: "inherit" as const };
+  const setCompaction = (mode: "inherit" | "custom", thresholdPercent = compactionPolicy.thresholdPercent ?? 85): void => {
+    if (!sessionId) return;
+    setCompactMessage("正在保存会话压缩策略…");
+    const policy = mode === "inherit" ? { mode } as const : { mode, thresholdPercent } as const;
+    void window.grokDesktop.setSessionCompactionPolicy(sessionId, policy)
+      .then((value) => { setRuntime(value); setCompactMessage(mode === "inherit" ? "已恢复为 CLI 默认策略；下次重新连接会话时生效。" : `已设置 ${thresholdPercent}% 阈值；下次重新连接会话时生效。`); })
+      .catch((error) => { const text = message(error); setCompactMessage(text); onError(text); });
+  };
+  return <div className="right-tool-scroll session-tool">
+    <section><header><strong>官方会话</strong><button onClick={refresh} disabled={loading || !sessionId}>{loading ? "读取中…" : "刷新"}</button></header>
+      {!sessionId ? <p className="right-tool-empty">当前没有活动会话。</p> : info?.supported === false ? <p className="right-tool-empty">当前 CLI 不支持 session/info；不会用全局默认值猜测旧会话配置。</p> : <dl className="session-detail-list"><dt>会话 ID</dt><dd title={info?.sessionId}>{info?.sessionId || "—"}</dd><dt>标题</dt><dd>{info?.title || "未命名"}</dd><dt>工作目录</dt><dd title={info?.cwd}>{info?.cwd || "—"}</dd><dt>Agent</dt><dd>{info?.agentName || "CLI 未返回"}</dd><dt>模型</dt><dd>{info?.modelId || "—"}{info?.resolvedModelId && info.resolvedModelId !== info.modelId ? ` → ${info.resolvedModelId}` : ""}</dd><dt>模式</dt><dd>{info?.mode || "CLI 未返回"}</dd><dt>思考档位</dt><dd>{info?.effort || "CLI 默认/未返回"}</dd><dt>Sandbox</dt><dd>{info?.sandbox || "CLI 未返回"}</dd></dl>}
+    </section>
+    <section><header><strong>Context</strong><span>{contextPercent === undefined ? "CLI 未返回" : `${contextPercent.toFixed(1)}%`}</span></header>{contextPercent === undefined ? <p className="right-tool-empty">上下文窗口与会话累计 Token 是不同概念；这里只显示 CLI 返回的当前上下文占用。</p> : <><div className="quota-progress"><i style={{ width: `${contextPercent}%` }}/></div><dl className="session-detail-list"><dt>当前占用</dt><dd>{formatOptionalTokens(info?.contextUsedTokens)}</dd><dt>模型窗口</dt><dd>{formatOptionalTokens(info?.contextWindowTokens)}</dd><dt>剩余</dt><dd>{formatOptionalTokens(info?.contextFreeTokens)}</dd><dt>系统提示</dt><dd>{formatOptionalTokens(info?.systemPromptTokens)}</dd><dt>工具定义</dt><dd>{info?.toolDefinitionsCount === undefined ? "未返回" : `${info.toolDefinitionsCount} 个 · ${formatOptionalTokens(info.toolDefinitionsTokens)}`}</dd><dt>消息/工具调用</dt><dd>{info?.messageCount === undefined && info?.toolCallCount === undefined ? "未返回" : `${info?.messageCount ?? 0} / ${info?.toolCallCount ?? 0}`}</dd><dt>已压缩</dt><dd>{info?.compactionCount === undefined ? "未返回" : `${info.compactionCount} 次`}</dd><dt>CLI 当前阈值</dt><dd>{info?.autoCompactThresholdPercent === undefined ? "未返回" : `${info.autoCompactThresholdPercent}%`}</dd></dl></>}<label className="field"><span>自动压缩策略</span><select value={compactionPolicy.mode} onChange={(event) => setCompaction(event.target.value as "inherit" | "custom")} disabled={!sessionId}><option value="inherit">继承 CLI</option><option value="custom">会话自定义</option></select></label>{compactionPolicy.mode === "custom" && <label className="field"><span>阈值 {compactionPolicy.thresholdPercent ?? 85}%</span><input type="range" min={60} max={95} step={1} value={compactionPolicy.thresholdPercent ?? 85} onChange={(event) => setCompaction("custom", Number(event.target.value))}/></label>}<p className="settings-note">自定义阈值通过此会话专属 CLI 环境生效，不修改全局配置；更改后需重新连接会话。</p><button onClick={compact} disabled={!sessionId || compacting}>{compacting ? "压缩中…" : "立即压缩"}</button>{compactMessage && <p className="settings-note" aria-live="polite">{compactMessage}</p>}</section>
+    <section><header><strong>Usage Limit</strong><span>{usage?.supported === false ? "不支持" : usage?.usageIsIncomplete ? "统计可能不完整" : "CLI 精确值"}</span></header>{usage?.supported === false ? <p className="right-tool-empty">当前 CLI 未提供 session/usage；不会推算 Token 或费用。</p> : <><dl className="session-detail-list"><dt>输入</dt><dd>{formatOptionalTokens(usage?.inputTokens)}</dd><dt>输出</dt><dd>{formatOptionalTokens(usage?.outputTokens)}</dd><dt>缓存读取</dt><dd>{formatOptionalTokens(usage?.cachedReadTokens)}</dd><dt>推理</dt><dd>{formatOptionalTokens(usage?.reasoningTokens)}</dd><dt>总计</dt><dd>{formatOptionalTokens(usage?.totalTokens)}</dd><dt>模型调用</dt><dd>{usage?.modelCalls === undefined ? "未返回" : usage.modelCalls.toLocaleString()}</dd><dt>API 耗时</dt><dd>{usage?.apiDurationMs === undefined ? "未返回" : `${(usage.apiDurationMs / 1000).toFixed(1)} 秒`}</dd><dt>费用</dt><dd>{usage?.costUsd === undefined ? "未返回/不可信" : `${usage.costIsPartial ? "部分 " : ""}$${usage.costUsd.toFixed(6)}`}</dd><dt>周期额度</dt><dd>{usage?.limitPercent === undefined ? "见账号额度" : `${usage.limitPercent.toFixed(1)}%`}</dd><dt>重置时间</dt><dd>{usage?.resetAt ? new Date(usage.resetAt).toLocaleString() : "见账号额度"}</dd></dl>{usage?.usageIsIncomplete && <p className="settings-note">存在仍在运行或未结算的子 Agent，本次会话用量可能低估；费用不会被当作完整账单。</p>}</>}</section>
+  </div>;
 }
 
 function readWidth(tool: RightUtilityTool): number { return Math.max(420, Math.min(760, Number(localStorage.getItem(`grok:right-width:${tool}`)) || 560)); }
-function toolTitle(tool: RightUtilityTool): string { return ({ launcher: "侧栏工具", document: "计划与结果", files: "最近文件", tasks: "侧边任务" })[tool]; }
-function toolSubtitle(tool: RightUtilityTool): string { return ({ launcher: "选择当前任务需要的工具", document: "当前回合", files: "最近回合实际写入", tasks: "Agent、后台、队列与等待" })[tool]; }
+function toolTitle(tool: RightUtilityTool): string { return ({ launcher: "侧栏工具", document: "计划与结果", files: "最近文件", tasks: "侧边任务", session: "会话信息" })[tool]; }
+function toolSubtitle(tool: RightUtilityTool): string { return ({ launcher: "选择当前任务需要的工具", document: "当前回合", files: "最近回合实际写入", tasks: "Agent、后台、队列与等待", session: "官方 CLI 元数据与用量" })[tool]; }
+function formatOptionalTokens(value?: number): string { return value === undefined ? "未返回" : value.toLocaleString(); }
 function sessionStatusLabel(status?: string): string { return ({ working: "运行中", "needs-user": "等待操作", error: "失败", idle: "空闲" } as Record<string, string>)[status ?? "idle"] ?? status ?? "空闲"; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 export function relativeDisplayPath(path: string, root: string): string {

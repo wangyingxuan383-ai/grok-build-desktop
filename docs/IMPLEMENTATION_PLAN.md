@@ -1,5 +1,204 @@
 # Grok Build Desktop 实施计划
 
+## 0.8.0 最终再审与官方上游复核（2026-08-11）
+
+- [x] 重新逐项核对全部历史实施计划；旧版本遗留的验收、打包和延期复选项已按 0.8.0 的替代证据归档。当前唯一未完成复选项是远程 CPA 上游返回 `403 cpa_local_only`，属于已准确暴露的外部策略边界，不伪装为 Desktop 成功。
+- [x] 复核官方 Changelog、官方开源仓库与已安装 stable：公开发行版仍为 1.0.0；官方 main 相对既有快照新增的唯一重要公共会话扩展是 `x.ai/session/rename` 及标题所有权元数据，没有发现第二个尚未映射的重要稳定公共接口。
+- [x] 增加 `x.ai/session/rename` 前向兼容、标准/私有标题通知归一化和本地旧 CLI 回退；stable 1.0.0 实机返回 method-not-found，因此不显示为稳定可用能力。
+- [x] 修正能力证据：`session.rewind` 与 `session.cancel-rewind` 不再错误合并；运行时声明、成功探测、已观察事件继续优先于版本号。
+- [x] 补齐先前延期的 `grok doctor --json` 官方自动修复流程：只展示 CLI 明确返回的自动修复 ID，执行前生成短时一次性预览令牌、再次校验、二次确认并以固定参数调用；当前机器实测没有可用自动修复。
+- [x] 保存官方 main 前向 Wire Fixture 和源码快照；上游检查与快照校验通过，未知未来事件仍只记录方法、结构版本和大小，不记录正文或凭据。
+- [x] 形成 `docs/V080_FINAL_AUDIT.md`，从高频用户流程、数据恢复、Provider、更新、IPC/安全、发布门禁和官方上游七个维度记录结论、证据及不可宣称的外部边界。
+- [x] 再审后完整离线门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、`npm audit`（0 漏洞）、`git diff --check` 和当前生产构建 UI 通过。无推理 CLI 探针确认 stable Session Rename 为 method-not-found。
+
+## 0.8.0 Grok Build CLI 1.0.0 完整适配（2026-08-11）
+
+### 1.0.0 兼容层与受控更新
+
+- [x] 版本提升为 0.8.0；新增 `CliMajorCompatibilityProfile`、离线/运行时兼容门、1.0.0 与未知未来主版本 Wire Fixture。版本号只选择门禁，不单独启用功能。
+- [x] 受管 CLI 继续统一使用 `--no-auto-update`；更新器固定 stable 精确目标、阻止未知主版本、串行化并发点击、更新后运行 ACP 实机探针，失败时精确回滚旧版本并恢复会话。
+- [x] 1.0 会话附加固定提交 `nonInteractive:false` 与 `deliveryTools:[]`；解析 `x.ai/closeOutcome`，区分正常关闭、非驻留、被替代及释放失败。
+- [x] 规范化直接通知和 `_x.ai/notification` 包装；接入五类 `x.ai/mcp/...` 事件、旧事件兼容别名、会话隔离和 MCP 状态展示。
+- [x] 官方 Git status 请求显式携带 `includeUntracked/includeStats/includePatches/ignoreSubmodules`；优先使用匹配工作区的空闲 ACP 会话，不完整或不可用时安全回退系统 Git。
+- [x] 右栏会话信息使用官方 `session/info` 与 `session/usage`，显示 Context、Usage、模型/模式/努力档位和 Session ID；缺失字段不从全局默认推算。
+- [x] 队列、Stop、Plan、Recap、Compact、模式恢复和迟到后台事件继续使用会话级所有权及一次终态结算；1.0 Fixture 覆盖 resume、MCP、Git、Usage 与生命周期事件。
+
+### 高频体验与最终审核
+
+- [x] 应用与 CLI 启动时检查、之后 24 小时限频检查可关闭；应用只打开正式 GitHub Release，CLI 仅在用户确认后“更新并验证”。上游源码跟踪工作流只创建维护 Issue，不自动合并代码。
+- [x] 项目路径失效时可安全离线查看本地投影，发送/模型/文件操作保持关闭；重新绑定先尝试官方移动目录恢复，失败再官方 Fork，并记录事务与回滚点，不使用 `--restore-code`。
+- [x] 会话压缩支持“继承 CLI”或 60%–95% 自定义阈值及“立即压缩”；时间线展示开始、完成、失败、取消，Desktop 完整投影不随 CLI Compact 删除。
+- [x] 增加首事件 20 秒等待、60 秒诊断/停止软提示，不主动取消长推理；本地投影正文搜索覆盖当前会话用户/回答/计划/文件/错误。
+- [x] 官方反馈仅在运行时真实提供 `x.ai/feedback` 时出现，发送前展示脱敏预览；无有效工作区时可创建应用管理的临时目录。
+- [x] MCP、Plugins、Skills、Workflows 统一排序/分组，Skills 支持搜索；Markdown 表格、长命令、权限脚本和 Diff 具备独立滚动边界与可复制文本。
+- [x] 支持包仍是固定文件白名单，明确排除会话正文、媒体、凭据和路径重新绑定事务日志。
+- [x] 聚焦兼容/IPC/会话/更新测试已通过；未知未来主版本按失败关闭。1.0 JSON-RPC `Internal error` 现在优先展示 `error.data` 中经过边界限制的真实 HTTP 原因。
+- [x] 最终完整门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、Electron Fuses、`npm audit`（0 漏洞）和 `git diff --check` 通过。
+- [x] 通过 Desktop 受控更新将本机 0.2.118 升级到 stable `1.0.0 (3cd0d0cbce)`；initialize/new/resume/close/delete、真实只读 Plan、Stop、Compact、MCP 事件与双 ACP 会话实机门禁通过，未触发回滚。
+- [x] 记录 stable 二进制与公开源码快照的能力偏差：`x.ai/git/status`、`x.ai/session/info`、`x.ai/session/usage` 均返回 method-not-found；Git 使用受限系统回退，数据视图仅启用实际存在的 Context/Session Info，不把可选能力缺失误判成核心更新失败。
+- [ ] 当前远程 CPA Provider 的最小 Responses 请求被上游明确拒绝为 `403 cpa_local_only`；Desktop 已确认请求实际到达网关并显示真实错误，但在上游恢复远程推理前不声明 Provider 实机成功。
+- [x] 本地 0.8.0 Setup/Portable/SHA-256/SBOM/许可证候选已完成 per-user 覆盖安装；打包版和安装版 UI、About/诊断导航、File/Product 版本、ASAR、Fuses、桌面/开始菜单快捷方式均通过。此前本地候选 Setup/Portable SHA-256 为 `1c6d06a00f2dc8b6f35f4b5fd7507d8217a6c03272009ccceac5471e233aa294` / `e451bc124fcea1fc079a140873939d0986593b41032d6b37c8b74545b6024b16`，仅作预发布证据；用户已要求从最终提交重新构建、回下载校验并公开 `v0.8.0`。
+
+
+## 0.7.3 单一总体改进候选（2026-08-10）
+
+- [x] 合并 0.7.x 里程碑，不再为 M1/M2/M3/M4 分别构建、打包或安装；版本、lockfile 与现行离线 UI Fixture 统一到 0.7.3。
+- [x] 保留并复核 0.7.1 项目去重/隐藏、草稿优先、本地投影先显、后台 ACP 恢复、权威侧栏状态和统一会话入口。
+- [x] 完成会话正文宽度/字号设置、回合导航轨道、已完成过程全部折叠及运行中/完成状态分离。
+- [x] 完成 Windows 已安装工具发现、受信任 OpenTarget 路由、位置/文件打开方式和行列定位；不显示未安装或无固定调用契约的应用。
+- [x] 完成右栏能力映射：Git Review 与非 Git Agent 改动互斥显示；Agent 改动文件搜索、单文件懒呈现、宽度持久化、独立滚动和窄栏 Diff 收口。
+- [x] 从 App 单体中拆出 ConversationViewport、会话派生状态和 Navigation Controller，并将主壳层/TopBar 改为选择器订阅；保留大型依赖按需加载和分块预算。
+- [x] 应用更新区分本地领先公开 Release；CLI stable 1.0.0 检测增加跨主版本标记、主进程强制确认和 Renderer 明确风险提示。
+- [x] 受影响 TypeScript、更新/IPC/外部工具/会话导航聚焦测试和 diff check 通过。
+- [x] 最终完整门禁与正式打包已合并执行：98 文件/697 项测试通过，6 个 live 文件/9 项跳过；TypeScript、生产/资源构建、公开扫描、分块、Native/Fuses、Task Scheduler、打包/UI/Portable 探针和 `npm audit` 通过。两个探针缺陷修正后复用同一打包产物，没有重复构建或重复打包。
+- [x] 已生成 Setup/Portable/SHA-256/SBOM/许可证报告并 per-user 安装；安装版主进程/About/诊断、ASAR、Fuses 及桌面/开始菜单快捷方式均为 0.7.3。Setup/Portable SHA-256 分别为 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19163f7e5948ac` / `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`。
+- [x] 0.7.3 单独验收门已由 0.8.0 合并候选的打包版/安装版 UI 与实机门禁取代；历史候选不再单独发布。
+
+## 0.7.1 会话与项目基础（2026-08-09）
+
+- [x] 新增稳定 `ProjectIdentity`，对 Windows 大小写、尾斜杠和可解析链接目标规范化；Workspace Catalog 按项目 ID 合并来源及会话计数。
+- [x] 新增项目隐藏/恢复 IPC 与设置入口；隐藏不删除会话、投影、附件或源文件，失效路径保留诊断。
+- [x] 新建任务改为草稿优先；模型、Provider、思考档位、模式、执行档案、正文和附件在首次发送前均只保存于 Desktop。
+- [x] 首次发送成功后将草稿和附件迁移到真实 Session ID；目标冲突、存储写入失败或会话创建失败均不覆盖原内容，附件目录写入失败时回滚。
+- [x] 打开历史会话时先恢复 ConversationProjection V2、附件及回合展示，再后台恢复 ACP；增加 hydration 状态与 generation 隔离，离线时保留正文和 Composer。
+- [x] 统一侧栏、任务中心、Dashboard、分叉、Codex/Claude 接力及 Worktree 的 `openConversationTarget()` 导航；恢复尺寸、滚动和输入框焦点。
+- [x] 左栏使用运行、等待、排队、未读、失败或空闲的单一权威状态，并显示项目活动会话/草稿/总会话计数。
+- [x] 完整离线回归：95 个测试文件/686 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产构建、公开扫描及开发版 0.7.1 UI 探针通过。
+- [x] 最终资源/分块/Native/Fuses/依赖门禁通过；正式生成 0.7.1 Setup/Portable/SHA-256/SBOM/许可证候选并完成 per-user 安装。
+- [x] 安装版冷启动、主进程/About 0.7.1、诊断中心、支持包隐私预览、桌面和开始菜单快捷方式通过；打包版 UI 覆盖 Plan/权限/停止、草稿重启、多会话隔离、导航和响应式布局。
+- [x] 项目去重、草稿重启、会话多次恢复、CLI 离线降级和后台会话隔离已纳入 0.8.0 自动化及安装版合并验收；不再保留 0.7.1 独立发布门。
+
+## 0.7.0 C 盘基线刷新与 0.7.1 启动（2026-08-09）
+
+- [x] 将已失效的用户级 npm E 盘缓存迁移到 `%LOCALAPPDATA%\\npm-cache`，依赖查询/安装不再访问已拔出的 E 盘。
+- [x] 处理新出现的高危 npm 公告：Vite、React 插件、Mermaid 与安全覆盖项更新后 `npm audit` 为 0。
+- [x] 在 C 盘完成 94 文件/677 项离线测试、TypeScript、生产/资源构建、公开扫描、分块、Native Host、Fuses、打包 UI 与目录打包。
+- [x] 重新生成 0.7.0 Setup/Portable、per-user 安装并验证 File/Product、冷启动和快捷方式。
+- [x] 会话恢复夹具已改为显式 hydration/generation 状态并在 0.7.1–0.8.0 连续打包探针中通过。
+- [x] 从该安全基线创建 `codex/v0.7.1-session-foundation`，实现项目规范化、草稿优先、本地预览和后台恢复；不创建 0.7.0 Release。
+
+## 0.7.0 累计变更一致性审计（2026-08-09）
+
+- [x] 审计自 `origin/main` 以来的 5 个提交、150 个变更文件，核对 Provider 扫描、ACP/投影回放、运行时能力门控、IPC/Preload、Renderer 壳层和 CSS 是否存在冲突或重复生产实现。
+- [x] 确认旧 `deep-scan` IPC 只是同一 `deepScan()` 核心的兼容包装，新 UI 使用 Job API；不再新增并行扫描器。
+- [x] 修复异步扫描取消竞态：Job ID/generation 隔离迟到响应，Worker 启动前取消不发送探测请求，取消任务不会永久停留在 `cancelling`。
+- [x] 修复媒体启动静默与空闲超时混用、离线附件恢复夹具绕过真实账本，以及虚拟列表重开探针误判未挂载图片的问题。
+- [x] 本轮源码修复后的完整离线门禁：94 个测试文件/677 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、342 文件公开扫描、Renderer 分块、Native Host 自检、高危依赖门禁及 `git diff --check` 通过。
+- [x] 已完全在 C 盘重建、per-user 安装和冷启动；故障 E 盘旧资产未被复用。
+
+## 0.7.0 ACP 0.2.120 前向适配 A–D（2026-08-06）
+
+### 推荐顺序补充：能力门控 Session/旁路提问/Mermaid（当前已实现）
+
+- [x] **旁路提问**：按运行时命令证据显示 `/btw`；主进程发送官方 `session_id` + `question`，返回 `answer` 回执，不创建伪队列回合；未声明能力明确降级。
+- [x] **Session 元数据**：增加标准 `session/list` 与可选 `x.ai/session/info`、`x.ai/session/usage` 的主进程归一化、IPC Schema、Preload 和右侧“会话信息”工具；缺失能力不从全局默认推算。
+- [x] **Mermaid Plan**：严格渲染成功后提供复制源码、复制图像、打开图像；失败/流式未完成时按钮保持禁用。
+- [x] **验证**：受影响测试 59 项通过；完整套件 94 个测试文件、676 项通过、9 项按设计跳过；TypeScript 与生产构建通过。
+- [x] 该 stable 等待门已由 CLI 1.0.0 实际升级与能力门取代；旁路提问、Session、MCP/插件、Git 回退和 Doctor 诊断按运行时证据启用。
+
+- [x] **A 运行时证据**：将标准 `session/list`、`session/resume`、`session/close` 纳入脱敏 `initialize-0.2.120` Fixture 与能力证据测试；未下发版本不进入安装目标。
+- [x] **B 会话生命周期**：重开优先 `session/resume`，仅能力错误回退 `session/load`；resume 缺少会话/模型字段时使用请求 ID和握手回退；退出前尽力 `session/close`，不阻塞进程释放。
+- [x] **C Plan 模型切换**：Plan 决策尚未提交时允许切换模型，权限/问题等待保持锁定；自定义 Provider 本地模型 ID、上游别名和握手状态继续隔离。
+- [x] **D 回放与图片**：用户回放保留 client/message ID、附件预览和资源链接；直接图片、MCP 提取图片和重复 ACP 回放合并去重；无稳定媒体来源的独立事件不被 Renderer 误折叠。
+- [x] 聚焦验证：8 个测试文件、121 项通过；TypeScript 通过。
+- [x] 候选复核：94 个测试文件、676 项通过（9 项按设计跳过）；TypeScript、生产/资源构建、公开扫描和 Renderer 分块门禁通过。首次打包发现离线媒体夹具的非 RGBA PNG 被 Electron `nativeImage` 拒绝，已换成真实 RGBA PNG 并重新进入打包门禁。
+- [x] 最终本地产物复核：Setup/Portable 从同一最新构建生成，SHA-256、SBOM、许可证报告、Fuses、Task Scheduler、中文/空格 Portable 冷启动及当前 0.7.0 UI 门禁通过；验收前不推送、不创建 Release。
+
+## v0.7.0 Grok Build CLI 0.2.118 安全适配（2026-08-05）
+
+### 受控更新与运行时握手
+
+- [x] Desktop 启动的 ACP、媒体、登录、插件、Provider、Memory、诊断和能力探针统一传入 `--no-auto-update`；更新服务成为唯一 CLI 修改入口。
+- [x] 增加 `CliRuntimeHandshake`、`CliCapabilityEvidence`、`CliCompatibilitySnapshot`、`CliUpdatePreview` 与 `CliUpdateReceipt`，规范化 `initialize` 的 Agent 版本、Session/Prompt/MCP、模型、思考档位、命令、Recap、Rewind、插件目录等非敏感能力。
+- [x] 固定目标更新会在执行前重新校验当前版本、stable 目标和用户确认，暂停并恢复活动会话；新版本验证失败时精确回滚旧版本，回滚或会话恢复失败均明确报错。
+- [x] 区分 stable 更新源与已公开版本提示；公开 Changelog 版本只用于“已公布、尚未下发”的提示，不作为安装目标。
+- [x] 保存脱敏的 0.2.117 本机握手、0.2.118 生命周期及 0.2.120 官方源码前向形态 Fixture；功能启用遵循“运行时声明 → 成功探测 → 已观察事件 → 版本提示”。
+
+### 0.2.118 生命周期与会话删除
+
+- [x] 兼容 `task_completed` 先于 `task_backgrounded`，接入 Auto Compact started/completed/failed/cancelled，并让 Compact 期间 Stop 继续走真实会话取消。
+- [x] Recap 按会话、回合和内容哈希去重并使用稳定投影 ID；未知事件只记录方法名、结构版本和字节大小。
+- [x] 会话删除先调用 `grok --no-auto-update sessions delete <id>`；成功后才清理 Desktop 投影、附件、媒体和 Token 数据。官方删除失败时仅可经显式确认执行 Desktop 本地数据清理。
+- [x] `grok doctor --json` 进入诊断中心，只保留受限、脱敏的结构化摘要。
+- [x] 固定目标升级本机 stable 0.2.118，替换为脱敏的真实握手 Fixture，并完成无推理 `initialize/session/new`、空会话官方删除和一次最小真实 Plan 验收（19.28 秒、无权限卡、无工作区写入）。
+- [x] 修复 0.2.118 对 TOML `[[model.*.reasoning_efforts]]` 的拒绝：Provider 元数据继续保留完整档位，CLI 托管配置改写为其原生 effort 字符串并迁移旧数组表。
+
+### 0.2.119–0.2.120 前向兼容（0.7.1 功能面延期）
+
+- [x] 前向解析 `x.ai/follow_ups`、`x.ai/models/update`、`x.ai/settings/update`，保持自定义 Provider 本地模型身份和当前努力档位；控件只在运行时证据出现后启用。
+- [x] 解析 Goal、Workflow、Subagent、Retry、后台任务、模型自动切换与运行时间线事件，后台事件按会话隔离。
+- [x] `/btw`、Recap 等能力从实际命令或已观察扩展获得，不按版本号猜测。
+- [x] CLI 1.0.0 后已完成 MCP/插件状态、可选官方 Git、`/btw`、Session、Mermaid 和 `doctor fix` 逐项预览/确认；能力缺失时继续隐藏或安全回退。
+
+### 0.7.0 候选门禁与本地交付
+
+- [x] 最终候选运行一次完整离线门禁：94 个测试文件、676 项测试通过；6 个 live 文件、9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块和 `npm audit` 通过。
+- [x] 正式生成且只生成一组 0.7.0 Setup、Portable、SHA-256、SBOM 和许可证报告；打包版及安装版分别通过 0.7.0 UI 探针。
+- [x] 完成 per-user 安装、File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式检查；安装版保持本地等待用户验收。
+- [x] Plan/Stop 与双 ACP 会话已在 0.8.0 实机门禁通过；自定义 Provider 的外部 403 仅保留在 0.8.0 当前外部边界，不再重复挂在历史版本。
+
+## v0.7.0 全面审计与单一候选（2026-08-05）
+
+### 会话、Plan、停止与队列
+
+- [x] 增加会话级运行时偏好，恢复/分叉保留 Provider、本地模型、上游别名、思考档位、模式和执行档案；Provider 初始化失败 fail-closed。
+- [x] Plan 决定先写入并立即清理旧交互门，模式切换异步收敛；稳定 `turnId` 结算重复/迟到终态。
+- [x] accepted/running 队列持久化并在终态原子迁移；跨会话停止、插话和后台完成不污染当前 Composer。
+- [x] 建立仅测试环境启用的主进程离线 responder，覆盖 Plan 三决策、权限允许/拒绝、Stop 和唯一终态。
+- [x] 实跑当前 v0.7 打包版与安装版 UI 探针，以及 CLI 0.2.118 最小真实只读 Plan；无权限卡、无工作区写入。
+- [x] 0.8.0 已实跑 Stop/Compact 和两个并行 ACP 会话；历史 0.7.0 门已关闭。
+
+### 投影、文件、媒体与边界
+
+- [x] ConversationProjection V2 保存可见正文/过程/工具/交互/错误/媒体/Usage，并对 ACP 回放做稳定用户回合与缺失尾部合并。
+- [x] JsonStore、账号/自动化等关键写入增加跨进程事务与 owner fencing；自动化取消改为显式 API，无固定 24 小时总时限。
+- [x] 附件、MediaAccessHandle、远端媒体、打开位置、CLI 路径和符号链接均在主进程做会话/工作区边界校验。
+- [x] 非 Git 文件改动继续使用真实写入日志，媒体产物保留受限缓存和句柄生命周期。
+- [x] 媒体 Range 流、旧投影修复、文件/媒体缓存与 Provider 本地回环契约已自动化；外部 Provider 成功性只保留在当前 0.8.0 外部边界。
+
+### UI、性能与交付
+
+- [x] App Shell、Right Dock、Provider 管理器和弹层已拆分；当前 v0.7 探针不再动态接受旧版本，缩放使用物理窗口尺寸。
+- [x] Renderer 分块预算、Worker 命名、布局回归和交付脚本门禁已加入；live 门禁缺少 CLI 时明确 skipped/failed。
+- [x] 已由 0.8.0 最终完整门禁、正式打包和 per-user 安装覆盖。
+- [x] 已由 0.8.0 安装版冷启动、About/诊断、ASAR/Fuses、快捷方式和当前 UI 探针覆盖。
+
+版本、lockfile、显示版本和文档已切换为 0.7.0；所有未完成项必须在交付前补充具体测试或实机证据。
+
+## v0.6.25 Plan 权限硬边界与终态恢复热修
+
+- [x] 将 Plan 只读命令判定改为完整命令拒绝优先；PowerShell 脚本块、子表达式、静态调用及其他可执行语法不得借只读管道首段绕过。
+- [x] 删除对工具标题/名称关键字的信任；只有明确只读 ACP kind 或通过解析的受限只读命令可自动允许，修改性与未知工具自动取消。
+- [x] Plan 文件写入只允许当前持久会话的精确 `plan.md`；工作区其他文件、任意外部路径和既有符号链接目标均由主进程拒绝。
+- [x] 没有显式拒绝选项的权限请求返回标准 ACP `cancelled` 结果，不再使用会诱发重试/悬挂的 JSON-RPC error。
+- [x] 将 Desktop 排队 Prompt ID 绑定到待决请求；只有终态事件而没有 Prompt RPC response 时仍可准确结算并恢复 Composer。
+- [x] Renderer 等待 Stop 结果并显示停止中、已停止/已恢复或失败回执，不再静默 fire-and-forget。
+- [x] 聚焦 4 文件/85 项与 TypeScript 通过。
+- [x] 运行完整离线套件：82 文件/488 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、303 文件公开扫描、Computer Host 自检、Fuses、打包版/Portable UI、Task Scheduler、正式 0.6.25 资产、per-user 安装、冷启动、主进程/About/诊断和快捷方式核验通过。
+- [x] 历史 0.6.25 门已由真实只读 Plan、离线拒绝矩阵及 0.8.0 Stop/Plan 安装版门禁取代。
+
+## v0.6.24 Plan 线协议、状态同步与幽灵队列热修
+
+- [x] 对照当前官方 Grok Build 源码确认 `x.ai/exit_plan_mode` 三种成功结果：`approved`、带可选 `feedback` 的 `cancelled`、`abandoned`；删除“继续规划/取消”误发 JSON-RPC error 的旧实现。
+- [x] 会话回放的 `current_mode_update` 同步适配器真实 `mode`；`session/set_mode` 失败不再被吞掉，普通/排队 Prompt 都携带本回合 `_meta.mode` 快照。
+- [x] 识别 Grok CLI 为普通 Prompt 创建的内部队列条目；只有 Desktop 自己提交的 queue/interject ID 才能启动后续展示回合，防止真实终态后出现幽灵第二回合并永久保留 Stop。
+- [x] 修复正式候选 UI 探针发现的工作区选择器焦点竞态：关闭回调保持稳定，Sidebar 无关重渲染不再破坏返回焦点目标。
+- [x] 聚焦 7 文件/85 项、补充 Plan 模式/队列契约和 TypeScript 通过；本机 CLI `0.2.117` 的无推理 `session/set_mode=plan` 握手通过。
+- [x] 运行一次隔离空目录的真实只读 Plan 回合：无 Renderer 权限卡、无工作区写入、收到计划并安全退出、最终 `working=false`；该验收在修复前稳定复现幽灵回合，修复后通过。
+- [x] 完成最终 0.6.24 候选门槛：82 文件/483 项离线测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、303 文件公开扫描、Fuses、打包版/Portable UI、Task Scheduler、per-user 安装、冷启动、主进程/About/诊断和快捷方式核验通过。首次打包探针暴露的工作区选择器焦点竞态已修复，修正后的候选完整通过。
+- [x] 历史 0.6.24 门已由 0.8.0 Plan/Stop 实机与 UI 门禁取代。
+
+## v0.6.23 Plan 终态与停止恢复热修
+
+- [x] 复现并定位普通/Plan 回合已收到最终回答与 `turn_completed`，但原始 `session/prompt` RPC 未返回时主进程仍永久保持 `working`。
+- [x] 以回合 ID 将权威终态事件绑定到对应 Prompt 请求；终态立即释放 Composer/关闭拦截，不得误结算后续排队或插话回合。
+- [x] Stop 先走标准 ACP cancel；单会话八秒不确认时只重建该 CLI Adapter 并恢复持久会话，不影响其他并行会话。
+- [x] Plan 模式不再弹权限卡：只读操作自动允许，修改性/未知操作自动拒绝；主进程文件写入与命令只读门仍是硬边界。
+- [x] 兼容 `read_file`、`list_directory`、`search_files` 等当前 ACP 标识，并允许由明确只读阶段组成的 PowerShell 管道。
+- [x] 聚焦 5 文件/80 项与最终 81 文件/478 项离线测试通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产/资源构建、公开扫描、Fuses、打包版/Portable UI 和 Task Scheduler 探针通过；不发送付费模型请求。
+- [x] 生成唯一一套 0.6.23 Setup/Portable/SBOM/许可证资产并 per-user 安装；File/Product、主进程/About/诊断、支持包附件排除及桌面/开始菜单快捷方式验收通过。
+- [x] 历史 0.6.23 门已由 0.8.0 一次终态结算、Plan/Stop 实机和安装版 UI 门禁取代。
+
 ## Post-v0.6.22 交互回合取消上限热修
 
 - [x] 移除普通 Prompt 与排队后续 Prompt 的 Desktop 30 分钟总时长上限；持续输出、工具执行和等待用户操作不再因累计时间自动取消。
@@ -49,7 +248,7 @@
 - [x] 可选计划说明默认收起；保留 0.6.18 的一次性请求、成功立即移除、陈旧请求本地收起及防重复响应语义。
 - [x] Renderer 聚焦测试 2 文件/32 项、TypeScript、生产构建和 `git diff --check` 通过。
 - [x] 仅打包一次并 per-user 安装 0.6.19；File/Product/ASAR、Fuses、桌面/开始菜单快捷方式和安装版主进程/About/诊断夹具通过，应用已打开交给用户实机验收。
-- [ ] 用户验收前不推送 GitHub、不创建 Release，并保留 0.6.15–0.6.18 资产。
+- [x] 历史候选已由后续版本取代；旧资产保留策略已执行。
 
 ## v0.6.18 交互与 Agent 改动本地验收热修
 
@@ -62,7 +261,7 @@
 - [x] 聚焦测试 5 文件/61 项、TypeScript 和生产构建通过。
 - [x] 最终完整离线套件通过：78 文件/447 项通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建、295 文件公开扫描和 diff check 通过；仅打包一次并生成 0.6.18 Setup/Portable/SBOM/许可证/SHA-256。
 - [x] per-user 安装 0.6.18，File/Product/ASAR、Fuses、桌面/开始菜单快捷方式及安装版主进程/About/诊断夹具通过。
-- [ ] 用户验收前不推送 GitHub、不创建 Release，并保留 0.6.15–0.6.17 资产。
+- [x] 历史候选已由后续版本取代；旧资产保留策略已执行。
 
 > 本文件保存获批实施计划。每次实行前必须阅读本文件、`FEATURE_MATRIX.md`、`CLI_COMPATIBILITY.md` 与根目录 `CHANGELOG.md`。
 
@@ -78,7 +277,7 @@
 - [x] 最终完整离线套件通过：78 文件/436 项通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建、295 文件公开扫描和 diff check 通过。
 - [x] 运行一次正式打包并生成 Setup/Portable/SBOM/许可证/SHA-256；产物扫描与 `SHA256SUMS.txt` 一致，0.6.15/0.6.16 资产保留。
 - [x] per-user 安装 0.6.17、冷启动并核对 File/Product/ASAR、Fuses、桌面/开始菜单快捷方式；安装版主进程/About/诊断探针与只读 Computer Use 主界面、设置和 Provider 管理界面检查通过。
-- [ ] 用户验收前不推送 GitHub、不创建 Release；保留 0.6.15/0.6.16 资产。
+- [x] 历史候选已由后续版本取代；旧资产保留策略已执行。
 
 ## v0.6.16 兼容扫描、会话可靠性、媒体与 Codex UI 本地验收候选
 
@@ -95,7 +294,7 @@
 - [x] 最终完整离线套件通过：78 文件/432 项通过，5 个 live 文件/8 项按设计跳过；TypeScript、生产构建和 295 文件公开扫描通过。
 - [x] 生成一次正式 0.6.16 Setup/Portable/SBOM/许可证/SHA-256，并完成打包版、Portable、任务调度与 Fuses 探针。
 - [x] per-user 安装、冷启动并核对主进程/About/诊断、File/Product/ASAR、Fuses 与桌面/开始菜单快捷方式。
-- [ ] 用户验收前不推送 GitHub、不创建 Release、不覆盖 0.6.15 资产。
+- [x] 历史候选已由后续版本取代；0.6.15 资产未被同名覆盖。
 
 ## v0.6.15 特别兼容本地验收候选
 
@@ -110,7 +309,7 @@
 - [x] 明确当前失败边界：CPA Claude 路由直接返回 HTTP 502；本机 grok2api 图片生成返回 HTTP 502，不把模型列表可见误报为可用。
 - [x] 完整离线套件（74 文件/406 项通过，5 live 文件/8 项按设计跳过）、TypeScript、生产构建、278 文件公开扫描与 diff check。
 - [x] 生成单一 0.6.15 Setup/Portable/SBOM/许可证/SHA-256，执行 per-user 覆盖安装；File/Product/ASAR、Fuses、兼容代码标记、桌面/开始菜单快捷方式和四进程冷启动通过，应用已关闭交给用户验收。
-- [ ] 用户验收前不推送、不创建 GitHub Release。
+- [x] 历史候选发布门已由后续版本取代；当前只遵守 0.8.0 的验收前不发布规则。
 
 ## v0.6.14 审计修复候选（本地上游暂不验收）
 
@@ -126,7 +325,7 @@
 - [x] TypeScript、Computer Host 0.3.1 自检/资源清单、生产 main/preload/Renderer 构建、273 文件公开扫描、`git diff --check` 和 npm audit（0 vulnerabilities）通过。
 - [x] 生产构建仍报告 Monaco/Shiki/Mermaid 等大型懒加载依赖 chunk；不通过提高 warning limit 隐藏，列为后续性能拆包事项。
 - [x] 源代码已提交并推送至 `origin/codex/v0.6.14-audit-fixes`；不创建正式 GitHub Release。
-- [ ] 用户恢复本地默认模型上游后，再执行 Provider/真实会话验收；当前按用户要求跳过。
+- [x] 该旧上游门按用户决定关闭；当前 Provider 结果统一记录在 0.8.0 的 `403 cpa_local_only` 外部边界。
 
 ## v0.6.13 本地验收候选：Anthropic Messages 无签名 thinking 兼容
 
@@ -136,7 +335,7 @@
 - [x] 使用当前 `kiro-claude-opus-4.8-thinking`、`xhigh` 和本地 `127.0.0.1:8080` 完成隔离 Grok CLI ACP 最小真实回合；未打印凭据或响应正文。
 - [x] 生成独立 0.6.13 Setup、执行 per-user 覆盖安装并核对 File/Product、快捷方式和安装 ASAR 兼容标记。
 - [x] 冷启动安装版并保持 Kiro-Go 运行；应用已打开交给用户执行真实会话验收。
-- [ ] 等待用户验收结果；不扩大为 GitHub 正式发布。
+- [x] 历史候选验收门已由后续版本取代。
 
 ## v0.6.12 本地验收候选：Provider 长流传输路由
 
@@ -169,7 +368,7 @@
 - [x] 当前本机 `CPA 兼容 · grok-4.5` 已经由通用 ProviderService 迁移为逐模型 Responses + xhigh/high/medium/low/minimal，并保留凭据与 TOML 备份。
 - [x] 6 文件/47 项聚焦测试、TypeScript、生产构建和原生资源自检通过。
 - [x] 重建并安装单一 0.6.10 Setup；旧候选已被替换。SHA-256、File/Product、Fuses、快捷方式、安装 ASAR 能力标记和冷启动通过。
-- [ ] 按用户此前决定，不扩大为完整离线/实机 UI 套件，不生成正式完整 Release 资产，不上传 GitHub。
+- [x] 当时的“暂缓扩大”决定已执行；后续版本已另行完成完整门禁。
 
 ## v0.6.9 本地验收候选：Provider 鉴权边界
 
@@ -182,7 +381,7 @@
 - [x] 当前 `CPA 兼容 · grok-4.5` 的完整 Grok CLI → 回环网关 → 上游 ACP 最小真实回合通过。
 - [x] 提升到 0.6.9；5 文件/43 项受影响测试、TypeScript、生产构建、原生资源自检和 Electron Fuse 校验通过。
 - [x] 生成单一 Setup（SHA-256 `2a0cc83d69c6cfe2053f23e2d224986f057b28af1c2086d015bfe6f71259c70c`）并 per-user 覆盖安装；File/Product 与桌面/开始菜单快捷方式通过，安装 ASAR 包含新鉴权边界。
-- [ ] 继续按用户决定，将扩大测试、Computer Use/安装版 UI 代验、完整正式资产和 GitHub 上传推迟到验收后。
+- [x] 当时的延期决定已执行；后续版本已另行完成安装版 UI 与资产门禁。
 
 ## v0.6.8 本地验收候选：CPA 会话路由与推理强度
 
@@ -194,7 +393,7 @@
 - [x] Provider 错误标签必须有同进程 scope 的近期网关观测；没有网关证据的官方 429 不再伪标为 CPA。
 - [x] 28 项聚焦 Adapter/进程管理/Renderer 能力测试、TypeScript、生产构建和原生资源自检通过。
 - [x] 只生成一个 0.6.8 本地 Setup 并 per-user 覆盖安装；File/Product 与桌面、开始菜单快捷方式通过检查，应用保持关闭交给用户验收。
-- [ ] 继续按用户决定，将扩大测试、实机代验、完整正式资产和 GitHub 上传推迟到用户验收后。
+- [x] 当时的延期决定已执行；后续版本已另行完成完整门禁。
 
 ## v0.6.7 本地验收候选：Provider 热修 + Claude 接力
 
@@ -208,7 +407,7 @@
 - [x] Renderer 增加可折叠 Claude 会话组、只读镜像、刷新/隐藏/在 Grok 中继续；工作区发现和选择器显示 Claude 项目计数。
 - [x] 源码与 lockfile 提升到 0.6.7，作为用户先行验收的本地候选。
 - [x] 36 项受影响测试、TypeScript、生产构建和打包所需原生资源自检通过；0.6.7 本地 Setup 已 per-user 覆盖安装，安装文件版本为 0.6.7。应用保持关闭，留给用户自行启动验收。
-- [ ] 按用户 2026-07-27 决定，扩大回归测试、Computer Use/安装版实机验收、完整正式资产和 GitHub 上传全部推迟到用户验收反馈之后。
+- [x] 当时的延期决定已执行；后续版本已另行完成完整回归与安装版门禁。
 
 ## v0.6.5 稳定修复 → v0.6.6 能力完善（2026-07-26）
 
@@ -249,7 +448,7 @@
 - [x] Token 圆环保留 512K 兜底（用户明确要求），但在 tooltip 注明该分母为估算。
 - [x] 模型发现识别 Gemini 系上游时自动预选 `gemini` Schema 档，并新增「Gemini 兼容」预设。
 - [x] 陈旧本地验收探针 13 条断言 + 2 类竞态修复；版本断言改由 `smoke-app.ps1` 从 `package.json` 派生。
-- [ ] 未做：对话框顶部裁剪（三种视口实测无法复现，候选修复已回退）；结构化错误摘要对真实错误的适配（需 0.6.6 的 `TurnFailure`）。
+- [x] 对话框顶部裁剪在多视口无法复现且错误候选已回退；结构化 `TurnFailure` 与真实 HTTP/Provider/Trace 展开已在后续版本实现。
 
 ### C. v0.6.5 验证与交付
 
@@ -257,9 +456,9 @@
 - [x] 用户授权的 Gemini 系上游真实端到端验证：无工具基线 200；空枚举工具在 `standard` 直通档返回 400 且错误文本与用户最初上报逐字一致；同一请求在 `gemini` 档返回 200。探针保留为 `provider-gateway.live.test.ts`，不落盘任何凭据。
 - [x] 两个显式 live Provider 探针分别通过本地假服务和用户允许的最小真实请求。
 - [x] 更新候选版本文档并通过 251 个文本文件的公开源码扫描；源码构建的 0.6.5 离线可见夹具通过结构化错误、逐回合耗时/Token、更新与诊断、导航、非 Git Review、提供商管理和多尺寸输入框验收。
-- [ ] 唯一一次 0.6.5 正式打包、Setup/Portable/SHA-256/SBOM/许可证生成和产物扫描。
-- [ ] per-user 安装、冷启动、About/诊断/进程/快捷方式和安装版关键交互验收。
-- [ ] 提交、推送、PR/合并、`v0.6.5` 标签、Release Draft 回下载/哈希/provenance 验证并发布 Latest。
+- [x] 0.6.5 独立交付被 0.6.6 正式候选有意取代，未制造一套无用户价值的中间 Release 资产。
+- [x] 该中间版本门由 0.6.6 及后续安装版验收覆盖。
+- [x] 0.6.5 独立发布被明确取消并由 0.6.6 正式发布取代；未创建误导性标签。
 
 ### D. v0.6.6 能力完善
 
@@ -284,7 +483,7 @@
 - [x] 未捕获到写入前文本时明确说明并只展示结果，不与空串对比伪造「新建文件」。
 - [x] 非 Git 目录点击「在 Review 中查看」不再静默跳转到无关文件列表。
 - [x] 右侧栏启动器新增入口，可主动打开而不只是 Git 不可用时的兜底。
-- [ ] 持久化（当前仅进程内存，重启后丢失）。
+- [x] 完成：真实文件改动随 ConversationProjection V2 的增强工具事件持久化；重启后可恢复已完成改动，崩溃中的未完成基线明确标记为无基线。
 
 #### D2. Token 活动中心（完成）
 
@@ -306,7 +505,7 @@
 - [x] 代码块不再每帧重新高亮；流式期间显示纯文本，文本稳定后再着色。
 - [x] 最终回答流式阶段不再按帧重建整棵 Markdown AST；完成后才进入完整 Markdown/公式/代码渲染。
 - [x] 「开发工具」展开状态持久化，不再每次启动折叠。
-- [ ] App 层 `useAppStore()` 无选择器，流式期间整棵外壳按帧重渲染（已有 rAF 合帧，故为每帧一次而非每事件一次）。
+- [x] App Shell/TopBar 已改为 Zustand 选择器订阅；仍读取完整 Store 的设置/辅助弹窗不位于流式主壳层。
 - [x] 添加调色板补上 Tab 焦点包含——它声明了 `aria-modal`，但全局焦点陷阱的 `hasBlockingOverlay` 不含它，从未被武装。
 - [x] 离开对话视图后不再残留 `right-tool-open`，外壳不再为一个不渲染的面板留出空间。
 - [x] 文件工作台维持“审核/预览后的辅助编辑器”定位：不恢复为拥挤的左栏常驻入口，由最近文件、Diff 和工具位置显式进入，并始终提供返回会话。
@@ -318,7 +517,7 @@
 - [x] 使用 Agent 工具真实 before/after 写入完成非 Git Last turn / Session changes；非 Git 不显示暂存、提交或分支假功能，缺少历史基线时明确降级。
 - [x] 最近文件与统一 `NavigationIntent` 使用会话/Worktree 真实根目录；项目内预览、受信任外部打开、二进制/缺失/越界原因均为行内反馈。
 - [x] 持久化精确 `TurnUsage`，实现逐回合耗时/Token、24h/今日/7天/30天/月度统计和精确 371 日的 53 周活动图。
-- [ ] 跨协议 Chat/Responses/Anthropic/Gemini 转换按用户决定延期；0.6.6 正式范围保持已验证的同协议透传、Gemini/strict Schema 清理、错误与流式转发，不伪装为已完成。
+- [x] 后续版本已完成 Chat/Responses/Anthropic/Gemini 双向请求与增量 SSE 转换、工具续写和 Usage 尾包测试；0.6.6 当时的延期记录保留为历史边界。
 - [x] 发布前复审修复并发存储覆盖、清理漂移、跨会话故障误关联、ACP 重试丢失、Prompt 超时未取消、流式解析热点和 Computer Use 按键/坐标/超时不确定性。
 - [x] 最终修正后的完整本地离线门槛通过：67 个测试文件通过、4 个显式 live 文件跳过；359 项通过、7 项跳过。TypeScript、生产构建、原生 Host、Electron Fuses、打包 UI/Task Scheduler/中文空格 Portable 夹具及前后两次 264 文件公开扫描均通过。
 - [x] 最终修正后的正式本地打包生成 0.6.6 Setup、Portable、SHA-256、SBOM 和许可证；同一 Setup 完成 per-user 安装，文件/Main/About 为 0.6.6，诊断为“可以使用”，桌面与开始菜单快捷方式均指向安装目录。
@@ -834,7 +1033,7 @@
   - [x] `agents.*` 与 `personas.*` 已接入同一发送者验证链；路径归属、只读来源、名称、语法、哈希冲突、临时文件、备份、inspect 与回滚均由主进程复核。
 - [x] 文件、Git、Memory、Agent/Persona 配置、进程和凭据全部保留在主进程；Renderer 继续 `nodeIntegration: false`、`contextIsolation: true`、sandbox、发送者验证和最小化 Preload API。
   - [x] Agent/Persona 文件发现、解析、写入、启停、重命名、删除、备份、CLI 校验和会话恢复均已留在主进程；Renderer 只持有目录展示与未保存文本。
-- [ ] CLI 初始化后按版本缓存 ACP核心、队列/插话、分叉/回退、Git/Worktree、Memory、Agent、插件/MCP、媒体、Codex读取器、额度和Computer能力；缺失功能提前禁用，核心 `initialize/session/new` 失败才触发CLI回滚。
+- [x] 已由 `CliCapabilityService`、1.x `CliCompatibilitySnapshot` 和运行时观察证据完成；核心失败回滚，可选能力缺失仅禁用对应界面。
   - [x] 首阶段能力快照已按 CLI 版本缓存 `--help`、Worktree/Memory 子命令帮助和 `inspect --json` 的非付费证据，私有 ACP 方法保持 `unknown`；成功创建/打开会话会叠加 ACP 核心运行时证据。
 - [x] 任务健康检查可自动修复计划任务注册、当前可执行路径和已不存在的会话映射；固定账号、提供商、模型、工作区与已删除配置档失效时进入“需要配置”，且检查不解密或发送提示词。
 
@@ -850,11 +1049,11 @@
   - [x] 6 项主进程服务测试、2 项 Renderer 原文补丁测试和 1 项进程管理增量测试覆盖来源/遮蔽、插件只读、结构字段、CRLF/YAML 列表、TOML 契约、外部哈希冲突、复制/启停/重命名/删除、持久备份、inspect 失败回滚、目录链接越界、可选热重载及仅空闲会话重启；隔离 Electron/CDP 探针验证 typed IPC、Agent/Persona 切换、结构化字段、Monaco 原文和未知字段保持。
 - [x] Dashboard/配置档覆盖父子生命周期、Worktree跳转、停止、全局/项目覆盖、能力降级及参数/ACP元数据转换。
 - [x] 集成流程固定为：创建Worktree配置档 → 启动会话映射 → 文件修改同步编辑器/Git → 查看Dashboard → 保存并恢复项目Memory → 预览并Apply → 人工制造冲突验证停止 → 解决并清理 → 验证自动批准参数只出现一次。临时仓库集成测试通过且不发送付费提示词。
-- [ ] 验证 `v0.5.16 → v0.6.0` 覆盖升级，保留DPAPI账号、任务、专属会话、Codex接力、计划任务注册和AppData；覆盖Windows 10 22H2、Windows 11 23H2/24H2、中文用户名、标准权限、安装/Portable、100–200%DPI及双屏。
+- 外部发布矩阵（非功能缺漏）：仍需在可用的 Windows 10/11 实机上覆盖升级、标准权限、不同 DPI/双屏和安装/Portable；当前机器无法替代这些硬件/系统证据。
 - [x] 遵循“开发只跑受影响测试、候选只跑一次完整离线套件、只生成一次正式候选包、未改Computer执行层不重复24项或付费验收”的测试纪律。完整套件一次执行得到262项通过、2项显式跳过和1项测试框架超时；仅调整该用例超时后聚焦Memory文件7/7通过，未重复完整套件；正式候选包只生成一次。
 - [x] 候选后界面重构只运行受影响门槛：TypeScript、生产构建、4个Renderer文件/8项聚焦测试及 Computer Use 本地源码版验收；已检查空状态、工作台菜单、文件工具栏、会话操作菜单/点击外部关闭和自定义背景可读性，未发送提示词、未重复完整套件、未重新打包。
 - [x] 本地版本已提升至`0.6.0`，矩阵/兼容文档/Changelog已更新；唯一候选打包生成无签名Setup、Portable、SHA-256、SBOM和许可证报告，并通过Fuses、产物公开扫描、打包壳层、Profiles/Dashboard/启动选择器/任务健康UI及中文空格路径Portable验收。
-- [ ] 仅在上项Windows外部设备/覆盖升级矩阵完成并获得明确发布指令后创建标签、上传GitHub Release和构建溯源；失败不得覆盖已有标签或资产。
+- 发布约束：只有外部 Windows 矩阵完成且用户明确下达发布指令后，才创建标签/Release；这不是源码未完成项。
 
 ---
 
@@ -1199,7 +1398,7 @@
 ## 五、测试与发布门槛
 
 - [x] 自动化覆盖配置隔离、敏感扫描、支持包脱敏、Windows 路径、向导、更新、文件搜索、隐私提醒、IPC 和资源哈希；打包脚本额外强制 Fuses/产物扫描，IME/会话搜索由 Renderer 实现并列入发布 UI 回归。
-- [ ] 在 Windows 10 22H2 与 Windows 11 x64、中文用户名、标准权限、不同 CLI/代理/路径/DPI/显示器和安装/ZIP 场景完成验收。
+- 外部兼容矩阵沿用上方发布约束；当前 0.8.0 自动化和本机安装证据不冒充其他 Windows/硬件实机。
 - [x] 本地公开源码和最终产物通过敏感信息扫描；已在干净 `npm ci` 后用一条 fail-fast 命令生成完整产物；默认验证已拆分为不触碰真实 Grok/Codex 数据的离线流程。
 - [x] 首次公开仓库标签已通过 GitHub CI、Gitleaks、CodeQL、版本一致性、公开产物扫描、干净 Windows Runner 的 NSIS 安装/覆盖升级/卸载/AppData 保留、EXE/ZIP 构建溯源，并成功创建 Draft Release。
 - [x] 发布负责人于 2026-07-20 明确要求公开可见的 EXE/ZIP，已将通过 CI、哈希、溯源、安装生命周期和回下载冒烟验证的 `v0.4.0` Draft 转为正式 Release；未完成的 Windows 10/多物理设备矩阵继续由上一项单独跟踪，不将发布动作冒充为该矩阵已通过。

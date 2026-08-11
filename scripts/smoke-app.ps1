@@ -37,14 +37,19 @@ $DebugPort = Get-Random -Minimum 19000 -Maximum 25000
 $HostedRunnerFlags = if ($env:GITHUB_ACTIONS -eq 'true') { '--disable-gpu' } else { '' }
 $Info.Arguments = ("--remote-debugging-port=$DebugPort --user-data-dir=`"$ProfileRoot`" $HostedRunnerFlags $ApplicationArguments").Trim()
 $Info.EnvironmentVariables['GROK_DESKTOP_OFFLINE_SMOKE'] = '1'
-if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) {
+if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs', 'probe-v070-ui.mjs')) {
     $Info.EnvironmentVariables['GROK_DESKTOP_UI_FIXTURE'] = '1'
+    if ($ProbeScript -eq 'probe-v070-ui.mjs') {
+        # The responder is a main-process-only state machine for the isolated
+        # v0.7 fixture. Never enable it for ordinary smoke runs or older probes.
+        $Info.EnvironmentVariables['GROK_DESKTOP_UI_RESPONDER'] = '1'
+    }
     $ThemeDirectory = Join-Path $ProfileRoot 'themes'
     [IO.Directory]::CreateDirectory($ThemeDirectory) | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $ThemeDirectory 'background.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='))
-    if ($ProbeScript -in @('probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) {
-        $FixtureWorkspace = if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) { $ProfileRoot } else { (Split-Path -Parent $PSScriptRoot) }
-        if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs')) {
+    if ($ProbeScript -in @('probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs', 'probe-v070-ui.mjs')) {
+        $FixtureWorkspace = if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs', 'probe-v070-ui.mjs')) { $ProfileRoot } else { (Split-Path -Parent $PSScriptRoot) }
+        if ($ProbeScript -in @('probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs', 'probe-v070-ui.mjs')) {
             $FixtureSource = Join-Path $FixtureWorkspace 'src\renderer\src'
             [IO.Directory]::CreateDirectory($FixtureSource) | Out-Null
             [IO.File]::WriteAllText((Join-Path $FixtureSource 'App.tsx'), "export const fixture = 'app';`n", [Text.UTF8Encoding]::new($false))
@@ -62,6 +67,7 @@ if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.
     }
 }
 $Process = [System.Diagnostics.Process]::Start($Info)
+$PreviousExpectedAppVersion = $env:GROK_EXPECTED_APP_VERSION
 try {
     $Ready = $false
     for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
@@ -71,15 +77,18 @@ try {
         if ($Process.MainWindowHandle -ne 0 -and $Process.MainWindowTitle -eq 'Grok Build Desktop') { $Ready = $true; break }
     }
     if (-not $Ready) { throw 'Application did not expose a visible Grok Build Desktop window within 15 seconds.' }
-    # Probes assert the packaged renderer reports the real version. Deriving it
-    # here keeps that assertion from rotting into a hard-coded literal that has
-    # to be hand-edited every release.
-    $env:GROK_EXPECTED_APP_VERSION = (Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'package.json') -Raw | ConvertFrom-Json).version
+    # Legacy probes may compare against the current package dynamically. The
+    # v0.7 gate deliberately hard-codes its release contract and must not be
+    # made to accept an older packaged shell through an environment override.
+    if ($ProbeScript -eq 'probe-v070-ui.mjs') { Remove-Item Env:GROK_EXPECTED_APP_VERSION -ErrorAction SilentlyContinue }
+    else { $env:GROK_EXPECTED_APP_VERSION = (Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'package.json') -Raw | ConvertFrom-Json).version }
     if ($ProbeArgument) { & node (Join-Path $PSScriptRoot $ProbeScript) "http://127.0.0.1:$DebugPort" $ProbeArgument }
     else { & node (Join-Path $PSScriptRoot $ProbeScript) "http://127.0.0.1:$DebugPort" }
     if ($LASTEXITCODE -ne 0) { throw 'Renderer content verification failed.' }
     Write-Host "Visible renderer smoke test passed (handle $($Process.MainWindowHandle))." -ForegroundColor Green
 } finally {
+    if ($null -eq $PreviousExpectedAppVersion) { Remove-Item Env:GROK_EXPECTED_APP_VERSION -ErrorAction SilentlyContinue }
+    else { $env:GROK_EXPECTED_APP_VERSION = $PreviousExpectedAppVersion }
     if (-not $Process.HasExited) {
         [void]$Process.CloseMainWindow()
         if (-not $Process.WaitForExit(5000)) { $Process.Kill() }

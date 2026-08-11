@@ -1,5 +1,132 @@
 # Feature Matrix
 
+## 0.8.0 Grok Build CLI 1.0.0 public release (2026-08-11)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Final historical-plan audit | Reviewed + full offline gate | Every remaining historical checkbox was reconciled against current 0.8.0 evidence. The only open item is the external remote CPA `403 cpa_local_only` boundary; no known P0/P1 source implementation gap remains in the reviewed scope. Final source gate: 101 files/734 tests, TypeScript/build/public/chunks/audit/diff and current UI pass. See `docs/V080_FINAL_AUDIT.md`. |
+| Official Session rename/title authority | Forward fixture + stable fallback verified | Official main exposes `x.ai/session/rename` and manual/auto title ownership metadata. Desktop normalizes private and standard notifications, but installed stable 1.0.0 returns method-not-found, so local catalog rename remains the truthful fallback and the capability stays unavailable. |
+| Grok Doctor automatic fixes | Focused + live no-fix verified | Diagnostics reads `doctor --json`, presents only named automatic remediations, uses a short-lived one-use token, revalidates before a fixed-argument `doctor fix` invocation and requires explicit confirmation. The installed CLI currently reports no automatic fixes. |
+| CLI 1.x gate and updater | Automated + installed-runtime verified | Desktop upgraded the installed CLI from 0.2.118 to stable `1.0.0 (3cd0d0cbce)` through the exact-target cross-major flow; initialize/new/close/delete and the core gate passed without rollback. Unknown future majors remain fail-closed. |
+| Session attach/close | Automated + live verified | Every new/load/resume attach sends interactive `startupHints`; a fresh 1.0 process resumed the same Session ID and structured close returned `closed`. |
+| MCP 1.0 events | Fixture + live observed | Direct/wrapped slash events are session-scoped. Live `/compact` observed wrapped init progress, server status, server list and initialized events on 1.0.0. Tool-list change remains event-fixture evidence. |
+| Session data views | Partial runtime capability | Stable 1.0.0 advertises `/context` and `/session-info`; ACP info/usage extensions are method-not-found and `/usage` is absent. UI exposes only observed views and leaves missing Usage disabled/unknown. |
+| Official Git status preference | Automated; stable method unavailable | Requests explicitly include untracked/stats/patch/submodule flags, but stable 1.0.0 returns method-not-found for `x.ai/git/status`. Restricted system Git remains the verified fallback; Review mutations still use the trusted Git service. |
+| Project path recovery | Source + TypeScript verified | Known missing projects may open local projections offline; Composer/model controls are disabled until reconnect/rebind. Rebind tries direct moved-directory attach before official Fork, records a transaction and never restores code implicitly. |
+| Compact and long-turn monitoring | Focused verified | Per-session inherited/custom threshold, manual Compact and lifecycle events exist. 20/60 second first-event notices are diagnostic only and do not cancel the request. |
+| Updates and upstream tracking | Focused verified | Automatic checks are optional and limited to startup/24h; app updates open official Releases, CLI updates require confirmation. Weekly upstream workflow opens a maintenance issue only. |
+| Privacy and interaction | Focused verified | Feedback is capability-gated and preview-redacted; support bundles exclude content/rebind logs. Long scripts/tables/diffs are selectable and bounded; extension families are grouped/searchable. |
+| Plan/Stop/Compact/parallel sessions | Live verified | Real read-only Plan passed without permission cards or writes; two ACP sessions started concurrently; `/compact` completed; `session/cancel` produced `stopReason=cancelled`; close outcomes were structured. |
+| Current managed Provider | Blocked by upstream policy | Desktop/CLI 1.0 reached the configured Responses gateway and preserved native reasoning choices, but the remote upstream returned `403 cpa_local_only`. The adapter now surfaces the actionable nested HTTP error instead of bare `Internal error`; no successful inference is claimed. |
+| 0.8.0 final gate | Packaged + installed + release workflow | 101 test files/734 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 366-file public scan, chunks, Native/Fuses, zero-vulnerability audit, packaged and installed UI, Setup/Portable/SBOM/licenses, installed About/diagnostics/ASAR and both shortcuts pass. Public assets are rebuilt from the tag and published only after SHA-256/Attestation verification. The remote CPA Provider remains explicitly blocked by upstream `cpa_local_only`. |
+
+
+## 0.7.3 consolidated 0.7.x candidate (2026-08-10)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Conversation reading and timeline | Packaged UI verified | Conversation-only width/font controls, virtualized request navigation markers and completed-process collapse pass component tests and the packaged 0.7.3 UI probe. |
+| External open targets | Focused verified | Main process discovers only installed Windows tools with deterministic fixed-argument contracts. Runtime schemas validate tool ID, target, line and column; trusted-root and realpath checks still run before launch. |
+| Git/non-Git review mapping | Packaged UI verified | Launcher exposes Git Review only when Git capability exists, otherwise Agent Changes. The non-Git packaged fixture verifies file search/single-Diff surface and absence of staging/commit/branch controls. |
+| Renderer architecture/performance | Source + focused verified | Conversation viewport, active-session derivation and navigation controller are separate modules; App Shell and TopBar subscribe through Zustand selectors instead of the complete store. Heavy workbenches remain lazy. |
+| Application update detection | Live source + unit verified | GitHub API returned public latest v0.6.22 on 2026-08-10; a 0.7.3 local candidate is represented as current-ahead, never as a downgrade. Network timeout/size and stable release parsing tests pass. |
+| CLI update detection | Live source + unit verified | Installed 0.2.118 reports stable 1.0.0. Cross-major preview/IPC/service require explicit acknowledgement; no 1.0.0 installation or runtime compatibility is claimed yet. Prior exact 0.2.118 update/rollback pipeline remains the last live apply evidence. |
+| 0.7.3 candidate gate | Packaged + installed verified | 98 test files/697 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 351-file public scan, chunks, Native/Fuses, Task Scheduler, current packaged UI, overlays, Portable Chinese/space path, Setup/SBOM/licenses, installed About/diagnostics/ASAR and shortcuts pass. Real long-session/Provider workloads remain user acceptance. |
+
+## 0.7.1 session and project foundation (2026-08-09)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Stable project identity | Offline verified | Existing Windows paths are realpath-normalized and compared case-insensitively without trailing separators; missing paths retain a lexical identity and diagnostic. Unit/catalog tests cover case, trailing separators, links, deduplication and source counts. |
+| Project hide and restore | Offline verified | Hiding is metadata-only and survives restart; restoring preserves original sessions. Renderer IPC is runtime-schema validated. No project, projection or source directory is deleted. |
+| Draft-first New Task | Offline + UI probe verified | Opening New Task creates no CLI session. Text, attachments and per-draft runtime choices persist locally; first send creates one session and moves the draft without overwriting an existing target. Rollback keeps attachment files when store migration fails. |
+| Local-first session hydration | Contract + UI verified | Projection V2, attachments and presentations render before ACP reconnect. Hydration states and generation fencing keep stale reconnects from replacing the active session; a failed reconnect with local content returns offline rather than blanking the view. |
+| Authoritative sidebar status | Offline verified | Running, waiting, queued, unread, failed and idle are represented as one status per session. Draft and active counts are enriched per project; background sessions do not own the active Composer controls. |
+| Unified conversation navigation | Source + UI verified | Sidebar, task center, Dashboard/deep targets, history forks, Codex/Claude continuations and Worktree sessions route through `openConversationTarget()` and share workspace/session activation, scroll settlement and focus behavior. |
+| Current candidate gate | Packaged + installed verified | 95 test files/686 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, public scan, chunks, Native Host, Fuses and packaged 0.7.1 UI pass. Setup/Portable/SHA-256/SBOM/licenses were generated; installed main/About/diagnostics and both shortcuts report 0.7.1. Real user CLI/provider acceptance remains pending. |
+
+## 0.7.0 C-drive refreshed baseline (2026-08-09)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Removed-drive tool cache | Installed verified | User-level npm cache now resolves to `%LOCALAPPDATA%\\npm-cache`; dependency and packaging commands no longer target the removed E drive. |
+| Dependency audit refresh | Offline verified | Vite/plugin/Mermaid and patched transitive overrides remove the newly published DOMPurify/PostCSS/NanoID/js-yaml findings; `npm audit` reports zero vulnerabilities. |
+| C-drive baseline | Packaged + installed verified | 94 files/677 tests, TypeScript, production/resources, 342-file public scan, chunks, native host, Fuses, packaged UI, per-user install, File/Product and shortcuts pass. A second redundant release-asset UI fixture remains timing-sensitive, so no public Release is claimed. |
+
+## 0.7.0 累计变更一致性审计（2026-08-09）
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Cumulative source audit | Source verified | Audited 5 commits / 150 changed files from `origin/main`; no parallel production scanner or projection replay store was found. CSS has one ordered entrypoint; 71 pre-existing base/shell selector overrides are documented cascade debt, not a second mounted shell. |
+| Provider scan cancellation | Focused verified | Cancellation no longer depends on `updatedAt`; Job ID/generation invalidates late responses and both queued and controller-not-yet-installed cancellation paths are checked before the first request. |
+| Compatibility IPC | Source verified | Legacy `deep-scan/cancel-scan` remains a compatibility wrapper around the single `deepScan()` core; new Renderer uses Job API. |
+| Media inactivity semantics | Focused verified | A bounded startup grace is separate from the configured post-output inactivity timer; continuous output re-arms inactivity and there is no wall-clock ceiling. |
+| Reopen attachment fixture | UI probe verified | Offline reopen restores through the same main-process attachment ledger as production; the virtualized probe scrolls to the image turn before asserting mounted previews. |
+| Post-fix source candidate | Offline verified | 94 test files/677 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 342-file public scan, chunks, native self-test and high-severity audit gate pass. Packaging/install is deliberately not claimed after the E-drive failure. |
+
+## v0.7.0 ACP 0.2.120 forward-compatibility A–D (2026-08-06)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Runtime session capability evidence | Focused verified | Sanitized 0.2.120 initialize fixture and CLI update tests record `session/list`, `session/resume` and `session/close`; the installed stable CLI is still 0.2.118. |
+| Resume-first session lifecycle | Contract verified | Resume is attempted only when declared, falls back to `session/load` only for capability errors, preserves the requested ID when the resume response omits it, and sends best-effort standard close before child teardown. |
+| Plan model switching | Contract verified | The model selector remains enabled only while an interactive Plan decision is pending; permission/question waits remain locked and managed Provider identity is retained. |
+| ACP attachment/media replay | Focused + renderer verified | User-message replay carries stable IDs and attachment previews; resource links/direct images/MCP extracted images are merged and content-deduplicated; source-less media events remain independent. |
+| Capability-gated `/btw` | Contract + focused verified | Official `session_id`/`question` wire shape, answer receipt and unsupported fallback are covered; the Composer exposes the action only when the current runtime advertises the command. |
+| Official Session surfaces | Contract + UI verified | `session/list`, `x.ai/session/info` and `x.ai/session/usage` are normalized in the main process and exposed in the right-side Session tool; missing declarations remain an explicit empty state. |
+| Mermaid Plan actions | Source + build verified | Strict Mermaid rendering now offers copy source, copy image and open image after successful render; no claim is made that every future CLI emits Mermaid blocks. |
+| Current milestone boundary | Local candidate | 94 test files/676 tests pass, 9 tests skip by design; TypeScript and production build pass. Stable 0.2.119/0.2.120 live evidence, provider acceptance and `doctor fix` remain deferred; no push or Release is made. |
+
+## v0.7.0 comprehensive audit candidate (local, not released)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| CLI controlled updates | Focused + installed verified | Every managed ACP/probe path uses `--no-auto-update`; exact stable target, concurrent click coalescing/rejection, verification, rollback and session restoration are unit-tested. This machine updated exactly from 0.2.117 to stable 0.2.118 and rechecked current/no-update. |
+| CLI runtime capability snapshot | Fixture + live handshake verified | Sanitized real 0.2.117/0.2.118 handshakes plus 0.2.118 lifecycle and official-source 0.2.120 forward fixtures cover Session/Prompt/MCP, models/efforts, commands, Recap/Rewind/plugins and unknown fields. Runtime declaration/probe/event evidence outranks version hints. |
+| CLI 0.2.118 lifecycle | Focused + minimal Plan live verified | Completion-before-background, Compact cancellation, Recap hash dedupe, unknown-event redaction and official-first session deletion are covered. One read-only Plan turn completed in 19.28s with no permission card and no workspace writes. |
+| CLI 0.2.118 custom-model TOML | Focused verified | Managed `reasoning_efforts` use CLI-native strings rather than rejected array-of-table output; upstream-only `auto/none` remain Desktop metadata and legacy object arrays are migrated on managed Provider launch. |
+| CLI 0.2.119–0.2.120 forward parse | Fixture + capability-gated UI | Follow-ups, models/settings updates and runtime timeline events parse only when observed; `/btw` and Session info/usage/list surfaces are now wired behind evidence. MCP/plugin status, official Git UI and doctor fixes remain deferred until stable runtime evidence. |
+| Session runtime identity | Focused verified | Session-scoped Provider/local model/upstream alias/effort/mode/profile; failed managed-provider launch is fail-closed; fork inherits parent runtime. |
+| Plan/permission/stop lifecycle | Focused + live Plan + installed fixture verified | Plan receipt closes the old gate before async mode reconciliation; stable turn IDs settle duplicate/late terminal events; isolated responder covers three Plan decisions, permission allow/deny and Stop. CLI 0.2.118 minimal read-only Plan passed live; an existing long-session Stop remains user acceptance. |
+| Persisted queue | Focused verified | accepted/running entries survive restart and move atomically to terminal; late snapshots cannot resurrect or duplicate user messages. |
+| Conversation projection replay | Focused verified | V2 projection stores visible blocks and merges ACP replay by stable user turn/content suffix; partial answers and re-chunked complete answers are covered. |
+| Store/automation concurrency | Focused verified | Cross-process transaction lock/owner fencing and explicit cancellation API; no fixed 24-hour total runtime, optional ACP inactivity is separate. |
+| IPC/path/media boundaries | Focused verified | Runtime schemas, Picker/session/workspace binding, junction/symlink checks, executable-open rejection, session-bound media handles and explicit Provider-Origin remote fetch. |
+| UI and delivery gates | Packaged + installed verified | Current v0.7 probe, Plan/permission/Stop fixture wiring, physical 125%–200% scaling, layout regression and renderer chunk/worker gates pass against the packaged and per-user installed binaries. |
+| Release/install | Installed locally for acceptance | 94 test files/676 offline tests pass; 6 live files/9 tests skip by design. Production/resources and the previous package/install checks remain valid; the current source/build still needs the final post-change package refresh. No push or Release before user acceptance. |
+
+## v0.6.25 local Plan permission and terminal-recovery hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Plan command gate | Focused verified | Script blocks, subexpressions, static-call syntax, redirection, expansion and mutating pipeline stages are rejected before any read-only allowlist decision. |
+| Plan tool gate | Focused verified | Auto-approval uses explicit normalized ACP kinds or a parsed bounded command; display titles and tool names cannot turn an unknown/mutating request into a read operation. |
+| Plan filesystem gate | Focused verified | Only the exact persisted session `plan.md` can be written while Plan is active. Other workspace/external paths and an existing symlink target are denied in the main process. |
+| Permission cancellation | Contract verified | A denied request without a CLI-provided reject option receives ACP `outcome=cancelled` and clears the waiting interaction rather than returning a JSON-RPC error. |
+| Queued terminal settlement | Contract verified | A Desktop-owned queued prompt is tied to its prompt ID, so `turn_completed` clears it even if the CLI omits the Prompt response. |
+| Stop feedback | Packaged/source verified | Renderer awaits the existing bounded cancel/recovery path and exposes success or failure beside the Composer. Real stuck-CLI timing remains user acceptance. |
+| Delivery | Installed locally for acceptance | 82 offline files/488 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 303-file scans, native host, Fuses, packaged/Portable UI, scheduler, installed main/About/diagnostics, File/Product and shortcuts pass. No GitHub push or Release. |
+
+## v0.6.24 local Plan wire/state and queue-ownership hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Plan decision wire | Official-source + contract verified | Desktop maps implement/continue/abandon to the current successful `approved`/`cancelled`/`abandoned` ext-method results. Feedback is emitted only on `cancelled`; duplicate decisions remain idempotent. |
+| Plan mode authority | Contract + live handshake verified | Replayed mode updates are authoritative, failed `session/set_mode` cannot produce a false UI mode, and direct/queued Prompts pin `_meta.mode`. Installed CLI 0.2.117 accepted a real `session/set_mode=plan`. |
+| Plan permissions | Real isolated turn verified | One real read-only Plan turn produced no Renderer permission event and no workspace mutation. Read-only selection and mutation/unknown rejection still retain the independent fs/terminal main-process gates. |
+| Direct-vs-queued lifecycle | Regression + real turn verified | Server-generated internal queue IDs from ordinary Prompts are hidden from Desktop queue ownership and cannot start a phantom second turn. The reproduced live turn ends with no active turn and `working=false`. |
+| Workspace picker focus | Packaged UI verified | The close callback is stable across Sidebar rerenders, preserving the original workspace-button return-focus target. The packaged workspace-picker focus/Escape probe passes. |
+| Delivery | Installed locally for acceptance | 82 offline files/483 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 303-file public scans, Fuses, packaged/Portable UI, scheduler, File/Product, shortcuts and installed main/About/diagnostics pass. The real isolated Plan turn also ends idle without a permission card or write. Existing long-conversation Plan/Stop behavior remains user acceptance; no GitHub push or Release. |
+
+## v0.6.23 local Plan terminal-state and Stop hotfix
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Terminal turn settlement | Focused verified | A turn-scoped `_x.ai/session/update.turn_completed` settles a missing `session/prompt` response, clears `working` and cannot settle a later queued/interjected turn. |
+| Stop recovery | Unit/source verified | ACP cancel remains first choice; an unacknowledged cancel replaces only the affected session adapter after eight seconds and reloads its persisted conversation. |
+| Plan permissions | Unit/source verified | Plan shows no permission surface: recognized read-only tools/queries are selected, mutation/unknown tools are rejected, and main-process fs/terminal gates remain enforced. |
+| Delivery | Installed locally for acceptance | 5 focused files/80 tests and the final 81 offline files/478 tests pass; 5 live files/8 tests skip by design. TypeScript, production/resources, public scans, Fuses, packaged/Portable UI, Task Scheduler, File/Product, shortcuts and installed main/About/diagnostics pass. Real “continue planning”, Stop and Plan read-only behavior remain user acceptance; no paid request, GitHub push or Release. |
+
 ## Post-v0.6.22 unlimited interactive-turn hotfix
 
 | Area | Status | Evidence / boundary |

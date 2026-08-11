@@ -13,6 +13,8 @@ function readCssGraph(url: URL, visited = new Set<string>()): string {
 const css = readCssGraph(new URL("./styles.css", import.meta.url));
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const auxiliaryPanels = readFileSync(new URL("./components/AppAuxiliaryPanels.tsx", import.meta.url), "utf8");
+const overlayFocusTrap = readFileSync(new URL("./hooks/use-overlay-focus-trap.ts", import.meta.url), "utf8");
 const messageCard = readFileSync(new URL("./components/MessageCard.tsx", import.meta.url), "utf8");
 const turnCard = readFileSync(new URL("./components/TurnCard.tsx", import.meta.url), "utf8");
 const composer = readFileSync(new URL("./components/Composer.tsx", import.meta.url), "utf8");
@@ -23,6 +25,10 @@ const agentChangePane = readFileSync(new URL("./components/AgentChangePane.tsx",
 const sidebar = readFileSync(new URL("./components/Sidebar.tsx", import.meta.url), "utf8");
 
 describe("renderer layout regression guards", () => {
+  it("renders the isolated UI fixture on clean hosts without a Grok CLI", () => {
+    expect(app).toContain("!store.cli?.found && !offlineFixtureActive");
+  });
+
   it("keeps the main grid within the window so nested content can scroll", () => {
     expect(css).toMatch(/\.main-pane\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
   });
@@ -49,7 +55,7 @@ describe("renderer layout regression guards", () => {
     expect(html).toContain('<div id="overlay-root"></div>');
     expect(css).toMatch(/#overlay-root\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;/s);
     expect(app).toContain('document.getElementById("overlay-root")!');
-    const portalStart = app.indexOf("{createPortal(<>");
+    const portalStart = app.indexOf("{createPortal(<Suspense");
     const portalEnd = app.indexOf('document.getElementById("overlay-root")!', portalStart);
     expect(portalStart).toBeGreaterThan(0);
     expect(portalEnd).toBeGreaterThan(portalStart);
@@ -57,10 +63,10 @@ describe("renderer layout regression guards", () => {
     expect(portal).toContain("<ControlPanel");
     expect(portal).toContain("<ComputerPermissionDialog");
     expect(portal).toContain("<ActionDialog");
-    expect(app).toContain("element.getClientRects().length > 0");
-    expect(app).toContain("new MutationObserver");
-    expect(app).toContain("root?.contains(document.activeElement)");
-    expect(app).not.toContain("element.offsetParent !== null");
+    expect(overlayFocusTrap).toContain("element.getClientRects().length > 0");
+    expect(overlayFocusTrap).toContain("new MutationObserver");
+    expect(overlayFocusTrap).toContain("root?.contains(document.activeElement)");
+    expect(overlayFocusTrap).not.toContain("element.offsetParent !== null");
   });
 
   it("keeps media actions in document flow and renders a missing-cache fallback", () => {
@@ -126,8 +132,8 @@ describe("renderer layout regression guards", () => {
 
   it("bounds large account collections and keeps the active account first", () => {
     expect(css).toMatch(/\.account-list\s*\{[^}]*max-height:[^;}]+;[^}]*overflow:\s*auto;/s);
-    expect(app).toContain("const displayAccounts = [...store.accounts].sort");
-    expect(app).toContain("displayAccounts.map((account)");
+    expect(auxiliaryPanels).toContain("const displayAccounts = [...store.accounts].sort");
+    expect(auxiliaryPanels).toContain("displayAccounts.map((account)");
   });
 
   it("uses manual media configuration without requiring a slow context scan", () => {

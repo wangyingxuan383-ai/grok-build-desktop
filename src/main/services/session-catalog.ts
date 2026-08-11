@@ -65,6 +65,7 @@ export class SessionCatalog {
           id: entry.name,
           cwd,
           title,
+          preview: summary.session_summary?.replace(/\s+/g, " ").trim().slice(0, 240) || undefined,
           createdAt: summary.created_at || "",
           updatedAt: summary.last_active_at || summary.updated_at || summary.created_at || "",
           messageCount: summary.num_chat_messages ?? summary.num_messages ?? 0,
@@ -101,53 +102,63 @@ export class SessionCatalog {
   }
 
   async rename(sessionId: string, title: string): Promise<void> {
-    const metadata = await this.meta.get();
-    metadata.renames[sessionId] = title.trim() || "新会话";
-    await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => { metadata.renames[sessionId] = title.trim() || "新会话"; });
+  }
+
+  async syncOfficialTitle(sessionId: string, title: string, manual: boolean): Promise<void> {
+    await this.meta.mutate((metadata) => {
+      if (!manual) {
+        delete metadata.renames[sessionId];
+        return;
+      }
+      const normalized = title.trim();
+      if (normalized) metadata.renames[sessionId] = normalized;
+    });
   }
 
   async markUnread(sessionId: string, error = false): Promise<void> {
-    const metadata = await this.meta.get();
-    metadata.unread[sessionId] = error ? "error" : "ok";
-    await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => { metadata.unread[sessionId] = error ? "error" : "ok"; });
   }
 
   async markRead(sessionId: string): Promise<void> {
-    const metadata = await this.meta.get();
-    delete metadata.unread[sessionId];
-    await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => { delete metadata.unread[sessionId]; });
   }
 
   async pin(sessionId: string, pinned: boolean): Promise<void> {
-    const metadata = await this.meta.get();
-    if (pinned) metadata.pinned[sessionId] = true;
-    else delete metadata.pinned[sessionId];
-    await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => {
+      if (pinned) metadata.pinned[sessionId] = true;
+      else delete metadata.pinned[sessionId];
+    });
   }
 
   async archive(sessionId: string, archived: boolean): Promise<void> {
-    const metadata = await this.meta.get();
-    metadata.archived ??= {};
-    if (archived) metadata.archived[sessionId] = true; else delete metadata.archived[sessionId];
-    await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => {
+      metadata.archived ??= {};
+      if (archived) metadata.archived[sessionId] = true; else delete metadata.archived[sessionId];
+    });
   }
 
   async recordFork(parentSessionId: string, childSessionId: string): Promise<void> {
-    const metadata = await this.meta.get(); metadata.parents ??= {}; metadata.origins ??= {}; metadata.parents[childSessionId] = parentSessionId; metadata.origins[childSessionId] = { kind: "fork", id: parentSessionId, title: "分叉会话" }; await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => {
+      metadata.parents ??= {};
+      metadata.origins ??= {};
+      metadata.parents[childSessionId] = parentSessionId;
+      metadata.origins[childSessionId] = { kind: "fork", id: parentSessionId, title: "分叉会话" };
+    });
   }
 
   async recordOrigins(values: Array<{ sessionId: string; kind: SessionOriginKind; id?: string; title?: string; suggestedTitle?: string }>): Promise<void> {
     if (!values.length) return;
-    const metadata = await this.meta.get(); metadata.origins ??= {};
-    let changed = false;
-    for (const value of values) {
-      const previous = metadata.origins[value.sessionId];
-      const next = { kind: value.kind, ...(value.id ? { id: value.id } : {}), ...(value.title ? { title: value.title } : {}) };
-      if (JSON.stringify(previous) !== JSON.stringify(next)) { metadata.origins[value.sessionId] = next; changed = true; }
-      const currentTitle = metadata.renames[value.sessionId];
-      if (value.suggestedTitle && currentTitle !== value.suggestedTitle && (!currentTitle || currentTitle === previous?.title)) { metadata.renames[value.sessionId] = value.suggestedTitle; changed = true; }
-    }
-    if (changed) await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => {
+      metadata.origins ??= {};
+      for (const value of values) {
+        const previous = metadata.origins[value.sessionId];
+        const next = { kind: value.kind, ...(value.id ? { id: value.id } : {}), ...(value.title ? { title: value.title } : {}) };
+        if (JSON.stringify(previous) !== JSON.stringify(next)) metadata.origins[value.sessionId] = next;
+        const currentTitle = metadata.renames[value.sessionId];
+        if (value.suggestedTitle && currentTitle !== value.suggestedTitle && (!currentTitle || currentTitle === previous?.title)) metadata.renames[value.sessionId] = value.suggestedTitle;
+      }
+    });
   }
 
   async has(cwd: string, sessionId: string): Promise<boolean> {
@@ -164,17 +175,17 @@ export class SessionCatalog {
     const rel = relative(resolve(root), target);
     if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("非法会话路径");
     await rm(target, { recursive: true, force: true });
-    const metadata = await this.meta.get();
-    delete metadata.renames[sessionId];
-    delete metadata.unread[sessionId];
-    delete metadata.pinned[sessionId];
-    if (metadata.archived) delete metadata.archived[sessionId];
-    if (metadata.parents) {
-      delete metadata.parents[sessionId];
-      for (const [child, parent] of Object.entries(metadata.parents)) if (parent === sessionId) delete metadata.parents[child];
-    }
-    if (metadata.origins) delete metadata.origins[sessionId];
-    await this.meta.set(metadata);
+    await this.meta.mutate((metadata) => {
+      delete metadata.renames[sessionId];
+      delete metadata.unread[sessionId];
+      delete metadata.pinned[sessionId];
+      if (metadata.archived) delete metadata.archived[sessionId];
+      if (metadata.parents) {
+        delete metadata.parents[sessionId];
+        for (const [child, parent] of Object.entries(metadata.parents)) if (parent === sessionId) delete metadata.parents[child];
+      }
+      if (metadata.origins) delete metadata.origins[sessionId];
+    });
   }
 
   async clear(cwd: string, keepSessionId?: string): Promise<void> {

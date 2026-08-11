@@ -1,0 +1,30 @@
+{
+  "protocolVersion": 1,
+  "agentCapabilities": {
+    "loadSession": true,
+    "promptCapabilities": { "image": false, "audio": false, "embeddedContext": true },
+    "mcpCapabilities": { "http": true, "sse": true },
+    "sessionCapabilities": { "list": {} },
+    "_meta": {
+      "x.ai/fs_notify": true,
+      "x.ai/hooks": { "blockingEvents": ["pre_tool_use", "stop", "subagent_stop"], "decisions": ["deny", "block"], "stopSignals": ["continue", "stopReason", "additionalContext"] },
+      "x.ai/capabilities": { "toolOverrides": { "x_keyword_search": true, "x_semantic_search": true } }
+    }
+  },
+  "_meta": {
+    "grokShell": true,
+    "x.ai/mcp/sdk": true,
+    "x.ai/pluginDirs": true,
+    "agentVersion": "0.2.117",
+    "modelState": {
+      "currentModelId": "grok-4.5",
+      "availableModels": [
+        { "modelId": "grok-4.5", "name": "Grok 4.5", "_meta": { "totalContextTokens": 500000, "supportsReasoningEffort": true, "reasoningEfforts": [{ "value": "high" }, { "value": "medium" }, { "value": "low" }] } }
+      ]
+    },
+    "availableCommands": [{ "name": "compact" }, { "name": "workflow" }, { "name": "goal" }],
+    "cancelRewind": true,
+    "sessionRecap": true,
+    "voiceMode": true
+  }
+}

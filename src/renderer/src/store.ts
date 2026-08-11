@@ -30,6 +30,8 @@ import type {
   UserMessageAttachmentPreview,
   UserMessageDeliveryState,
   TurnPresentation,
+  CliRuntimeUpdate,
+  SessionHydrationState,
 } from "../../shared/types";
 
 export type UiMessage =
@@ -44,6 +46,8 @@ export type UiMessage =
   | { id: string; kind: "plan"; requestId?: string | number; text: string; interactive: boolean; resolved?: boolean; resolution?: string }
   | { id: string; kind: "media"; media: "image" | "video"; source: string; isData?: boolean; mimeType?: string }
   | { id: string; kind: "recovery"; status: "recovered" | "unavailable"; text: string }
+  | { id: string; kind: "recap"; text: string; contentHash: string }
+  | { id: string; kind: "compact"; status: "started" | "completed" | "failed" | "cancelled"; text?: string }
   | { id: string; kind: "turn-end" };
 
 export interface UiTurnActivityGroup extends TurnActivityGroup {
@@ -69,8 +73,14 @@ export interface SessionView {
   mode: SessionMode;
   meta: PromptMeta;
   status: string;
+  compacting: boolean;
   queue: PromptQueueEntry[];
   turnPresentations: TurnPresentation[];
+  followUps: Array<{ id: string; text: string }>;
+  runtimeUpdates: CliRuntimeUpdate[];
+  hydration: SessionHydrationState;
+  hydrationGeneration: number;
+  hydrationMessage?: string;
 }
 
 interface AppState {
@@ -116,7 +126,7 @@ interface AppState {
   handleEvents(events: ChatEvent[]): void;
 }
 
-export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", queue: [], turnPresentations: [] });
+export const emptyView = (): SessionView => ({ messages: [], models: [], currentModelId: "", effort: "", commands: [], mode: "agent", meta: {}, status: "idle", compacting: false, queue: [], turnPresentations: [], followUps: [], runtimeUpdates: [], hydration: "local", hydrationGeneration: 0 });
 
 export const useAppStore = create<AppState>((set) => ({
   loading: true,
@@ -174,8 +184,26 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   const view = state.views[sessionId] ?? emptyView();
   let next = { ...view, messages: [...view.messages] };
   switch (event.type) {
+    case "session-hydration":
+      if (event.generation < view.hydrationGeneration) return {};
+      next.hydration = event.state;
+      next.hydrationGeneration = event.generation;
+      next.hydrationMessage = event.message;
+      break;
     case "session-reset":
-      next = emptyView();
+      // A transport reset replaces the ACP process, not the conversation.
+      // Keep the locally projected body/runtime/queue visible while the main
+      // process reloads and deterministically merges the fresh replay. Process
+      // local action request ids cannot survive, so only those cards expire.
+      next = {
+        ...view,
+        status: "cold",
+        models: [],
+        commands: [],
+        messages: view.messages.map((message) => isActionMessage(message) && !message.resolved
+          ? { ...message, resolved: true, resolution: "请求已随连接重建结束" }
+          : message),
+      };
       break;
     case "conversation-projection-restore": {
       let projectedState: AppState = {
@@ -194,7 +222,13 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         next.messages = projected.messages.map((message) => isActionMessage(message) && !message.resolved
           ? { ...message, resolved: true, resolution: "请求已随上次连接结束" }
           : message);
-        next.turnPresentations = mergeTurnPresentations(next.turnPresentations, projected.turnPresentations);
+      }
+      if (projected) next.turnPresentations = mergeTurnPresentations(next.turnPresentations, projected.turnPresentations);
+      if (event.projection.queue) next.queue = event.projection.queue.entries;
+      if (event.projection.runtime) {
+        next.currentModelId = event.projection.runtime.modelId ?? next.currentModelId;
+        next.effort = event.projection.runtime.effort;
+        next.mode = event.projection.runtime.mode;
       }
       break;
     }
@@ -269,6 +303,27 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       else next.messages.push(value);
       break;
     }
+    case "compact-status": {
+      const id = `compact-${next.turnPresentations.at(-1)?.turnId ?? "session"}`;
+      const value: UiMessage = { id, kind: "compact", status: event.status, text: event.message };
+      const index = next.messages.findIndex((message) => message.id === id);
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
+      next.compacting = event.status === "started";
+      break;
+    }
+    case "session-recap": {
+      if (!next.messages.some((message) => message.kind === "recap" && message.contentHash === event.contentHash)) {
+        next.messages.push({ id: `recap-${event.contentHash}`, kind: "recap", text: event.text, contentHash: event.contentHash });
+      }
+      break;
+    }
+    case "follow-ups":
+      next.followUps = event.suggestions;
+      break;
+    case "runtime-update":
+      next.runtimeUpdates = [...next.runtimeUpdates.filter((item) => !(item.name === event.update.name && item.at === event.update.at)), event.update].slice(-100);
+      break;
     case "tool-call": {
       const index = next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === event.tool.toolCallId);
       if (index >= 0) {
@@ -315,6 +370,8 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         : message);
       break;
     case "media":
+      if (typeof event.source === "string" && event.source.length > 0
+        && next.messages.some((message) => message.kind === "media" && message.media === event.media && message.source === event.source)) break;
       next.messages.push({ id: crypto.randomUUID(), kind: "media", media: event.media, source: event.source, isData: event.isData, mimeType: event.mimeType });
       break;
     case "commands":
@@ -357,6 +414,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       break;
     case "turn-started":
       next.turnPresentations = mergeTurnPresentation(next.turnPresentations, event.presentation);
+      next.followUps = [];
       break;
     case "turn-presentations-restore":
       next.turnPresentations = [...event.presentations].sort((a, b) => a.ordinal - b.ordinal);

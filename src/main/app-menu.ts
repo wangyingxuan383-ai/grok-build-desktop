@@ -64,11 +64,19 @@ export function installApplicationMenu(window: BrowserWindow, development = !app
     { label: "帮助", submenu: [
       { label: "我的 GitHub 仓库", click: open(PUBLIC_REPOSITORY_URLS.repository) },
       { label: "版本发布", click: open(PUBLIC_REPOSITORY_URLS.releases) },
-      { label: "问题反馈", click: open(PUBLIC_REPOSITORY_URLS.issues) },
+      { label: "Desktop 问题反馈", click: open(PUBLIC_REPOSITORY_URLS.issues) },
+      { id: "grok-official-feedback", label: "向 Grok Build 提交官方反馈…", visible: false, click: command("open-feedback") },
       { label: "xAI Grok Build 文档", click: open(PUBLIC_REPOSITORY_URLS.xaiDocs) },
       { type: "separator" },
       { label: "关于 Grok Build Desktop", click: command("open-about") },
     ] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+/** The item is hidden by default: a version number is not evidence that the
+ * current CLI session actually publishes /feedback. */
+export function setOfficialFeedbackMenuAvailable(available: boolean): void {
+  const item = Menu.getApplicationMenu()?.getMenuItemById("grok-official-feedback");
+  if (item) item.visible = available;
 }

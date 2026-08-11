@@ -1,12 +1,17 @@
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import type { AppSettings, CliVersionStatus } from "../../shared/types";
 
 const execFileAsync = promisify(execFile);
 const effortFlags = new Map<string, "--effort" | "--reasoning-effort">();
+export const CLI_CHANGELOG_URL = "https://x.ai/build/changelog";
+// Highest public release observed in the official changelog when this build
+// was cut. It is display-only: it does not prove wire compatibility, and the
+// CLI stable feed remains the sole authority for an installable target.
+export const KNOWN_PUBLIC_CLI_VERSION = "1.0.0";
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
@@ -18,6 +23,40 @@ export async function locateGrokCli(configured = ""): Promise<string | undefined
   for (const dir of pathNames) candidates.push(join(dir, process.platform === "win32" ? "grok.exe" : "grok"));
   for (const candidate of candidates) if (await exists(candidate)) return candidate;
   return undefined;
+}
+
+/**
+ * Validate a renderer-supplied CLI override before it is persisted. Merely
+ * checking that a path exists turns the next CLI launch into an arbitrary
+ * executable primitive. A valid override must be a regular Grok-named binary
+ * and identify itself as Grok through the bounded `--version` probe.
+ */
+export async function validateGrokCliExecutable(
+  configured: string,
+  probe: (path: string) => Promise<string> = probeGrokCliIdentity,
+): Promise<string> {
+  const value = configured.trim();
+  if (!value) return "";
+  const canonical = await realpath(value).catch(() => undefined);
+  if (!canonical) throw new Error("指定的 Grok CLI 不存在或无法读取");
+  const info = await stat(canonical).catch(() => undefined);
+  if (!info?.isFile()) throw new Error("指定的 Grok CLI 不是文件");
+  const name = basename(canonical).toLowerCase();
+  if (name !== "grok" && name !== "grok.exe") throw new Error("Grok CLI 文件名必须是 grok 或 grok.exe");
+  const identity = await probe(canonical).catch(() => "");
+  if (!/^grok(?:\s+build)?\s+v?\d+\.\d+\.\d+(?:\s|$)/i.test(identity.trim())) {
+    throw new Error("指定的程序没有通过 Grok CLI 身份验证");
+  }
+  return canonical;
+}
+
+async function probeGrokCliIdentity(path: string): Promise<string> {
+  const { stdout, stderr } = await execFileAsync(path, ["--version"], {
+    timeout: 10_000,
+    windowsHide: true,
+    maxBuffer: 64 * 1024,
+  });
+  return `${stdout}\n${stderr}`.trim();
 }
 
 export function buildCliEnv(settings: AppSettings, apiKey?: string): NodeJS.ProcessEnv {
@@ -55,11 +94,23 @@ export async function checkCliUpdate(cliPath: string, env = process.env): Promis
       latestVersion?: string;
       updateAvailable?: boolean;
       channel?: string;
+      installer?: string;
+      autoUpdate?: boolean;
       error?: string | null;
     };
-    return { found: true, path: cliPath, ...result };
+    const publicAhead = compareVersions(KNOWN_PUBLIC_CLI_VERSION, result.latestVersion) > 0;
+    return {
+      found: true,
+      path: cliPath,
+      ...result,
+      checkedAt: new Date().toISOString(),
+      changelogUrl: CLI_CHANGELOG_URL,
+      publicLatestVersion: KNOWN_PUBLIC_CLI_VERSION,
+      majorUpgrade: isMajorUpgrade(result.currentVersion, result.latestVersion),
+      distributionState: result.error ? "error" : publicAhead ? "public-ahead" : result.updateAvailable ? "stable-update" : "current",
+    };
   } catch (error) {
-    return { found: true, path: cliPath, error: error instanceof Error ? error.message : String(error) };
+    return { found: true, path: cliPath, checkedAt: new Date().toISOString(), changelogUrl: CLI_CHANGELOG_URL, publicLatestVersion: KNOWN_PUBLIC_CLI_VERSION, distributionState: "error", error: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -68,7 +119,7 @@ export async function detectEffortFlag(cliPath: string, env = process.env): Prom
   const cached = effortFlags.get(key);
   if (cached) return cached;
   try {
-    const { stdout, stderr } = await execFileAsync(cliPath, ["agent", "--help"], { env, timeout: 15_000, windowsHide: true });
+    const { stdout, stderr } = await execFileAsync(cliPath, ["--no-auto-update", "agent", "--help"], { env, timeout: 15_000, windowsHide: true });
     const help = `${stdout}\n${stderr}`;
     const flag = /(?:^|\s)--effort(?:[=\s,]|$)/m.test(help) ? "--effort" : "--reasoning-effort";
     effortFlags.set(key, flag);
@@ -81,6 +132,22 @@ export async function detectEffortFlag(cliPath: string, env = process.env): Prom
 export function parseVersion(value?: string): [number, number, number] | undefined {
   const match = /(?:^|\D)(\d+)\.(\d+)\.(\d+)/.exec(value ?? "");
   return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : undefined;
+}
+
+export function compareVersions(left?: string, right?: string): number {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  if (!a || !b) return 0;
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index]! !== b[index]!) return a[index]! > b[index]! ? 1 : -1;
+  }
+  return 0;
+}
+
+export function isMajorUpgrade(current?: string, target?: string): boolean {
+  const from = parseVersion(current);
+  const to = parseVersion(target);
+  return Boolean(from && to && to[0] > from[0]);
 }
 
 export function isLockedBinaryError(message: string): boolean {

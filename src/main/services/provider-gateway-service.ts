@@ -7,7 +7,7 @@ import type { LogService } from "./log-service";
 import {
   translateProviderRequest,
   translateProviderResponse,
-  translateProviderSseResponse,
+  ProviderSseIncrementalBridge,
   type ProviderRequestTranslation,
 } from "./provider-protocol-translator";
 
@@ -255,6 +255,22 @@ export class ProviderGatewayService {
       if (Number.isFinite(declaredLength) && declaredLength > (this.options.maxResponseBytes ?? MAX_RESPONSE_BYTES)) {
         throw new Error("提供商响应过大");
       }
+      if (upstream.status >= 300 && upstream.status < 400) {
+        const location = upstream.headers.get("location");
+        const destination = location ? new URL(location, upstreamUrl) : undefined;
+        if (destination && destination.origin !== new URL(provider.baseUrl).origin) {
+          await upstream.body?.cancel().catch(() => undefined);
+          this.recordFailure({
+            at: new Date().toISOString(), requestId, providerId: provider.id, scopeId, proxyMode, endpoint,
+            elapsedMs: Date.now() - started, status: upstream.status, statusText: upstream.statusText,
+            phase: "upstream", reason: "upstream-http", sanitizedCount: changed,
+            message: "提供商响应试图重定向到其他 Origin，已拒绝",
+          });
+          failureRecorded = true;
+          cleanupAbortHandlers();
+          return jsonError(response, 502, "提供商重定向到其他 Origin，已拒绝");
+        }
+      }
       if (upstream.status >= 400) {
         this.recordFailure({
           at: new Date().toISOString(),
@@ -305,32 +321,43 @@ export class ProviderGatewayService {
       if (translation?.translated) {
         const contentType = upstream.headers.get("content-type") ?? "";
         const upstreamSse = /text\/event-stream/i.test(contentType);
-        // Cross-protocol SSE conversion currently needs the complete terminal
-        // stream to preserve tool-call ordering and usage. Flush a legal SSE
-        // comment immediately, then keep the downstream alive while collecting
-        // so a long silent reasoning phase cannot look like a dead connection.
-        let bridgeHeartbeat: ReturnType<typeof setInterval> | undefined;
         if (upstreamSse && upstream.status < 400) {
           response.setHeader("content-type", "text/event-stream; charset=utf-8");
           response.setHeader("cache-control", "no-cache");
           response.flushHeaders();
-          response.write(": grok-desktop protocol bridge\n\n");
-          bridgeHeartbeat = setInterval(() => {
-            if (!response.destroyed && !response.writableEnded) response.write(": keep-alive\n\n");
-          }, 15_000);
-          bridgeHeartbeat.unref?.();
+          const bridge = new ProviderSseIncrementalBridge(
+            translation.clientProtocol,
+            translation.upstreamProtocol,
+            Math.min(responseLimit, 8 * 1024 * 1024),
+          );
+          const streamResult = await pipeTranslatedSseResponse(responseSource, response, responseLimit, bridge);
+          cleanupAbortHandlers();
+          if (streamResult.malformedEvents) {
+            await this.options.log.log(`Provider gateway ignored ${streamResult.malformedEvents} malformed SSE event(s) before a valid terminal for ${requestId}`);
+          }
+          if (streamResult.outcome === "failed") {
+            this.recordFailure({
+              at: new Date().toISOString(), requestId, providerId: provider.id, scopeId, proxyMode, endpoint,
+              elapsedMs: Date.now() - started, status: upstream.status, statusText: upstream.statusText,
+              traceId: traceHeader(upstream.headers), retryAfter: upstream.headers.get("retry-after") ?? undefined,
+              phase: "response", reason: "upstream-stream", sanitizedCount: changed,
+              message: "提供商 SSE 返回错误终态",
+            });
+            failureRecorded = true;
+            await this.options.log.log(`Provider gateway request ${requestId} translated an upstream SSE error terminal elapsedMs=${Date.now() - started}`);
+            return;
+          }
+          if (!failureRecorded) this.observe({
+            at: new Date().toISOString(), requestId, providerId: provider.id, scopeId, proxyMode, endpoint,
+            elapsedMs: Date.now() - started, status: upstream.status, statusText: upstream.statusText,
+            traceId: traceHeader(upstream.headers), retryAfter: upstream.headers.get("retry-after") ?? undefined,
+            phase: "response", outcome: "completed", sanitizedCount: changed,
+          });
+          await this.options.log.log(`Provider gateway request ${requestId} incrementally translated ${translation.upstreamProtocol}->${translation.clientProtocol} status=${upstream.status} elapsedMs=${Date.now() - started}`);
+          return;
         }
-        const collected = await collectLimitedResponse(responseSource, responseLimit).finally(() => {
-          if (bridgeHeartbeat) clearInterval(bridgeHeartbeat);
-        });
-        const translated = /text\/event-stream/i.test(contentType)
-          ? translateProviderSseResponse({
-            clientProtocol: translation.clientProtocol,
-            upstreamProtocol: translation.upstreamProtocol,
-            body: collected,
-            status: upstream.status,
-          })
-          : translateProviderResponse({
+        const collected = await collectLimitedResponse(responseSource, responseLimit);
+        const translated = translateProviderResponse({
             clientProtocol: translation.clientProtocol,
             upstreamProtocol: translation.upstreamProtocol,
             body: collected,
@@ -575,6 +602,31 @@ async function pipeLimitedResponse(source: Readable, response: ServerResponse, l
   }
   response.end();
   return 0;
+}
+
+async function pipeTranslatedSseResponse(
+  source: Readable,
+  response: ServerResponse,
+  limit: number,
+  bridge: ProviderSseIncrementalBridge,
+): Promise<{ malformedEvents: number; outcome: "completed" | "failed" }> {
+  let size = 0;
+  for await (const raw of source) {
+    const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+    size += chunk.length;
+    if (size > limit) throw new Error("提供商响应过大");
+    for (const output of bridge.push(chunk)) await writeResponse(response, Buffer.from(output));
+    if (bridge.outcome) {
+      source.destroy();
+      break;
+    }
+  }
+  if (!bridge.outcome) for (const output of bridge.push(new Uint8Array(), true)) await writeResponse(response, Buffer.from(output));
+  if (!bridge.outcome) {
+    throw new Error(`提供商 SSE 在有效终态前结束${bridge.malformedEvents ? `（忽略了 ${bridge.malformedEvents} 个畸形事件）` : ""}`);
+  }
+  response.end();
+  return { malformedEvents: bridge.malformedEvents, outcome: bridge.outcome };
 }
 
 /**

@@ -2,11 +2,13 @@ import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { AppController } from "./app-controller";
 import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, CapabilityApplicationSelection, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MediaCreationRequest, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, OpenTargetIntent, PersonaDefinitionSaveInput, ProviderConnectionDraft, ProviderDeepScanOptions, ProviderScanScope, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TokenActivityQuery, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
 import { isTrustedRendererFrame, type RendererTrustPolicy } from "./security-policy";
+import { validateIpcInvocation } from "./ipc-schema";
 
 export function registerIpc(controller: AppController, window: BrowserWindow, policy: RendererTrustPolicy): void {
   const handle = <Args extends unknown[]>(channel: string, action: (...args: Args) => unknown): void => {
     ipcMain.handle(channel, (event, ...args) => {
       assertTrustedIpcSender(event, window, policy);
+      validateIpcInvocation(channel, args, action.length);
       return action(...args as Args);
     });
   };
@@ -17,6 +19,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("onboarding:update", (patch: Partial<OnboardingState>) => controller.updateOnboarding(patch));
   handle("onboarding:reset", () => controller.resetOnboarding());
   handle("diagnostics:run", () => controller.runDiagnostics());
+  handle("diagnostics:doctor-fix-preview", () => controller.previewGrokDoctorFixes());
+  handle("diagnostics:doctor-fix", (id: string, confirmationToken: string, confirmed: boolean) => controller.applyGrokDoctorFix(id, confirmationToken, confirmed));
   handle("diagnostics:failure", (failure: TurnFailure) => controller.diagnoseFailure(failure));
   handle("diagnostics:cli-capabilities", (force?: boolean) => controller.getCliCapabilities(force));
   handle("diagnostics:support-preview", () => controller.previewSupportBundle());
@@ -24,9 +28,13 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("app-update:check", (force?: boolean) => controller.checkAppUpdate(force));
   handle("app-update:open", (url?: string) => controller.openAppRelease(url));
   handle("workspace:choose", () => controller.chooseWorkspace());
+  handle("workspace:create-temporary", () => controller.createTemporaryWorkspace());
   handle("workspace:set", (cwd: string) => controller.setWorkspace(cwd));
+  handle("workspace:open-offline", (cwd: string) => controller.openWorkspaceOffline(cwd));
   handle("workspace:discover", (force?: boolean) => controller.discoverWorkspaces(force));
   handle("workspace:pin", (cwd: string, pinned: boolean) => controller.pinWorkspace(cwd, pinned));
+  handle("workspace:hidden:list", () => controller.listHiddenWorkspaces());
+  handle("workspace:hidden:set", (cwd: string, hidden: boolean) => controller.setWorkspaceHidden(cwd, hidden));
   handle("workspace:search-files", (cwd: string, query: string, limit?: number) => controller.searchWorkspaceFiles(cwd, query, limit));
   handle("workspace:tree:list", (cwd: string, directoryPath?: string, options?: WorkspaceTreeOptions) => controller.listWorkspaceTree(cwd, directoryPath, options));
   handle("editor:open", (cwd: string, path: string) => controller.openEditorDocument(cwd, path));
@@ -103,10 +111,22 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("dashboard:clear", (nodeId?: string) => controller.clearAgentDashboardRecord(nodeId));
   handle("attachment:inspect-privacy", (cwd: string, attachments: Attachment[]) => controller.inspectAttachmentPrivacy(cwd, attachments));
   handle("session:list", (cwd?: string, query?: string) => controller.listSessions(cwd, query));
+  handle("session:official-list", (cwd?: string, cursor?: string) => controller.listOfficialSessions(cwd, cursor));
   handle("session:create", (input: string | ExecutionProfileLaunchInput) => controller.createSession(input));
+  handle("session:preview", (cwd: string, id: string) => controller.previewSession(cwd, id));
   handle("session:open", (cwd: string, id: string) => controller.openSession(cwd, id));
+  handle("session:info", (id: string) => controller.getCliSessionInfo(id));
+  handle("session:usage", (id: string) => controller.getCliSessionUsage(id));
+  handle("session:runtime", (id: string) => controller.getSessionRuntimePreferences(id));
+  handle("session:compaction-policy", (id: string, policy: import("../shared/types").SessionCompactionPolicy) => controller.setSessionCompactionPolicy(id, policy));
+  handle("session:compact", (id: string) => controller.compactSession(id));
+  handle("session:btw", (id: string, text: string) => controller.sendBtwPrompt(id, text));
+  handle("feedback:capability", (id: string) => controller.getOfficialFeedbackCapability(id));
+  handle("feedback:preview", (text: string) => controller.previewOfficialFeedback(text));
+  handle("feedback:submit", (id: string, text: string) => controller.submitOfficialFeedback(id, text));
   handle("session:rename", (id: string, title: string) => controller.renameSession(id, title));
   handle("session:delete", (cwd: string, id: string) => controller.deleteSession(cwd, id));
+  handle("session:delete-desktop-data", (cwd: string, id: string) => controller.deleteDesktopSessionData(cwd, id));
   handle("session:clear", (cwd: string, keep?: string) => controller.clearSessions(cwd, keep));
   handle("session:pin", (id: string, pinned: boolean) => controller.pinSession(id, pinned));
   handle("session:export-markdown", (cwd: string, id: string) => controller.exportSessionMarkdown(cwd, id));
@@ -124,6 +144,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:queue:clear", (sessionId: string) => controller.clearPromptQueue(sessionId));
   handle("session:queue:interject", (sessionId: string, id: string, text?: string) => controller.interjectQueuedPrompt(sessionId, id, text));
   handle("session:fork", (sessionId: string, pointId?: string, launch?: ExecutionProfileLaunchInput) => controller.forkSession(sessionId, pointId, launch));
+  handle("workspace:rebind-sessions", (sourceCwd: string, targetCwd: string) => controller.rebindWorkspaceSessions(sourceCwd, targetCwd));
   handle("session:rewind-points", (sessionId: string) => controller.listRewindPoints(sessionId));
   handle("session:rewind", (sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files") => controller.rewindSession(sessionId, pointId, mode));
   handle("session:archive", (sessionId: string, archived: boolean) => controller.archiveSession(sessionId, archived));
@@ -141,11 +162,14 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("plan:respond", (id: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string) => controller.respondPlan(id, requestId, verdict, comment));
   handle("attachments:pick", () => controller.pickAttachments());
   handle("attachments:pick-folders", () => controller.pickAttachmentFolders());
-  handle("attachments:paths", (paths: string[]) => controller.attachmentsFromPaths(paths));
+  handle("attachments:dropped", (paths: string[]) => controller.attachmentsFromDroppedPaths(paths));
+  handle("attachments:paths", (paths: string[], sessionId?: string) => controller.attachmentsFromPaths(paths, sessionId));
   handle("system:open-path", (path: string) => controller.openPath(path));
   handle("system:open-target", (intent: OpenTargetIntent) => controller.openTarget(intent));
+  handle("system:list-open-tools", () => controller.listOpenTargetTools());
   handle("system:copy-image", (source: string) => controller.copyImage(source));
   handle("system:save-image", (source: string) => controller.saveImage(source));
+  handle("system:open-media", (source: string) => controller.openMedia(source));
   handle("system:open-external", (url: string) => controller.openExternal(url));
   handle("settings:get", () => controller.getSettings());
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
@@ -182,6 +206,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("providers:scan:get", (jobId: string) => controller.getProviderScanJob(jobId));
   handle("providers:scan:list", (providerId?: string) => controller.listProviderScanJobs(providerId));
   handle("providers:scan:cancel", (jobId: string) => controller.cancelProviderScan(jobId));
+  // Deprecated compatibility channels. They intentionally delegate to the
+  // same ProviderService core and must not be used by new Renderer code.
   handle("providers:deep-scan", (id: string, options?: ProviderDeepScanOptions) => controller.deepScanProvider(id, options));
   handle("providers:cancel-scan", (id: string) => controller.cancelProviderDeepScan(id));
   handle("providers:capabilities:application", (id: string) => controller.getProviderCapabilityApplication(id));
@@ -195,6 +221,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:delete", (id: string) => controller.deleteAutomation(id));
   handle("automations:pause", (id: string, paused: boolean) => controller.pauseAutomation(id, paused));
   handle("automations:run-now", (id: string) => controller.runAutomationNow(id));
+  handle("automations:run:cancel", (id: string) => controller.cancelAutomationRun(id));
   handle("automations:runs", (taskId?: string) => controller.listAutomationRuns(taskId));
   handle("automations:policy:get", () => controller.getAutomationGlobalPolicy());
   handle("automations:policy:update", (patch: Partial<AutomationGlobalPolicy>) => controller.updateAutomationGlobalPolicy(patch));
@@ -205,7 +232,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:health:repair", () => controller.checkAutomationHealth(true));
   handle("automations:clear-context", (id: string) => controller.clearAutomationContext(id));
   handle("draft:get", (key: string) => controller.getDraft(key));
-  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[]) => controller.setDraft(key, text, capability, attachments));
+  handle("draft:list", () => controller.listDrafts());
+  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: import("../shared/types").NewTaskDraft) => controller.setDraft(key, text, capability, attachments, newTask));
+  handle("draft:move", (sourceKey: string, targetKey: string) => controller.moveDraft(sourceKey, targetKey));
   handle("draft:clear", (key: string) => controller.clearDraft(key));
   handle("draft:text:create", (key: string, text: string) => controller.createTextDraftAttachment(key, text));
   handle("draft:text:read", (path: string) => controller.readTextDraftAttachment(path));
@@ -243,7 +272,10 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("computer:settings:get", () => controller.getComputerSettings());
   handle("computer:settings:update", (patch: Partial<ComputerUseSettings>) => controller.updateComputerSettings(patch));
   handle("cli:check-update", () => controller.checkCliUpdate());
-  handle("cli:apply-update", () => controller.applyCliUpdate());
+  handle("updates:auto-check", () => controller.checkUpdatesAutomatically());
+  handle("cli:update-preview", () => controller.previewCliUpdate());
+  handle("cli:apply-update", (input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) => controller.applyCliUpdate(input));
+  handle("cli:compatibility", () => controller.getCliCompatibilitySnapshot());
   handle("cli:update-history", () => controller.getCliUpdateHistory());
   handle("logs:export", () => controller.exportLogs());
 }

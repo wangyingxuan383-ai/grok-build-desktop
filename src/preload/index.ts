@@ -32,7 +32,7 @@ window.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const paths = Array.from(event.dataTransfer?.files ?? []).map((file) => webUtils.getPathForFile(file)).filter(Boolean);
     if (!paths.length) return;
-    void ipcRenderer.invoke("attachments:paths", paths).then((attachments: Attachment[]) => {
+    void ipcRenderer.invoke("attachments:dropped", paths).then((attachments: Attachment[]) => {
       for (const listener of droppedAttachmentListeners) listener(attachments);
     });
   });
@@ -45,6 +45,8 @@ const api: GrokDesktopApi = {
   updateOnboarding: (patch) => ipcRenderer.invoke("onboarding:update", patch),
   resetOnboarding: () => ipcRenderer.invoke("onboarding:reset"),
   runDiagnostics: () => ipcRenderer.invoke("diagnostics:run"),
+  previewGrokDoctorFixes: () => ipcRenderer.invoke("diagnostics:doctor-fix-preview"),
+  applyGrokDoctorFix: (id, confirmationToken, confirmed) => ipcRenderer.invoke("diagnostics:doctor-fix", id, confirmationToken, confirmed),
   getAgentChanges: (sessionId, scope) => ipcRenderer.invoke("agent-changes:get", sessionId, scope),
   getTokenActivity: (query) => ipcRenderer.invoke("token-activity:get", query),
   diagnoseFailure: (failure) => ipcRenderer.invoke("diagnostics:failure", failure),
@@ -54,9 +56,13 @@ const api: GrokDesktopApi = {
   checkAppUpdate: (force) => ipcRenderer.invoke("app-update:check", force),
   openAppRelease: (url) => ipcRenderer.invoke("app-update:open", url),
   chooseWorkspace: () => ipcRenderer.invoke("workspace:choose"),
+  createTemporaryWorkspace: () => ipcRenderer.invoke("workspace:create-temporary"),
   setWorkspace: (cwd) => ipcRenderer.invoke("workspace:set", cwd),
+  openWorkspaceOffline: (cwd) => ipcRenderer.invoke("workspace:open-offline", cwd),
   discoverWorkspaces: (force) => ipcRenderer.invoke("workspace:discover", force),
   pinWorkspace: (cwd, pinned) => ipcRenderer.invoke("workspace:pin", cwd, pinned),
+  listHiddenWorkspaces: () => ipcRenderer.invoke("workspace:hidden:list"),
+  setWorkspaceHidden: (cwd, hidden) => ipcRenderer.invoke("workspace:hidden:set", cwd, hidden),
   searchWorkspaceFiles: (cwd, query, limit) => ipcRenderer.invoke("workspace:search-files", cwd, query, limit),
   listWorkspaceTree: (cwd, directoryPath, options) => ipcRenderer.invoke("workspace:tree:list", cwd, directoryPath, options),
   openEditorDocument: (cwd, path) => ipcRenderer.invoke("editor:open", cwd, path),
@@ -131,10 +137,22 @@ const api: GrokDesktopApi = {
     clearAgentDashboardRecord: (nodeId) => ipcRenderer.invoke("dashboard:clear", nodeId),
   inspectAttachmentPrivacy: (cwd, attachments) => ipcRenderer.invoke("attachment:inspect-privacy", cwd, attachments),
   listSessions: (cwd, query) => ipcRenderer.invoke("session:list", cwd, query),
+  listOfficialSessions: (cwd, cursor) => ipcRenderer.invoke("session:official-list", cwd, cursor),
   createSession: (cwd) => ipcRenderer.invoke("session:create", cwd),
+  previewSession: (cwd, id) => ipcRenderer.invoke("session:preview", cwd, id),
   openSession: (cwd, id) => ipcRenderer.invoke("session:open", cwd, id),
+  getCliSessionInfo: (id) => ipcRenderer.invoke("session:info", id),
+  getCliSessionUsage: (id) => ipcRenderer.invoke("session:usage", id),
+  getSessionRuntimePreferences: (id) => ipcRenderer.invoke("session:runtime", id),
+  setSessionCompactionPolicy: (id, policy) => ipcRenderer.invoke("session:compaction-policy", id, policy),
+  compactSession: (id) => ipcRenderer.invoke("session:compact", id),
+  sendBtwPrompt: (id, text) => ipcRenderer.invoke("session:btw", id, text),
+  getOfficialFeedbackCapability: (id) => ipcRenderer.invoke("feedback:capability", id),
+  previewOfficialFeedback: (text) => ipcRenderer.invoke("feedback:preview", text),
+  submitOfficialFeedback: (id, text) => ipcRenderer.invoke("feedback:submit", id, text),
   renameSession: (id, title) => ipcRenderer.invoke("session:rename", id, title),
   deleteSession: (cwd, id) => ipcRenderer.invoke("session:delete", cwd, id),
+  deleteDesktopSessionData: (cwd, id) => ipcRenderer.invoke("session:delete-desktop-data", cwd, id),
   clearSessions: (cwd, keep) => ipcRenderer.invoke("session:clear", cwd, keep),
   pinSession: (id, pinned) => ipcRenderer.invoke("session:pin", id, pinned),
   exportSessionMarkdown: (cwd, id) => ipcRenderer.invoke("session:export-markdown", cwd, id),
@@ -156,6 +174,7 @@ const api: GrokDesktopApi = {
   clearPromptQueue: (sessionId) => ipcRenderer.invoke("session:queue:clear", sessionId),
   interjectQueuedPrompt: (sessionId, id, text) => ipcRenderer.invoke("session:queue:interject", sessionId, id, text),
   forkSession: (sessionId, pointId, launch) => ipcRenderer.invoke("session:fork", sessionId, pointId, launch),
+  rebindWorkspaceSessions: (sourceCwd, targetCwd) => ipcRenderer.invoke("workspace:rebind-sessions", sourceCwd, targetCwd),
   listRewindPoints: (sessionId) => ipcRenderer.invoke("session:rewind-points", sessionId),
   rewindSession: (sessionId, pointId, mode) => ipcRenderer.invoke("session:rewind", sessionId, pointId, mode),
   archiveSession: (sessionId, archived) => ipcRenderer.invoke("session:archive", sessionId, archived),
@@ -173,11 +192,13 @@ const api: GrokDesktopApi = {
   respondPlan: (id, requestId, verdict, comment) => ipcRenderer.invoke("plan:respond", id, requestId, verdict, comment),
   pickAttachments: () => ipcRenderer.invoke("attachments:pick"),
   pickAttachmentFolders: () => ipcRenderer.invoke("attachments:pick-folders"),
-  attachmentsFromPaths: (paths) => ipcRenderer.invoke("attachments:paths", paths),
+  attachmentsFromPaths: (paths, sessionId) => ipcRenderer.invoke("attachments:paths", paths, sessionId),
   openPath: (path) => ipcRenderer.invoke("system:open-path", path),
   openTarget: (intent) => ipcRenderer.invoke("system:open-target", intent),
+  listOpenTargetTools: () => ipcRenderer.invoke("system:list-open-tools"),
   copyImage: (source) => ipcRenderer.invoke("system:copy-image", source),
   saveImage: (source) => ipcRenderer.invoke("system:save-image", source),
+  openMedia: (source) => ipcRenderer.invoke("system:open-media", source),
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),
@@ -218,6 +239,9 @@ const api: GrokDesktopApi = {
     providerScanProgressListeners.add(listener);
     return () => providerScanProgressListeners.delete(listener);
   },
+  // Compatibility-only blocking surface. The production Renderer uses the
+  // Job API above so progress, cancellation receipts and generation fencing
+  // remain observable.
   deepScanProvider: (id, options) => ipcRenderer.invoke("providers:deep-scan", id, options),
   cancelProviderDeepScan: (id) => ipcRenderer.invoke("providers:cancel-scan", id),
   getProviderCapabilityApplication: (id) => ipcRenderer.invoke("providers:capabilities:application", id),
@@ -231,6 +255,7 @@ const api: GrokDesktopApi = {
   deleteAutomation: (id) => ipcRenderer.invoke("automations:delete", id),
   pauseAutomation: (id, paused) => ipcRenderer.invoke("automations:pause", id, paused),
   runAutomationNow: (id) => ipcRenderer.invoke("automations:run-now", id),
+  cancelAutomationRun: (id) => ipcRenderer.invoke("automations:run:cancel", id),
   listAutomationRuns: (taskId) => ipcRenderer.invoke("automations:runs", taskId),
   getAutomationGlobalPolicy: () => ipcRenderer.invoke("automations:policy:get"),
   updateAutomationGlobalPolicy: (patch) => ipcRenderer.invoke("automations:policy:update", patch),
@@ -240,7 +265,9 @@ const api: GrokDesktopApi = {
   checkAutomationHealth: (repair) => ipcRenderer.invoke(repair ? "automations:health:repair" : "automations:health:check"),
   clearAutomationContext: (id) => ipcRenderer.invoke("automations:clear-context", id),
   getDraft: (key) => ipcRenderer.invoke("draft:get", key),
-  setDraft: (key, text, capability, attachments) => ipcRenderer.invoke("draft:set", key, text, capability, attachments),
+  listDrafts: () => ipcRenderer.invoke("draft:list"),
+  setDraft: (key, text, capability, attachments, newTask) => ipcRenderer.invoke("draft:set", key, text, capability, attachments, newTask),
+  moveDraft: (sourceKey, targetKey) => ipcRenderer.invoke("draft:move", sourceKey, targetKey),
   clearDraft: (key) => ipcRenderer.invoke("draft:clear", key),
   createTextDraftAttachment: (key, text) => ipcRenderer.invoke("draft:text:create", key, text),
   readTextDraftAttachment: (path) => ipcRenderer.invoke("draft:text:read", path),
@@ -278,7 +305,10 @@ const api: GrokDesktopApi = {
   getComputerSettings: () => ipcRenderer.invoke("computer:settings:get"),
   updateComputerSettings: (patch) => ipcRenderer.invoke("computer:settings:update", patch),
   checkCliUpdate: () => ipcRenderer.invoke("cli:check-update"),
-  applyCliUpdate: () => ipcRenderer.invoke("cli:apply-update"),
+  checkUpdatesAutomatically: () => ipcRenderer.invoke("updates:auto-check"),
+  previewCliUpdate: () => ipcRenderer.invoke("cli:update-preview"),
+  applyCliUpdate: (input) => ipcRenderer.invoke("cli:apply-update", input),
+  getCliCompatibilitySnapshot: () => ipcRenderer.invoke("cli:compatibility"),
   getCliUpdateHistory: () => ipcRenderer.invoke("cli:update-history"),
   exportLogs: () => ipcRenderer.invoke("logs:export"),
   onEvent: (listener: (event: ChatEvent) => void) => {

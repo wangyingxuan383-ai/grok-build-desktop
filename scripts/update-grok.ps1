@@ -59,7 +59,7 @@ function Test-GrokCli {
     param([string]$Executable)
     $VersionJson = Invoke-GrokCapture $Executable @('version', '--json') 30
     [void]($VersionJson | ConvertFrom-Json)
-    $Models = Invoke-GrokCapture $Executable @('models') 60
+    $Models = Invoke-GrokCapture $Executable @('--no-auto-update', 'models') 60
     if (-not $Models) { throw 'grok models returned no output.' }
     $ProbeScript = Join-Path $PSScriptRoot 'probe-grok.mjs'
     $ProbeResult = & node $ProbeScript --cli $Executable --cwd $ProbeWorkspace --effort low 2>&1
@@ -98,6 +98,8 @@ function Test-GrokCli {
 
 $Cli = Resolve-GrokCli $CliPath
 $Before = (Invoke-GrokCapture $Cli @('version', '--json') 30 | ConvertFrom-Json).currentVersion
+$BeforeVersion = ([regex]::Match([string]$Before, '\d+\.\d+\.\d+')).Value
+if (-not $BeforeVersion) { throw "无法从 CLI 版本输出中解析语义版本：$Before" }
 $StatusJson = Invoke-GrokCapture $Cli @('update', '--check', '--json') 60
 $Status = $StatusJson | ConvertFrom-Json
 $Status | ConvertTo-Json -Depth 5
@@ -108,11 +110,21 @@ if ($CheckOnly -or ((-not $Version) -and (-not $Status.updateAvailable))) {
     return
 }
 
-$OldVersion = ([regex]::Match([string]$Before, '\d+\.\d+\.\d+')).Value
-$UpdateArguments = @('update')
-if ($Version) { $UpdateArguments += @('--version', $Version) }
+if (-not $Version) {
+    throw '检测到 stable 更新，但必须通过 -Version 指定并确认精确目标；不会执行未固定版本的 grok update。'
+}
 
-$TargetVersion = if ($Version) { $Version } else { 'latest' }
+if ([string]$Status.currentVersion -ne $BeforeVersion) {
+    throw "stable 更新源报告的当前版本 $($Status.currentVersion) 与本机 $BeforeVersion 不一致，请重新检查。"
+}
+if ([string]$Status.latestVersion -ne $Version -or -not $Status.updateAvailable) {
+    throw "stable 更新目标不是请求的 $Version（当前源：$($Status.latestVersion)），已拒绝更新。"
+}
+
+$OldVersion = $BeforeVersion
+$UpdateArguments = @('update', '--version', $Version)
+
+$TargetVersion = $Version
 if (-not $PSCmdlet.ShouldProcess($Cli, "Install Grok CLI $TargetVersion")) { return }
 
 try {

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-08-11T00:00:00.000Z",
+  "declaredCliVersion": "1.0.0",
+  "repositoryCommit": "b13fa526f5112c0b20dad5f1f2300d3d3b127895",
+  "sourceRevision": "a51a1dc62fe20029ac39a665985bba78edbb870f",
+  "compatibilityFixture": "src/main/services/fixtures/cli-wire/initialize-1.0.0.json",
+  "forwardCompatibilityFixture": "src/main/services/fixtures/cli-wire/session-rename-upstream-main.json"
+}

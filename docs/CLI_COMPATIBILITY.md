@@ -1,5 +1,93 @@
 # Grok CLI Compatibility
 
+## Desktop 0.8.0 / Grok Build 1.0.0 public release (2026-08-11)
+
+- A final upstream audit pinned official main repository commit `b13fa526f5112c0b20dad5f1f2300d3d3b127895` and source revision `a51a1dc62fe20029ac39a665985bba78edbb870f`. The public Changelog still ends at 1.0.0. Relative to the previous source snapshot, the important new public extension is `x.ai/session/rename` plus `x.ai/titleIsManual` title ownership notifications; no other unmapped stable public API was found.
+- Desktop can call `x.ai/session/rename` on an attached compatible runtime and handles both private `x.ai/session_notification` and standard ACP `session/update` title notifications. Installed stable 1.0.0 returns method-not-found, so the runtime capability remains unknown and Desktop uses its existing local catalog rename without claiming official synchronization.
+- `session.rewind` is now declared only by actual Rewind evidence; `cancelRewind` is recorded separately as `session.cancel-rewind` and can no longer enable a misleading full-Rewind surface.
+- Grok Doctor automatic remediation is capability-by-result rather than version-gated. Desktop accepts only validated IDs emitted by `doctor --json`, creates a five-minute one-use confirmation token, rechecks the report and CLI path, and then invokes fixed arguments `--no-auto-update doctor fix <id> --yes`. The current installed CLI exposes the command but reports no automatic fixes.
+- Desktop's fixed-target updater successfully upgraded this machine from `0.2.118` to stable `1.0.0 (3cd0d0cbce)`, completed its ACP core gate without rollback, and persisted an `updated` receipt. The installed CLI now remains 1.0.0 for the packaged-candidate gate.
+- Managed new/load/resume attaches send `startupHints.nonInteractive=false` and an empty `deliveryTools` list. Session close parses `_meta["x.ai/closeOutcome"]` instead of collapsing every release path into a boolean.
+- Runtime notifications normalize direct and `_x.ai/notification` wrapped forms. The 1.0 slash-named MCP init/tools/status/server events and retained legacy aliases update only their owning session.
+- The stable Windows 1.0.0 binary currently returns method-not-found for `x.ai/git/status`; Desktop therefore uses its bounded system-Git fallback. When a future runtime declares the official method, the request uses the 1.0 camelCase contract with explicit untracked/stats/patch/submodule options. Git write operations remain in the existing trusted service.
+- The stable binary advertises `/context` and `/session-info`, but returns method-not-found for the newer source-snapshot `x.ai/session/info` and `x.ai/session/usage` methods and does not advertise `/usage`. Desktop records exactly `context, session-info`, leaves Usage unavailable, and does not roll back an otherwise healthy core ACP update. Version hints or defaults never fabricate missing model, effort, cost or context details.
+- Stable exact-target update rechecks the feed, suspends sessions, updates, performs the live ACP gate and attempts an exact rollback to 0.2.118 on failure. Unknown future majors fail closed. All other managed CLI launches retain `--no-auto-update`.
+- Project rebind never edits official JSONL and never uses code restore by default. A missing known project may display the Desktop projection offline; direct moved-cwd attach is tried before official Fork, with a local transaction journal and rollback point.
+- Auto Compact inherits CLI behavior unless a per-session 60%–95% threshold is explicitly stored. Manual Compact and lifecycle events are supported; lack of returned before/after tokens is shown as unknown rather than estimated.
+- Live evidence covers initialize/new/resume/structured close/official empty-session delete, a real read-only Plan turn without permission cards or writes, two concurrent ACP sessions, `/compact`, `session/cancel`, and actual wrapped MCP init/status/initialized events. The official Git method is unavailable and correctly falls back. The configured remote CPA Provider reached Desktop's Responses gateway but the upstream returned its explicit `403 cpa_local_only`; this is recorded as an upstream deployment restriction, not a successful model gate. The final 101-file/734-test offline gate, packaged/install UI probes, per-user install, ASAR/Fuses and shortcut checks pass for Desktop 0.8.0; public assets are rebuilt and verified by the tagged release workflow.
+
+
+## Desktop 0.7.3 / Grok Build 1.0.0 stable detection (2026-08-10)
+
+- The installed CLI remains `0.2.118 (1e1687c1cf)`. A live read-only `grok update --check --json` now reports `1.0.0` on the stable channel; Desktop does not auto-install it.
+- The official Changelog lists 1.0.0 on 2026-08-07, including queue/stop, Plan/permission, mode synchronization, API-error and large-session fixes. These are compatibility hints only: Desktop surfaces remain gated by runtime declaration, bounded probes and observed events.
+- `CliVersionStatus` and `CliUpdatePreview` mark a semantic major-version boundary. IPC accepts an `allowMajorUpgrade` boolean, and the main-process update service rejects 0.x → 1.x unless that explicit acknowledgement is present.
+- If acknowledged, the established exact-target path still rechecks stable metadata, suspends sessions, runs a pinned update, probes initialize/session/new and official deletion, and attempts an exact rollback on failure. 1.0.0 has not yet passed that live apply path, so no 1.0.0 compatibility claim is made.
+- All managed ACP/media/automation/probe launches continue to disable CLI self-update; only the update service may mutate the installed binary.
+
+## Desktop 0.7.1 session-foundation note (2026-08-09)
+
+- No new ACP method or wire shape is introduced. New Task remains Desktop-local until first send, then uses the existing configured `session/new` path exactly once.
+- Reopening sends the existing local ConversationProjection V2 to the Renderer before the established capability-gated `session/resume` / `session/load` flow starts. ACP replay is still merged by stable block identity.
+- A reconnect failure with a valid local projection is reported as `offline`; it does not create a replacement session or silently change the persisted Provider/model identity. Hydration generations discard late UI state from older navigation attempts.
+- The 0.7.1 offline suite passes 95 test files/686 tests with 6 live files/9 tests skipped by design. Installed CLI/provider acceptance remains a separate user-verification boundary.
+
+## Cumulative 0.7.0 audit note (2026-08-09)
+
+- The legacy `providers:deep-scan` IPC is retained only for compatibility and delegates to the same `ProviderService.deepScan()` implementation used by the asynchronous Job API; it is not a second network scanner.
+- Provider scan cancellation now uses Job ID/generation fencing rather than a mutable timestamp. The job state is checked again after the provider store read and before controller installation, so cancellation during that await cannot issue a probe; late responses are discarded.
+- The post-change offline gate passes 94 test files/677 tests with 6 live files/9 tests skipped by design, plus TypeScript, production/resources, public scan, chunk and high-severity dependency gates. Prior 0.7.0 package hashes do not include this source revision and are not reused as evidence.
+
+## ACP session resume/close forward shape (0.2.120 source, Desktop 0.7.0)
+
+- The official 0.2.120 source advertises standard `session/list`, `session/resume` and `session/close` capabilities. The sanitized `initialize-0.2.120.json` fixture records those declarations without retaining account, prompt or filesystem data.
+- `session/resume` is capability-gated and is the preferred re-attach path. Its current response may contain only modes/configuration and no `sessionId` or model list; Desktop keeps the requested session identity and uses the runtime handshake as a model fallback.
+- A resume failure falls back to `session/load` only for explicit method/parameter capability errors (`-32601`, `-32602` or equivalent unsupported-method text). Timeouts and transport failures are surfaced instead of issuing a second attach that could create an ambiguous session.
+- `session/close` is a best-effort resource release before an ACP child is terminated. It is not session deletion; the existing official-first `grok sessions delete` path remains responsible for deletion and local projection cleanup.
+- The local stable CLI remains `0.2.118`; 0.2.119/0.2.120 source behavior is forward-parsed and contract-tested only until the stable channel actually offers it.
+
+## 0.2.118 stable adapter / 0.2.119–0.2.120 forward compatibility (Desktop 0.7.0)
+
+- Desktop-managed Grok processes use `--no-auto-update`. Only the update service may mutate the CLI, and it requires an exact version that still matches the stable feed immediately before installation. Public Changelog versions are display-only until the stable feed offers them.
+- `initialize` is normalized into a non-sensitive runtime handshake. Session/Prompt/MCP markers, models and reasoning efforts, commands, Recap/Rewind, plugin directories and observed private methods are stored as evidence; unknown response fields are discarded.
+- Capability precedence is runtime declaration, successful bounded probe, observed event, then version hint. An observed method can enable its own surface; a version number alone cannot.
+- 0.2.118 event handling covers completion-before-background ordering, Auto Compact lifecycle/cancellation and Recap hash deduplication. Unknown events log only method name, schema version and serialized byte size.
+- Session deletion is official-first (`grok --no-auto-update sessions delete <id>`). Desktop data is removed only after official success, or after a separate explicit local-only confirmation when the CLI operation fails.
+- Forward fixtures parse `x.ai/follow_ups`, `x.ai/models/update` and `x.ai/settings/update`. Model updates keep a managed Provider's local model ID and current selected effort; they do not silently rename it to an upstream or official Grok model.
+- `/btw` now has a capability-gated Composer action using the official `session_id` + `question` wire shape; an answer receipt is shown without creating a fake queue/assistant turn, and unsupported CLIs return an explicit unsupported state.
+- Standard `session/list` plus optional `x.ai/session/info` and `x.ai/session/usage` are normalized in the main process and exposed through the right-side Session tool. The tool never infers missing model, mode, effort or Token values from Desktop defaults.
+- Mermaid Plan blocks now expose copy source/image and open image actions only after strict rendering succeeds. MCP/plugin status, official Git interfaces and automatic doctor fixes remain deferred until stable runtime evidence; a version number alone does not enable them.
+- Live acceptance on 2026-08-05 installed exactly `0.2.118 (1e1687c1cf)`, then passed initialize/session/new and official empty-session deletion. A single read-only Plan turn completed in 19.28 seconds with no permission request and an unchanged empty workspace.
+- 0.2.118 rejects TOML object arrays serialized as `[[model.*.reasoning_efforts]]`. Desktop now emits the CLI-native string-list form, filters upstream-only `auto/none` from the CLI menu, and keeps richer protocol-specific reasoning evidence in Desktop provider metadata.
+
+## 0.7.0 audit candidate: session identity, terminal settlement and Plan fixture
+
+- Desktop persists the session's local Provider/model identity separately from the upstream alias reported by `session-ready`. Reopening a managed session therefore cannot silently select the global Grok 4.5 default; if the recorded Provider is disabled, missing or cannot establish its gateway, sending is blocked with a structured error.
+- `turn_completed`, Prompt RPC completion, cancellation and process exit are reconciled by a stable turn ID. A late event from an earlier turn cannot settle a later queued/interjected turn. Desktop-owned accepted/running queue entries are persisted and atomically moved to terminal state.
+- Current CLI Plan behavior is exercised both through a test-only in-memory responder in the packaged/installed UI probe and one isolated live 0.2.118 read-only Plan turn. This does not claim every installed model, Provider or existing long session has been live-tested; those remain user acceptance.
+- ACP replay is merged with the local ConversationProjection V2. A partially persisted assistant body receives only a missing suffix; a complete body with different chunk boundaries is not duplicated. If no reliable turn boundary exists, Desktop retains the local projection and marks recovery as unavailable instead of inventing text.
+- Provider protocol translation and media/path boundaries remain evidence-based: unsupported capabilities are not inferred, remote media requires an explicit configured Provider Origin, and Renderer-submitted arbitrary local paths are rejected by the main process.
+
+## 0.2.117 Plan permission cancellation and exact-plan-file note (Desktop 0.6.25)
+
+- No new private ACP method is required. A mutating/unknown `session/request_permission` that has no explicit reject option is answered with the standard successful `{ outcome: { outcome: "cancelled" } }` shape; a JSON-RPC error is reserved for real transport/protocol failures.
+- Plan auto-approval no longer trusts human-readable tool titles. Explicit read/search/list/fetch/think kinds remain eligible, while execute calls must pass Desktop's bounded command parser; script blocks, subexpressions and static-call syntax are denied before pipeline analysis.
+- `fs/write_text_file` in Plan mode is restricted to the exact `plan.md` below the active persisted session directory. This keeps Grok Build's plan artifact available without granting a general workspace or external-path write exception.
+- A queued Desktop Prompt is associated with its client prompt ID, allowing the existing `turn_completed` event to settle it if Grok Build omits the original JSON-RPC response. This is lifecycle recovery, not a new queue protocol.
+
+## 0.2.117 Plan ext-method and internal-queue note (Desktop 0.6.24)
+
+- Current open-source Grok Build defines `x.ai/exit_plan_mode` as a successful ext-method response with `outcome` equal to `approved`, `cancelled` or `abandoned`; optional `feedback` is valid only for `cancelled`. A JSON-RPC error is a transport/tool-loop failure, not the wire representation of “continue planning” or “abandon”.
+- Current `session/prompt` consumes `_meta.mode`. Desktop sends the per-request Plan/Agent snapshot in addition to `session/set_mode`, treats replayed `current_mode_update` as authoritative and surfaces a failed mode change.
+- `_x.ai/queue/changed.runningPromptId` can identify Grok Build's internal execution queue entry for an ordinary direct Prompt. Desktop only creates a follow-up presentation turn when the ID belongs to an explicit Desktop queue/interject operation.
+- Live evidence on installed CLI `0.2.117 (f1c0609308)`: `session/set_mode=plan` succeeded, and one isolated real read-only Plan turn emitted no UI permission request, wrote no workspace file and ended idle. This is a narrow Plan lifecycle acceptance, not a claim that every model/tool combination has been exercised.
+
+## 0.2.117 terminal-event and Plan permission note (Desktop 0.6.23)
+
+- Current CLI may publish `_x.ai/session/update` with `sessionUpdate=turn_completed` after the complete visible answer without resolving the original `session/prompt` JSON-RPC request. Desktop treats that turn-scoped event as authoritative completion and ignores a later duplicate response.
+- `session/cancel` remains a notification rather than an acknowledged request. Desktop waits eight seconds, then replaces only the affected CLI adapter and reloads the persisted session if it is still working.
+- Plan mode uses the existing `session/request_permission` options without a new private method. Read-only calls are selected automatically; mutating/unknown calls are rejected automatically and still face the independent main-process filesystem/terminal gates. Underscore-style kinds and bounded read-only PowerShell pipelines are normalized locally.
+
 ## Unlimited interactive-turn note (post-Desktop 0.6.22)
 
 - Desktop no longer places a 30-minute wall-clock timer around `session/prompt` or queued follow-up Prompt requests. This does not require a new ACP method and does not change the CLI's own completion/cancellation behavior.

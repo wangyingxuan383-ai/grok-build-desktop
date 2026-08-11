@@ -1,6 +1,134 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-08-11
+
+### Grok Build CLI 1.0.0 完整适配与最终收口
+
+- 最终再审逐项清理历史计划状态并复核官方 Changelog、已安装 stable 和官方 main。新增官方 `x.ai/session/rename` 前向兼容、手动/自动标题所有权同步与旧 CLI 本地回退；stable 1.0.0 实机尚不提供该方法，因此不会错误显示为可用。
+- 修复 CLI 能力证据把 `cancelRewind` 当成完整 Rewind 支持的问题；`session.rewind` 与 `session.cancel-rewind` 现在分别记录，未知/未探测能力继续保持关闭。
+- 诊断中心补齐官方 Grok Doctor 自动修复：只接受 `doctor --json` 返回的安全修复 ID，使用五分钟一次性预览令牌、执行前重新验证和二次确认，以固定参数调用 `doctor fix`；当前机器没有可应用修复。
+- 官方上游快照更新至仓库 `b13fa526f5112c0b20dad5f1f2300d3d3b127895` / 源码 `a51a1dc62fe20029ac39a665985bba78edbb870f`，并加入 Session Rename/标题通知前向 Fixture；审计报告见 `docs/V080_FINAL_AUDIT.md`。
+- 再审后的完整套件为 101 个测试文件/734 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、366 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
+- 建立独立的 CLI 1.x 兼容档案、离线/运行时门禁及 1.0.0/未知未来主版本 Wire Fixture；未知主版本失败关闭，版本号不再被当成功能证据。
+- 受管 ACP 会话按 1.0 重新提交交互式附加策略，解析结构化 `closeOutcome`；MCP 斜杠事件、包装通知、Context/Usage/Session Info、Plan/Stop/Compact/Recap 和恢复后的真实模式均按会话归一化。
+- 官方 Git status 显式请求未跟踪文件、统计、补丁和子模块策略，避免 1.0 默认值改变让 Review 漏文件；官方返回不完整或没有匹配的空闲会话时回退现有受限系统 Git。
+- CLI 更新器继续禁止子进程自更新，只接受 stable 固定目标；跨主版本需要明确确认，更新后执行 ACP/Session/Git/Usage 探针，失败时精确回滚并恢复会话。应用更新只检测正式 GitHub Release，不从 `main` 安装。
+- 项目旧路径失效时新增本地投影离线查看；离线状态阻止发送和文件操作。重新绑定先尝试官方移动目录恢复，不支持时再官方 Fork，默认不恢复旧代码状态，并保留事务回滚记录。
+- 会话支持继承 CLI 或 60%–95% 自定义 Compact 阈值、立即压缩、压缩时间线及 Stop 取消；首事件只做 20/60 秒软提示，不再为长推理增加总时长上限。
+- 右栏增加官方会话数据视图；官方反馈按真实能力显示并在发送前脱敏预览。扩展列表统一排序/分组，Skills 可搜索；Markdown 表格、长脚本、Diff 与 CJK 正文恢复选择复制和独立滚动。
+- 支持包继续采用静态允许列表，明确排除会话正文、媒体、凭据和路径重新绑定日志。
+- Desktop 固定目标更新已将本机 CLI 从0.2.118升级到 stable `1.0.0 (3cd0d0cbce)`；核心 ACP、Resume、结构化 Close/Delete、真实只读 Plan、Stop、Compact、MCP 事件和双会话门禁通过。stable 暂无 `x.ai/git/status`/Session Usage 扩展时按运行时证据禁用并安全回退，不再回滚整个1.0升级。
+- 修复 CLI 1.0 将真实上游 HTTP 原因包在 JSON-RPC `error.data`、界面却只显示 `Internal error` 的问题；现在保留 JSON-RPC/HTTP 分类并优先展示受限长度的可操作错误。当前远程 CPA 实测返回 `403 cpa_local_only`，因此不声称 Provider 推理成功。
+- 最终源码门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native/Fuses、零漏洞依赖审计、打包版与安装版 UI 通过。正式公开资产由 `v0.8.0` 标签工作流从最终提交重新构建，并在草稿回下载、SHA-256 与 Attestation 校验通过后发布。
+
+
+### 0.7.3 0.7.x 总体改进合并候选（2026-08-10）
+
+- 不再逐阶段重复打包：将原 0.7.1–0.7.3 计划合并为唯一 0.7.3 本地候选，复用既有项目身份、草稿优先、ConversationProjection V2、统一会话导航、Provider Gateway 与 IPC 安全边界。
+- 会话阅读加入仅作用于正文的 640–1040px 宽度和 90%–135% 字号设置；新增回合导航轨道，按请求、Plan、权限、错误、过程和最终回答定位，并可一键折叠所有已完成过程。运行中过程保持展开，完成后继续按回合压缩。
+- 主进程新增受限的已安装工具发现与“打开方式”：资源管理器、VS Code、Cursor、记事本、Windows Terminal 和 Codex CLI 只有在真实可用且有固定参数契约时才显示；文件/目录仍经过会话、Worktree 和可信路径校验，Renderer 不启动任意程序。
+- 右栏在 Git 工作区只展示 Git Review，在非 Git 工作区只展示 Agent 真实写入；Agent 改动支持文件搜索、单文件 Diff、独立滚动和 420–760px 持久化宽度。修复窄栏与 unified Diff 的横向溢出。
+- 从 App Shell 中抽出虚拟会话视口、会话派生状态和导航控制器；App/TopBar 改为 Zustand 选择器订阅，后台会话流式事件不再因读取完整 Store 而重渲染全部壳层。Monaco、Markdown 高亮、Mermaid 和大型工作台继续按需加载并受分块门禁约束。
+- 应用更新检查会区分“发现新 Release”“当前等于公开版本”和“本地候选高于公开 Release”，不会把 0.7.3 候选误报为需要降级。2026-08-10 只读实测 GitHub Latest 为 v0.6.22。
+- Grok CLI 更新检查已适配 stable 1.0.0：0.2.118 → 1.0.0 被标记为跨主版本更新，必须显式二次确认，仍固定目标、验证 ACP/会话创建并在失败时回滚；本轮没有擅自升级用户 CLI。官方 1.0.0 Changelog 仅作为能力提示，控件继续服从运行时声明/探测证据。
+- 最终完整门禁通过：98 个测试文件/697 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、351 文件公开扫描、Renderer 分块、Native Host、Fuses、Task Scheduler、当前 0.7.3 UI、覆盖层及中文/空格 Portable 冷启动通过，`npm audit` 为 0 漏洞。旧 0.4/0.6 UI 探针从现行发布门禁移除，避免已退役信息架构误报。
+- 已生成并 per-user 安装 0.7.3；安装版主进程/About/诊断、ASAR、Fuses、桌面/开始菜单快捷方式均验证。Setup SHA-256 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19163f7e5948ac`；Portable `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`；SBOM `96c5307ea15185f11194d0150a175ed5c16a91bb352faeef28eb8229b44abc1f`；许可证报告 `668db4dc469c6d4dd9616429ef14daa1032e93ffc6fece8355863b85ecbe21dc`。用户验收前不推送、不创建 GitHub Release。
+
+### 0.7.1 会话与项目基础（2026-08-09）
+
+- 工作区目录引入稳定 `ProjectIdentity`：Windows 大小写、尾部分隔符和可解析重解析点统一到同一项目；置顶、最近项目及 Grok/Codex/Claude 会话来源合并计数，重复项目不再并列显示。
+- 项目支持只隐藏目录记录、不删除会话或源文件，并在设置中的“已隐藏项目”恢复；旧路径元数据按路径兼容迁移，无法访问的路径保留诊断而不是丢弃。
+- “新建任务”改为本地草稿优先：进入空白画布时不启动 CLI，正文、附件、模型、Provider、思考档位、模式和执行档案持久化；首次发送成功后再创建唯一会话并将草稿及附件原子迁移，失败或冲突时保留源草稿。
+- 历史会话先恢复 ConversationProjection V2、附件和回合展示，再在后台连接/同步 ACP；`local/connecting/synchronizing/ready/offline/failed` 状态和 generation 隔离防止快速切换后的迟到事件覆盖当前会话，离线时保留本地正文与 Composer。
+- 左栏统一运行、等待、排队、未读完成、失败和空闲状态；项目显示活动会话数、草稿数和总会话数。侧栏、任务中心、Dashboard、历史分叉、Codex/Claude 接力和 Worktree 会话全部走统一 `openConversationTarget()`。
+- 0.7.1 完整离线套件为 95 个测试文件/686 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、公开扫描、分块、Native Host、Fuses 和打包版 0.7.1 UI 草稿/恢复/多会话探针通过。
+- 正式生成 Setup、Portable、SHA-256、SBOM 和许可证报告并完成 per-user 安装；安装版 File/Product、About、诊断、冷启动以及桌面/开始菜单快捷方式均验证为 0.7.1。首次打包探针暴露虚拟会话切换未等待 React 提交的时序问题，夹具改为等待目标会话并派发真实滚动事件后，重新打包通过；没有上传或创建 Release。
+
+### 0.7.0 C 盘基线刷新（2026-08-09）
+
+- 将 npm 缓存从已移除的 `E:\\ToolCaches\\npm-cache` 迁回 `%LOCALAPPDATA%\\npm-cache`，恢复依赖查询和打包链路；仓库与构建流程不再访问故障 E 盘。
+- 针对新公布的高危依赖公告，最小更新 Vite/React 插件/Mermaid，并覆盖到已修复的 DOMPurify、PostCSS、NanoID 和 js-yaml；`npm audit` 由 17 项告警恢复为 0。
+- 在 C 盘重新完成 94 个测试文件/677 项离线测试、TypeScript、生产/资源构建、342 文件公开扫描、分块、Native Host、Fuses、打包版 UI 与目录打包门禁。
+- 重新生成 Setup/Portable 并执行 per-user 安装；安装版 File/Product 均为 0.7.0，冷启动和桌面/开始菜单快捷方式通过。Release 资产的第二次重复 UI 探针仍暴露夹具时序波动，因此没有创建公开 Release。
+
+### 0.7.0 累计变更一致性审计（2026-08-09）
+
+- 审计 `origin/main...codex/v0.7.0-audit-hardening` 的 5 个提交、150 个变更文件，确认 Provider 扫描、会话投影/ACP 回放、CLI 前向能力和 CSS 壳层没有并行重复生产实现；旧 `deep-scan` IPC 仅保留兼容包装并标记为后续弃用入口。
+- 修复 Provider 异步扫描“取消发生在 Worker 安装 AbortController 之前”时可能永久停在 `cancelling` 或继续探测的竞态；取消现在按 Job ID/generation 隔离迟到响应，并在首次网络请求前二次检查任务状态。
+- 媒体子进程将“启动静默宽限”和“首字节后的空闲超时”分离，持续输出不会触发总时长上限；离线会话夹具改为走真实附件账本恢复，虚拟列表探针先定位目标回合再断言，避免把未挂载节点误判为图片丢失。
+- 聚焦回归 4 个文件、72 项通过；完整离线门禁为 94 个测试文件、677 项通过，6 个 live 文件/9 项按设计跳过。TypeScript、生产/资源构建、342 文件公开扫描、Renderer 分块、Native Host 自检、`git diff --check` 和高危依赖门禁通过；当前仅有 4 个无可用修复的 DOMPurify 传递中危项。
+- 本轮不复用故障 E 盘期间生成的 Setup/Portable 作为证据，也不创建 Release；正式打包、安装和桌面实机验收留待存储环境稳定后的独立候选流程。
+
+### 0.7.0 capability-gated Session surfaces and Mermaid controls (2026-08-06)
+
+- 接入官方 `/btw` 旁路提问线：仅当运行时命令/扩展证据声明能力时显示，使用官方 `session_id` + `question` 字段，不把旁路问题伪装成排队回合；旧 CLI 显示明确“不支持”。
+- 增加主进程能力门控的官方 `session/list`、`x.ai/session/info` 和 `x.ai/session/usage` 归一化接口；右侧“会话信息”只展示 CLI 实际返回的模型、模式、思考档位和 Token，不用全局默认或推算值补齐。
+- Mermaid 计划块增加复制源码、复制图像和打开图像操作，保持严格渲染；工具仅在图表已成功生成后可用。
+- IPC、Preload 和运行时 Schema 已覆盖上述入口，扩展参数按官方 wire shape 发送并对未知/未声明能力降级。
+- 本轮受影响测试 59 项通过；完整离线套件现为 94 个测试文件、676 项通过、9 项按设计跳过，TypeScript 与生产构建通过。0.2.119/0.2.120 stable 实机能力及 `doctor fix` 仍未宣称完成。
+
+### 0.7.0 ACP 0.2.120 前向适配补充（2026-08-06）
+
+- `initialize` 能力证据现在记录标准 `session/list`、`session/resume` 与 `session/close`；官方 0.2.120 源码形态以脱敏 Fixture 固定，仍不会把尚未进入本机 stable 通道的版本当作可安装版本。
+- 重开会话优先使用运行时声明的 `session/resume`，仅在明确的“方法不存在/参数不支持”错误时回退 `session/load`；传输超时不会盲目重复挂载。退出时尽力发送标准 `session/close`，超时仍会释放 CLI 进程。
+- Plan 决策卡等待期间允许切换模型，其他权限/问题等待仍保持锁定；自定义 Provider 的本地模型身份和上游模型状态继续分离，不会切回全局 Grok 4.5。
+- ACP 回放的用户消息现在保留稳定消息 ID、附件预览和文件/图片资源；MCP 提取图片、直接图片块和重复回放按内容去重并合并到现有消息，不再生成空白或重复图片消息。
+- Windows 文件锁在短暂 `EPERM/EBUSY` 竞争窗口内按锁争用重试，避免并行投影写入偶发失败；真正的权限错误仍立即报告。
+- 离线媒体夹具改用 Electron `nativeImage` 可解码的 RGBA PNG，修复打包 UI 探针中生成媒体卡被误判为“图片数据无效”的候选门禁问题。
+- A–D 变更已通过 94 个测试文件、676 项测试（9 项按设计跳过）、TypeScript、生产/资源构建、公开扫描和分块门禁；本地 0.7.0 打包已重新执行，验收前仍不推送 GitHub、不创建 Release。
+
+### 0.7.0 本地候选最终复核（2026-08-06）
+
+- Setup、Portable、SBOM、许可证报告、SHA-256、Electron Fuses、Task Scheduler 和中文/空格 Portable 冷启动均通过；Portable 已从最新构建同步，避免旧压缩包掩盖 IPC 修复。
+- 当前 0.7.0 UI 门禁覆盖 Plan/权限四种组合、Stop 恢复、多会话隔离、导航、右栏五工具、非 Git Review、文件预览、结构化错误、Token 活动、诊断动作、响应式 Composer/窄栏抽屉和 Provider 管理。
+- Setup `release/Grok-Build-Desktop-Setup-v0.7.0-x64.exe` SHA-256：`04f6894dea09c900f9dbae1c38d3ca6316bfd07b52da35cb97a56b57c6109a7c`；Portable `release/Grok-Build-Desktop-Portable-v0.7.0-x64.zip`：`c1f2e74685e7f03db937141efdf6fe70c571bb328525249791055128c81a6c4f`；SBOM：`a7a47e9a7fdb668f165f9f3813a4bd3807d99ba119155715ab0c129d36790561`；许可证报告：`382a29a84ec5dcf10c5e4532b34ae419aad97674b4fc36ea2a1ef504eef252c5`。
+- 仍按锁定策略仅交付本地候选，不推送 GitHub、不创建 Release、不覆盖 0.6.x 资产；真实长会话、Provider 与双并行回合继续由用户桌面验收。
+
+### 0.7.0 全面审计与稳定性候选（已本地安装，等待验收）
+
+- Grok Build CLI 适配改为运行时证据驱动：保存脱敏的 `initialize` 能力快照，消费 Agent/协议版本、Session/Prompt/MCP 能力、模型/努力档位、命令、Recap、Rewind 与插件目录；版本号仅作为最后一级提示。
+- 所有 Desktop 管理的 ACP、媒体、登录、Memory、Provider、插件和诊断子进程显式传入 `--no-auto-update`。CLI 更新只接受用户确认的 stable 精确目标，更新前再次校验源状态并暂停会话，完成后验证 initialize、session/new、官方空会话删除与基础扩展；失败时精确回滚并恢复会话。
+- 区分本机 stable 目标和官方已公布版本：公开 Changelog 高于 stable 时仅提示分批发布状态，不会越过更新通道强制安装。
+- 适配 0.2.118 生命周期：快速后台任务完成先于 backgrounded 时不复活任务；Auto Compact 可见且可取消；Recap 按内容哈希去重；未知事件只记录名称、结构版本和大小。
+- 会话删除优先使用官方 `grok sessions delete`，成功后才清理 Desktop 投影/附件/媒体/Token；失败时必须显式选择“仅清理 Desktop 数据”。诊断中心增加受限脱敏的 `grok doctor --json` 摘要。
+- 为 0.2.119/0.2.120 增加按运行时事件启用的前向解析：follow-ups、模型/设置热更新、Goal、Workflow、Subagent、Retry 和后台任务。自定义 Provider 的本地模型身份不会被上游别名改回官方模型；`/btw`、Session 元数据和 Mermaid 操作已按运行时证据门控接入，MCP/插件/Git 新界面与 doctor 修复仍延期到 stable 实机证据。
+- 本机已按 stable 精确升级到 `grok 0.2.118 (1e1687c1cf)`；真实 `initialize/session/new` 与空会话官方删除完成，最小只读 Plan 回合在 19.28 秒内通过，未出现权限卡或工作区写入。升级过程未安装 0.2.119/0.2.120。
+- 0.2.118 收紧了自定义模型 TOML 思考档位解析。Desktop 不再把对象数组序列化成 CLI 拒绝的 `[[model.*.reasoning_efforts]]`，而是写入原生字符串列表，并把 `auto/none` 留在 Desktop 上游能力层而非 CLI 模型菜单。
+- 会话运行时按会话保存 Provider、本地模型 ID、上游别名、思考档位、模式和执行档案；恢复旧会话时不再被全局默认模型覆盖。受管 Provider 初始化失败会明确阻止发送，不静默回退到官方模型；分叉会话继承父会话运行时。
+- Plan 决定写入成功后立即关闭旧交互门，模式切换异步收敛；普通回合、Plan、权限等待、队列和插话统一按稳定回合 ID结算。accepted/running 队列落盘，重复终态和迟到事件不会复活或重复消息。离线 UI responder 已覆盖 Plan 三决策、权限允许/拒绝和 Stop 终态。
+- 会话可见内容升级为本地投影 V2：流式正文、过程、工具、计划/权限/问题、错误、媒体、回合耗时和 Usage 可恢复；ACP 回放与本地投影按用户消息和内容后缀合并，避免重开只剩指标或重复回答。
+- JsonStore 使用跨进程事务锁和 owner fencing；自动化任务取消改为显式 API，取消/进程退出/可选 ACP 无活动超时均有持久终态，不再设置 24 小时总时限。支持包日志、IPC 参数、文件路径、媒体和 CLI 路径增加运行时边界校验。
+- 附件、媒体、打开位置和系统路径统一绑定会话/工作区/Picker 签发句柄；阻断任意 Renderer 路径、符号链接越界、可执行文件打开和未经允许的远端媒体。媒体远端默认拒绝，只有显式 Provider Origin 才能进入受限抓取。
+- Provider Chat/Responses/Messages/Gemini 翻译、SSE 错误/EOF/Usage、工具名称映射和扫描状态保留现有成果；未验证能力不伪造模型档位或媒体能力。
+- 最终候选一次完整离线套件通过 94 个测试文件、676 项测试；9 项按设计跳过。TypeScript、生产/资源构建、341 文件公开扫描、Native/Computer Host、24/24 Computer Use、Electron Fuses、Renderer 分块、打包版与安装版 0.7.0 UI、`npm audit`（0 漏洞）均通过。
+- 已生成并 per-user 安装最新源码对应的唯一一组 0.7.0 本地产物。File/Product/ASAR/Fuses、About/诊断、冷启动和桌面/开始菜单快捷方式通过；现有长会话 Stop、双真实模型并行和已配置 Provider 留给用户验收。验收前不推送、不创建 Release。
+
+### 0.6.25 Plan permission hardening and terminal recovery
+
+- Closed the remaining Plan-mode approval bypasses. PowerShell script blocks, subexpressions and static-call syntax are rejected before pipeline classification; read-only auto-approval is based on explicit ACP kinds and parsed commands rather than user-visible titles or tool names.
+- Plan filesystem access now allows only the current persisted session's exact `plan.md`. Other workspace paths, arbitrary external paths and an existing symbolic-link plan target are rejected in the main process.
+- A rejected permission request that offers no explicit reject option now receives the standard ACP `cancelled` outcome instead of a JSON-RPC error, preventing the CLI from retrying or leaving the session waiting.
+- Terminal-only completion can now settle both direct and Desktop-owned queued prompts by their stable prompt ID, so a missing JSON-RPC response cannot leave a queued Plan follow-up permanently working.
+- Stop is no longer fire-and-forget in the Renderer. The Composer displays the stop attempt and its success/recovery result, while failures remain visible and copyable instead of silently preserving the Stop state.
+- Focused verification passes 4 files / 85 tests. The final candidate passes 82 offline files / 488 tests with 6 live files / 9 tests skipped by design, plus TypeScript, production/resources, 303-file public scans, native-host self-test, Fuses, packaged/Portable UI, Task Scheduler and installed main/About/diagnostics checks. One 0.6.25 Setup/Portable/SBOM/license set is installed per-user; Setup SHA-256 is `4026ce1d961a0ca7f8c66d0fca0cf48a2c5ce1ecac60174d20d838ddcdce1908` and Portable is `6041acb6c378cd75d1e7247b1198e45b1803a4f01c448b8deaa9f1a51d3c3477`. Real long-conversation Plan/Stop behavior remains user acceptance; no GitHub push or Release is performed before that acceptance.
+
+### 0.6.24 Plan wire/state and phantom-queue hotfix
+
+- Corrected the current open-source Grok Build `x.ai/exit_plan_mode` response contract. “批准并执行” returns `outcome=approved`, “继续规划” returns the successful `outcome=cancelled` result with optional `feedback`, and “取消” returns `outcome=abandoned`; legitimate choices are no longer mis-sent as JSON-RPC errors.
+- Plan state now remains session-scoped across reload. Replayed `current_mode_update` changes the adapter's authoritative mode, `session/set_mode` failures are surfaced instead of silently claiming success, and every direct or explicitly queued Prompt pins its `mode` snapshot in `_meta`.
+- Fixed the persistent Stop button after an otherwise completed turn. Grok Build's server-generated internal queue entry for an ordinary direct Prompt is no longer treated as a Desktop-owned follow-up turn; only IDs submitted by Desktop queue/interject actions can start a queued presentation turn.
+- Stabilized workspace-picker focus restoration. Its close callback no longer changes identity on unrelated Sidebar renders, so closing the picker consistently returns keyboard focus to the workspace button.
+- Added current-CLI wire contracts plus an opt-in real Plan acceptance. On installed Grok Build `0.2.117`, a real isolated read-only Plan turn completed with no Renderer permission event, no workspace write and `working=false`; this live test also reproduced the phantom second turn before the ownership fix.
+- Final local verification passes 82 offline files / 483 tests; 6 live files / 9 tests skip by design. TypeScript, production/resources, 303-file public scans, Electron Fuses, packaged/Portable UI, Task Scheduler and installed main/About/diagnostics checks pass. The first package attempt correctly exposed and led to the workspace-picker focus fix; the resulting candidate then passed the complete formal gate.
+- One 0.6.24 Setup/Portable/SBOM/license set is installed per-user. File/Product, main/About/diagnostics, Fuses and desktop/start-menu shortcuts report 0.6.24. Setup SHA-256 is `4f2d37bb24822ef0fd83e966205041c00638fed22df5b19126eb45847e4abf92`; Portable is `afe51b3acbcc5510998b4c869cda1d10f39a9705f88d025952103dda180de6a8`. Existing long-conversation Plan/Stop behavior remains user acceptance; no GitHub push or Release is performed before that acceptance.
+
+### 0.6.23 Plan terminal-state and Stop recovery hotfix
+
+- Fixed a normal/Plan turn remaining permanently `working` after Grok CLI had already streamed the final answer and published `_x.ai/session/update.turn_completed` but omitted the original `session/prompt` JSON-RPC response. The terminal event now settles the matching prompt request by turn ID, clears the Composer Stop state and cannot complete a later queued/interjected turn.
+- Stop now has a bounded recovery path. Desktop first sends the standard ACP cancel notification; if that session alone does not acknowledge cancellation within eight seconds, its CLI process is replaced and the persisted conversation is reloaded without interrupting other concurrently running conversations.
+- Plan mode no longer opens approval cards. Read-only tools are selected automatically, while mutating or unknown tools are rejected automatically; filesystem writes and non-read-only terminal commands remain independently blocked in the main process. Current underscore-style ACP kinds such as `read_file`, `list_directory` and `search_files`, plus bounded read-only PowerShell pipelines, are recognized.
+- Focused regression coverage includes terminal-only completion without a prompt response, idempotent Plan decisions, read/mutation permission routing and acknowledged/stuck cancellation recovery. No paid Provider request is part of the automated gate.
+- Final local verification passes 81 offline files / 478 tests; 5 live files / 8 tests skip by design. TypeScript, production/resources, public scans, Electron Fuses, packaged/Portable UI and Task Scheduler probes pass. One 0.6.23 Setup/Portable/SBOM/license set is installed per-user; File/Product, main/About/diagnostics, support-bundle exclusions and both shortcuts report the installed build. Setup SHA-256 is `345753b1d2ab4ade56dff41853ce8cab6c077282929debb42b99f08f73da76c4`; Portable is `2c5b7d388b67dc45e3622c69965fef0d24eb3b4fd9b1874ef91212f3bccbcc02`. Real Plan/Stop behavior remains user acceptance; no GitHub push or Release was performed.
 
 ### Post-0.6.22 unlimited interactive turns
 

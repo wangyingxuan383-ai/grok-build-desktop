@@ -107,6 +107,24 @@ try {
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell.sidebar-collapsed'))"), "Sidebar did not auto-collapse below 1000px");
   await request("Emulation.setDeviceMetricsOverride", { width: 1440, height: 810, deviceScaleFactor: 1, mobile: false });
   await request("Page.reload", { ignoreCache: true });
-  await waitFor(() => evaluate("document.querySelectorAll('.user-image-preview img').length >= 3"), "Attachment previews did not survive renderer reopen");
+  // Renderer reopen restores the conversation's last position.  Scroll the
+  // virtualized list to the first turn before asserting the multi-image card;
+  // otherwise the card is present in state but outside the mounted viewport.
+  await evaluate("document.querySelector('.conversation')?.scrollTo({ top: 0 }); true");
+  await sleep(150);
+  try {
+    await waitFor(() => evaluate("document.querySelectorAll('.user-image-preview img').length >= 3"), "Attachment previews did not survive renderer reopen");
+  } catch (error) {
+    const diagnostics = await evaluate(`({
+      fixture: document.body.innerText.includes('0.7.0 会话生命周期与并发验收'),
+      turns: document.querySelectorAll('.chat-turn').length,
+      images: document.querySelectorAll('.user-image-preview img').length,
+      missing: document.querySelectorAll('.user-image-preview.missing').length,
+      active: document.querySelector('.conversation')?.getAttribute('data-session-id') || '',
+      route: document.querySelector('.main-stage')?.className || '',
+      body: document.body.innerText.slice(0, 800),
+    })`);
+    throw new Error(`${error.message}: ${JSON.stringify(diagnostics)}`);
+  }
   console.log(JSON.stringify({ ok: true, version: initial.appVersion, legacySegmentsCoalesced: 30, elapsed: "1分23秒", reviewScopes: review.scopes, settingsCategories: settings.categories.length, backgroundExact: true, pastedImageVisible: true, reopenedImagesVisible: true, responsive: ["900x720", "1100x720", "1440x810"] }, null, 2));
 } finally { socket.close(); }

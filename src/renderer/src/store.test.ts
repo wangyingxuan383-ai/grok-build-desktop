@@ -23,6 +23,14 @@ function apply(state: any, event: ChatEvent): any {
 }
 
 describe("session event reducer", () => {
+  it("ignores stale hydration updates after a newer open generation", () => {
+    let state = apply(baseState(), { type: "session-hydration", sessionId: "session", state: "connecting", generation: 4 });
+    state = apply(state, { type: "session-hydration", sessionId: "session", state: "ready", generation: 5 });
+    state = apply(state, { type: "session-hydration", sessionId: "session", state: "failed", generation: 4, message: "late failure" });
+    expect(state.views.session).toMatchObject({ hydration: "ready", hydrationGeneration: 5 });
+    expect(state.views.session.hydrationMessage).toBeUndefined();
+  });
+
   it("settles a subagent when its parent turn completes", () => {
     let state = baseState();
     state = apply(state, { type: "subagent", sessionId: "session", update: { sessionUpdate: "subagent_spawned", subagent_id: "child-1" } });
@@ -68,6 +76,12 @@ describe("session event reducer", () => {
     expect(state.views.session.messages[0].attachments).toEqual([first]);
   });
 
+  it("does not collapse distinct media events that have no stable source", () => {
+    let state = apply(baseState(), { type: "media", sessionId: "session", media: "image", source: "" });
+    state = apply(state, { type: "media", sessionId: "session", media: "image", source: "" });
+    expect(state.views.session.messages.filter((message: { kind: string }) => message.kind === "media")).toHaveLength(2);
+  });
+
   it("merges duplicate turn completion metadata without inventing legacy durations", () => {
     let state = apply(baseState(), { type: "turn-started", sessionId: "session", presentation: { turnId: "turn-1", clientMessageId: "message-1", ordinal: 0, startedAt: "2026-07-22T00:00:00.000Z" } });
     state = apply(state, { type: "turn-completed", sessionId: "session", presentation: { turnId: "turn-1", clientMessageId: "message-1", ordinal: 0, startedAt: "2026-07-22T00:00:00.000Z", completedAt: "2026-07-22T00:00:01.250Z", durationMs: 1250, outcome: "completed" } });
@@ -80,6 +94,15 @@ describe("session event reducer", () => {
     state = apply(state, { type: "turn-retry", sessionId: "session", attempt: 1, maxAttempts: 3, delayMs: 500, reason: "HTTP 429" });
     state = apply(state, { type: "turn-retry", sessionId: "session", attempt: 2, maxAttempts: 3, delayMs: 1000, reason: "HTTP 429" });
     expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "retry", attempt: 2, maxAttempts: 3, delayMs: 1000 })]);
+  });
+
+  it("keeps the composer stoppable for the full auto-compact lifecycle", () => {
+    let state = apply(baseState(), { type: "compact-status", sessionId: "session", status: "started" });
+    expect(state.views.session.compacting).toBe(true);
+    expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "compact", status: "started" })]);
+    state = apply(state, { type: "compact-status", sessionId: "session", status: "cancelled", message: "user cancelled" });
+    expect(state.views.session.compacting).toBe(false);
+    expect(state.views.session.messages).toEqual([expect.objectContaining({ kind: "compact", status: "cancelled", text: "user cancelled" })]);
   });
 
   it("restores the durable visible projection after an incomplete ACP replay", () => {
@@ -119,12 +142,42 @@ describe("session event reducer", () => {
       ],
     };
     state = apply(state, { type: "session-reset", sessionId: "session" });
-    expect(state.views.session.messages).toEqual([]);
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "user", text: "before reset" }),
+      expect.objectContaining({ kind: "assistant", text: "partial answer" }),
+    ]);
+    expect(state.views.session.status).toBe("cold");
     state = apply(state, { type: "conversation-projection-restore", sessionId: "session", projection });
     expect(state.views.session.messages).toEqual([
       expect.objectContaining({ kind: "user", text: "before reset" }),
       expect.objectContaining({ kind: "assistant", text: "partial answer" }),
     ]);
+  });
+
+  it("isolates background session lifecycle state from the active session", () => {
+    let state = baseState();
+    state.views.background = emptyView();
+    state = apply(state, { type: "status", sessionId: "background", status: "working", text: "running elsewhere" });
+    state = apply(state, { type: "prompt-queue", sessionId: "background", entries: [{ id: "bg", sessionId: "background", text: "queued", position: 0, createdAt: "2026-08-04T00:00:00Z", state: "queued" }] });
+    expect(state.activeSessionId).toBe("session");
+    expect(state.views.session).toMatchObject({ status: "idle", queue: [] });
+    expect(state.views.background).toMatchObject({ status: "working", queue: [{ id: "bg" }] });
+  });
+
+  it("restores V2 queue and session runtime without requiring a visible message", () => {
+    const state = apply(baseState(), {
+      type: "conversation-projection-restore",
+      sessionId: "session",
+      projection: {
+        version: 2,
+        sessionId: "session",
+        updatedAt: "2026-08-04T00:00:00Z",
+        events: [],
+        runtime: { sessionId: "session", cwd: "D:\\repo", modelId: "provider-model", providerId: "provider", effort: "xhigh", mode: "plan", updatedAt: "2026-08-04T00:00:00Z" },
+        queue: { version: 1, sessionId: "session", updatedAt: "2026-08-04T00:00:00Z", entries: [{ id: "q", sessionId: "session", text: "queued", position: 0, createdAt: "2026-08-04T00:00:00Z", state: "queued" }] },
+      },
+    });
+    expect(state.views.session).toMatchObject({ currentModelId: "provider-model", effort: "xhigh", mode: "plan", queue: [{ id: "q", text: "queued" }] });
   });
 
   it("shows an explicit recovery state instead of promoting it to a global error", () => {

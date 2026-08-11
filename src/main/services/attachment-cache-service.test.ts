@@ -21,6 +21,16 @@ function pasted(overrides: Partial<Attachment> = {}): Attachment {
 }
 
 describe("attachment cache", () => {
+  it("copies cached image attachments to a rebound session", async () => {
+    const userData = await root();
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("parent", [pasted()]);
+    await service.record("parent", "message", "image", prepared.previews, "sent");
+    await service.cloneSession("parent", "child");
+    const restored = await service.restore("child");
+    expect(restored).toEqual([expect.objectContaining({ clientMessageId: "message", attachments: [expect.objectContaining({ availability: "ready" })] })]);
+    expect(restored[0]!.attachments[0]!.source).not.toBe(prepared.previews[0]!.source);
+  });
   it("materializes a pasted image inside a hashed session directory and restores it after restart", async () => {
     const userData = await root();
     const service = new AttachmentCacheService(userData);
@@ -117,5 +127,19 @@ describe("attachment cache", () => {
     await rm(source);
     expect(await readFile(prepared.attachments[0]!.path!, "utf8")).toBe(text);
     expect(prepared.previews[0]).toMatchObject({ availability: "ready", isData: false });
+  });
+
+  it("does not lose concurrent message attachment records", async () => {
+    const userData = await root();
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("session", [pasted()]);
+    await Promise.all(Array.from({ length: 20 }, (_, index) => service.record(
+      "session",
+      `message-${index}`,
+      `text-${index}`,
+      prepared.previews,
+      "sent",
+    )));
+    expect(await service.restore("session")).toHaveLength(20);
   });
 });

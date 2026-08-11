@@ -1,6 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { navigateToolLocation, redactErrorText, summarizeError, toolLocationCandidates } from "./MessageCard";
+import { isResolvedInteraction, MessageCard, navigateToolLocation, protectedActionScript, redactErrorText, summarizeError, toolLocationCandidates } from "./MessageCard";
 
 describe("tool card editor locations", () => {
   it("normalizes ACP locations and file-tool raw inputs without duplicating targets", () => {
@@ -44,5 +46,43 @@ describe("structured provider errors", () => {
     expect(safe).not.toContain("super-secret");
     expect(safe).not.toContain("key-secret");
     expect(summarizeError(safe)).toContain("HTTP 400 · Provider antigravity");
+  });
+});
+
+describe("resolved interaction cards", () => {
+  it("shows the complete protected script instead of truncating it into the title", () => {
+    const script = "Get-ChildItem -Recurse | Select-String -Pattern '测试'";
+    expect(protectedActionScript({ title: "运行命令", rawInput: { command: script } })).toBe(script);
+    expect(renderToStaticMarkup(createElement(MessageCard, {
+      message: { id: "permission-script", kind: "permission", request: { requestId: 1, sessionId: "session", toolCall: { title: "运行命令", rawInput: { command: script } }, options: [] } } as never,
+      sessionId: "session",
+      showThinking: true,
+      expandTools: false,
+    }))).toContain("查看完整命令");
+  });
+
+  it.each([
+    { id: "permission-1", kind: "permission", resolved: true, request: { requestId: 1, sessionId: "session", toolCall: {}, options: [] } },
+    { id: "question-1", kind: "question", resolved: true, requestId: 1, questions: [] },
+    { id: "plan-1", kind: "plan", resolved: true, requestId: 1, text: "Plan", interactive: true },
+  ] as const)("removes a resolved $kind decision surface immediately", (message) => {
+    expect(isResolvedInteraction(message as never)).toBe(true);
+    expect(renderToStaticMarkup(createElement(MessageCard, {
+      message: message as never,
+      sessionId: "session",
+      showThinking: true,
+      expandTools: false,
+    }))).toBe("");
+  });
+
+  it("keeps an unresolved decision visible", () => {
+    const message = { id: "permission-1", kind: "permission", request: { requestId: 1, sessionId: "session", toolCall: {}, options: [] } } as const;
+    expect(isResolvedInteraction(message as never)).toBe(false);
+    expect(renderToStaticMarkup(createElement(MessageCard, {
+      message: message as never,
+      sessionId: "session",
+      showThinking: true,
+      expandTools: false,
+    }))).toContain("需要批准");
   });
 });

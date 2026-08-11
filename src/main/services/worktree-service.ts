@@ -201,9 +201,7 @@ export class WorktreeService {
       } else await this.run(["-C", target.repositoryRoot, "worktree", "remove", worktree.path]);
     }
     if (worktree.branch) await this.run(["-C", target.repositoryRoot, "branch", "-d", worktree.branch], [1]);
-    const state = await this.store.get();
-    state.entries = state.entries.filter((entry) => entry.id !== worktreeId);
-    await this.store.set(state);
+    await this.store.mutate((state) => { state.entries = state.entries.filter((entry) => entry.id !== worktreeId); });
   }
 
   async previewGc(workspacePath: string): Promise<WorktreeGcPreview> {
@@ -223,9 +221,9 @@ export class WorktreeService {
     if (preview.confirmationToken !== confirmationToken) throw new Error("GC 预览已变化，请重新预览");
     const official = await this.tryOfficial("x.ai/git/worktree/gc", { workspacePath: preview.repositoryRoot });
     if (!official) await this.run(["-C", preview.repositoryRoot, "worktree", "prune", "--expire=now", "--verbose"]);
-    const state = await this.store.get();
-    state.entries = state.entries.filter((entry) => entry.repositoryRoot !== preview.repositoryRoot || !preview.candidates.some((candidate) => candidate.path.includes(basename(entry.path))));
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      state.entries = state.entries.filter((entry) => entry.repositoryRoot !== preview.repositoryRoot || !preview.candidates.some((candidate) => candidate.path.includes(basename(entry.path))));
+    });
     return this.previewGc(workspacePath);
   }
 
@@ -256,9 +254,9 @@ export class WorktreeService {
   private async recordMetadata(input: Omit<WorktreeMetadata, "id" | "createdAt" | "lastUsedAt"> & { id?: string }): Promise<WorktreeMetadata> {
     const now = new Date().toISOString();
     const metadata: WorktreeMetadata = { ...input, id: input.id ?? randomUUID(), createdAt: now, lastUsedAt: now };
-    const state = await this.store.get();
-    state.entries = [...state.entries.filter((entry) => entry.id !== metadata.id && !samePath(entry.path, metadata.path)), metadata];
-    await this.store.set(state);
+    await this.store.mutate((state) => {
+      state.entries = [...state.entries.filter((entry) => entry.id !== metadata.id && !samePath(entry.path, metadata.path)), metadata];
+    });
     return metadata;
   }
 

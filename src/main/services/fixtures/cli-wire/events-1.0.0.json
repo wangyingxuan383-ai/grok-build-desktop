@@ -1,0 +1,9 @@
+[
+  { "method": "x.ai/mcp/init_progress", "params": { "sessionId": "session-fixture", "total": 2, "connected": 1 } },
+  { "method": "_x.ai/mcp/server_status", "params": { "sessionId": "session-fixture", "name": "fixture", "source": "local", "status": "ready", "reason": "initialized", "detail": null, "tools": [{ "name": "one" }, { "name": "two" }, { "name": "three" }] } },
+  { "method": "x.ai/mcp/tools_changed", "params": { "sessionId": "session-fixture", "serverName": "fixture", "tools": [{ "name": "one" }, { "name": "two" }, { "name": "three" }, { "name": "four" }] } },
+  { "method": "x.ai/mcp/servers_updated", "params": { "mcpServers": [{ "name": "fixture" }] } },
+  { "method": "x.ai/mcp_initialized", "params": { "sessionId": "session-fixture", "mcpToolCount": 4, "elapsedMs": 250 } },
+  { "method": "x.ai/settings/update", "params": { "mode": "plan", "message": "resumed mode" } },
+  { "method": "x.ai/queue/changed", "params": { "sessionId": "session-fixture", "entries": [], "runningPromptId": null } }
+]
