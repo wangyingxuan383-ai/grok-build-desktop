@@ -49,32 +49,37 @@ npm run build
 if ($LASTEXITCODE -ne 0) { throw "生产构建失败 ($LASTEXITCODE)" }
 npm run check:chunks
 if ($LASTEXITCODE -ne 0) { throw "Renderer 分块预算或 Worker 命名门禁失败 ($LASTEXITCODE)" }
-npx electron-builder --win nsis zip --x64 --publish never
-if ($LASTEXITCODE -ne 0) { throw "electron-builder 失败 ($LASTEXITCODE)" }
+npx electron-builder --win --dir --x64 --publish never
+if ($LASTEXITCODE -ne 0) { throw "electron-builder 目录打包失败 ($LASTEXITCODE)" }
 $ExpectedExecutable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
 $ExpectedSetup = Join-Path $Root "release\Grok-Build-Desktop-Setup-v$Version-x64.exe"
 $ExpectedZip = Join-Path $Root "release\Grok-Build-Desktop-$Version-x64.zip"
 Wait-ReleaseFile $ExpectedExecutable
-Wait-ReleaseFile $ExpectedSetup
-Wait-ReleaseFile $ExpectedZip
-Remove-Item -LiteralPath (Join-Path $Root 'release\builder-debug.yml'),(Join-Path $Root 'release\builder-effective-config.yaml') -Force -ErrorAction SilentlyContinue
-Get-ChildItem -LiteralPath (Join-Path $Root 'release') -Filter '*.blockmap' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 node (Join-Path $PSScriptRoot 'verify-fuses.mjs') $ExpectedExecutable
 if ($LASTEXITCODE -ne 0) { throw 'Electron Fuses 校验失败。' }
 $HostedActions = $env:GITHUB_ACTIONS -eq 'true'
 if ($HostedActions) {
     # The full current-version fixture is already a required PR/main CI gate
-    # on the same commit. A tag runner has no interactive Windows desktop and
-    # can deadlock a fixture-heavy Renderer after ZIP/NSIS compression even
-    # though the packaged application is healthy. Verify the clean packaged
-    # shell and every real feature entry in one lightweight Renderer here;
-    # local packaging continues to run the complete fixture below.
+    # on the same commit. Verify the clean unpacked application before ZIP/NSIS
+    # compression consumes the hosted virtual desktop's graphics resources.
+    # The tag runner uses one lightweight Renderer; local packaging continues
+    # to run the complete fixture below.
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-hosted-release-ui.mjs'
     if ($LASTEXITCODE -ne 0) { throw 'Hosted Windows 打包壳层验收失败。' }
 } else {
     & (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $ExpectedExecutable
     if ($LASTEXITCODE -ne 0) { throw '当前 v0.8.0 打包 UI 验收失败。' }
 }
+
+# Generate distributable assets from the exact unpacked directory that passed
+# Fuses and UI verification. This avoids repackaging a different application
+# tree and keeps heavyweight ZIP/NSIS compression after the GUI gate.
+npx electron-builder --win nsis zip --x64 --publish never --prepackaged (Join-Path $Release 'win-unpacked')
+if ($LASTEXITCODE -ne 0) { throw "electron-builder 发布资产打包失败 ($LASTEXITCODE)" }
+Wait-ReleaseFile $ExpectedSetup
+Wait-ReleaseFile $ExpectedZip
+Remove-Item -LiteralPath (Join-Path $Root 'release\builder-debug.yml'),(Join-Path $Root 'release\builder-effective-config.yaml') -Force -ErrorAction SilentlyContinue
+Get-ChildItem -LiteralPath (Join-Path $Root 'release') -Filter '*.blockmap' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 
 $GenericZip = Join-Path $Root "release\Grok-Build-Desktop-$Version-x64.zip"
 $PortableZip = Join-Path $Root "release\Grok-Build-Desktop-Portable-v$Version-x64.zip"
@@ -103,7 +108,7 @@ if ($ReleaseArtifactsOnly) {
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
-    # The current v0.7 probe supersedes the legacy v0.4/v0.6 probes. Those
+    # The current-version probe supersedes the legacy v0.4/v0.6 probes. Those
     # scripts encode retired information architecture (for example, exposing
     # Git Review in a non-Git fixture) and must not gate the current release.
     foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {

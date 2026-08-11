@@ -16,12 +16,12 @@ $Version = (Get-Content (Join-Path $Root 'package.json') -Raw | ConvertFrom-Json
 node (Join-Path $PSScriptRoot 'check-renderer-chunks.mjs')
 if ($LASTEXITCODE -ne 0) { throw '发布资产的 Renderer 分块预算或 Worker 命名门禁失败。' }
 $PackagedExecutable = Join-Path $Release 'win-unpacked\Grok Build Desktop.exe'
-if (-not (Test-Path -LiteralPath $PackagedExecutable -PathType Leaf)) { throw '发布资产缺少 win-unpacked 应用，无法执行当前 v0.7 UI 验收。' }
+if (-not (Test-Path -LiteralPath $PackagedExecutable -PathType Leaf)) { throw '发布资产缺少 win-unpacked 应用，无法执行当前版本 UI 验收。' }
 if (-not $SkipPackagedUiProbe) {
     & (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $PackagedExecutable
-    if ($LASTEXITCODE -ne 0) { throw '发布资产的当前 v0.7 UI 验收失败。' }
+    if ($LASTEXITCODE -ne 0) { throw '发布资产的当前版本 UI 验收失败。' }
 } else {
-    Write-Host '复用同一打包流程刚完成的 v0.7 UI 验收，不重复启动相同候选。' -ForegroundColor Cyan
+    Write-Host '复用同一打包流程刚完成的当前版本 UI 验收，不重复启动相同候选。' -ForegroundColor Cyan
 }
 
 $Sbom = Join-Path $Release "Grok-Build-Desktop-$Version-SBOM.cdx.json"

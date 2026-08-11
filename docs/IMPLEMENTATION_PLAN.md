@@ -5,6 +5,7 @@
 - [x] 正式发布 Hosted Windows 二次打包探针改为“先等待 Renderer 首帧、再设置固定视口”，移除启动竞态中的合成 resize；CDP 超时请求可清理并重试，发布门禁仍执行完整 0.8.0 UI 断言。
 - [x] 标签工作流在无交互 Hosted Windows 上以轻量单 Renderer 验证打包壳层、全部真实功能入口和 Portable 结构；完整多会话/Plan/权限/Stop/Provider/响应式夹具保持为同提交 PR/main CI 与本机打包必过项，不在 ZIP/NSIS 后重复消耗不可靠的虚拟桌面资源。
 - [x] Hosted 壳层探针已迁移至 0.8.0 入口契约：新建任务、开发工具、右栏、任务中心、扩展、创作、设置与 Overlay Host；删除对已退役 0.6.x 顶栏类名的发布依赖。
+- [x] 正式 Windows 打包拆为“目录打包并验收 → 从已验收目录生成 Setup/Portable”两阶段；Fuses/UI 在压缩前验证，`--prepackaged` 保证最终公开资产与被验收应用树一致。
 - [x] 重新逐项核对全部历史实施计划；旧版本遗留的验收、打包和延期复选项已按 0.8.0 的替代证据归档。当前唯一未完成复选项是远程 CPA 上游返回 `403 cpa_local_only`，属于已准确暴露的外部策略边界，不伪装为 Desktop 成功。
 - [x] 复核官方 Changelog、官方开源仓库与已安装 stable：公开发行版仍为 1.0.0；官方 main 相对既有快照新增的唯一重要公共会话扩展是 `x.ai/session/rename` 及标题所有权元数据，没有发现第二个尚未映射的重要稳定公共接口。
 - [x] 增加 `x.ai/session/rename` 前向兼容、标准/私有标题通知归一化和本地旧 CLI 回退；stable 1.0.0 实机返回 method-not-found，因此不显示为稳定可用能力。
