@@ -61,8 +61,20 @@ Remove-Item -LiteralPath (Join-Path $Root 'release\builder-debug.yml'),(Join-Pat
 Get-ChildItem -LiteralPath (Join-Path $Root 'release') -Filter '*.blockmap' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 node (Join-Path $PSScriptRoot 'verify-fuses.mjs') $ExpectedExecutable
 if ($LASTEXITCODE -ne 0) { throw 'Electron Fuses 校验失败。' }
-& (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $ExpectedExecutable
-if ($LASTEXITCODE -ne 0) { throw '当前 v0.7 打包 UI 验收失败。' }
+$HostedActions = $env:GITHUB_ACTIONS -eq 'true'
+if ($HostedActions) {
+    # The full current-version fixture is already a required PR/main CI gate
+    # on the same commit. A tag runner has no interactive Windows desktop and
+    # can deadlock a fixture-heavy Renderer after ZIP/NSIS compression even
+    # though the packaged application is healthy. Verify the clean packaged
+    # shell and every real feature entry in one lightweight Renderer here;
+    # local packaging continues to run the complete fixture below.
+    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-hosted-release-ui.mjs'
+    if ($LASTEXITCODE -ne 0) { throw 'Hosted Windows 打包壳层验收失败。' }
+} else {
+    & (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $ExpectedExecutable
+    if ($LASTEXITCODE -ne 0) { throw '当前 v0.8.0 打包 UI 验收失败。' }
+}
 
 $GenericZip = Join-Path $Root "release\Grok-Build-Desktop-$Version-x64.zip"
 $PortableZip = Join-Path $Root "release\Grok-Build-Desktop-Portable-v$Version-x64.zip"
@@ -71,8 +83,12 @@ if (Test-Path -LiteralPath $GenericZip) {
     [IO.File]::Move($GenericZip, $PortableZip)
 }
 if ($ReleaseArtifactsOnly) {
+    if ($HostedActions) {
+        & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
+        if ($LASTEXITCODE -ne 0) { throw 'Hosted Windows Portable 结构验收失败。' }
+    }
     Write-Host '仅生成并校验发布资产；产品验收复用同一提交已通过的 CI 与本机发布门槛。' -ForegroundColor Cyan
-} elseif ($env:GITHUB_ACTIONS -eq 'true') {
+} elseif ($HostedActions) {
     # GitHub's Windows virtual desktop becomes unreliable after several
     # consecutive Electron/CDP processes even when every process exits cleanly.
     # Verify the packaged shell, overlay host and feature entry points in one
@@ -84,7 +100,6 @@ if ($ReleaseArtifactsOnly) {
     # Renderer exits even though the process tree is gone. The fresh download
     # job independently launches the extracted Portable build.
     & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-hosted-release-ui.mjs'
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
