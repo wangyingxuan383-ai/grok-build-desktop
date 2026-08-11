@@ -49,13 +49,15 @@ try {
   stage("verify feature entry points and overlay host");
   const entries = await evaluate(`(() => ({
     overlayRoot: Boolean(document.querySelector('#overlay-root')),
-    task: Boolean(document.querySelector('.task-entry')),
-    extensions: Boolean(document.querySelector('.extensions-entry')),
-    media: Boolean(document.querySelector('.media-entry'))
+    newTask: Boolean(document.querySelector('.new-task-button')),
+    projectTools: Boolean(document.querySelector('.project-tools-heading')),
+    rightDock: Boolean(document.querySelector('.review-toggle')),
+    moreActions: Array.from(document.querySelectorAll('.topbar-more button')).map((node) => (node.textContent || '').trim())
   }))()`);
-  if (!entries.overlayRoot || !entries.task || !entries.extensions || !entries.media) throw new Error(`Packaged feature entries are incomplete: ${JSON.stringify(entries)}`);
+  const requiredActions = ["任务中心", "扩展", "创作", "设置"];
+  if (!entries.overlayRoot || !entries.newTask || !entries.projectTools || !entries.rightDock || requiredActions.some((label) => !entries.moreActions.includes(label))) throw new Error(`Packaged feature entries are incomplete: ${JSON.stringify(entries)}`);
   stage("complete");
-  console.log(JSON.stringify({ ok: true, singleRenderer: true, shell: true, overlayRoot: true, taskEntry: true, extensionsEntry: true, mediaEntry: true }));
+  console.log(JSON.stringify({ ok: true, singleRenderer: true, shell: true, overlayRoot: true, newTask: true, projectTools: true, rightDock: true, moreActions: requiredActions }));
 } finally {
   socket.close();
 }
