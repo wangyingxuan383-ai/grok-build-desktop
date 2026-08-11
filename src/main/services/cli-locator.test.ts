@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -79,8 +79,9 @@ describe("CLI locator helpers", () => {
 
   it("accepts only a regular Grok-named executable with a Grok version identity", async () => {
     const path = await fixture(process.platform === "win32" ? "grok.exe" : "grok");
+    const canonical = await realpath(path);
     await expect(validateGrokCliExecutable(path, async () => "grok 0.2.117 (fixture)"))
-      .resolves.toBe(path);
+      .resolves.toBe(canonical);
   });
 
   it("rejects arbitrary renderer-selected programs even when their probe returns a version", async () => {

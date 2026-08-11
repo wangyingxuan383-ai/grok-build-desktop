@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,10 +23,11 @@ describe("MediaAccessService", () => {
     await mkdir(directory, { recursive: true });
     const path = join(directory, "result.png");
     await writeFile(path, "png");
+    const canonical = await realpath(path);
     const handle = await new MediaAccessService(userData).register("s", path, "image", "image/png");
     expect(handle.url).toMatch(/^grok-media:\/\/access\/[0-9a-f-]{36}$/);
     expect(handle.url).not.toContain(path);
-    expect((await new MediaAccessService(userData).resolve(handle.url)).path).toBe(path);
+    expect((await new MediaAccessService(userData).resolve(handle.url)).path).toBe(canonical);
   });
 
   it("reuses one handle for the same cached file instead of growing the ledger", async () => {
@@ -48,10 +49,11 @@ describe("MediaAccessService", () => {
     await mkdir(directory, { recursive: true });
     const path = join(directory, "result.png");
     await writeFile(path, "png");
+    const canonical = await realpath(path);
     const service = new MediaAccessService(userData);
     const handle = await service.register("first", path, "image", "image/png");
     await expect(service.resolve(handle.url, "second")).rejects.toThrow(/不属于当前会话/);
-    await expect(service.resolve(handle.url, "first")).resolves.toMatchObject({ sessionId: "first", path });
+    await expect(service.resolve(handle.url, "first")).resolves.toMatchObject({ sessionId: "first", path: canonical });
   });
 
   it("rejects registration outside the exact session cache", async () => {
@@ -69,11 +71,12 @@ describe("MediaAccessService", () => {
     await mkdir(directory, { recursive: true });
     const path = join(directory, "paste.png");
     await writeFile(path, "png");
+    const canonical = await realpath(path);
     const service = new MediaAccessService(userData);
     const handle = await service.registerAttachment("s", path, "image/png", "paste.png");
     expect(handle.url).toMatch(/^grok-media:\/\/access\/[0-9a-f-]{36}$/);
     expect(handle.url).not.toContain(path);
-    expect((await service.resolve(handle.url)).path).toBe(path);
+    expect((await service.resolve(handle.url)).path).toBe(canonical);
   });
 
   it("revokes handles when a session is deleted", async () => {
