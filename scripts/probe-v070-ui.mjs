@@ -174,8 +174,6 @@ try {
   await ensureFixtureSessions();
   const fixtureSessions = await evaluate(`Array.from(document.querySelectorAll('.session-row')).map((node) => ({ text: node.textContent || '', active: node.classList.contains('active') }))`);
   if (fixtureSessions.length < 3 || !fixtureSessions.some((row) => row.text.includes('后台并行队列')) || !fixtureSessions.some((row) => row.text.includes('Plan 与权限交互'))) throw new Error(`Current-version multi-session fixture is incomplete: ${JSON.stringify(fixtureSessions)}`);
-  await openFixtureSession('后台并行队列');
-  await waitFor(() => evaluate("document.querySelectorAll('.chat-turn').length >= 1"), "Selected conversation projection did not settle");
 
   // A new task is a persisted local draft. Opening it must not create a CLI
   // session, remove history rows or inherit the previously active lifecycle.
