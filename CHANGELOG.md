@@ -8,7 +8,7 @@
 - 修复 CLI 能力证据把 `cancelRewind` 当成完整 Rewind 支持的问题；`session.rewind` 与 `session.cancel-rewind` 现在分别记录，未知/未探测能力继续保持关闭。
 - 诊断中心补齐官方 Grok Doctor 自动修复：只接受 `doctor --json` 返回的安全修复 ID，使用五分钟一次性预览令牌、执行前重新验证和二次确认，以固定参数调用 `doctor fix`；当前机器没有可应用修复。
 - 官方上游快照更新至仓库 `b13fa526f5112c0b20dad5f1f2300d3d3b127895` / 源码 `a51a1dc62fe20029ac39a665985bba78edbb870f`，并加入 Session Rename/标题通知前向 Fixture；审计报告见 `docs/V080_FINAL_AUDIT.md`。
-- 再审后的完整套件为 101 个测试文件/733 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、365 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
+- 再审后的完整套件为 101 个测试文件/734 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、366 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
 - 建立独立的 CLI 1.x 兼容档案、离线/运行时门禁及 1.0.0/未知未来主版本 Wire Fixture；未知主版本失败关闭，版本号不再被当成功能证据。
 - 受管 ACP 会话按 1.0 重新提交交互式附加策略，解析结构化 `closeOutcome`；MCP 斜杠事件、包装通知、Context/Usage/Session Info、Plan/Stop/Compact/Recap 和恢复后的真实模式均按会话归一化。
 - 官方 Git status 显式请求未跟踪文件、统计、补丁和子模块策略，避免 1.0 默认值改变让 Review 漏文件；官方返回不完整或没有匹配的空闲会话时回退现有受限系统 Git。
@@ -19,7 +19,7 @@
 - 支持包继续采用静态允许列表，明确排除会话正文、媒体、凭据和路径重新绑定日志。
 - Desktop 固定目标更新已将本机 CLI 从0.2.118升级到 stable `1.0.0 (3cd0d0cbce)`；核心 ACP、Resume、结构化 Close/Delete、真实只读 Plan、Stop、Compact、MCP 事件和双会话门禁通过。stable 暂无 `x.ai/git/status`/Session Usage 扩展时按运行时证据禁用并安全回退，不再回滚整个1.0升级。
 - 修复 CLI 1.0 将真实上游 HTTP 原因包在 JSON-RPC `error.data`、界面却只显示 `Internal error` 的问题；现在保留 JSON-RPC/HTTP 分类并优先展示受限长度的可操作错误。当前远程 CPA 实测返回 `403 cpa_local_only`，因此不声称 Provider 推理成功。
-- 最终源码门禁通过：101 个测试文件/733 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、365 文件公开扫描、Renderer 分块、Native/Fuses、零漏洞依赖审计、打包版与安装版 UI 通过。正式公开资产由 `v0.8.0` 标签工作流从最终提交重新构建，并在草稿回下载、SHA-256 与 Attestation 校验通过后发布。
+- 最终源码门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native/Fuses、零漏洞依赖审计、打包版与安装版 UI 通过。正式公开资产由 `v0.8.0` 标签工作流从最终提交重新构建，并在草稿回下载、SHA-256 与 Attestation 校验通过后发布。
 
 
 ### 0.7.3 0.7.x 总体改进合并候选（2026-08-10）

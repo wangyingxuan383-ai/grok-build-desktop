@@ -49,8 +49,8 @@
 |---|---|
 | 聚焦兼容/诊断测试 | 7 个测试文件、127 项通过 |
 | 上游快照检查 | 当前快照与官方 main 一致；`--validate` 通过 |
-| 完整离线套件 | 101 个测试文件、733 项通过；6 个 live 文件、9 项按设计跳过 |
-| TypeScript/生产构建/公开扫描/分块 | 全部通过；公开扫描 365 个文本文件，Renderer 236 个 JS 分块通过预算门禁 |
+| 完整离线套件 | 101 个测试文件、734 项通过；6 个 live 文件、9 项按设计跳过 |
+| TypeScript/生产构建/公开扫描/分块 | 全部通过；公开扫描 366 个文本文件，Renderer 236 个 JS 分块通过预算门禁 |
 | 依赖审计/差异检查 | `npm audit` 0 漏洞；`git diff --check` 通过 |
 | 当前生产构建 UI | Plan/权限四组合、Stop、双会话隔离、导航、右栏、Provider、诊断和 125%–200% 缩放通过 |
 | CLI 无推理探针 | initialize/session-new 通过；Session Rename 如实返回 method-not-found，临时会话和目录已清理 |

@@ -25,6 +25,10 @@ const agentChangePane = readFileSync(new URL("./components/AgentChangePane.tsx",
 const sidebar = readFileSync(new URL("./components/Sidebar.tsx", import.meta.url), "utf8");
 
 describe("renderer layout regression guards", () => {
+  it("renders the isolated UI fixture on clean hosts without a Grok CLI", () => {
+    expect(app).toContain("!store.cli?.found && !offlineFixtureActive");
+  });
+
   it("keeps the main grid within the window so nested content can scroll", () => {
     expect(css).toMatch(/\.main-pane\s*\{[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s);
   });

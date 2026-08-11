@@ -9,7 +9,7 @@
 - [x] 补齐先前延期的 `grok doctor --json` 官方自动修复流程：只展示 CLI 明确返回的自动修复 ID，执行前生成短时一次性预览令牌、再次校验、二次确认并以固定参数调用；当前机器实测没有可用自动修复。
 - [x] 保存官方 main 前向 Wire Fixture 和源码快照；上游检查与快照校验通过，未知未来事件仍只记录方法、结构版本和大小，不记录正文或凭据。
 - [x] 形成 `docs/V080_FINAL_AUDIT.md`，从高频用户流程、数据恢复、Provider、更新、IPC/安全、发布门禁和官方上游七个维度记录结论、证据及不可宣称的外部边界。
-- [x] 再审后完整离线门禁通过：101 个测试文件/733 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、365 文件公开扫描、Renderer 分块、Native Host、`npm audit`（0 漏洞）、`git diff --check` 和当前生产构建 UI 通过。无推理 CLI 探针确认 stable Session Rename 为 method-not-found。
+- [x] 再审后完整离线门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、`npm audit`（0 漏洞）、`git diff --check` 和当前生产构建 UI 通过。无推理 CLI 探针确认 stable Session Rename 为 method-not-found。
 
 ## 0.8.0 Grok Build CLI 1.0.0 完整适配（2026-08-11）
 
@@ -33,7 +33,7 @@
 - [x] MCP、Plugins、Skills、Workflows 统一排序/分组，Skills 支持搜索；Markdown 表格、长命令、权限脚本和 Diff 具备独立滚动边界与可复制文本。
 - [x] 支持包仍是固定文件白名单，明确排除会话正文、媒体、凭据和路径重新绑定事务日志。
 - [x] 聚焦兼容/IPC/会话/更新测试已通过；未知未来主版本按失败关闭。1.0 JSON-RPC `Internal error` 现在优先展示 `error.data` 中经过边界限制的真实 HTTP 原因。
-- [x] 最终完整门禁通过：101 个测试文件/733 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、365 文件公开扫描、Renderer 分块、Native Host、Electron Fuses、`npm audit`（0 漏洞）和 `git diff --check` 通过。
+- [x] 最终完整门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、Electron Fuses、`npm audit`（0 漏洞）和 `git diff --check` 通过。
 - [x] 通过 Desktop 受控更新将本机 0.2.118 升级到 stable `1.0.0 (3cd0d0cbce)`；initialize/new/resume/close/delete、真实只读 Plan、Stop、Compact、MCP 事件与双 ACP 会话实机门禁通过，未触发回滚。
 - [x] 记录 stable 二进制与公开源码快照的能力偏差：`x.ai/git/status`、`x.ai/session/info`、`x.ai/session/usage` 均返回 method-not-found；Git 使用受限系统回退，数据视图仅启用实际存在的 Context/Session Info，不把可选能力缺失误判成核心更新失败。
 - [ ] 当前远程 CPA Provider 的最小 Responses 请求被上游明确拒绝为 `403 cpa_local_only`；Desktop 已确认请求实际到达网关并显示真实错误，但在上游恢复远程推理前不声明 Provider 实机成功。

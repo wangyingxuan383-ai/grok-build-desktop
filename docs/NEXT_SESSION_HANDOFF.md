@@ -5,7 +5,7 @@
 - 最终再审已重新核对全部历史计划和官方上游。历史未勾选项已按当前证据归档，唯一仍未完成的是远程 CPA 上游的 `403 cpa_local_only` 实机边界；完整结论见 `docs/V080_FINAL_AUDIT.md`。
 - 官方 Changelog 仍以 1.0.0 为最新发行；官方 main 已固定到 `b13fa526f5112c0b20dad5f1f2300d3d3b127895` / `a51a1dc62fe20029ac39a665985bba78edbb870f`。相对旧快照的重要新增公共扩展只有 Session Rename/标题所有权，Desktop 已做前向适配，stable 1.0.0 method-not-found 时保持本地回退。
 - 再审发现并修复能力证据误报（Rewind 与 Cancel Rewind 分离），并补齐 Grok Doctor 自动修复的预览、一次性令牌、重新校验和二次确认流程；当前机器没有可用自动修复。
-- 再审后的完整离线门禁为 101 个测试文件/733 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、365 文件公开扫描、Renderer 分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。无推理 CLI 探针确认 Session Rename 在 stable 1.0.0 中为 method-not-found。
+- 再审后的完整离线门禁为 101 个测试文件/734 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。无推理 CLI 探针确认 Session Rename 在 stable 1.0.0 中为 method-not-found。
 - 当前发布分支为 `codex/v0.8.0-cli-1.0-final`；0.8.0 CLI 1.0 完整适配与最终再审已进入提交、PR、标签和公开 Release 流程。正式资产只接受 GitHub 标签工作流从最终提交重建并回下载校验后的版本。
 - 源码与 lockfile 已提升到0.8.0；Desktop 固定目标流程已把本机 CLI 从0.2.118升级到 stable `1.0.0 (3cd0d0cbce)`，核心 ACP 实机门禁通过且没有回滚。所有受管子进程仍带 `--no-auto-update`。
 - 已实现 1.x 离线/运行时兼容门、1.0/未来主版本 Fixture、交互式附加策略、结构化 closeOutcome、MCP 斜杠事件、Session Info/Usage、显式 Git status 选项、反馈能力门控及上游跟踪工作流。
@@ -14,7 +14,7 @@
 - 会话支持 CLI 默认或 60%–95% 自定义 Compact 阈值、立即压缩和 Compact 时间线；20/60 秒首事件监控只提示，不主动取消长推理。
 - 本轮实机已通过同 Session ID Resume、结构化 Close/Delete、真实只读 Plan（无权限卡/无写入）、两路并行 ACP、手动 Compact、Stop 取消和 MCP 初始化/状态事件。官方 Git 扩展不可用时确认回退；远程 CPA 请求实际到达 Responses 网关，但上游明确返回 `403 cpa_local_only`，所以 Provider 成功验收仍保持未通过。
 - CLI 1.0 把上游原因封装在 JSON-RPC `error.data` 时，Desktop 现在优先显示受限长度的真实 HTTP 原因，不再只显示 `Internal error`。Provider 实机测试也修正为与生产一致的 CLI 原生 reasoning 字符串列表并过滤 `auto/none`。
-- 最终源码门禁已完成：101 个测试文件/733 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、365 文件公开扫描、分块、Native/Fuses、`npm audit`（0 漏洞）、打包版与安装版 UI 均通过。
+- 最终源码门禁已完成：101 个测试文件/734 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、分块、Native/Fuses、`npm audit`（0 漏洞）、打包版与安装版 UI 均通过。
 - 本地预发布候选已完成 per-user 覆盖安装。安装版 File `0.8.0` / Product `0.8.0.0`、ASAR、Fuses、About/诊断导航及桌面/开始菜单快捷方式通过。此前本地 Setup/Portable/SBOM/许可证哈希仅作预发布证据；正式公开哈希以 Release 的 `SHA256SUMS.txt` 为准。
 - 用户已要求提交 GitHub 并创建正式 `v0.8.0` Release；必须等待云端构建、公开扫描、草稿回下载、SHA-256 与 Attestation 全部通过后才发布为 Latest。上游 `403 cpa_local_only` 仍不能记录为 Desktop Provider 成功。
 
