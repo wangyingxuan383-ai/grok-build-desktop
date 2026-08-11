@@ -11,8 +11,19 @@ const socket = new WebSocket(target.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
 let id = 0; const pending = new Map();
 socket.onmessage = ({ data }) => { const message = JSON.parse(data); const entry = pending.get(message.id); if (!entry) return; pending.delete(message.id); message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); };
-const request = (method, params = {}) => new Promise((resolve, reject) => { const requestId = ++id; const timer = setTimeout(() => reject(new Error(`${method} timed out`)), 60_000); pending.set(requestId, { resolve: (value) => { clearTimeout(timer); resolve(value); }, reject }); socket.send(JSON.stringify({ id: requestId, method, params })); });
-const evaluate = async (expression) => { const result = await request("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }); if (result.exceptionDetails) throw new Error(result.exceptionDetails.text); return result.result?.value; };
+const request = (method, params = {}, timeout = 60_000) => new Promise((resolve, reject) => {
+  const requestId = ++id;
+  const timer = setTimeout(() => {
+    pending.delete(requestId);
+    reject(new Error(`${method} timed out`));
+  }, timeout);
+  pending.set(requestId, {
+    resolve: (value) => { clearTimeout(timer); resolve(value); },
+    reject: (error) => { clearTimeout(timer); reject(error); }
+  });
+  socket.send(JSON.stringify({ id: requestId, method, params }));
+});
+const evaluate = async (expression, timeout) => { const result = await request("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, timeout); if (result.exceptionDetails) throw new Error(result.exceptionDetails.text); return result.result?.value; };
 let runtimeGlobal;
 const refreshRuntimeGlobal = async () => { runtimeGlobal = await request("Runtime.evaluate", { expression: "globalThis", returnByValue: false }); };
 await refreshRuntimeGlobal();
@@ -163,13 +174,19 @@ let windowTarget;
 try { windowTarget = await request("Browser.getWindowForTarget", { targetId: target.id }); } catch { windowTarget = undefined; }
 try {
   await request("Page.bringToFront");
+  // A packaged Renderer can expose its native window before React has
+  // committed the first frame. Do not inject a synthetic resize into that
+  // startup window: on Hosted Windows it can race the first layout and keep
+  // the Renderer main thread busy indefinitely. Probe the native viewport
+  // first, then apply the deterministic acceptance viewport.
+  await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))", 5_000), "Application shell did not render", 60_000);
   // Hosted Windows desktops may expose a much smaller effective screen than
   // the BrowserWindow request. Fix the initial CSS viewport so Virtuoso and
   // responsive layout make the same measurements locally and in CI.
   if (windowTarget) await request("Browser.setWindowBounds", { windowId: windowTarget.windowId, bounds: { width: 1440, height: 920, windowState: "normal" } });
   await request("Emulation.setDeviceMetricsOverride", { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false });
-  await evaluate("window.dispatchEvent(new Event('resize'))");
-  await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))"), "Application shell did not render");
+  await sleep(350);
+  await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell')) && innerWidth === 1440 && innerHeight === 920", 5_000), "Acceptance viewport did not settle", 30_000);
   // A clean profile intentionally opens without selecting a conversation.
   // Validate the shell first, then select a known fixture below before
   // requiring its persisted projection to mount a virtualized turn.
