@@ -2,9 +2,7 @@
 
 ## 0.8.0 最终再审与官方上游复核（2026-08-11）
 
-- [x] 正式发布 Hosted Windows 二次打包探针改为“先等待 Renderer 首帧、再设置固定视口”，移除启动竞态中的合成 resize；CDP 超时请求可清理并重试，发布门禁仍执行完整 0.8.0 UI 断言。
-- [x] 标签工作流在无交互 Hosted Windows 上以轻量单 Renderer 验证打包壳层、全部真实功能入口和 Portable 结构；完整多会话/Plan/权限/Stop/Provider/响应式夹具保持为同提交 PR/main CI 与本机打包必过项，不在 ZIP/NSIS 后重复消耗不可靠的虚拟桌面资源。
-- [x] Hosted 壳层探针已迁移至 0.8.0 入口契约：新建任务、开发工具、右栏、任务中心、扩展、创作、设置与 Overlay Host；删除对已退役 0.6.x 顶栏类名的发布依赖。
+- [x] 当前版本完整 UI 探针改为“先等待 Renderer 首帧、再设置固定视口”，移除启动竞态中的合成 resize；CDP 超时请求可清理并重试。标签工作流在无交互 Hosted Windows 上改为验证 ASAR/Renderer 入口与生产资产、Overlay Root、资源清单/哈希、Fuses 和 Portable 结构；完整交互断言继续由同提交 PR/main CI 与本机打包门禁执行。
 - [x] 正式 Windows 打包拆为“目录打包并验收 → 从已验收目录生成 Setup/Portable”两阶段；Fuses/UI 在压缩前验证，`--prepackaged` 保证最终公开资产与被验收应用树一致。
 - [x] 重新逐项核对全部历史实施计划；旧版本遗留的验收、打包和延期复选项已按 0.8.0 的替代证据归档。当前唯一未完成复选项是远程 CPA 上游返回 `403 cpa_local_only`，属于已准确暴露的外部策略边界，不伪装为 Desktop 成功。
 - [x] 复核官方 Changelog、官方开源仓库与已安装 stable：公开发行版仍为 1.0.0；官方 main 相对既有快照新增的唯一重要公共会话扩展是 `x.ai/session/rename` 及标题所有权元数据，没有发现第二个尚未映射的重要稳定公共接口。
@@ -13,7 +11,7 @@
 - [x] 补齐先前延期的 `grok doctor --json` 官方自动修复流程：只展示 CLI 明确返回的自动修复 ID，执行前生成短时一次性预览令牌、再次校验、二次确认并以固定参数调用；当前机器实测没有可用自动修复。
 - [x] 保存官方 main 前向 Wire Fixture 和源码快照；上游检查与快照校验通过，未知未来事件仍只记录方法、结构版本和大小，不记录正文或凭据。
 - [x] 形成 `docs/V080_FINAL_AUDIT.md`，从高频用户流程、数据恢复、Provider、更新、IPC/安全、发布门禁和官方上游七个维度记录结论、证据及不可宣称的外部边界。
-- [x] 再审后完整离线门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、`npm audit`（0 漏洞）、`git diff --check` 和当前生产构建 UI 通过。无推理 CLI 探针确认 stable Session Rename 为 method-not-found。
+- [x] 再审后完整离线门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、367 文件公开扫描、Renderer 分块、Native Host、`npm audit`（0 漏洞）、`git diff --check` 和当前生产构建 UI 通过。无推理 CLI 探针确认 stable Session Rename 为 method-not-found。
 
 ## 0.8.0 Grok Build CLI 1.0.0 完整适配（2026-08-11）
 
@@ -37,7 +35,7 @@
 - [x] MCP、Plugins、Skills、Workflows 统一排序/分组，Skills 支持搜索；Markdown 表格、长命令、权限脚本和 Diff 具备独立滚动边界与可复制文本。
 - [x] 支持包仍是固定文件白名单，明确排除会话正文、媒体、凭据和路径重新绑定事务日志。
 - [x] 聚焦兼容/IPC/会话/更新测试已通过；未知未来主版本按失败关闭。1.0 JSON-RPC `Internal error` 现在优先展示 `error.data` 中经过边界限制的真实 HTTP 原因。
-- [x] 最终完整门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native Host、Electron Fuses、`npm audit`（0 漏洞）和 `git diff --check` 通过。
+- [x] 最终完整门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、367 文件公开扫描、Renderer 分块、Native Host、Electron Fuses、`npm audit`（0 漏洞）和 `git diff --check` 通过。
 - [x] 通过 Desktop 受控更新将本机 0.2.118 升级到 stable `1.0.0 (3cd0d0cbce)`；initialize/new/resume/close/delete、真实只读 Plan、Stop、Compact、MCP 事件与双 ACP 会话实机门禁通过，未触发回滚。
 - [x] 记录 stable 二进制与公开源码快照的能力偏差：`x.ai/git/status`、`x.ai/session/info`、`x.ai/session/usage` 均返回 method-not-found；Git 使用受限系统回退，数据视图仅启用实际存在的 Context/Session Info，不把可选能力缺失误判成核心更新失败。
 - [ ] 当前远程 CPA Provider 的最小 Responses 请求被上游明确拒绝为 `403 cpa_local_only`；Desktop 已确认请求实际到达网关并显示真实错误，但在上游恢复远程推理前不声明 Provider 实机成功。

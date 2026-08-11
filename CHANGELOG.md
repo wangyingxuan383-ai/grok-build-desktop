@@ -8,11 +8,10 @@
 - 修复 CLI 能力证据把 `cancelRewind` 当成完整 Rewind 支持的问题；`session.rewind` 与 `session.cancel-rewind` 现在分别记录，未知/未探测能力继续保持关闭。
 - 诊断中心补齐官方 Grok Doctor 自动修复：只接受 `doctor --json` 返回的安全修复 ID，使用五分钟一次性预览令牌、执行前重新验证和二次确认，以固定参数调用 `doctor fix`；当前机器没有可应用修复。
 - 官方上游快照更新至仓库 `b13fa526f5112c0b20dad5f1f2300d3d3b127895` / 源码 `a51a1dc62fe20029ac39a665985bba78edbb870f`，并加入 Session Rename/标题通知前向 Fixture；审计报告见 `docs/V080_FINAL_AUDIT.md`。
-- 再审后的完整套件为 101 个测试文件/734 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、366 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
+- 再审后的完整套件为 101 个测试文件/734 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、367 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
 - 正式工作流在完成 ZIP/NSIS 重负载后仍会再次运行完整 UI 夹具；CDP 单次诊断上限由 20 秒提高到 60 秒，避免 Hosted Windows 打包后短时繁忙被误判为 Renderer 故障，功能断言和总流程超时保持不变。
 - 修复 Hosted Windows 打包后 UI 探针在 React 首帧提交前注入合成 `resize`、可能让 Renderer 布局线程持续繁忙的问题：现在先等待原生首帧，再设置确定性验收视口；超时 CDP 请求会从挂起表清理并按总门禁重试，不降低任何界面断言。
-- 发布标签的无交互 Hosted Windows 改用单 Renderer 的打包壳层/真实功能入口探针与 Portable 结构验收；完整 0.8.0 多会话、Plan、权限、Stop、Provider 和响应式 UI 夹具仍由同一提交的 PR/main CI 及本机打包门禁强制执行，避免 ZIP/NSIS 重负载后的虚拟桌面死锁被误判为产品故障。
-- 同步更新 Hosted 打包壳层断言到 0.8.0 信息架构：验证新建任务、折叠开发工具、右栏、任务中心、扩展、创作、设置和 Overlay Host，不再查询已退役且由 CSS 隐藏的 0.6.x 顶栏入口。
+- 发布标签的无交互 Hosted Windows 改用确定性的静态打包内容门禁：校验 ASAR 版本/主进程/Preload/Renderer 入口、真实 Renderer 资产、Overlay Root、资源清单、Native Host/Computer Use 插件及逐文件 SHA-256，并继续执行 Fuses 与 Portable 结构验收。完整 0.8.0 多会话、Plan、权限、Stop、Provider 和响应式 UI 夹具仍由同一提交的 PR/main CI 及本机打包门禁强制执行，不把 Hosted 虚拟桌面无法调度打包 Renderer 误判为产品故障。
 - Windows 正式打包改为两阶段：先生成并验收唯一 `win-unpacked`（Fuses 与 UI），再以 `--prepackaged` 从同一目录生成 Setup/Portable；GUI 验收不再排在 ZIP/NSIS 重压缩之后，既避免 Hosted 虚拟桌面资源枯竭，也保证公开资产来自已验收的同一应用树。
 - 建立独立的 CLI 1.x 兼容档案、离线/运行时门禁及 1.0.0/未知未来主版本 Wire Fixture；未知主版本失败关闭，版本号不再被当成功能证据。
 - 受管 ACP 会话按 1.0 重新提交交互式附加策略，解析结构化 `closeOutcome`；MCP 斜杠事件、包装通知、Context/Usage/Session Info、Plan/Stop/Compact/Recap 和恢复后的真实模式均按会话归一化。
@@ -24,7 +23,7 @@
 - 支持包继续采用静态允许列表，明确排除会话正文、媒体、凭据和路径重新绑定日志。
 - Desktop 固定目标更新已将本机 CLI 从0.2.118升级到 stable `1.0.0 (3cd0d0cbce)`；核心 ACP、Resume、结构化 Close/Delete、真实只读 Plan、Stop、Compact、MCP 事件和双会话门禁通过。stable 暂无 `x.ai/git/status`/Session Usage 扩展时按运行时证据禁用并安全回退，不再回滚整个1.0升级。
 - 修复 CLI 1.0 将真实上游 HTTP 原因包在 JSON-RPC `error.data`、界面却只显示 `Internal error` 的问题；现在保留 JSON-RPC/HTTP 分类并优先展示受限长度的可操作错误。当前远程 CPA 实测返回 `403 cpa_local_only`，因此不声称 Provider 推理成功。
-- 最终源码门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、366 文件公开扫描、Renderer 分块、Native/Fuses、零漏洞依赖审计、打包版与安装版 UI 通过。正式公开资产由 `v0.8.0` 标签工作流从最终提交重新构建，并在草稿回下载、SHA-256 与 Attestation 校验通过后发布。
+- 最终源码门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、367 文件公开扫描、Renderer 分块、Native/Fuses、零漏洞依赖审计、打包版与安装版 UI 通过。正式公开资产由 `v0.8.0` 标签工作流从最终提交重新构建，并在草稿回下载、SHA-256 与 Attestation 校验通过后发布。
 
 
 ### 0.7.3 0.7.x 总体改进合并候选（2026-08-10）
