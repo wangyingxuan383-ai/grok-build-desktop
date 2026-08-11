@@ -11,6 +11,8 @@
 - 再审后的完整套件为 101 个测试文件/734 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、366 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
 - 正式工作流在完成 ZIP/NSIS 重负载后仍会再次运行完整 UI 夹具；CDP 单次诊断上限由 20 秒提高到 60 秒，避免 Hosted Windows 打包后短时繁忙被误判为 Renderer 故障，功能断言和总流程超时保持不变。
 - 修复 Hosted Windows 打包后 UI 探针在 React 首帧提交前注入合成 `resize`、可能让 Renderer 布局线程持续繁忙的问题：现在先等待原生首帧，再设置确定性验收视口；超时 CDP 请求会从挂起表清理并按总门禁重试，不降低任何界面断言。
+- 发布标签的无交互 Hosted Windows 改用单 Renderer 的打包壳层/真实功能入口探针与 Portable 结构验收；完整 0.8.0 多会话、Plan、权限、Stop、Provider 和响应式 UI 夹具仍由同一提交的 PR/main CI 及本机打包门禁强制执行，避免 ZIP/NSIS 重负载后的虚拟桌面死锁被误判为产品故障。
+- 同步更新 Hosted 打包壳层断言到 0.8.0 信息架构：验证新建任务、折叠开发工具、右栏、任务中心、扩展、创作、设置和 Overlay Host，不再查询已退役且由 CSS 隐藏的 0.6.x 顶栏入口。
 - 建立独立的 CLI 1.x 兼容档案、离线/运行时门禁及 1.0.0/未知未来主版本 Wire Fixture；未知主版本失败关闭，版本号不再被当成功能证据。
 - 受管 ACP 会话按 1.0 重新提交交互式附加策略，解析结构化 `closeOutcome`；MCP 斜杠事件、包装通知、Context/Usage/Session Info、Plan/Stop/Compact/Recap 和恢复后的真实模式均按会话归一化。
 - 官方 Git status 显式请求未跟踪文件、统计、补丁和子模块策略，避免 1.0 默认值改变让 Review 漏文件；官方返回不完整或没有匹配的空闲会话时回退现有受限系统 Git。
