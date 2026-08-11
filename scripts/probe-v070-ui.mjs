@@ -51,7 +51,17 @@ async function scrollToFind(selector, message, steps = 70) {
     await evaluate(`(() => { const s=${scroller}; if (!s) return false; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); s.dispatchEvent(new Event('scroll')); return true; })()`);
     await sleep(220);
   }
-  if (!(await present())) throw new Error(message);
+  if (!(await present())) {
+    const state = await evaluate(`(() => { const s=${scroller}; const box=s?.getBoundingClientRect(); return {
+      active: document.querySelector('.session-row.active')?.textContent || '',
+      viewport: { width: innerWidth, height: innerHeight, scale: devicePixelRatio },
+      conversation: box ? { width: box.width, height: box.height, scrollTop: s.scrollTop, scrollHeight: s.scrollHeight, clientHeight: s.clientHeight } : null,
+      turns: document.querySelectorAll('.chat-turn').length,
+      text: (s?.innerText || '').slice(0, 1000),
+      error: document.querySelector('.error-toast')?.textContent || ''
+    }; })()`);
+    throw new Error(`${message}: ${JSON.stringify(state)}`);
+  }
 }
 async function collectVirtualizedText(selector, steps = 40) {
   const scroller = "document.querySelector('.conversation')";
@@ -149,8 +159,16 @@ async function exerciseStop() {
   if (result.error || /失败/.test(result.notice) || /运行中/.test(result.session)) throw new Error(`Stop settled into an invalid state: ${JSON.stringify(result)}`);
   return result;
 }
+let windowTarget;
+try { windowTarget = await request("Browser.getWindowForTarget", { targetId: target.id }); } catch { windowTarget = undefined; }
 try {
   await request("Page.bringToFront");
+  // Hosted Windows desktops may expose a much smaller effective screen than
+  // the BrowserWindow request. Fix the initial CSS viewport so Virtuoso and
+  // responsive layout make the same measurements locally and in CI.
+  if (windowTarget) await request("Browser.setWindowBounds", { windowId: windowTarget.windowId, bounds: { width: 1440, height: 920, windowState: "normal" } });
+  await request("Emulation.setDeviceMetricsOverride", { width: 1440, height: 920, deviceScaleFactor: 1, mobile: false });
+  await evaluate("window.dispatchEvent(new Event('resize'))");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))"), "Application shell did not render");
   // A clean profile intentionally opens without selecting a conversation.
   // Validate the shell first, then select a known fixture below before
@@ -278,8 +296,6 @@ try {
   // Electron's embedded CDP endpoint does not expose the Browser domain on
   // every supported build. Use physical window bounds when available, while
   // retaining the deterministic CSS viewport/DPR check as the portable path.
-  let windowTarget;
-  try { windowTarget = await request("Browser.getWindowForTarget", { targetId: target.id }); } catch { windowTarget = undefined; }
   const responsiveEvidence = [];
   for (const [physicalWidth, physicalHeight, scale] of [[1280, 720, 1.25], [1440, 810, 1.5], [1920, 1080, 2]]) {
     const cssWidth = Math.floor(physicalWidth / scale);
