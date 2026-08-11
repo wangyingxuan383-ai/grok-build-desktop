@@ -13,6 +13,11 @@ const DiffEditor = lazy(async () => {
 });
 
 export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, showThinking, expandTools, onResolved, onRetry, onNavigate, onDiagnose }: { message: UiMessage; sessionId: string; navigationRoot?: string; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onDiagnose?: (failure: TurnFailure) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
+  // Resolved interactions remain in the durable conversation projection as an
+  // audit event, but their full decision surface must disappear immediately.
+  // Keeping a disabled Plan/permission/question card on screen made a
+  // successful response look pending and invited duplicate clicks.
+  if (isResolvedInteraction(message)) return null;
   if (message.kind === "thought" && !showThinking) return <div className="thinking-placeholder"><span /> 思考过程</div>;
   if (message.kind === "user") return <UserMessageCard message={message} onRetry={onRetry} />;
   if (message.kind === "assistant") return <div className="message-row assistant"><div className="assistant-body"><LazyMarkdownView text={message.text} /></div></div>;
@@ -25,12 +30,19 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   if (message.kind === "error") return <ErrorCard text={message.text} failure={message.failure} onDiagnose={onDiagnose} />;
   if (message.kind === "media") return <GeneratedMediaGallery messages={[message]} />;
   if (message.kind === "recovery") return <div className={`history-recovery-card ${message.status}`}><strong>{message.status === "recovered" ? "历史内容已恢复" : "历史内容无法可靠恢复"}</strong><span>{message.text}</span></div>;
+  if (message.kind === "recap") return <details className="session-recap-card"><summary>会话回顾</summary><LazyMarkdownView text={message.text}/></details>;
+  if (message.kind === "compact") return <div className={`compact-status-card ${message.status}`}><strong>{message.status === "started" ? "正在压缩上下文" : message.status === "completed" ? "上下文压缩完成" : message.status === "cancelled" ? "上下文压缩已取消" : "上下文压缩失败"}</strong>{message.text && <span>{message.text}</span>}</div>;
   if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;
   if (message.kind === "permission") return <PermissionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "question") return <QuestionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "plan") return <PlanCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   return null;
 });
+
+export function isResolvedInteraction(message: UiMessage): boolean {
+  return (message.kind === "permission" || message.kind === "question" || message.kind === "plan")
+    && message.resolved === true;
+}
 
 export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<UiMessage, { kind: "media" }>> }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
@@ -47,10 +59,10 @@ export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<Ui
 
 function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
   const [preview, setPreview] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
   const src = message.isData ? `data:${message.mimeType || "image/png"};base64,${message.source}` : toFileUrl(message.source);
-  useEffect(() => { setUnavailable(false); setPreview(false); }, [src]);
-  const pathActions = !message.isData && <><button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button><button onClick={() => void navigator.clipboard.writeText(message.source)}>复制路径</button></>;
+  const [unavailable, setUnavailable] = useState(!src);
+  useEffect(() => { setUnavailable(!src); setPreview(false); }, [src]);
+  const pathActions = !message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>;
   return <div className="media-result-item">
     {unavailable
       ? <div className="media-unavailable"><strong>{message.media === "image" ? "图片文件不可用" : "视频文件不可用"}</strong><span>历史缓存可能已被清理或原文件已移动。不会再显示损坏的图片占位。</span></div>
@@ -61,7 +73,7 @@ function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "
       {!unavailable && message.media === "image" && <><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button></>}
       {pathActions}
     </div>
-    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openPath(message.source)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
+    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
   </div>;
 }
 
@@ -161,6 +173,7 @@ function PermissionCard({ message, sessionId, onResolved }: { message: Extract<U
     }
   };
   const detail = protectedActionSummary(message.request.toolCall);
+  const script = protectedActionScript(message.request.toolCall);
   const denyOptions = message.request.options.filter((option) => isDenyPermission(option.name, option.kind));
   const allowOptions = message.request.options.filter((option) => !isDenyPermission(option.name, option.kind));
   const primaryOption = allowOptions.find((option) => option.kind === "allow_once") ?? allowOptions.at(-1);
@@ -173,7 +186,7 @@ function PermissionCard({ message, sessionId, onResolved }: { message: Extract<U
     onClick={() => void respond(option.optionId)}
   >{state.value === "submitting" && state.optionId === option.optionId ? "提交中…" : localizedPermissionName(option.name, option.kind)}</button>;
   return <section className="action-card decision-card codex-request-card" aria-label="权限确认">
-    <div className="request-card-body"><span className="request-card-eyebrow">需要批准</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝不会创建新的用户消息。</p></div>
+    <div className="request-card-body"><span className="request-card-eyebrow">需要批准</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝不会创建新的用户消息。</p>{script && <details className="permission-script"><summary>查看完整命令</summary><pre>{script}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(script)}>复制命令</button></details>}</div>
     {state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}
     <footer className="request-card-actions">
       <div className="request-leading-actions">{scopedOptions.map((option) => optionButton(option))}</div>
@@ -292,13 +305,37 @@ function isDenyPermission(name?: string, kind?: string): boolean { return /^(?:n
 function isExpiredInteractionError(value: string): boolean {
   return /已经结束|已被响应|已被回答|没有可响应|request.*(?:ended|closed|expired|not found)|invalid request/i.test(value);
 }
-function protectedActionSummary(value: unknown): string {
+export function protectedActionSummary(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   const tool = value as Record<string, unknown>;
   const title = [tool.title, tool.name, tool.description].find((item): item is string => typeof item === "string" && Boolean(item.trim()));
   return title?.trim().slice(0, 240) ?? "";
 }
-function toFileUrl(path: string): string { return `grok-media://local/?path=${encodeURIComponent(path.replace(/^\\\\\?\\/, ""))}`; }
+export function protectedActionScript(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const tool = value as Record<string, unknown>;
+  const input = tool.rawInput && typeof tool.rawInput === "object" ? tool.rawInput as Record<string, unknown>
+    : tool.input && typeof tool.input === "object" ? tool.input as Record<string, unknown>
+      : tool.arguments && typeof tool.arguments === "object" ? tool.arguments as Record<string, unknown>
+        : tool;
+  const direct = [input.command, input.script, input.cmd, input.code, input.shell_command, input.shellCommand]
+    .find((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  if (direct) return direct.trim().slice(0, 64_000);
+  const commands = input.commands;
+  if (Array.isArray(commands)) {
+    return commands.flatMap((item) => typeof item === "string" ? [item] : item && typeof item === "object"
+      ? [String((item as Record<string, unknown>).command ?? (item as Record<string, unknown>).script ?? "")]
+      : []).filter(Boolean).join("\n").slice(0, 64_000);
+  }
+  return "";
+}
+function toFileUrl(path: string): string {
+  // Durable conversation media is exposed only through an opaque handle. A
+  // raw path here means an old/corrupt projection escaped main-process
+  // normalization; render it as unavailable instead of minting a path URL in
+  // the sandboxed Renderer.
+  return path.startsWith("grok-media://access/") ? path : "";
+}
 function formatBytes(size?: number): string { return typeof size !== "number" ? "附件" : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`; }
 
 export function toolLocationCandidates(tool: Extract<UiMessage, { kind: "tool" }>["tool"]): Array<{ path: string; line?: number }> {

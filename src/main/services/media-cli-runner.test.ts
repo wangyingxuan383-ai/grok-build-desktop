@@ -18,7 +18,7 @@ async function fixture(source: string): Promise<{ root: string; script: string }
 describe("runCliMediaProcess", () => {
   it("isolates headless media work in an explicit transient CLI session", () => {
     expect(buildCliMediaArgs("draw a cat", "00000000-0000-4000-8000-000000000001", "image_gen")).toEqual([
-      "--single", "draw a cat",
+      "--no-auto-update", "--single", "draw a cat",
       "--session-id", "00000000-0000-4000-8000-000000000001",
       "--output-format", "streaming-json",
       "--always-approve",
@@ -40,7 +40,7 @@ describe("runCliMediaProcess", () => {
     expect(result).toEqual([expect.objectContaining({ media: "image", source: output })]);
   });
 
-  it("terminates a fake CLI when the bounded timeout expires", async () => {
+  it("terminates a fake CLI when the inactivity timeout expires", async () => {
     const { root, script } = await fixture("setInterval(() => {}, 1000);");
     await expect(runCliMediaProcess({
       executable: process.execPath,
@@ -49,8 +49,22 @@ describe("runCliMediaProcess", () => {
       env: process.env,
       media: "video",
       signal: new AbortController().signal,
-      timeoutMs: 60,
-    })).rejects.toThrow("超过 1 秒");
+      idleTimeoutMs: 60,
+    })).rejects.toThrow("连续 1 秒没有输出");
+  });
+
+  it("does not impose a wall-clock ceiling while the CLI keeps reporting progress", async () => {
+    const { root, script } = await fixture("let n=0; const t=setInterval(()=>{ process.stderr.write('progress\\n'); if(++n===4){ clearInterval(t); process.stdout.write(JSON.stringify({type:'tool_result',result:{path:process.argv[2]}})+'\\n'); } },80);");
+    const output = join(root, "long-result.png");
+    await expect(runCliMediaProcess({
+      executable: process.execPath,
+      args: [script, output],
+      cwd: root,
+      env: process.env,
+      media: "image",
+      signal: new AbortController().signal,
+      idleTimeoutMs: 200,
+    })).resolves.toEqual([expect.objectContaining({ source: output })]);
   });
 
   it("terminates a fake CLI immediately when the media job is cancelled", async () => {
@@ -63,7 +77,7 @@ describe("runCliMediaProcess", () => {
       env: process.env,
       media: "image",
       signal: controller.signal,
-      timeoutMs: 5_000,
+      idleTimeoutMs: 5_000,
     });
     setTimeout(() => controller.abort(new Error("用户取消媒体任务")), 40);
     await expect(running).rejects.toThrow("用户取消媒体任务");

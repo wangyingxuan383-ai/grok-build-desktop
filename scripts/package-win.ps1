@@ -47,6 +47,8 @@ if (-not $ReleaseArtifactsOnly) {
 }
 npm run build
 if ($LASTEXITCODE -ne 0) { throw "生产构建失败 ($LASTEXITCODE)" }
+npm run check:chunks
+if ($LASTEXITCODE -ne 0) { throw "Renderer 分块预算或 Worker 命名门禁失败 ($LASTEXITCODE)" }
 npx electron-builder --win nsis zip --x64 --publish never
 if ($LASTEXITCODE -ne 0) { throw "electron-builder 失败 ($LASTEXITCODE)" }
 $ExpectedExecutable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
@@ -59,6 +61,8 @@ Remove-Item -LiteralPath (Join-Path $Root 'release\builder-debug.yml'),(Join-Pat
 Get-ChildItem -LiteralPath (Join-Path $Root 'release') -Filter '*.blockmap' -File -ErrorAction SilentlyContinue | Remove-Item -Force
 node (Join-Path $PSScriptRoot 'verify-fuses.mjs') $ExpectedExecutable
 if ($LASTEXITCODE -ne 0) { throw 'Electron Fuses 校验失败。' }
+& (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $ExpectedExecutable
+if ($LASTEXITCODE -ne 0) { throw '当前 v0.7 打包 UI 验收失败。' }
 
 $GenericZip = Join-Path $Root "release\Grok-Build-Desktop-$Version-x64.zip"
 $PortableZip = Join-Path $Root "release\Grok-Build-Desktop-Portable-v$Version-x64.zip"
@@ -84,9 +88,9 @@ if ($ReleaseArtifactsOnly) {
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v042-ui.mjs'
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v062-ui.mjs'
-    & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-v066-ui.mjs'
+    # The current v0.7 probe supersedes the legacy v0.4/v0.6 probes. Those
+    # scripts encode retired information architecture (for example, exposing
+    # Git Review in a non-Git fixture) and must not gate the current release.
     foreach ($OverlayEntry in @('.task-entry', '.extensions-entry', '.media-entry')) {
         & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
     }
@@ -95,6 +99,6 @@ if ($ReleaseArtifactsOnly) {
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 }
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
-& (Join-Path $PSScriptRoot 'generate-release-assets.ps1')
+& (Join-Path $PSScriptRoot 'generate-release-assets.ps1') -SkipPackagedUiProbe
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')
 Write-Host "Windows 公开产物已生成：$PortableZip" -ForegroundColor Green

@@ -1,3 +1,6 @@
+/* Structural baseline. shell.css intentionally applies the final compact
+   product-shell values after this file; feature styles must not add another
+   shell layer here. */
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 * { scrollbar-color: var(--border-strong) transparent; }
@@ -81,6 +84,7 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .status-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: #59616b; }
 .status-dot.working { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .status-dot.needs-user { background: var(--warning); }
+.status-dot.queued { background: #8f7bd8; }
 .status-dot.unread { background: var(--success); }
 .status-dot.error { background: var(--danger); }
 .session-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
@@ -236,7 +240,7 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .extensions-entry:hover { border-color: var(--border-strong); background: var(--hover); }
 .conversation-wrap { position: relative; min-width: 0; min-height: 0; flex: 1 1 auto; }
 .conversation { height: 100%; padding: 8px 0 20px; overflow-x: hidden !important; }
-.chat-turn { width: min(var(--content-width), calc(100% - 48px)); min-width: 0; margin: 0 auto; padding: 5px 0 18px; }
+.chat-turn { width: min(var(--conversation-content-width, var(--content-width)), calc(100% - 48px)); min-width: 0; margin: 0 auto; padding: 5px 0 18px; font-size: calc(1em * var(--conversation-font-scale, 1)); }
 .chat-turn .message-row, .chat-turn .thinking-placeholder, .chat-turn .thought-card, .chat-turn .tool-card, .chat-turn .action-card, .chat-turn .plan-card, .chat-turn .error-card { width: 100%; }
 .execution-process { margin: 3px 0 13px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); overflow: hidden; }
 .execution-process > summary { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 7px 11px; list-style: none; cursor: pointer; color: var(--text-secondary); }
@@ -268,8 +272,9 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .assistant-body { width: 100%; min-width: 0; max-width: 100%; line-height: 1.72; color: var(--text); }
 .assistant-body h1, .assistant-body h2, .assistant-body h3 { color: var(--text-strong); }
 .assistant-body pre, .thought-card pre { overflow: auto; }
-.assistant-body table { width: 100%; border-collapse: collapse; }
-.assistant-body th, .assistant-body td { border: 1px solid var(--border); padding: 7px 9px; }
+.assistant-body table { display: block; width: 100%; max-width: 100%; overflow: auto; border-collapse: collapse; overscroll-behavior-x: contain; }
+.assistant-body th, .assistant-body td { min-width: 8ch; max-width: 42ch; border: 1px solid var(--border); padding: 7px 9px; white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.assistant-body th > *, .assistant-body td > * { max-width: 100%; }
 .assistant-body a { color: var(--accent); }
 .markdown-loading { padding: 6px 0; color: var(--muted); font-size: .75em; }
 .thinking-placeholder { margin: 10px 0; color: var(--muted); font-size: .8125em; }
@@ -322,6 +327,18 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .file-line-stats i { color: var(--success); font-style: normal; }
 .file-line-stats b { color: var(--danger); font-weight: 600; }
 .mermaid { padding: 12px; overflow: auto; background: var(--panel); border-radius: 8px; }
+.mermaid-wrap { position: relative; }
+.mermaid-toolbar { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px 0; background: var(--panel); border-radius: 8px 8px 0 0; }
+.mermaid-toolbar button { border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); padding: 3px 8px; font-size: 12px; cursor: pointer; }
+.mermaid-toolbar button:hover:not(:disabled), .mermaid-toolbar button:focus-visible { color: var(--text); border-color: var(--accent); }
+.mermaid-toolbar button:disabled { opacity: .45; cursor: not-allowed; }
+.session-tool section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.session-tool section > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.session-tool section > header span { color: var(--muted); font-size: 12px; }
+.session-tool section > header button { border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-secondary); padding: 4px 8px; cursor: pointer; }
+.session-detail-list { display: grid; grid-template-columns: 94px minmax(0, 1fr); gap: 8px 12px; margin: 0; font-size: 12px; }
+.session-detail-list dt { color: var(--muted); }
+.session-detail-list dd { margin: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .message-row, .thinking-placeholder, .thought-card, .tool-card, .action-card, .plan-card, .error-card {
   width: min(var(--content-width), calc(100% - 48px));
   margin-left: auto;
@@ -574,6 +591,19 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .extension-list article small { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
 .extension-list article p { margin: 5px 0 0; color: var(--text-secondary); line-height: 1.45; }
 .extension-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.extension-search { display: grid; gap: 6px; margin-bottom: 12px; color: var(--muted); }
+.extension-search input { min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--text); background: var(--input-bg); }
+.skill-groups { display: grid; gap: 10px; }
+.skill-groups > details { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel) 88%, transparent); overflow: hidden; }
+.skill-groups > details > summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; cursor: pointer; }
+.skill-groups > details > summary span { color: var(--muted); font-size: .8125em; }
+.skill-groups > details > .extension-list { padding: 0 8px 8px; }
+.official-feedback-panel { width: min(720px, calc(100vw - 40px)); }
+.official-feedback-panel textarea { width: 100%; min-height: 180px; resize: vertical; }
+.feedback-preview { margin-top: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in srgb, var(--surface) 90%, transparent); }
+.feedback-preview > header { display: flex; gap: 10px; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.feedback-preview > header span { color: var(--muted); font-size: .75em; }
+.feedback-preview pre { max-height: 260px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .plugin-details { display: grid; gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
 .extension-status, .official-badge, .compat-badge { display: inline-flex; padding: 3px 7px; border-radius: 999px; font-size: .6875em; white-space: nowrap; }
 .extension-status.enabled, .official-badge, .compat-badge.adaptable { border: 1px solid #315e4d; background: #13251e; color: #91d3b4; }
@@ -789,11 +819,15 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .app-shell.sidebar-collapsed .sidebar { visibility: hidden; pointer-events: none; overflow: hidden; }
 .codex-mirror, .empty-state, .workspace-empty { flex: 1 1 auto; min-height: 0; }
 .composer-zone { flex: 0 0 auto; }
-.conversation-search-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px max(18px, calc((100% - var(--content-width)) / 2)); border-bottom: 1px solid var(--border); background: var(--panel); }
+.conversation-search-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 7px max(18px, calc((100% - var(--conversation-content-width, var(--content-width))) / 2)); border-bottom: 1px solid var(--border); background: var(--panel); }
 .conversation-search-bar input { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; color: var(--text); background: var(--input-bg); }
 .conversation-search-bar span { color: var(--muted); font-size: .75em; }
 .conversation-search-bar button { border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; background: var(--panel-3); cursor: pointer; }
 .conversation-match-active { border-radius: 10px; box-shadow: inset 0 0 0 1px #866c29; background: #3b32141f; }
+.conversation-reading-settings { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
+.conversation-reading-settings legend { padding: 0 6px; color: var(--text-strong); font-weight: 650; }
+.conversation-reading-settings label { display: grid; gap: 5px; }
+.open-location-menu .menu-section-label { display: block; padding: 8px 10px 3px; color: var(--muted); font-size: .62em; text-transform: uppercase; letter-spacing: .04em; }
 .file-menu { max-height: 310px; overflow: auto; }
 
 .diagnostics-panel, .onboarding-panel { width: min(900px, 95vw); height: min(800px, 94vh); }
@@ -812,6 +846,8 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .diagnostic-item code { display: block; color: var(--muted); overflow-wrap: anywhere; }
 .support-preview { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--input-bg); }
 .support-preview p { color: var(--text-secondary); line-height: 1.5; }
+.doctor-fix-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.doctor-fix-row > div { min-width: 0; }.doctor-fix-row p { margin: 4px 0; overflow-wrap: anywhere; }.doctor-fix-row small { color: var(--muted); }
 .panel-message { color: var(--accent); overflow-wrap: anywhere; }
 .diagnostics-panel > footer, .onboarding-panel > footer { padding: 12px 20px; border-top: 1px solid var(--border); }
 .button-row .spacer { flex: 1; }

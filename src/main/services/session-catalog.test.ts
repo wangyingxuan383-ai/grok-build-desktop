@@ -22,6 +22,7 @@ describe("SessionCatalog", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.id).toBe(sessionId);
     expect(rows[0]?.title).toBe("Existing Grok session");
+    expect(rows[0]?.preview).toBe("Existing Grok session");
   });
 
   it("persists pin state and exports user/assistant history as Markdown", async () => {
@@ -88,5 +89,36 @@ describe("SessionCatalog", () => {
     expect((await catalog.list(cwd))[0]?.title).toBe("用户自定义名称");
     await catalog.delete(cwd, sessionId);
     expect(await catalog.has(cwd, sessionId)).toBe(false);
+  });
+
+  it("preserves concurrent metadata mutations", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-concurrent-"));
+    const catalog = new SessionCatalog(join(root, "app-data"), join(root, ".grok"));
+    await Promise.all([
+      catalog.rename("session", "并发会话"),
+      catalog.pin("session", true),
+      catalog.archive("session", true),
+      catalog.markUnread("session", true),
+      catalog.recordFork("parent", "session"),
+    ]);
+    const metadata = JSON.parse(await readFile(join(root, "app-data", "session-metadata.json"), "utf8"));
+    expect(metadata).toMatchObject({
+      renames: { session: "并发会话" },
+      unread: { session: "error" },
+      pinned: { session: true },
+      archived: { session: true },
+      parents: { session: "parent" },
+    });
+  });
+
+  it("synchronizes explicit official manual-title and reset notifications", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-title-sync-"));
+    const appData = join(root, "app-data");
+    const catalog = new SessionCatalog(appData, join(root, ".grok"));
+    await catalog.rename("session", "Desktop title");
+    await catalog.syncOfficialTitle("session", "Official title", true);
+    expect(JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session).toBe("Official title");
+    await catalog.syncOfficialTitle("session", "", false);
+    expect(JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session).toBeUndefined();
   });
 });

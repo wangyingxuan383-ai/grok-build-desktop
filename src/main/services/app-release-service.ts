@@ -17,7 +17,8 @@ export class AppReleaseService {
   constructor(
     private readonly build: BuildInfo,
     private readonly log: LogService,
-    private readonly fetchRelease: (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }> = (url) => net.fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": `Grok-Build-Desktop/${build.version}` } }),
+    private readonly fetchRelease: (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; text?(): Promise<string> }> = (url, init) => net.fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": `Grok-Build-Desktop/${build.version}` }, redirect: "error", signal: init?.signal }),
+    private readonly timeoutMs = 15_000,
   ) {}
 
   async check(force = false): Promise<AppReleaseStatus> {
@@ -25,17 +26,26 @@ export class AppReleaseService {
     const checkedAt = new Date().toISOString();
     if (!this.build.repository) return this.cached = { configured: false, currentVersion: this.build.version, updateAvailable: false, checkedAt, error: "本地构建，未配置公开更新源" };
     const url = `https://api.github.com/repos/${this.build.repository}/releases/latest`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error("应用更新检查响应超时")), this.timeoutMs);
+    timeout.unref?.();
     try {
-      const response = await this.fetchRelease(url);
+      const response = await this.fetchRelease(url, { signal: controller.signal });
       if (!response.ok) throw new Error(`GitHub Release API 返回 HTTP ${response.status}`);
-      const status = parseGitHubRelease(await response.json(), this.build, checkedAt);
+      let payload: unknown;
+      if (response.text) {
+        const raw = await response.text();
+        if (Buffer.byteLength(raw, "utf8") > 2 * 1024 * 1024) throw new Error("GitHub Release API 响应超过 2 MiB 限制");
+        payload = JSON.parse(raw);
+      } else payload = await response.json();
+      const status = parseGitHubRelease(payload, this.build, checkedAt);
       this.cached = status;
       return status;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = controller.signal.aborted ? "应用更新检查响应超时" : error instanceof Error ? error.message : String(error);
       await this.log.log(`Application update check failed: ${message}`);
       return this.cached = { ...(this.cached ?? { configured: true, currentVersion: this.build.version, updateAvailable: false, checkedAt }), checkedAt, error: message };
-    }
+    } finally { clearTimeout(timeout); }
   }
 
   releaseUrl(candidate?: string): string {
@@ -57,6 +67,7 @@ export function parseGitHubRelease(value: unknown, build: BuildInfo, checkedAt =
     currentVersion: build.version,
     latestVersion,
     updateAvailable: compareVersions(latestVersion, build.version) > 0,
+    currentAhead: compareVersions(build.version, latestVersion) > 0,
     checkedAt,
     publishedAt: release.published_at,
     releaseUrl: release.html_url,

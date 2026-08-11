@@ -184,7 +184,13 @@ export class ComputerUseService {
     const approved = decision !== "deny";
     if (approved) {
       const key = `${pending.request.sessionId}:${pending.request.app.id}`.toLocaleLowerCase(); this.onceAllowed.add(key);
-      if (decision === "always") { const settings = await this.settings.get(); if (!settings.alwaysAllowedAppIds.includes(pending.request.app.id)) await this.settings.patch({ alwaysAllowedAppIds: [...settings.alwaysAllowedAppIds, pending.request.app.id] }); }
+      if (decision === "always") {
+        await this.settings.mutate((settings) => {
+          if (!settings.alwaysAllowedAppIds.includes(pending.request.app.id)) {
+            settings.alwaysAllowedAppIds.push(pending.request.app.id);
+          }
+        });
+      }
     }
     await pending.onDecision?.(approved); pending.resolve?.(approved);
   }

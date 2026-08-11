@@ -1,0 +1,61 @@
+[
+  {
+    "method": "x.ai/session/update",
+    "params": {
+      "update": {
+        "sessionUpdate": "auto_compact_started",
+        "tokens_used": 410000,
+        "context_window": 500000,
+        "percentage": 82,
+        "reason": "context_threshold"
+      }
+    }
+  },
+  {
+    "method": "x.ai/session/update",
+    "params": {
+      "update": {
+        "sessionUpdate": "auto_compact_cancelled",
+        "reason": "user_cancelled"
+      }
+    }
+  },
+  {
+    "method": "x.ai/session/update",
+    "params": {
+      "update": {
+        "sessionUpdate": "task_completed",
+        "task_snapshot": {
+          "task_id": "fixture-fast-task",
+          "command": "fixture-command",
+          "cwd": "C:\\fixture",
+          "exit_code": 0,
+          "output": "fixture-output"
+        },
+        "will_wake": false
+      }
+    }
+  },
+  {
+    "method": "x.ai/session/update",
+    "params": {
+      "update": {
+        "sessionUpdate": "task_backgrounded",
+        "tool_call_id": "fixture-tool",
+        "task_id": "fixture-fast-task",
+        "command": "fixture-command",
+        "cwd": "C:\\fixture"
+      }
+    }
+  },
+  {
+    "method": "x.ai/session/update",
+    "params": {
+      "update": {
+        "sessionUpdate": "session_recap",
+        "summary": "Sanitized recap fixture.",
+        "auto": true
+      }
+    }
+  }
+]

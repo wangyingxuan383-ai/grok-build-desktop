@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JsonStore } from "./json-store";
+import { JsonStore, withCrossProcessFileLock } from "./json-store";
 
 const roots: string[] = [];
 
@@ -49,6 +49,54 @@ describe("JsonStore", () => {
     const value = await store.get();
     expect(value.count).toBe(20);
     expect(new Set(value.items).size).toBe(20);
+  });
+
+  it("serializes fresh read-modify-write transactions across two store instances", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-json-store-"));
+    roots.push(root);
+    const path = join(root, "shared.json");
+    const first = new JsonStore(path, { left: 0, right: 0, count: 0 });
+    const second = new JsonStore(path, { left: 0, right: 0, count: 0 });
+    // Prime both instances before either mutation. A per-instance cache would
+    // otherwise make this the classic lost-update race used by scheduler
+    // workers and the visible Desktop.
+    await Promise.all([first.get(), second.get()]);
+    await Promise.all([
+      first.mutate(async (value) => { await new Promise((resolve) => setTimeout(resolve, 20)); value.left = 1; value.count += 1; }),
+      second.mutate((value) => { value.right = 2; value.count += 1; }),
+    ]);
+    expect(await first.get()).toEqual({ left: 1, right: 2, count: 2 });
+    expect(await second.get()).toEqual({ left: 1, right: 2, count: 2 });
+  });
+
+  it("refreshes a previously read instance after another instance replaces the file", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-json-store-"));
+    roots.push(root);
+    const path = join(root, "refresh.json");
+    const first = new JsonStore(path, { value: 0 });
+    const second = new JsonStore(path, { value: 0 });
+    expect(await first.get()).toEqual({ value: 0 });
+    await second.set({ value: 7 });
+    expect(await first.get()).toEqual({ value: 7 });
+  });
+
+  it("reclaims one dead owner without allowing competing reapers into the critical section", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-json-store-"));
+    roots.push(root);
+    const lockPath = join(root, "shared.json.lock");
+    await writeFile(lockPath, JSON.stringify({ pid: 2_147_483_647, createdAt: new Date(0).toISOString(), nonce: "dead-owner" }), "utf8");
+    let active = 0;
+    let maxActive = 0;
+    let completed = 0;
+    await Promise.all(Array.from({ length: 8 }, () => withCrossProcessFileLock(lockPath, async () => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completed += 1;
+      active -= 1;
+    })));
+    expect(completed).toBe(8);
+    expect(maxActive).toBe(1);
   });
 
   it("preserves malformed JSON as a recovery backup before using defaults", async () => {

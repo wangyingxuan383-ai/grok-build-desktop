@@ -19,21 +19,26 @@ export class TurnPresentationService {
   }
 
   async recordForSession(sessionId: string, presentation: TurnPresentation): Promise<TurnPresentation[]> {
-    const state = await this.store.get();
-    const records = [...(state.sessions[sessionId] ?? [])];
-    const index = records.findIndex((value) => value.turnId === presentation.turnId);
-    if (index >= 0) records[index] = { ...records[index], ...presentation };
-    else records.push({ ...presentation });
-    records.sort((a, b) => a.ordinal - b.ordinal);
-    state.sessions[sessionId] = records;
-    await this.store.set(state);
+    let records: TurnPresentation[] = [];
+    await this.store.mutate((state) => {
+      records = [...(state.sessions[sessionId] ?? [])];
+      const index = records.findIndex((value) => value.turnId === presentation.turnId);
+      if (index >= 0) records[index] = { ...records[index], ...presentation };
+      else records.push({ ...presentation });
+      records.sort((a, b) => a.ordinal - b.ordinal);
+      state.sessions[sessionId] = records;
+    });
     return records;
   }
 
   async delete(sessionId: string): Promise<void> {
-    const state = await this.store.get();
-    if (!(sessionId in state.sessions)) return;
-    delete state.sessions[sessionId];
-    await this.store.set(state);
+    await this.store.mutate((state) => { delete state.sessions[sessionId]; });
+  }
+
+  async cloneSession(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    await this.store.mutate((state) => {
+      const source = state.sessions[sourceSessionId];
+      if (source?.length) state.sessions[targetSessionId] = structuredClone(source);
+    });
   }
 }

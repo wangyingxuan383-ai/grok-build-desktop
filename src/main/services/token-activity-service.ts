@@ -54,10 +54,7 @@ export class TokenActivityService {
   async record(sessionId: string, presentation: TurnPresentation, context: { workspace?: string } = {}): Promise<void> {
     const usage = presentation.usage;
     const at = presentation.completedAt ?? this.now().toISOString();
-    const day = at.slice(0, 10);
     await this.store.mutate((data) => {
-      if (data.turns.some((turn) => turn.turnId === presentation.turnId && turn.sessionId === sessionId)) return data;
-
       const record: TurnRecord = {
         at, sessionId, turnId: presentation.turnId,
         hasUsage: Boolean(usage),
@@ -70,15 +67,22 @@ export class TokenActivityService {
         ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
         ...(usage?.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
       };
-      data.turns.push(record);
-
-      const rollup = data.days[day] ?? { day, turns: 0, turnsWithUsage: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-      rollup.turns += 1;
-      if (record.hasUsage) rollup.turnsWithUsage += 1;
-      rollup.inputTokens += record.inputTokens ?? 0;
-      rollup.outputTokens += record.outputTokens ?? 0;
-      rollup.totalTokens += record.totalTokens ?? sumParts(record);
-      data.days[day] = rollup;
+      const existingIndex = data.turns.findIndex((turn) => turn.turnId === presentation.turnId && turn.sessionId === sessionId);
+      if (existingIndex >= 0) {
+        // A normal prompt RPC may finish before turn_completed. Preserve the
+        // single turn record, but let later authoritative usage replace its
+        // earlier prompt-result numbers and adjust the anonymous rollup by the
+        // exact delta. A terminal without usage must not erase exact usage that
+        // was already reported.
+        if (!usage) return data;
+        const previous = data.turns[existingIndex]!;
+        adjustRollup(data.days, previous, -1);
+        data.turns[existingIndex] = record;
+        adjustRollup(data.days, record, 1);
+      } else {
+        data.turns.push(record);
+        adjustRollup(data.days, record, 1);
+      }
       return prune(data, this.now());
     });
   }
@@ -94,6 +98,18 @@ export class TokenActivityService {
     if (!removed.size) return;
     await this.store.mutate((data) => {
       data.turns = data.turns.filter((turn) => !removed.has(turn.sessionId));
+    });
+  }
+
+  /** Move per-turn ownership after an official cross-directory fork without
+   * changing the anonymous daily totals. */
+  async rebindSession(sourceSessionId: string, targetSessionId: string, workspace: string): Promise<void> {
+    await this.store.mutate((data) => {
+      for (const turn of data.turns) {
+        if (turn.sessionId !== sourceSessionId) continue;
+        turn.sessionId = targetSessionId;
+        turn.workspace = workspace;
+      }
     });
   }
 
@@ -123,6 +139,18 @@ export class TokenActivityService {
 
 function sumParts(record: TurnRecord): number {
   return (record.inputTokens ?? 0) + (record.outputTokens ?? 0) + (record.reasoningTokens ?? 0);
+}
+
+function adjustRollup(days: Record<string, DayRollup>, record: TurnRecord, direction: 1 | -1): void {
+  const day = record.at.slice(0, 10);
+  const rollup = days[day] ?? { day, turns: 0, turnsWithUsage: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  rollup.turns = Math.max(0, rollup.turns + direction);
+  rollup.turnsWithUsage = Math.max(0, rollup.turnsWithUsage + (record.hasUsage ? direction : 0));
+  rollup.inputTokens = Math.max(0, rollup.inputTokens + direction * (record.inputTokens ?? 0));
+  rollup.outputTokens = Math.max(0, rollup.outputTokens + direction * (record.outputTokens ?? 0));
+  rollup.totalTokens = Math.max(0, rollup.totalTokens + direction * (record.totalTokens ?? sumParts(record)));
+  if (!rollup.turns && !rollup.turnsWithUsage && !rollup.inputTokens && !rollup.outputTokens && !rollup.totalTokens) delete days[day];
+  else days[day] = rollup;
 }
 
 function windowFor(turns: TurnRecord[], from: Date): TokenActivityWindow {

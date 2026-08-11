@@ -81,6 +81,7 @@ export class ProviderService {
   private readonly scanControllers = new Map<string, { controller: AbortController; jobId?: string; generation: number }>();
   private readonly scanGenerations = new Map<string, number>();
   private readonly scanJobs = new Map<string, ProviderScanJob>();
+  private providerMutationTail: Promise<void> = Promise.resolve();
 
   constructor(userDataPath: string, private readonly log: LogService, private readonly options: ProviderServiceOptions = {}) {
     this.configPath = join(options.grokHome ?? join(homedir(), ".grok"), "config.toml");
@@ -118,6 +119,10 @@ export class ProviderService {
   }
 
   async upsert(input: CustomProviderInput): Promise<CustomProviderProfile[]> {
+    return this.serializeProviderMutation(() => this.upsertUnlocked(input));
+  }
+
+  private async upsertUnlocked(input: CustomProviderInput): Promise<CustomProviderProfile[]> {
     validateInput(input);
     const originalConfig = await readFile(this.configPath, "utf8").catch(() => "");
     const originalHash = hash(originalConfig);
@@ -188,6 +193,10 @@ export class ProviderService {
   }
 
   async remove(id: string): Promise<CustomProviderProfile[]> {
+    return this.serializeProviderMutation(() => this.removeUnlocked(id));
+  }
+
+  private async removeUnlocked(id: string): Promise<CustomProviderProfile[]> {
     const references = await this.options.references?.(id) ?? [];
     if (references.length) throw new Error(`提供商仍被引用：${references.join("、")}`);
     const data = await this.store.get();
@@ -206,8 +215,9 @@ export class ProviderService {
       await this.options.validateConfig?.();
       await this.store.set({ providers: nextProviders });
       storeChanged = true;
-      const capabilities = await this.capabilityStore.get();
-      await this.capabilityStore.set({ snapshots: capabilities.snapshots.filter((value) => value.providerId !== id) });
+      await this.capabilityStore.mutate((capabilities) => {
+        capabilities.snapshots = capabilities.snapshots.filter((value) => value.providerId !== id);
+      });
       if (removeEnvironment && target.credentialEnv) {
         await this.environment.write(target.credentialEnv, undefined);
         environmentChanged = true;
@@ -231,9 +241,17 @@ export class ProviderService {
    * a provider key can be rotated after the app starts. The Renderer never
    * receives this object; it is merged only into the spawned CLI process.
    */
-  async desktopEnvironment(scopeId: string = randomUUID()): Promise<Record<string, string>> {
+  async desktopEnvironment(scopeId: string = randomUUID(), requiredProviderId?: string): Promise<Record<string, string>> {
     const storedProviders = (await this.store.get()).providers;
     const providers = storedProviders.filter((provider) => provider.enabled !== false && provider.models.some((model) => model.enabled !== false));
+    const requiredProvider = requiredProviderId
+      ? storedProviders.find((provider) => provider.id === requiredProviderId)
+      : undefined;
+    if (requiredProviderId && !requiredProvider) throw new Error(`受管提供商 ${requiredProviderId} 不存在`);
+    if (requiredProvider?.enabled === false) throw new Error(`提供商“${requiredProvider.name}”已停用`);
+    if (requiredProvider && !requiredProvider.models.some((model) => model.enabled !== false)) {
+      throw new Error(`提供商“${requiredProvider.name}”没有已启用模型`);
+    }
     if (!providers.length) return {};
     const config = await readFile(this.configPath, "utf8").catch(() => "");
     let needsMigration = managedCapabilitiesOutdated(config, providers);
@@ -247,6 +265,13 @@ export class ProviderService {
           ? await this.environment.readFresh(variable)
           : await this.environment.read(variable);
         if (value) environment[variable] = value;
+      }
+      if (
+        provider.id === requiredProviderId
+        && provider.credentialMode !== "none"
+        && (!provider.credentialEnv || !environment[provider.credentialEnv])
+      ) {
+        throw new Error(`提供商“${provider.name}”的凭据不可用`);
       }
       const name = managedBaseUrlEnvironmentName(provider.id);
       try {
@@ -262,6 +287,12 @@ export class ProviderService {
         await this.replaceManagedBlock(config, storedProviders, hash(config), storedProviders);
         await this.options.validateConfig?.();
       } catch (error) {
+        // `replaceManagedBlock` is atomic as a file write, but validation is a
+        // separate CLI operation. Never leave a syntactically/semantically
+        // rejected managed block behind for the next launch to mistake as a
+        // successful migration.
+        await this.restoreConfig(config).catch((rollbackError) => this.log.log(`提供商管理块迁移回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+        if (requiredProviderId) throw error;
         await this.log.log(`提供商管理块迁移失败，本次会话沿用现有 config.toml：${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -278,6 +309,18 @@ export class ProviderService {
     if (!modelId) return undefined;
     const providers = (await this.store.get()).providers;
     return providers.find((provider) => provider.enabled !== false && provider.models.some((model) => model.enabled !== false && model.id === modelId));
+  }
+
+  /** Returns a managed registration even when it is disabled, for fail-closed launch validation. */
+  async managedProviderForModel(modelId: string | undefined): Promise<CustomProviderProfile | undefined> {
+    if (!modelId) return undefined;
+    return (await this.store.get()).providers.find((provider) => provider.models.some((model) => model.id === modelId));
+  }
+
+  /** Looks up the exact managed registration recorded by a conversation. */
+  async managedProviderById(providerId: string | undefined): Promise<CustomProviderProfile | undefined> {
+    if (!providerId) return undefined;
+    return (await this.store.get()).providers.find((provider) => provider.id === providerId);
   }
 
   /** Most recent gateway-observed failures, newest first. */
@@ -408,7 +451,8 @@ export class ProviderService {
         continue;
       }
       if (url && /^https?:\/\//i.test(url)) {
-        const imageResponse = await this.fetcher(url, {
+        const trustedUrl = providerArtifactUrl(provider.baseUrl, url);
+        const imageResponse = await this.fetcher(trustedUrl, {
           method: "GET",
           headers: { Accept: "image/*" },
           redirect: "manual",
@@ -471,7 +515,7 @@ export class ProviderService {
     const rows = extractMediaAssets(parsed, "video");
     const artifacts = rows.flatMap((row): MediaArtifact[] => {
       if (row.data) return [{ id: randomUUID(), media: "video", source: row.data, isData: true, mimeType: row.mimeType ?? "video/mp4", name: `${model.name}.mp4` }];
-      if (row.url) return [{ id: randomUUID(), media: "video", source: row.url, isData: false, mimeType: row.mimeType, name: `${model.name}.mp4` }];
+      if (row.url) return [{ id: randomUUID(), media: "video", source: providerArtifactUrl(provider.baseUrl, row.url), isData: false, mimeType: row.mimeType, name: `${model.name}.mp4` }];
       return [];
     });
     if (!artifacts.length) throw new Error("视频端点成功，但没有返回实际视频资产；异步任务 ID 暂不冒充完成结果");
@@ -491,7 +535,7 @@ export class ProviderService {
     if (!provider) throw new Error("提供商不存在或为只读外部配置");
     const models = provider.models.filter((model) => !scope.modelIds?.length || scope.modelIds.includes(model.id));
     if (!models.length) throw new Error("扫描范围中没有模型");
-    const protocols = scope.protocols?.length ? scope.protocols : PROVIDER_PROTOCOLS;
+    const protocols = Array.from(new Set(scope.protocols?.length ? scope.protocols : PROVIDER_PROTOCOLS));
     if (scope.context?.mode === "exact" && scope.context.confirmedCost !== true) {
       throw new Error("精确上下文探测需要明确确认请求成本");
     }
@@ -552,10 +596,21 @@ export class ProviderService {
       this.scanControllers.delete(job.providerId);
       this.scanGenerations.set(job.providerId, job.generation + 1);
     }
-    const generation = job.updatedAt;
+    // A queued job may not have installed its AbortController yet because
+    // `startScan()` deliberately returns before the worker is scheduled. Do
+    // not key the cancellation grace period off `updatedAt`: the worker will
+    // publish a `running` update and change that field before the timer fires,
+    // which used to leave queued cancellations stuck in `cancelling` forever.
     setTimeout(() => {
       const current = this.scanJobs.get(jobId);
-      if (!current || current.updatedAt !== generation || isTerminalScanStatus(current.status)) return;
+      if (!current || isTerminalScanStatus(current.status)) return;
+      const active = this.scanControllers.get(current.providerId);
+      if (current.status === "cancelling" && active?.jobId === jobId && active.generation === current.generation) {
+        active.controller.abort(new Error("用户取消了兼容扫描"));
+        this.scanControllers.delete(current.providerId);
+        this.scanGenerations.set(current.providerId, current.generation + 1);
+      }
+      if (current.status !== "cancelling") return;
       current.status = "cancelled";
       current.stage = "complete";
       current.completedAt = new Date().toISOString();
@@ -569,7 +624,13 @@ export class ProviderService {
   cancelDeepScan(id: string): boolean {
     const active = this.scanControllers.get(id);
     if (!active) return false;
+    if (active.jobId) {
+      this.cancelScan(active.jobId);
+      return true;
+    }
     active.controller.abort(new Error("用户取消了兼容扫描"));
+    this.scanControllers.delete(id);
+    this.scanGenerations.set(id, active.generation + 1);
     return true;
   }
 
@@ -678,28 +739,37 @@ export class ProviderService {
     if (this.scanControllers.has(id)) throw new Error("该提供商正在执行兼容扫描");
     const provider = (await this.store.get()).providers.find((value) => value.id === id);
     if (!provider) throw new Error("提供商不存在或为只读外部配置");
-    const controller = new AbortController();
-    const generation = requestedGeneration ?? ((this.scanGenerations.get(id) ?? 0) + 1);
-    this.scanGenerations.set(id, generation);
-    this.scanControllers.set(id, { controller, jobId, generation });
-    const startedAt = new Date().toISOString();
-    const protocols = options.protocols?.length ? options.protocols : PROVIDER_PROTOCOLS;
+    // `runScanJob()` enters this method before the first store read settles.
+    // A cancellation can therefore arrive while there is not yet an
+    // AbortController to abort. Re-check the persisted job state before any
+    // compatibility request is allowed to leave the process.
+    const queuedJob = jobId ? this.scanJobs.get(jobId) : undefined;
+    if (queuedJob && (queuedJob.status === "cancelling" || queuedJob.status === "cancelled")) {
+      throw new Error("用户取消了兼容扫描");
+    }
+    const protocols = Array.from(new Set(options.protocols?.length ? options.protocols : PROVIDER_PROTOCOLS));
     const models = provider.models.filter((model) => !options.modelIds?.length || options.modelIds.includes(model.id));
+    if (!models.length) throw new Error("扫描范围中没有模型");
     if (options.context?.mode === "exact" && options.context.confirmedCost !== true) {
       throw new Error("精确上下文探测需要明确确认请求成本");
     }
     if (options.context?.mode === "exact" && (models.length !== 1 || protocols.length !== 1)) {
       throw new Error("精确上下文探测只允许单模型、单协议运行");
     }
+    const controller = new AbortController();
+    const generation = requestedGeneration ?? ((this.scanGenerations.get(id) ?? 0) + 1);
+    this.scanGenerations.set(id, generation);
+    this.scanControllers.set(id, { controller, jobId, generation });
+    const startedAt = new Date().toISOString();
     const total = models.length * protocols.length;
     let completed = 0;
     const warnings: string[] = [];
-    const existing = await this.getCapabilities(id);
-    this.updateScanStage(jobId, "metadata", { message: "正在识别 Provider 兼容家族" });
-    const flavor = await this.detectCompatibilityFlavor(provider, controller.signal);
-    this.finishScanUnit(jobId, true);
-    const modelProfiles: ProviderModelCapabilityProfile[] = [];
     try {
+      const existing = await this.getCapabilities(id);
+      this.updateScanStage(jobId, "metadata", { message: "正在识别 Provider 兼容家族" });
+      const flavor = await this.detectCompatibilityFlavor(provider, controller.signal);
+      this.finishScanUnit(jobId, true);
+      const modelProfiles: ProviderModelCapabilityProfile[] = [];
       const headers = await this.providerHeaders(provider);
       for (const model of models) {
         const previousModel = existing?.models.find((value) => value.modelId === model.id);
@@ -781,8 +851,9 @@ export class ProviderService {
         };
       }
       this.updateScanStage(jobId, "saving", { message: controller.signal.aborted ? "正在保存取消前已完成的兼容证据" : "正在保存已验证兼容证据" });
-      const data = await this.capabilityStore.get();
-      await this.capabilityStore.set({ snapshots: [...data.snapshots.filter((value) => value.providerId !== id), snapshot] });
+      await this.capabilityStore.mutate((data) => {
+        data.snapshots = [...data.snapshots.filter((value) => value.providerId !== id), snapshot];
+      });
       this.finishScanUnit(jobId, true);
       return {
         providerId: id,
@@ -803,6 +874,18 @@ export class ProviderService {
   private async runScanJob(jobId: string): Promise<void> {
     const job = this.scanJobs.get(jobId);
     if (!job) return;
+    // Cancellation can arrive between `startScan()` returning and this
+    // asynchronous worker getting its first turn. Never start network probes
+    // for a job the user already cancelled.
+    if (job.status === "cancelling" || job.status === "cancelled") {
+      job.status = "cancelled";
+      job.stage = "complete";
+      job.completedAt = new Date().toISOString();
+      job.updatedAt = job.completedAt;
+      job.message = "扫描已取消；未发送探测请求";
+      this.publishScan(job);
+      return;
+    }
     job.status = "running";
     job.updatedAt = new Date().toISOString();
     this.publishScan(job);
@@ -816,7 +899,11 @@ export class ProviderService {
       current.stage = "complete";
       current.status = result.cancelled || current.status === "cancelling" || current.status === "cancelled" ? "cancelled" : "completed";
       current.completed = Math.min(current.total, Math.max(current.completed, result.cancelled ? current.completed : current.total));
-      current.message = current.status === "cancelled" ? "扫描已取消；已完成结果已保存" : "兼容扫描完成";
+      current.message = current.status === "cancelled"
+        ? result.completed > 0
+          ? "扫描已取消；已完成结果已保存"
+          : "扫描已取消；未发送探测请求"
+        : "兼容扫描完成";
       this.publishScan(current);
     } catch (error) {
       const current = this.scanJobs.get(jobId);
@@ -827,7 +914,11 @@ export class ProviderService {
       current.completedAt = new Date().toISOString();
       current.updatedAt = current.completedAt;
       current.error = cancelled ? undefined : sanitizeProbeMessage(error instanceof Error ? error.message : String(error));
-      current.message = cancelled ? "扫描已取消" : `扫描失败：${current.error}`;
+      current.message = cancelled
+        ? current.completed > 0
+          ? "扫描已取消；已完成结果已保存"
+          : "扫描已取消；未发送探测请求"
+        : `扫描失败：${current.error}`;
       this.publishScan(current);
     }
   }
@@ -885,11 +976,16 @@ export class ProviderService {
       })), ...previousModels],
       expired: false,
     };
-    const data = await this.capabilityStore.get();
-    await this.capabilityStore.set({ snapshots: [...data.snapshots.filter((value) => value.providerId !== provider.id), snapshot] });
+    await this.capabilityStore.mutate((data) => {
+      data.snapshots = [...data.snapshots.filter((value) => value.providerId !== provider.id), snapshot];
+    });
   }
 
   async setCliDefault(modelId: string): Promise<CustomProviderProfile[]> {
+    return this.serializeProviderMutation(() => this.setCliDefaultUnlocked(modelId));
+  }
+
+  private async setCliDefaultUnlocked(modelId: string): Promise<CustomProviderProfile[]> {
     const data = await this.store.get();
     if (!data.providers.some((provider) => provider.enabled !== false && provider.models.some((model) => model.enabled !== false && model.id === modelId))) throw new Error("只能选择已启用的应用管理模型作为 CLI 默认值");
     const original = await readFile(this.configPath, "utf8").catch(() => "");
@@ -971,12 +1067,21 @@ export class ProviderService {
   }
 
   private async markCapabilitiesExpired(provider: CustomProviderProfile): Promise<void> {
-    const data = await this.capabilityStore.get();
     const modelListHash = hash(provider.models.map((model) => model.model).sort().join("\0"));
-    const snapshots = data.snapshots.map((snapshot) => snapshot.providerId === provider.id && snapshot.modelListHash !== modelListHash
-      ? { ...snapshot, expired: true }
-      : snapshot);
-    if (snapshots.some((value, index) => value !== data.snapshots[index])) await this.capabilityStore.set({ snapshots });
+    await this.capabilityStore.mutate((data) => {
+      data.snapshots = data.snapshots.map((snapshot) => snapshot.providerId === provider.id && snapshot.modelListHash !== modelListHash
+        ? { ...snapshot, expired: true }
+        : snapshot);
+    });
+  }
+
+  private async serializeProviderMutation<T>(action: () => Promise<T>): Promise<T> {
+    const previous = this.providerMutationTail;
+    let release!: () => void;
+    this.providerMutationTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await action(); }
+    finally { release(); }
   }
 
   private async assertNoExternalCollision(input: CustomProviderInput, config: string, managed: CustomProviderProfile[]): Promise<void> {
@@ -1017,7 +1122,12 @@ export class ProviderService {
         context_window: item.contextWindow,
         max_completion_tokens: item.maxCompletionTokens,
         inference_idle_timeout_secs: providerInferenceIdleTimeoutSeconds(item),
-        reasoning_efforts: providerReasoningEfforts(item.model, item.reasoningEfforts).map((value) => ({ value, label: value })),
+        // Grok CLI 0.2.118 parses TOML model overrides as either bare effort
+        // strings or inline tables. The TOML serializer emits object arrays as
+        // `[[model.*.reasoning_efforts]]`, which the tightened parser rejects.
+        // Keep Desktop's richer upstream capability data in providers.json,
+        // but publish only CLI-native effort strings to config.toml.
+        reasoning_efforts: cliReasoningEfforts(item.model, item.reasoningEfforts),
         extra_headers: Object.keys(extraHeaders).length ? extraHeaders : undefined,
       };
       }
@@ -1152,8 +1262,8 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
 }
 
 export async function validateGrokConfig(cliPath: string, cwd = process.cwd()): Promise<void> {
-  await exec(cliPath, ["inspect", "--json"], cwd);
-  await exec(cliPath, ["models"], cwd);
+  await exec(cliPath, ["--no-auto-update", "inspect", "--json"], cwd);
+  await exec(cliPath, ["--no-auto-update", "models"], cwd);
 }
 
 function exec(file: string, args: string[], cwd: string): Promise<void> {
@@ -1379,13 +1489,15 @@ function managedCapabilitiesOutdated(config: string, providers: CustomProviderPr
   try {
     const models = asRecord(asRecord(parse(config)).model);
     return providers.some((provider) => provider.models.some((model) => {
-      const expected = providerReasoningEfforts(model.model, model.reasoningEfforts);
+      const expected = cliReasoningEfforts(model.model, model.reasoningEfforts);
       const expectedProtocol = model.protocol ?? provider.protocol;
       const configured = asRecord(models[model.id]);
       if (configured.api_backend !== expectedProtocol) return true;
       if (configured.inference_idle_timeout_secs !== providerInferenceIdleTimeoutSeconds(model)) return true;
-      const current = Array.isArray(configured.reasoning_efforts)
-        ? configured.reasoning_efforts.map(reasoningEffortValue).filter(Boolean)
+      const rawEfforts = configured.reasoning_efforts;
+      if (Array.isArray(rawEfforts) && rawEfforts.some((value) => typeof value !== "string")) return true;
+      const current = Array.isArray(rawEfforts)
+        ? rawEfforts.map(reasoningEffortValue).filter(Boolean)
         : [];
       return expected.join("\0") !== current.join("\0");
     }));
@@ -1395,6 +1507,13 @@ function managedCapabilitiesOutdated(config: string, providers: CustomProviderPr
     return false;
   }
 }
+
+const CLI_REASONING_EFFORTS = new Set<ReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function cliReasoningEfforts(model: string, configured?: ProviderModelDefinition["reasoningEfforts"]): ReasoningEffort[] {
+  return providerReasoningEfforts(model, configured).filter((value) => CLI_REASONING_EFFORTS.has(value));
+}
+
 function parseModelList(raw: string): Array<{ id: string; name?: string; description?: string; ownedBy?: string; contextWindow?: number; reasoningEfforts?: ProviderModelDefinition["reasoningEfforts"] }> {
   const parsed = JSON.parse(raw) as any;
   const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : [];
@@ -2144,6 +2263,15 @@ function resolveProviderEndpoint(baseUrl: string, endpoint: string): string {
       : new URL(value, `${base.href.replace(/\/+$/, "")}/`);
   if (!/^https?:$/.test(resolved.protocol)) throw new Error("媒体端点只支持 HTTP 或 HTTPS");
   if (resolved.origin !== base.origin) throw new Error("媒体端点必须与 Provider 基础地址同源，避免向第三方泄露凭据");
+  return resolved.href;
+}
+
+/** Keep media assets on the configured Provider origin as well. */
+export function providerArtifactUrl(baseUrl: string, value: string): string {
+  const base = new URL(baseUrl);
+  const resolved = new URL(value, base);
+  if (!/^https?:$/.test(resolved.protocol)) throw new Error("媒体产物地址只支持 HTTP 或 HTTPS");
+  if (resolved.origin !== base.origin) throw new Error("媒体产物地址必须与 Provider 基础地址同源");
   return resolved.href;
 }
 

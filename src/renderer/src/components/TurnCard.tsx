@@ -24,6 +24,15 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
     if (turn.running) setOpen(true);
     else if (turn.completed && localStorage.getItem(storageKey) == null) setOpen(false);
   }, [storageKey, turn.completed, turn.running]);
+  useEffect(() => {
+    const collapse = (event: Event): void => {
+      if ((event as CustomEvent<{ sessionId: string }>).detail?.sessionId !== sessionId || turn.running) return;
+      setOpen(false);
+      localStorage.setItem(storageKey, "closed");
+    };
+    window.addEventListener("grok:collapse-processes", collapse);
+    return () => window.removeEventListener("grok:collapse-processes", collapse);
+  }, [sessionId, storageKey, turn.running]);
   const groups = useMemo(() => turn.groups.map((group) => ({ ...group, items: showThinking ? group.items : collapseHiddenThoughts(group.items) })).filter((group) => group.items.length), [showThinking, turn.groups]);
   const hasActivity = groups.length > 0;
   const mediaResults = turn.trailing.filter((message): message is Extract<UiMessage, { kind: "media" }> => message.kind === "media");

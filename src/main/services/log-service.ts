@@ -1,17 +1,34 @@
 import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+const SENSITIVE_NAME = String.raw`[A-Za-z0-9_.-]*(?:(?:proxy[-_])?authorization|refresh[-_]?token|access[-_]?token|api[-_]?key|x[-_]?api[-_]?key|client[-_]?secret|private[-_]?key|secret[-_]?key|password|passwd|credential|secret|token|signature|header)[A-Za-z0-9_.-]*`;
+const QUOTED_SECRET_ASSIGNMENT = new RegExp(String.raw`((?:["']?${SENSITIVE_NAME}["']?)\s*[:=]\s*)("(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')`, "gi");
+const UNQUOTED_SECRET_ASSIGNMENT = new RegExp(String.raw`((?:["']?${SENSITIVE_NAME}["']?)\s*[:=]\s*)(?!["'])([^\r\n,;}&]+)`, "gi");
+
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
-  [/(authorization\s*[:=]\s*bearer\s+)[^\s"']+/gi, "$1[REDACTED]"],
-  [/((?:refresh_?token|access_?token|api_?key|xai_api_key|key)\s*["']?\s*[:=]\s*["'])[^"'\s]+/gi, "$1[REDACTED]"],
-  [/([?&](?:refresh_?token|access_?token|api_?key|xai_api_key|key)=)[^&#\s]+/gi, "$1[REDACTED]"],
+  [/([?&](?:(?:access|refresh|id)[_-]?token|token|api[_-]?key|access[_-]?key|key|secret|password|credential|authorization|auth|signature|sig|jwt|code)=)[^&#\s"']*/gi, "$1[REDACTED]"],
+  [/(\bhttps?:\/\/)[^@\s/"']+@/gi, "$1[REDACTED]@"],
   [/(sk-[A-Za-z0-9_-]{12,})/g, "[REDACTED_API_KEY]"],
   [/(xai-[A-Za-z0-9_-]{12,})/g, "[REDACTED_API_KEY]"],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_JWT]"],
+  // Opaque credentials exported by local gateways are often bare Base64 or
+  // base64url strings without a recognizable vendor prefix.
+  [/\b(?:[A-Za-z0-9+/]{40,}={0,2}|[A-Za-z0-9_-]{48,})\b/g, "[REDACTED_OPAQUE_TOKEN]"],
 ];
 
 export function redactSecrets(input: string): string {
-  return SECRET_PATTERNS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), input);
+  let value = input
+    // Custom header/environment names cannot be enumerated safely. When a
+    // diagnostic serializes one of these containers, remove the flat payload
+    // instead of trying to guess which values are credentials.
+    .replace(/((?:["']?(?:headers?|environment|env)["']?)\s*[:=]\s*)\{[\s\S]{0,65536}?\}/gi, "$1{[REDACTED_VALUES]}")
+    .replace(/((?:environment|env)(?:\.|\s+)[A-Za-z0-9_.-]+\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)/gi, "$1[REDACTED]")
+    .replace(/((?:(?:request|response)\s+)?header\s+[A-Za-z0-9_.-]+\s*[:=]\s*)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)/gi, "$1[REDACTED]")
+    .replace(/((?:--header|-H)\s+)(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[^\s]+)/gi, "$1[REDACTED_HEADER]")
+    .replace(QUOTED_SECRET_ASSIGNMENT, (_match, prefix: string, quoted: string) => `${prefix}${quoted[0]}[REDACTED]${quoted.at(-1)}`)
+    .replace(UNQUOTED_SECRET_ASSIGNMENT, "$1[REDACTED]");
+  value = SECRET_PATTERNS.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), value);
+  return value;
 }
 
 /** Redaction applied to the persistent AppData log, not only support bundles. */
@@ -28,11 +45,13 @@ export function redactLogText(input: string): string {
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]")
     .replace(/(["'])(?:\\\\\?\\)?[A-Za-z]:[\\/][^"'\r\n]*\1/g, "$1[REDACTED_PATH]$1")
     .replace(/(["'])\\\\[^\\\s"']+\\[^"'\r\n]*\1/g, "$1[REDACTED_NETWORK_PATH]$1")
+    .replace(/(["'])\/\/[^/\s"']+\/[^"'\r\n]*\1/g, "$1[REDACTED_NETWORK_PATH]$1")
     // Unquoted paths can contain spaces and there is no reliable generic end
     // delimiter in arbitrary stderr. Redact the remainder of that log line
     // rather than retaining a private path suffix.
     .replace(/(?<![A-Za-z0-9])(?:\\\\\?\\)?[A-Za-z]:[\\/][^\r\n"']*/g, "[REDACTED_PATH]")
-    .replace(/\\\\[^\\\s"']+\\[^\r\n"']*/g, "[REDACTED_NETWORK_PATH]");
+    .replace(/\\\\[^\\\s"']+\\[^\r\n"']*/g, "[REDACTED_NETWORK_PATH]")
+    .replace(/\/\/[^/\s"']+\/[^\r\n"']*/g, "[REDACTED_NETWORK_PATH]");
 }
 
 export class LogService {

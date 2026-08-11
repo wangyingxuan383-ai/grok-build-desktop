@@ -1,13 +1,23 @@
 import { isAbsolute, relative, resolve } from "node:path";
 
-const UNSAFE_SHELL_SYNTAX = /[\0\r\n;&|<>`^]|\$\(|\$\{|@\(|%|![A-Za-z_][A-Za-z0-9_]*!/;
+// This is deliberately a deny-by-default lexical gate rather than a partial
+// PowerShell parser. Braces and parentheses can execute script blocks or
+// nested pipelines even when the visible pipeline stage starts with a benign
+// command (for example `Where-Object { Remove-Item ... }`). Square brackets
+// are also rejected because PowerShell static method calls can mutate the
+// machine without invoking a normally mutating command name.
+const UNSAFE_SHELL_SYNTAX = /[\0\r\n;&<>`^{}()[\]]|\|\||\$\(|\$\{|@\(|%|![A-Za-z_][A-Za-z0-9_]*!/;
 const SIMPLE_READ_ONLY_COMMAND = /^(?:pwd|dir|ls|Get-(?:ChildItem|Content|Item|Location)|type|cat|head|tail|findstr|rg|grep)(?:\s+.*)?$/i;
+const READ_ONLY_PIPELINE_STAGE = /^(?:Where-Object|Select-(?:Object|String)|Sort-Object|Group-Object|Measure-Object|Format-(?:Table|List|Wide)|findstr|grep|head|tail|more)(?:\s+.*)?$/i;
 const SAFE_GIT_QUERY = /^git\s+(?:status|diff|log|show)(?:\s+.*)?$/i;
 const SAFE_GIT_BRANCH_QUERY = /^git\s+branch(?:\s+--(?:show-current|list|all|remotes)(?:\s+[^-\s][^\s]*)*)?$/i;
 const SAFE_NODE_QUERY = /^node\s+(?:--version|-v)$/i;
 const SAFE_NPM_QUERY = /^npm\s+(?:--version|-v|view(?:\s+.+)?)$/i;
 const SAFE_GROK_QUERY = /^grok\s+(?:--version|version|models|inspect)(?:\s+.*)?$/i;
-const WRITE_CAPABLE_QUERY_FLAG = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff\b|--exec\b|-exec(?:dir)?\b|-delete\b|-fprint(?:f)?\b|--pre(?:-glob)?\b)/i;
+// `git diff/show --textconv` is not necessarily read-only: Git may invoke an
+// arbitrary external text-conversion driver from repository configuration.
+// Keep Plan mode limited to Git's built-in object/diff readers.
+const WRITE_CAPABLE_QUERY_FLAG = /(?:^|\s)(?:--output(?:=|\s)|--ext-diff\b|--textconv\b|--exec\b|-exec(?:dir)?\b|-delete\b|-fprint(?:f)?\b|--pre(?:-glob)?\b)/i;
 
 export function isWithinWorkspace(candidate: string, workspaceRoot: string): boolean {
   const target = resolve(candidate);
@@ -16,8 +26,13 @@ export function isWithinWorkspace(candidate: string, workspaceRoot: string): boo
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-export function shouldBlockWrite(path: string, workspaceRoot: string, planActive: boolean): boolean {
-  return planActive && isWithinWorkspace(path, workspaceRoot);
+export function shouldBlockWrite(path: string, _workspaceRoot: string, planActive: boolean, planFilePath?: string): boolean {
+  if (!planActive) return false;
+  // Official Grok Plan mode has one writable contract: the current session's
+  // private plan.md. "Outside the workspace" is not a trust boundary; allowing
+  // every external path would permit Plan mode to alter AppData or arbitrary
+  // user files.
+  return !planFilePath || resolve(path).toLocaleLowerCase() !== resolve(planFilePath).toLocaleLowerCase();
 }
 
 export function shouldBlockCommand(command: string, planActive: boolean): boolean {
@@ -27,34 +42,50 @@ export function shouldBlockCommand(command: string, planActive: boolean): boolea
 export function isReadOnlyCommand(command: string): boolean {
   const value = command.trim();
   if (!value || UNSAFE_SHELL_SYNTAX.test(value) || WRITE_CAPABLE_QUERY_FLAG.test(value)) return false;
-  return SIMPLE_READ_ONLY_COMMAND.test(value)
-    || SAFE_GIT_QUERY.test(value)
-    || SAFE_GIT_BRANCH_QUERY.test(value)
-    || SAFE_NODE_QUERY.test(value)
-    || SAFE_NPM_QUERY.test(value)
-    || SAFE_GROK_QUERY.test(value);
+  const pipeline = value.split("|").map((stage) => stage.trim());
+  if (pipeline.some((stage) => !stage)) return false;
+  const first = pipeline[0]!;
+  const firstIsReadOnly = SIMPLE_READ_ONLY_COMMAND.test(first)
+    || SAFE_GIT_QUERY.test(first)
+    || SAFE_GIT_BRANCH_QUERY.test(first)
+    || SAFE_NODE_QUERY.test(first)
+    || SAFE_NPM_QUERY.test(first)
+    || SAFE_GROK_QUERY.test(first);
+  return firstIsReadOnly && pipeline.slice(1).every((stage) => READ_ONLY_PIPELINE_STAGE.test(stage));
 }
 
 /**
  * Plan mode may inspect the workspace without interrupting for every read.
- * This is intentionally narrower than "always approve": ACP read/search/fetch
- * tools and commands already accepted by the read-only shell gate are allowed;
- * edits, deletes, moves, mode switches and unknown tools still require a
- * decision (and workspace writes remain blocked by shouldBlockWrite).
+ * This is intentionally narrower than "always approve": only explicit ACP
+ * read/search/fetch/think kinds, known Grok read aliases and commands already
+ * accepted by the read-only shell gate are allowed. Human-readable titles and
+ * tool names are presentation metadata and must never turn an unknown tool into
+ * a trusted one.
  */
 export function isPlanSafeToolCall(toolCall: unknown): boolean {
   if (!toolCall || typeof toolCall !== "object") return false;
   const value = toolCall as Record<string, unknown>;
   const raw = value.rawInput && typeof value.rawInput === "object" ? value.rawInput as Record<string, unknown> : undefined;
-  const kind = String(value.kind || raw?.kind || "").trim().toLowerCase();
-  const descriptor = `${kind} ${String(value.title || "")} ${String(raw?.name || raw?.tool || "")}`.toLowerCase();
-  if (/\b(?:edit|write|create|delete|remove|move|rename|patch|apply|execute|terminal|shell|switch_mode)\b/.test(descriptor) && kind !== "execute") return false;
-  if (["read", "search", "think", "fetch"].includes(kind)) return true;
-  if (kind === "execute") {
-    const command = firstCommand(value, raw);
+  const kind = String(value.kind || (!value.kind ? raw?.kind : "") || "").trim().toLowerCase();
+  // ACP tool identifiers commonly use read_file/list_directory/search_files.
+  // `_` is a word character in JavaScript regexes, so matching the raw value
+  // with `\b` misses those tools and needlessly opens a permission card.
+  const normalizedKind = kind.replace(/[_./:-]+/g, " ").replace(/\s+/g, " ").trim();
+  const executeLike = /^(?:execute|terminal|shell|run terminal command)$/.test(normalizedKind);
+  const command = firstCommand(value, raw);
+  // A command hidden in a non-execute tool is contradictory wire metadata.
+  // Reject it rather than trusting the icon/title supplied by the server.
+  if (command && !executeLike) return false;
+  if (executeLike) {
     return command ? isReadOnlyCommand(command) : false;
   }
-  return /\b(?:read|search|list|glob|grep|find|inspect|fetch|think)\b/.test(descriptor);
+  return [
+    "read", "read file", "read files", "read many files", "read text file",
+    "view", "view file", "view files", "stat", "get file info",
+    "search", "search files", "search code", "search text", "code search", "web search",
+    "list", "list directory", "list files",
+    "glob", "grep", "find", "inspect", "think", "fetch", "fetch url",
+  ].includes(normalizedKind);
 }
 
 function firstCommand(toolCall: Record<string, unknown>, raw?: Record<string, unknown>): string | undefined {

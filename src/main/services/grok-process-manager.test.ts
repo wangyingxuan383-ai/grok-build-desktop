@@ -93,6 +93,16 @@ describe("Grok process reasoning effort switching", () => {
 });
 
 describe("extension mutation scheduling", () => {
+  it("uses the official rename only for an attached session", async () => {
+    const { manager, adapter } = fixture("high");
+    Object.assign(adapter, { renameSession: vi.fn().mockResolvedValue("official") });
+    try {
+      await expect(manager.renameSessionIfLoaded("session", "Pinned")).resolves.toBe("official");
+      expect((adapter as any).renameSession).toHaveBeenCalledWith("Pinned");
+      await expect(manager.renameSessionIfLoaded("missing", "Local")).resolves.toBe("not-loaded");
+    } finally { await manager.dispose(); }
+  });
+
   it("queues only state-changing extension methods", () => {
     expect(isMutatingExtensionMethod("x.ai/plugins/action")).toBe(true);
     expect(isMutatingExtensionMethod("x.ai/plugins/reload")).toBe(true);
@@ -115,6 +125,46 @@ describe("extension mutation scheduling", () => {
 });
 
 describe("configured session restoration", () => {
+  it("probes an unloaded moved session against the new cwd without forking", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const open = vi.spyOn(manager, "open").mockResolvedValue({ sessionId: "moved-session" });
+    try {
+      await expect(manager.tryMoveSessionToWorkspace("moved-session", "C:\\Moved")).resolves.toBe(true);
+      expect(open).toHaveBeenCalledWith("C:\\Moved", "moved-session");
+    } finally { await manager.dispose(); }
+  });
+
+  it("does not replace a resident session while probing a moved cwd", async () => {
+    const { manager } = fixture("high");
+    const open = vi.spyOn(manager, "open");
+    try {
+      await expect(manager.tryMoveSessionToWorkspace("session", "C:\\Moved")).resolves.toBe(false);
+      expect(open).not.toHaveBeenCalled();
+    } finally { await manager.dispose(); }
+  });
+
+  it("restores an unloaded conversation from its session preferences instead of global defaults", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const runtime = {
+      get: vi.fn().mockResolvedValue({ sessionId: "saved-session", cwd: "D:\\Saved", modelId: "provider-model", effort: "xhigh", mode: "plan", updatedAt: new Date().toISOString() }),
+      getQueue: vi.fn().mockResolvedValue([]),
+      save: vi.fn().mockResolvedValue(undefined),
+      saveQueue: vi.fn().mockResolvedValue(undefined),
+    };
+    const manager = new GrokProcessManager(async () => ({ ...settings, defaultModel: "grok-4.5", defaultEffort: "low", defaultMode: "agent" }), async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, runtime as any);
+    const adapter = {
+      sessionId: "saved-session", cwd: "D:\\Saved", currentModelId: "provider-model", effort: "xhigh", mode: "plan",
+      start: vi.fn().mockResolvedValue({ sessionId: "saved-session" }), dispose: vi.fn(), extensionLeaseId: undefined,
+    };
+    const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
+    try {
+      await manager.open("D:\\Saved", "saved-session");
+      expect(spawn).toHaveBeenCalledWith("D:\\Saved", "xhigh", "plan", "provider-model", undefined, undefined, undefined, "saved-session");
+      expect(spawn).not.toHaveBeenCalledWith(expect.anything(), "low", "agent", "grok-4.5", expect.anything(), expect.anything(), expect.anything(), expect.anything());
+    } finally { await manager.dispose(); }
+  });
+
   it("loads an existing scheduled-task session with its fixed execution profile", async () => {
     const log = { log: vi.fn().mockResolvedValue(undefined) };
     const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
@@ -122,8 +172,25 @@ describe("configured session restoration", () => {
     const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
     try {
       await expect(manager.openConfigured("D:\\Workspace", "task-session", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" })).resolves.toEqual({ sessionId: "task-session" });
-      expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" }, undefined);
+      expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "high", "auto", "grok-4.5", undefined, { TEST_PROVIDER: "1" }, undefined, "task-session");
       expect(adapter.start).toHaveBeenCalledWith("task-session");
+    } finally { await manager.dispose(); }
+  });
+
+  it("restores an assigned interactive conversation from its saved runtime instead of its old profile", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const runtime = {
+      get: vi.fn().mockResolvedValue({ sessionId: "assigned-session", cwd: "D:\\Workspace", modelId: "saved-provider-model", effort: "xhigh", mode: "plan", updatedAt: new Date().toISOString() }),
+      getQueue: vi.fn().mockResolvedValue([]),
+      save: vi.fn().mockResolvedValue(undefined),
+      saveQueue: vi.fn().mockResolvedValue(undefined),
+    };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, runtime as any);
+    const adapter = { sessionId: "assigned-session", cwd: "D:\\Workspace", currentModelId: "saved-provider-model", effort: "xhigh", mode: "plan", start: vi.fn().mockResolvedValue({ sessionId: "assigned-session" }), dispose: vi.fn(), extensionLeaseId: undefined };
+    const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
+    try {
+      await manager.openConfigured("D:\\Workspace", "assigned-session", "low", "agent", "old-profile-model", undefined, { PROFILE: "1" }, undefined, true);
+      expect(spawn).toHaveBeenCalledWith("D:\\Workspace", "xhigh", "plan", "saved-provider-model", undefined, { PROFILE: "1" }, undefined, "assigned-session");
     } finally { await manager.dispose(); }
   });
 
@@ -153,6 +220,123 @@ describe("configured session restoration", () => {
       expect(manager.liveStatuses()).toEqual(new Map([["session-a", "working"], ["session-b", "working"]]));
       expect(manager.get("session-a")).toBe(adapters[0]);
       expect(manager.get("session-b")).toBe(adapters[1]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("transactional provider model switching", () => {
+  it("commits the target local model and provider only after live switching succeeds", async () => {
+    const runtime = {
+      get: vi.fn().mockResolvedValue({ sessionId: "session", cwd: "C:\\repo", modelId: "provider-a-local", providerId: "provider-a", effort: "high", mode: "agent", updatedAt: "2026-08-05T00:00:00.000Z" }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, { log: vi.fn() } as any, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, runtime as any);
+    const current = {
+      sessionId: "session", cwd: "C:\\repo", effort: "high", mode: "agent", currentModelId: "provider-a-local",
+      working: false, needsUser: false, processOptions: undefined,
+      setModel: vi.fn().mockImplementation(async function (this: any, modelId: string, identity: { localModelId?: string }) { this.currentModelId = identity.localModelId ?? modelId; }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    (manager as any).sessions.set("session", current);
+    try {
+      await manager.setModel("session", "provider-b-local", {
+        target: { providerId: "provider-b", localModelId: "provider-b-local" },
+        previous: { providerId: "provider-a", localModelId: "provider-a-local" },
+      });
+      expect(current.setModel).toHaveBeenCalledWith("provider-b-local", { localModelId: "provider-b-local", persistRuntime: false });
+      expect(runtime.save).toHaveBeenLastCalledWith(expect.objectContaining({ modelId: "provider-b-local", providerId: "provider-b" }));
+    } finally { await manager.dispose(); }
+  });
+
+  it("starts the target with its provider route and restores the complete previous identity on failure", async () => {
+    const runtime = {
+      get: vi.fn().mockResolvedValue({ sessionId: "session", cwd: "C:\\repo", modelId: "provider-a-local", providerId: "provider-a", effort: "high", mode: "agent", updatedAt: "2026-08-05T00:00:00.000Z" }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, { log: vi.fn() } as any, vi.fn(), undefined, undefined, undefined, undefined, undefined, undefined, undefined, runtime as any);
+    const current = {
+      sessionId: "session", cwd: "C:\\repo", effort: "high", mode: "agent", currentModelId: "provider-a-local",
+      working: false, needsUser: false, processOptions: undefined,
+      setModel: vi.fn().mockRejectedValue(new Error("hot switch unsupported")),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const target = { start: vi.fn().mockRejectedValue(new Error("target unavailable")), dispose: vi.fn().mockResolvedValue(undefined), extensionLeaseId: undefined };
+    const rollback = { sessionId: "session", cwd: "C:\\repo", effort: "high", mode: "agent", currentModelId: "provider-a-local", start: vi.fn().mockResolvedValue({ sessionId: "session" }), dispose: vi.fn().mockResolvedValue(undefined), extensionLeaseId: undefined };
+    (manager as any).sessions.set("session", current);
+    const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValueOnce(target).mockResolvedValueOnce(rollback);
+    try {
+      await expect(manager.setModel("session", "provider-b-local", {
+        target: { providerId: "provider-b", localModelId: "provider-b-local" },
+        previous: { providerId: "provider-a", localModelId: "provider-a-local" },
+      })).rejects.toThrow("已尝试恢复原模型");
+      expect(spawn).toHaveBeenNthCalledWith(1, "C:\\repo", "high", "agent", "provider-b-local", undefined, undefined, undefined, "session", { providerId: "provider-b", localModelId: "provider-b-local" });
+      expect(spawn).toHaveBeenNthCalledWith(2, "C:\\repo", "high", "agent", "provider-a-local", undefined, undefined, undefined, "session", { providerId: "provider-a", localModelId: "provider-a-local" });
+      expect(runtime.save).toHaveBeenLastCalledWith(expect.objectContaining({ modelId: "provider-a-local", providerId: "provider-a" }));
+      expect(manager.get("session")).toBe(rollback);
+    } finally { await manager.dispose(); }
+  });
+});
+
+describe("session cancellation recovery", () => {
+  it("replaces only the stuck session when the CLI does not acknowledge cancel", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const onEvent = vi.fn();
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, onEvent);
+    const permissionDecider = vi.fn().mockResolvedValue(false);
+    const processOptions = { environmentOverride: { PROFILE_FLAG: "kept" }, permissionDecider, alwaysApprove: false };
+    const stuck = {
+      sessionId: "stuck-session",
+      cwd: "C:\\workspace",
+      effort: "high",
+      mode: "plan",
+      currentModelId: "grok-test",
+      processOptions,
+      working: true,
+      needsUser: false,
+      cancel: vi.fn(),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const replacement = {
+      start: vi.fn().mockResolvedValue({ sessionId: "stuck-session" }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+      extensionLeaseId: undefined,
+      working: false,
+      needsUser: false,
+    };
+    (manager as any).sessions.set("stuck-session", stuck);
+    vi.spyOn(manager as any, "spawn").mockResolvedValue(replacement);
+    try {
+      await manager.cancelSession("stuck-session", 0);
+      expect(stuck.cancel).toHaveBeenCalledTimes(1);
+      expect(stuck.dispose).toHaveBeenCalledWith(2_000);
+      expect((manager as any).spawn).toHaveBeenCalledWith(
+        "C:\\workspace", "high", "plan", "grok-test", undefined, undefined, processOptions, "stuck-session",
+      );
+      expect(replacement.start).toHaveBeenCalledWith("stuck-session");
+      expect(manager.get("stuck-session")).toBe(replacement);
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "status", status: "idle", text: "已停止并恢复会话" }));
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not restart after an acknowledged cancel", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapter = {
+      working: true,
+      needsUser: false,
+      cancel: vi.fn(function (this: { working: boolean }) { this.working = false; }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    (manager as any).sessions.set("session", adapter);
+    const spawn = vi.spyOn(manager as any, "spawn");
+    try {
+      await manager.cancelSession("session", 100);
+      expect(adapter.cancel).toHaveBeenCalledTimes(1);
+      expect(spawn).not.toHaveBeenCalled();
     } finally {
       await manager.dispose();
     }
