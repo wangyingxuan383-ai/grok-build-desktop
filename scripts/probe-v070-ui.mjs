@@ -156,27 +156,26 @@ async function exerciseStop() {
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))"), "Application shell did not render");
-  // The hosted Windows renderer can paint the shell before the persisted
-  // projection has committed its first virtualized turn.  Wait for the same
-  // complete shell contract we assert below instead of sampling at a fixed
-  // delay; a missing turn still fails at the bounded wait deadline.
+  // A clean profile intentionally opens without selecting a conversation.
+  // Validate the shell first, then select a known fixture below before
+  // requiring its persisted projection to mount a virtualized turn.
   await waitFor(async () => {
     const state = await evaluate(`({
       version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(),
       composer: Boolean(document.querySelector('.composer')),
-      turns: document.querySelectorAll('.chat-turn').length,
       environmentBars: document.querySelectorAll('.environment-bar').length
     })`);
     return state.version === expectedVersion
       && state.composer
-      && state.turns >= 1
       && state.environmentBars === 0;
-  }, "Initial conversation projection did not settle");
-  const initial = await evaluate(`({ version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(), composer: Boolean(document.querySelector('.composer')), turns: document.querySelectorAll('.chat-turn').length, environmentBars: document.querySelectorAll('.environment-bar').length })`);
-  if (initial.version !== expectedVersion || !initial.composer || initial.turns < 1 || initial.environmentBars) throw new Error(`Shell mismatch for ${expectedVersion}: ${JSON.stringify(initial)}`);
+  }, "Initial application shell did not settle");
+  const initial = await evaluate(`({ version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(), composer: Boolean(document.querySelector('.composer')), environmentBars: document.querySelectorAll('.environment-bar').length })`);
+  if (initial.version !== expectedVersion || !initial.composer || initial.environmentBars) throw new Error(`Shell mismatch for ${expectedVersion}: ${JSON.stringify(initial)}`);
   await ensureFixtureSessions();
   const fixtureSessions = await evaluate(`Array.from(document.querySelectorAll('.session-row')).map((node) => ({ text: node.textContent || '', active: node.classList.contains('active') }))`);
   if (fixtureSessions.length < 3 || !fixtureSessions.some((row) => row.text.includes('后台并行队列')) || !fixtureSessions.some((row) => row.text.includes('Plan 与权限交互'))) throw new Error(`Current-version multi-session fixture is incomplete: ${JSON.stringify(fixtureSessions)}`);
+  await openFixtureSession('后台并行队列');
+  await waitFor(() => evaluate("document.querySelectorAll('.chat-turn').length >= 1"), "Selected conversation projection did not settle");
 
   // A new task is a persisted local draft. Opening it must not create a CLI
   // session, remove history rows or inherit the previously active lifecycle.
