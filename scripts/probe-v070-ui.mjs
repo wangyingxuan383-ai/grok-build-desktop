@@ -156,7 +156,22 @@ async function exerciseStop() {
 try {
   await request("Page.bringToFront");
   await waitFor(() => evaluate("Boolean(document.querySelector('.app-shell'))"), "Application shell did not render");
-  await sleep(700);
+  // The hosted Windows renderer can paint the shell before the persisted
+  // projection has committed its first virtualized turn.  Wait for the same
+  // complete shell contract we assert below instead of sampling at a fixed
+  // delay; a missing turn still fails at the bounded wait deadline.
+  await waitFor(async () => {
+    const state = await evaluate(`({
+      version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(),
+      composer: Boolean(document.querySelector('.composer')),
+      turns: document.querySelectorAll('.chat-turn').length,
+      environmentBars: document.querySelectorAll('.environment-bar').length
+    })`);
+    return state.version === expectedVersion
+      && state.composer
+      && state.turns >= 1
+      && state.environmentBars === 0;
+  }, "Initial conversation projection did not settle");
   const initial = await evaluate(`({ version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(), composer: Boolean(document.querySelector('.composer')), turns: document.querySelectorAll('.chat-turn').length, environmentBars: document.querySelectorAll('.environment-bar').length })`);
   if (initial.version !== expectedVersion || !initial.composer || initial.turns < 1 || initial.environmentBars) throw new Error(`Shell mismatch for ${expectedVersion}: ${JSON.stringify(initial)}`);
   await ensureFixtureSessions();
