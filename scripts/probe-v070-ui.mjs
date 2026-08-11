@@ -46,13 +46,10 @@ async function scrollToFind(selector, message, steps = 70) {
   await sleep(750);
   await evaluate(`(() => { const s=${scroller}; if (s) { s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); } return true; })()`);
   await sleep(350);
-  let stagnant = 0;
   for (let step = 0; step < steps; step += 1) {
     if (await present()) return;
-    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); s.dispatchEvent(new Event('scroll')); return s.scrollTop === before; })()`);
+    await evaluate(`(() => { const s=${scroller}; if (!s) return false; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); s.dispatchEvent(new Event('scroll')); return true; })()`);
     await sleep(220);
-    stagnant = atEnd ? stagnant + 1 : 0;
-    if (stagnant >= 3) break;
   }
   if (!(await present())) throw new Error(message);
 }
@@ -66,7 +63,9 @@ async function collectVirtualizedText(selector, steps = 40) {
     for (const value of mounted || []) values.add(value);
     const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); return s.scrollTop === before; })()`);
     await sleep(220);
-    if (atEnd) break;
+    // An empty virtualized list may temporarily report that it is already at
+    // the end while the selected projection is still hydrating.
+    if (atEnd && values.size > 0) break;
   }
   return [...values].join('\n');
 }
@@ -79,13 +78,10 @@ async function scrollToFindText(selector, text, message, steps = 40) {
   await sleep(750);
   await evaluate(`(() => { const s=${scroller}; if (s) { s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); } return true; })()`);
   await sleep(350);
-  let stagnant = 0;
   for (let step = 0; step < steps; step += 1) {
     if (await present()) return;
-    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); return s.scrollTop === before; })()`);
+    await evaluate(`(() => { const s=${scroller}; if (!s) return false; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); s.dispatchEvent(new Event('scroll')); return true; })()`);
     await sleep(220);
-    stagnant = atEnd ? stagnant + 1 : 0;
-    if (stagnant >= 3) break;
   }
   throw new Error(message);
 }
