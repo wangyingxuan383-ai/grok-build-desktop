@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 2,
+  "agentCapabilities": {
+    "loadSession": true,
+    "sessionCapabilities": { "close": {}, "list": {}, "resume": {} },
+    "futureCapability": { "enabled": true }
+  },
+  "_meta": {
+    "agentVersion": "2.0.0",
+    "availableCommands": [{ "name": "future-command" }],
+    "futureEnvelopeVersion": 2
+  }
+}

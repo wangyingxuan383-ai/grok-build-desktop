@@ -173,6 +173,7 @@ function PermissionCard({ message, sessionId, onResolved }: { message: Extract<U
     }
   };
   const detail = protectedActionSummary(message.request.toolCall);
+  const script = protectedActionScript(message.request.toolCall);
   const denyOptions = message.request.options.filter((option) => isDenyPermission(option.name, option.kind));
   const allowOptions = message.request.options.filter((option) => !isDenyPermission(option.name, option.kind));
   const primaryOption = allowOptions.find((option) => option.kind === "allow_once") ?? allowOptions.at(-1);
@@ -185,7 +186,7 @@ function PermissionCard({ message, sessionId, onResolved }: { message: Extract<U
     onClick={() => void respond(option.optionId)}
   >{state.value === "submitting" && state.optionId === option.optionId ? "提交中…" : localizedPermissionName(option.name, option.kind)}</button>;
   return <section className="action-card decision-card codex-request-card" aria-label="权限确认">
-    <div className="request-card-body"><span className="request-card-eyebrow">需要批准</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝不会创建新的用户消息。</p></div>
+    <div className="request-card-body"><span className="request-card-eyebrow">需要批准</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝不会创建新的用户消息。</p>{script && <details className="permission-script"><summary>查看完整命令</summary><pre>{script}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(script)}>复制命令</button></details>}</div>
     {state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}
     <footer className="request-card-actions">
       <div className="request-leading-actions">{scopedOptions.map((option) => optionButton(option))}</div>
@@ -304,11 +305,29 @@ function isDenyPermission(name?: string, kind?: string): boolean { return /^(?:n
 function isExpiredInteractionError(value: string): boolean {
   return /已经结束|已被响应|已被回答|没有可响应|request.*(?:ended|closed|expired|not found)|invalid request/i.test(value);
 }
-function protectedActionSummary(value: unknown): string {
+export function protectedActionSummary(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   const tool = value as Record<string, unknown>;
   const title = [tool.title, tool.name, tool.description].find((item): item is string => typeof item === "string" && Boolean(item.trim()));
   return title?.trim().slice(0, 240) ?? "";
+}
+export function protectedActionScript(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const tool = value as Record<string, unknown>;
+  const input = tool.rawInput && typeof tool.rawInput === "object" ? tool.rawInput as Record<string, unknown>
+    : tool.input && typeof tool.input === "object" ? tool.input as Record<string, unknown>
+      : tool.arguments && typeof tool.arguments === "object" ? tool.arguments as Record<string, unknown>
+        : tool;
+  const direct = [input.command, input.script, input.cmd, input.code, input.shell_command, input.shellCommand]
+    .find((item): item is string => typeof item === "string" && Boolean(item.trim()));
+  if (direct) return direct.trim().slice(0, 64_000);
+  const commands = input.commands;
+  if (Array.isArray(commands)) {
+    return commands.flatMap((item) => typeof item === "string" ? [item] : item && typeof item === "object"
+      ? [String((item as Record<string, unknown>).command ?? (item as Record<string, unknown>).script ?? "")]
+      : []).filter(Boolean).join("\n").slice(0, 64_000);
+  }
+  return "";
 }
 function toFileUrl(path: string): string {
   // Durable conversation media is exposed only through an opaque handle. A

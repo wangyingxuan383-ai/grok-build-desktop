@@ -638,6 +638,7 @@ export interface SessionLaunchResult {
 export const CLI_CAPABILITY_NAMES = [
   "acp.initialize",
   "acp.sessionNew",
+  "session.rename",
   "queue",
   "interjection",
   "fork",

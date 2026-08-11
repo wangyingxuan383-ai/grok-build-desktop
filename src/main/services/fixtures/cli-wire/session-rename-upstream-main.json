@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/xai-org/grok-build",
+    "repositoryCommit": "b13fa526f5112c0b20dad5f1f2300d3d3b127895",
+    "sourceRevision": "a51a1dc62fe20029ac39a665985bba78edbb870f",
+    "stableRuntimeSupport": false
+  },
+  "request": {
+    "method": "x.ai/session/rename",
+    "params": {
+      "sessionId": "fixture-session",
+      "title": "Pinned title",
+      "cwd": "C:\\fixture-workspace",
+      "kind": "build"
+    }
+  },
+  "manualNotification": {
+    "method": "x.ai/session_notification",
+    "params": {
+      "sessionId": "fixture-session",
+      "update": {
+        "sessionUpdate": "SessionSummaryGenerated",
+        "session_summary": "Pinned title"
+      },
+      "_meta": {
+        "x.ai/titleIsManual": true
+      }
+    }
+  },
+  "resetNotification": {
+    "method": "x.ai/session_notification",
+    "params": {
+      "sessionId": "fixture-session",
+      "update": {
+        "sessionUpdate": "SessionSummaryGenerated",
+        "session_summary": "Automatic title"
+      },
+      "_meta": {
+        "x.ai/titleIsManual": false
+      }
+    }
+  },
+  "standardManualNotification": {
+    "method": "session/update",
+    "params": {
+      "sessionId": "fixture-session",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Pinned title"
+      },
+      "_meta": {
+        "x.ai/titleIsManual": true
+      }
+    }
+  },
+  "standardResetNotification": {
+    "method": "session/update",
+    "params": {
+      "sessionId": "fixture-session",
+      "update": {
+        "sessionUpdate": "session_info_update"
+      },
+      "_meta": {
+        "x.ai/titleIsManual": false
+      }
+    }
+  }
+}

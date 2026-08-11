@@ -93,6 +93,16 @@ describe("Grok process reasoning effort switching", () => {
 });
 
 describe("extension mutation scheduling", () => {
+  it("uses the official rename only for an attached session", async () => {
+    const { manager, adapter } = fixture("high");
+    Object.assign(adapter, { renameSession: vi.fn().mockResolvedValue("official") });
+    try {
+      await expect(manager.renameSessionIfLoaded("session", "Pinned")).resolves.toBe("official");
+      expect((adapter as any).renameSession).toHaveBeenCalledWith("Pinned");
+      await expect(manager.renameSessionIfLoaded("missing", "Local")).resolves.toBe("not-loaded");
+    } finally { await manager.dispose(); }
+  });
+
   it("queues only state-changing extension methods", () => {
     expect(isMutatingExtensionMethod("x.ai/plugins/action")).toBe(true);
     expect(isMutatingExtensionMethod("x.ai/plugins/reload")).toBe(true);
@@ -115,6 +125,25 @@ describe("extension mutation scheduling", () => {
 });
 
 describe("configured session restoration", () => {
+  it("probes an unloaded moved session against the new cwd without forking", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const open = vi.spyOn(manager, "open").mockResolvedValue({ sessionId: "moved-session" });
+    try {
+      await expect(manager.tryMoveSessionToWorkspace("moved-session", "C:\\Moved")).resolves.toBe(true);
+      expect(open).toHaveBeenCalledWith("C:\\Moved", "moved-session");
+    } finally { await manager.dispose(); }
+  });
+
+  it("does not replace a resident session while probing a moved cwd", async () => {
+    const { manager } = fixture("high");
+    const open = vi.spyOn(manager, "open");
+    try {
+      await expect(manager.tryMoveSessionToWorkspace("session", "C:\\Moved")).resolves.toBe(false);
+      expect(open).not.toHaveBeenCalled();
+    } finally { await manager.dispose(); }
+  });
+
   it("restores an unloaded conversation from its session preferences instead of global defaults", async () => {
     const log = { log: vi.fn().mockResolvedValue(undefined) };
     const runtime = {

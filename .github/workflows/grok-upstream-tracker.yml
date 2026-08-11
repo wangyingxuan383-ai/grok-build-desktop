@@ -1,0 +1,49 @@
+name: Grok Build upstream tracker
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: upstream
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          node scripts/check-grok-upstream.mjs | tee upstream-result.json
+      - name: Create or refresh maintenance issue
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_COMMIT: ${{ steps.upstream.outputs.commit }}
+          SOURCE_REVISION: ${{ steps.upstream.outputs.source_revision }}
+        run: |
+          title="维护：审计 Grok Build 上游变化 ${UPSTREAM_COMMIT:0:12}"
+          body=$(cat <<EOF
+          自动跟踪发现官方 Grok Build 源码快照已变化。
+
+          - 仓库提交：\`${UPSTREAM_COMMIT}\`
+          - SOURCE_REV：\`${SOURCE_REVISION}\`
+          - 工作流：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          请人工更新 Wire Fixture、运行时能力矩阵和兼容测试。此工作流不会自动合并或发布上游代码。
+          EOF
+          )
+          existing=$(gh issue list --state open --search 'in:title 维护：审计 Grok Build 上游变化' --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label maintenance || gh issue create --title "$title" --body "$body"
+          fi

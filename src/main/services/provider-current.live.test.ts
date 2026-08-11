@@ -58,6 +58,7 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
       credentialMode: allowLoopbackWithoutCredential ? "none" : provider.credentialMode,
     };
     const reasoningEfforts = providerReasoningEfforts(model.model, model.reasoningEfforts);
+    const cliReasoningEfforts = reasoningEfforts.filter((value) => ["minimal", "low", "medium", "high", "xhigh", "max"].includes(value));
     const gateway = new ProviderGatewayService({
       providers: async () => [{ ...effectiveProvider, schemaProfile: effectiveProvider.schemaProfile ?? "standard" }],
       environment: async (name) => userEnvironment.readFresh ? userEnvironment.readFresh(name) : userEnvironment.read(name),
@@ -86,7 +87,11 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
           context_window: model.contextWindow ?? 128_000,
           max_completion_tokens: Math.min(model.maxCompletionTokens ?? 1024, 1024),
           inference_idle_timeout_secs: model.inferenceIdleTimeoutSeconds ?? DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS,
-          reasoning_efforts: reasoningEfforts.map((value) => ({ value, label: value })),
+          // Grok Build 0.2.118+ and 1.0 consume the native string-list form.
+          // Array-of-table objects are intentionally rejected/ignored by the
+          // CLI and would make this live gate test a stale configuration shape
+          // rather than the same contract emitted by ProviderService.
+          reasoning_efforts: cliReasoningEfforts,
           extra_headers: Object.fromEntries(Object.entries(extraHeaders).filter(([, value]) => value)),
         },
       },
@@ -116,10 +121,10 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
     try {
       await adapter.start();
       const active = adapter.models.find((value) => value.modelId === "grok-desktop-current-provider-probe");
-      if (reasoningEfforts.length) {
+      if (cliReasoningEfforts.length) {
         expect(active).toMatchObject({
           supportsReasoningEffort: true,
-          reasoningEfforts: reasoningEfforts.map((value) => expect.objectContaining({ value })),
+          reasoningEfforts: cliReasoningEfforts.map((value) => expect.objectContaining({ value })),
         });
       }
       const nextEffort = process.env.GROK_CURRENT_PROVIDER_SWITCH_EFFORT;
@@ -127,7 +132,22 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
         await adapter.setEffort(nextEffort);
         expect(adapter.effort).toBe(nextEffort);
       }
-      await adapter.prompt("Reply with exactly OK.");
+      try {
+        await adapter.prompt("Reply with exactly OK.");
+      } catch (error) {
+        const observations = gateway.recentObservations(provider.id).map((value) => ({
+          status: value.status,
+          endpoint: value.endpoint,
+          phase: value.phase,
+          outcome: value.outcome,
+          reason: value.reason,
+          elapsedMs: value.elapsedMs,
+          sanitizedCount: value.sanitizedCount,
+        }));
+        const logTail = await readFile(join(root, "provider-probe.log"), "utf8").catch(() => "");
+        console.log("[current-provider-failure]", JSON.stringify({ observations, logTail: logTail.split(/\r?\n/).slice(-20) }));
+        throw error;
+      }
       expect(gateway.recentObservations(provider.id).some((value) => (value.status ?? 0) >= 200 && (value.status ?? 0) < 300)).toBe(true);
       expect(adapter.currentModelId).toBe("grok-desktop-current-provider-probe");
     } finally {

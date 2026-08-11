@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { CodexPluginCompatibility, ComputerCapability, ComputerUseSettings, HookSummary, MarketplaceSource, McpDiagnostic, McpServerSummary, PluginDetails, PluginSummary, SkillSummary } from "../../../shared/types";
 
 type Tab = "plugins" | "marketplace" | "skills" | "mcp" | "hooks" | "computer" | "codex";
@@ -33,7 +33,7 @@ export function ExtensionsPanel({ onClose, onUseSkill, confirmAction, setError }
 function PluginsTab({ busy, setBusy, confirmAction, setError }: CommonProps): React.JSX.Element {
   const [rows, setRows] = useState<PluginSummary[]>([]); const [loading, setLoading] = useState(true); const [source, setSource] = useState("");
   const [details, setDetails] = useState<PluginDetails | null>(null);
-  const load = (force = false): void => { setLoading(true); void window.grokDesktop.listPlugins(force).then(setRows).catch((error) => setError(message(error))).finally(() => setLoading(false)); };
+  const load = (force = false): void => { setLoading(true); void window.grokDesktop.listPlugins(force).then((value) => setRows(sortByName(value))).catch((error) => setError(message(error))).finally(() => setLoading(false)); };
   useEffect(() => load(), []);
   const action = async (plugin: PluginSummary, value: "enable" | "disable" | "update" | "uninstall" | "reload"): Promise<void> => {
     if (value === "uninstall" && !await confirmAction(`卸载插件“${plugin.name}”？`, { title: "卸载插件", confirmLabel: "卸载", danger: true })) return;
@@ -77,15 +77,30 @@ function MarketplaceTab({ busy, setBusy, confirmAction, setError }: CommonProps)
 }
 
 function SkillsTab({ onUse, setError }: { onUse(command: string): void; setError(message: string): void }): React.JSX.Element {
-  const [rows, setRows] = useState<SkillSummary[]>([]); useEffect(() => { void window.grokDesktop.listSkills().then(setRows).catch((error) => setError(message(error))); }, []);
-  return <TabShell title="可用 Skills">{!rows.length ? <Empty text="当前已安装插件没有公布 Skill。" /> : <div className="extension-list">{rows.map((row) => <article key={`${row.source}:${row.name}`}><div><strong>{row.name}</strong><small>{row.source}</small><p>{row.description}</p></div><button onClick={() => onUse(`${row.command} `)}>在聊天中使用</button></article>)}</div>}</TabShell>;
+  const [rows, setRows] = useState<SkillSummary[]>([]);
+  const [query, setQuery] = useState("");
+  useEffect(() => { void window.grokDesktop.listSkills().then((value) => setRows(sortByName(value))).catch((error) => setError(message(error))); }, []);
+  const groups = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    const filtered = needle ? rows.filter((row) => `${row.name} ${row.description || ""} ${row.source || ""} ${row.command}`.toLocaleLowerCase().includes(needle)) : rows;
+    const grouped = new Map<string, SkillSummary[]>();
+    for (const row of filtered) {
+      const source = row.source?.trim() || "内置";
+      grouped.set(source, [...(grouped.get(source) || []), row]);
+    }
+    return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right, "zh-CN", { sensitivity: "base" }));
+  }, [query, rows]);
+  return <TabShell title="可用 Skills">
+    <label className="extension-search"><span>搜索 Skills</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、来源、描述或命令" /></label>
+    {!rows.length ? <Empty text="当前已安装插件没有公布 Skill。" /> : !groups.length ? <Empty text="没有匹配的 Skill。" /> : <div className="skill-groups">{groups.map(([source, skills]) => <details key={source} open><summary><strong>{source}</strong><span>{skills.length}</span></summary><div className="extension-list">{skills.map((row) => <article key={`${row.source}:${row.name}`}><div><strong>{row.name}</strong><small>{row.command}</small>{row.description && <p>{row.description}</p>}</div><button onClick={() => onUse(`${row.command} `)}>在聊天中使用</button></article>)}</div></details>)}</div>}
+  </TabShell>;
 }
 
 function McpTab({ busy, setBusy, confirmAction, setError }: CommonProps): React.JSX.Element {
   const [rows, setRows] = useState<McpServerSummary[]>([]); const [diagnostics, setDiagnostics] = useState<McpDiagnostic[]>([]);
   const [auth, setAuth] = useState<{ url?: string; code?: string; message?: string } | null>(null);
   const [showAdd, setShowAdd] = useState(false); const [name, setName] = useState(""); const [transport, setTransport] = useState<"stdio" | "http" | "sse">("stdio"); const [target, setTarget] = useState(""); const [args, setArgs] = useState(""); const [secretName, setSecretName] = useState(""); const [secretValue, setSecretValue] = useState("");
-  const load = (force = false): void => { void window.grokDesktop.listMcpServers(force).then(setRows).catch((error) => setError(message(error))); };
+  const load = (force = false): void => { void window.grokDesktop.listMcpServers(force).then((value) => setRows(sortByName(value))).catch((error) => setError(message(error))); };
   useEffect(() => load(), []);
   return <TabShell title="MCP 服务" action={<><button onClick={() => setShowAdd(!showAdd)}>添加</button><button onClick={() => load(true)}>刷新</button><button onClick={async () => { setBusy(true); try { setDiagnostics(await window.grokDesktop.diagnoseMcp()); } finally { setBusy(false); } }}>全部诊断</button></>}>
     {showAdd && <div className="mcp-add-form"><label>名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="my-server" /></label><label>传输<select value={transport} onChange={(event) => setTransport(event.target.value as typeof transport)}><option value="stdio">stdio</option><option value="http">HTTP</option><option value="sse">SSE</option></select></label><label className="wide">{transport === "stdio" ? "命令" : "URL"}<input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={transport === "stdio" ? "npx" : "https://example.com/mcp"} /></label>{transport === "stdio" && <label className="wide">参数<input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="-y @example/mcp（以空格分隔）" /></label>}<label>密钥变量名<input value={secretName} onChange={(event) => setSecretName(event.target.value)} placeholder="API_KEY" /></label><label>密钥值<input type="password" value={secretValue} onChange={(event) => setSecretValue(event.target.value)} placeholder="由 Windows DPAPI 加密" /></label><div className="wide button-row"><button onClick={() => setShowAdd(false)}>取消</button><button className="primary" disabled={busy || !name.trim() || !target.trim()} onClick={async () => { setBusy(true); try { setRows(await window.grokDesktop.upsertMcp({ name, transport, commandOrUrl: target, args: args.split(/\s+/).filter(Boolean), env: {}, secretEnv: secretName && secretValue ? { [secretName]: secretValue } : {}, headers: {} })); setName(""); setTarget(""); setArgs(""); setSecretName(""); setSecretValue(""); setShowAdd(false); } catch (error) { setError(message(error)); } finally { setBusy(false); } }}>加密保存并添加</button></div></div>}
@@ -136,3 +151,4 @@ function TabShell({ title, action, children }: { title: string; action?: React.R
 function Loading(): React.JSX.Element { return <div className="extension-loading"><span className="spinner" />正在加载…</div>; }
 function Empty({ text }: { text: string }): React.JSX.Element { return <div className="extension-empty">{text}</div>; }
 function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function sortByName<T extends { name: string }>(rows: T[]): T[] { return [...rows].sort((left, right) => left.name.localeCompare(right.name, "zh-CN", { sensitivity: "base", numeric: true })); }

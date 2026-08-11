@@ -3,7 +3,7 @@ if (!endpoint) throw new Error("Usage: node scripts/probe-v070-ui.mjs <cdp-endpo
 // This is the v0.7 acceptance gate, not a generic "whatever package.json
 // currently says" smoke test. Keeping the expected release explicit prevents
 // an older 0.6.x build from silently satisfying the current UI contract.
-const expectedVersion = "0.7.3";
+const expectedVersion = "0.8.0";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(120); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
 const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer unavailable");
@@ -168,7 +168,7 @@ try {
   await waitFor(() => callFunction("function () { return Array.from(document.querySelectorAll('.session-row.draft')).some((node) => (node.textContent || '').includes('未发送草稿')); }"), "Draft-first row did not appear");
   const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length");
   if (!(await clickExactText('.new-task-button', '新建任务'))) throw new Error('New-task button did not open the local draft');
-  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.7.3 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
+  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.8.0 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
   const draftState = await evaluate(`({
     historyCount: document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length,
     stop: Boolean(document.querySelector('.send-button.stop')),
@@ -176,12 +176,12 @@ try {
     model: document.querySelector('.draft-model-controls select')?.value || ''
   })`);
   if (draftState.historyCount !== historyCountBeforeDraft || draftState.stop || draftState.waiting || draftState.model !== 'fixture-draft-model') throw new Error(`Draft-first state is not isolated from CLI sessions: ${JSON.stringify(draftState)}`);
-  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.7.3 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
+  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.8.0 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
   await sleep(700);
   await reloadFixture();
   await waitFor(() => evaluate("Boolean(document.querySelector('.session-row.draft'))"), "Persisted draft row was lost after restart");
   await evaluate("document.querySelector('.session-row.draft')?.click()");
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.7.3 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.0 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
   if ((await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
 
   // A background running conversation owns its own Stop button, queue and
@@ -303,8 +303,8 @@ try {
   const tokenUi = await evaluate(`({ cells: document.querySelectorAll('.token-heatmap-grid .token-cell').length, windows: Array.from(document.querySelectorAll('.token-window-grid article strong')).map((node) => node.textContent.trim()), privacy: document.querySelector('.token-heatmap footer')?.textContent || '' })`);
   if (tokenUi.cells !== 371 || !tokenUi.windows.includes("最近 24 小时") || !tokenUi.windows.includes("本月") || !tokenUi.privacy.includes("不包含任何提示词")) throw new Error(`Token activity mismatch: ${JSON.stringify(tokenUi)}`);
   await clickText('.settings-layout > nav button', '更新与诊断');
-  const updateUi = await evaluate(`({ actions: document.querySelectorAll('.settings-action-list button').length, resultRegion: document.querySelector('.settings-action-results')?.getAttribute('aria-live') })`);
-  if (updateUi.actions !== 4 || updateUi.resultRegion !== "polite") throw new Error(`Update/diagnostic actions mismatch: ${JSON.stringify(updateUi)}`);
+  const updateUi = await evaluate(`({ actions: document.querySelectorAll('.settings-action-list button').length, labels: Array.from(document.querySelectorAll('.settings-action-list button')).map((node) => node.textContent.trim()), resultRegion: document.querySelector('.settings-action-results')?.getAttribute('aria-live') })`);
+  if (updateUi.actions !== 5 || !updateUi.labels.includes('更新并验证 Grok CLI') || updateUi.resultRegion !== "polite") throw new Error(`Update/diagnostic actions mismatch: ${JSON.stringify(updateUi)}`);
   await clickText('.settings-action-list button', '打开诊断中心');
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostics-panel'))"), "Settings did not navigate to diagnostics");
   await evaluate("document.querySelector('.diagnostics-panel > header .icon-button')?.click()");
@@ -324,5 +324,5 @@ try {
   const draftUi = await evaluate(`({ discover: Array.from(document.querySelectorAll('.provider-probe-actions button')).some((node) => node.textContent.includes('获取模型列表')), manual: Array.from(document.querySelectorAll('.provider-model-heading button')).some((node) => node.textContent.includes('手工添加')), address: Array.from(document.querySelectorAll('.provider-form-grid input')).some((node) => node.value.includes('127.0.0.1:11434')) })`);
   if (!draftUi.discover || !draftUi.manual || !draftUi.address) throw new Error(`Provider draft workflow mismatch: ${JSON.stringify(draftUi)}`);
 
-  console.log(JSON.stringify({ ok: true, version: initial.version, multiSessionIsolation: true, planPermissionActions: decisionReceipts, composerRecoveredAfterDecisions: true, stop: stopReceipt, composerRecoveredAfterStop: true, draftIsolation: true, navigation: "dashboard→chat→file→chat→tasks→chat", rightTools: launcher.length, recentFilePreview: true, unavailableGitReviewHidden: true, agentChanges: "real-writes-no-git-actions", structuredError: "collapsed-with-details", turnMetrics: true, conversationReadingControls: true, tokenActivityDays: tokenUi.cells, updateActions: 4, diagnosticsNavigation: true, responsiveComposer: responsiveEvidence, narrowDrawerVisible: true, rightDockContainerQueries: true, lazyPanelsSettled: true, providerManager: true }, null, 2));
+  console.log(JSON.stringify({ ok: true, version: initial.version, multiSessionIsolation: true, planPermissionActions: decisionReceipts, composerRecoveredAfterDecisions: true, stop: stopReceipt, composerRecoveredAfterStop: true, draftIsolation: true, navigation: "dashboard→chat→file→chat→tasks→chat", rightTools: launcher.length, recentFilePreview: true, unavailableGitReviewHidden: true, agentChanges: "real-writes-no-git-actions", structuredError: "collapsed-with-details", turnMetrics: true, conversationReadingControls: true, tokenActivityDays: tokenUi.cells, updateActions: updateUi.actions, diagnosticsNavigation: true, responsiveComposer: responsiveEvidence, narrowDrawerVisible: true, rightDockContainerQueries: true, lazyPanelsSettled: true, providerManager: true }, null, 2));
 } finally { socket.close(); }

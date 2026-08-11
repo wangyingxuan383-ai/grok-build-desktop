@@ -23,7 +23,7 @@ import { Sidebar } from "./components/Sidebar";
 import { findStaleReviewComment, formatReviewComments, type ReviewCommentDraft } from "./review-comments";
 import { useOverlayFocusTrap } from "./hooks/use-overlay-focus-trap";
 import { ActionDialog, ComputerPermissionDialog, ComputerRiskDialog, type DialogState } from "./components/AppDialogs";
-import { ControlPanel, SessionHistoryPanel } from "./components/AppAuxiliaryPanels";
+import { ControlPanel, OfficialFeedbackDialog, SessionHistoryPanel } from "./components/AppAuxiliaryPanels";
 import { RightDock } from "./components/RightDock";
 import { useSessionDraft } from "./hooks/use-session-draft";
 import { ConversationViewport } from "./components/ConversationViewport";
@@ -46,7 +46,7 @@ const LazyAgentDashboardWorkbench = lazy(() => import("./components/AgentDashboa
 const LazyFailureDiagnosisPanel = lazy(() => import("./components/FailureDiagnosisPanel").then((module) => ({ default: module.FailureDiagnosisPanel })));
 const LazyMediaStudioPanel = lazy(() => import("./components/MediaStudioPanel").then((module) => ({ default: module.MediaStudioPanel })));
 
-type Panel = "settings" | "accounts" | "providers" | "about" | "media" | "extensions" | "diagnostics" | "onboarding" | "tasks" | "history" | null;
+type Panel = "settings" | "accounts" | "providers" | "about" | "media" | "extensions" | "diagnostics" | "onboarding" | "tasks" | "history" | "feedback" | null;
 export default function App(): React.JSX.Element {
   const store = useAppStore(useShallow((state) => ({
     accounts: state.accounts,
@@ -258,8 +258,10 @@ export default function App(): React.JSX.Element {
         void window.grokDesktop.listCodexSessions(data.settings.activeWorkspace, data.settings.showArchivedCodex).then((values) => useAppStore.getState().setCodexSessions(values)).catch(() => undefined);
         void window.grokDesktop.listClaudeSessions(data.settings.activeWorkspace).then((values) => useAppStore.getState().setClaudeSessions(values)).catch(() => undefined);
       }
-      window.setTimeout(() => void window.grokDesktop.checkCliUpdate().then((cli) => useAppStore.getState().setCli(cli)).catch(() => undefined), 250);
-      window.setTimeout(() => void window.grokDesktop.checkAppUpdate().then((release) => useAppStore.getState().setAppRelease(release)).catch(() => undefined), 1200);
+      window.setTimeout(() => void window.grokDesktop.checkUpdatesAutomatically().then((result) => {
+        if (result.cli) useAppStore.getState().setCli(result.cli);
+        if (result.app) useAppStore.getState().setAppRelease(result.app);
+      }).catch(() => undefined), 500);
     }).catch((error) => useAppStore.getState().setError(error instanceof Error ? error.message : String(error)));
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
@@ -401,6 +403,12 @@ export default function App(): React.JSX.Element {
   const activeSession = store.sessions.find((value) => value.id === store.activeSessionId);
   const activeCodex = store.codexSessions.find((value) => value.id === activeCodexId);
   const activeClaude = store.claudeSessions.find((value) => value.id === activeClaudeId);
+  useEffect(() => {
+    if (!store.activeSessionId) return;
+    // Also updates the native Help menu visibility in the main process. The
+    // item remains hidden unless this exact session advertised /feedback.
+    void window.grokDesktop.getOfficialFeedbackCapability(store.activeSessionId).catch(() => undefined);
+  }, [store.activeSessionId, view?.commands]);
   const executionRoot = executionAssignment?.cwd || activeSession?.cwd || store.settings?.activeWorkspace || "";
   const { planWaiting, turns, lastTurnPaths, utilityTurn } = useConversationDerivedState(view, executionRoot);
   const navigate = useNavigationController({ setWorkbenchView, setRightTool, setReviewInitialScope });
@@ -776,6 +784,7 @@ export default function App(): React.JSX.Element {
     else if (command === "open-onboarding") void window.grokDesktop.resetOnboarding().then((state) => { store.setOnboarding(state); setPanel("onboarding"); });
     else if (command === "open-about") setPanel("about");
     else if (command === "open-task-center") setPanel("tasks");
+    else if (command === "open-feedback") setPanel("feedback");
   }), [activeSession?.id, focusComposer, setWorkbenchView, stopActiveSession, store.activeSessionId, turns]);
 
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;
@@ -859,6 +868,33 @@ export default function App(): React.JSX.Element {
         onToggleArchived={async (value) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ showArchivedCodex: value })); }}
         onPinWorkspace={async (workspace) => store.setWorkspaces(await window.grokDesktop.pinWorkspace(workspace.cwd, !workspace.pinned))}
         onHideWorkspace={async (workspace) => store.setWorkspaces(await window.grokDesktop.setWorkspaceHidden(workspace.cwd, true))}
+        onOpenWorkspaceOffline={(workspace) => { void (async () => {
+          setWorkbenchView("chat");
+          setRightTool(null);
+          setPanel(null);
+          store.setActiveSession("");
+          store.setSessions(await window.grokDesktop.openWorkspaceOffline(workspace.cwd));
+          store.setSettings(await window.grokDesktop.getSettings());
+          setComposerNotice("当前项目路径已失效；可离线查看本地会话历史。重新绑定前不能发送消息或修改文件。");
+        })().catch((error) => store.setError(errorMessage(error))); }}
+        onRebindWorkspace={(workspace) => { void (async () => {
+          const rows = await window.grokDesktop.listSessions(workspace.cwd);
+          if (!rows.length) throw new Error("这个失效项目没有可迁移的 Grok 会话");
+          const confirmed = await askConfirm(
+            `将 ${rows.length} 个会话重新绑定到一个新目录？\n\n应用会先尝试让官方会话直接使用新目录；不支持时再使用官方 Fork。默认只恢复会话正文，不会自动把旧代码状态覆盖到新目录。原会话会保留事务回滚记录。`,
+            { title: "重新绑定项目路径", confirmLabel: "选择新位置" },
+          );
+          if (!confirmed) return;
+          const target = await window.grokDesktop.chooseWorkspace();
+          if (!target) return;
+          const receipt = await window.grokDesktop.rebindWorkspaceSessions(workspace.cwd, target);
+          store.setSettings(await window.grokDesktop.getSettings());
+          store.setWorkspaces(await window.grokDesktop.discoverWorkspaces(true));
+          store.setSessions(await window.grokDesktop.listSessions(receipt.targetCwd));
+          const first = receipt.completed[0];
+          if (first) await openConversationTarget({ cwd: receipt.targetCwd, sessionId: first.sessionId });
+          if (receipt.failures.length) store.setError(`已迁移 ${receipt.completed.length} 个会话，${receipt.failures.length} 个失败：${receipt.failures.map((item) => item.message).join("；")}`);
+        })().catch((error) => store.setError(errorMessage(error))); }}
         onDeleteDraft={() => { void (async () => { if (!newDraftKey) return; if (!await askConfirm("删除这个尚未发送的本地草稿？不会影响任何 Grok 会话。", { title: "删除草稿", confirmLabel: "删除", danger: true })) return; await window.grokDesktop.clearDraft(newDraftKey); if (!store.activeSessionId) { setComposer(""); setCapability(undefined); setNewTask(undefined); store.clearAttachments(); } store.setWorkspaces(await window.grokDesktop.discoverWorkspaces(true)); })().catch((error) => store.setError(errorMessage(error))); }}
         onClear={async () => {
           const cwd = store.settings?.activeWorkspace;
@@ -880,7 +916,25 @@ export default function App(): React.JSX.Element {
         {!store.cli?.found ? <EmptyState title="未找到 Grok CLI" text="请在设置中指定 grok.exe 路径。" action="打开设置" onAction={() => setPanel("settings")} />
           : activeCodexId ? <ForeignSessionMirror source="Codex" detail={codexDetail} busy={operationBusy} onRefresh={async () => setCodexDetail(await window.grokDesktop.refreshCodexSession(activeCodexId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueCodexSession(activeCodexId); await openConversationTarget(result); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideCodexSession(activeCodexId, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(store.settings?.activeWorkspace || "", store.settings?.showArchivedCodex, true)); setActiveCodexId(""); setCodexDetail(null); }} />
           : activeClaudeId ? <ForeignSessionMirror source="Claude" detail={claudeDetail} busy={operationBusy} onRefresh={async () => setClaudeDetail(await window.grokDesktop.refreshClaudeSession(activeClaudeId))} onContinue={async () => { setOperationBusy(true); try { const result = await window.grokDesktop.continueClaudeSession(activeClaudeId); await openConversationTarget(result); } catch (error) { store.setError(errorMessage(error)); } finally { setOperationBusy(false); } }} onHide={async () => { await window.grokDesktop.hideClaudeSession(activeClaudeId, true); store.setClaudeSessions(await window.grokDesktop.listClaudeSessions(store.settings?.activeWorkspace || "", true)); setActiveClaudeId(""); setClaudeDetail(null); }} />
-          : !activeSession && !view ? <WorkspaceEmptyState workspaces={store.workspaces} onNew={() => void openNewSessionDialog()} onOpen={async (cwd) => { store.setSessions(await window.grokDesktop.setWorkspace(cwd)); store.setSettings(await window.grokDesktop.getSettings()); }} />
+          : !activeSession && !view ? <WorkspaceEmptyState workspaces={store.workspaces} onNew={() => void openNewSessionDialog()} onTemporary={async () => {
+            const cwd = await window.grokDesktop.createTemporaryWorkspace();
+            const [settings, workspaces] = await Promise.all([
+              window.grokDesktop.getSettings(),
+              window.grokDesktop.discoverWorkspaces(true),
+            ]);
+            const workspace = workspaces.find((candidate) => candidate.cwd.toLowerCase() === cwd.toLowerCase());
+            store.setSettings(settings);
+            store.setWorkspaces(workspaces);
+            store.setSessions([]);
+            setNewTask({
+              projectId: workspace?.projectId ?? cwd,
+              workspacePath: cwd,
+              modelId: settings.defaultModel || undefined,
+              effort: settings.defaultEffort,
+              mode: settings.defaultMode,
+            });
+            window.setTimeout(focusComposer, 0);
+          }} onOpen={async (cwd) => { store.setSessions(await window.grokDesktop.setWorkspace(cwd)); store.setSettings(await window.grokDesktop.getSettings()); }} />
           : <ConversationViewport
             turns={turns}
             sessionId={store.activeSessionId}
@@ -909,8 +963,8 @@ export default function App(): React.JSX.Element {
           text={composer}
           setText={setComposer}
           busy={view?.status === "working" || view?.compacting === true}
-          controlsDisabled={operationBusy || activeSending || view?.status === "needs-user"}
-          modelControlsDisabled={operationBusy || activeSending || (view?.status === "needs-user" && !planWaiting) || ((view?.status === "working" || view?.compacting === true) && !planWaiting)}
+          controlsDisabled={operationBusy || activeSending || view?.status === "needs-user" || view?.hydration === "offline" || view?.hydration === "failed"}
+          modelControlsDisabled={operationBusy || activeSending || view?.hydration === "offline" || view?.hydration === "failed" || (view?.status === "needs-user" && !planWaiting) || ((view?.status === "working" || view?.compacting === true) && !planWaiting)}
           sessionId={store.activeSessionId}
           attachments={store.attachments}
           reviewComments={reviewComments}
@@ -927,7 +981,8 @@ export default function App(): React.JSX.Element {
           btwAvailable={Boolean(view?.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "btw"))}
           onBtw={() => void sendBtw()}
           onBlockedSubmit={() => {
-            const reason = view?.status === "needs-user" ? "请先处理当前的计划、权限或问题卡片，然后再发送。"
+            const reason = view?.hydration === "offline" || view?.hydration === "failed" ? "当前仅能离线查看；请先重新绑定项目路径或成功重新连接 CLI 后再发送。"
+              : view?.status === "needs-user" ? "请先处理当前的计划、权限或问题卡片，然后再发送。"
               : activeSending ? "当前会话的消息正在提交，稍后会自动恢复。"
               : "界面正在处理其它操作，请稍候。";
             setComposerNotice(reason);
@@ -986,12 +1041,13 @@ export default function App(): React.JSX.Element {
         {store.error && <div className="toast error-toast"><span>{store.error}</span><button onClick={() => window.location.reload()}>重新加载界面</button><button onClick={() => setPanel("diagnostics")}>诊断</button><button onClick={() => store.setError("")}>×</button></div>}
         {panel === "media" && <LazyMediaStudioPanel hasGrokConversation={Boolean(!activeCodexId && !activeClaudeId && store.activeSessionId)} commands={activeCodexId || activeClaudeId ? [] : view?.commands ?? []} onCreate={createMedia} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "extensions" && <Suspense fallback={<div className="modal-backdrop"><section className="control-panel"><div className="panel-body">正在加载扩展中心…</div></section></div>}><LazyExtensionsPanel confirmAction={askConfirm} setError={store.setError} onUseSkill={(command) => { setComposer(command); focusComposer(); }} onClose={() => { setPanel(null); focusComposer(); }} /></Suspense>}
-        {panel === "diagnostics" && <LazyDiagnosticsPanel onClose={() => { setPanel(null); focusComposer(); }} />}
+        {panel === "diagnostics" && <LazyDiagnosticsPanel confirmAction={askConfirm} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "onboarding" && store.onboarding && <LazyOnboardingPanel state={store.onboarding} onState={store.setOnboarding} onClose={() => { setReturnToOnboarding(false); setPanel(null); focusComposer(); }} onAccounts={() => { setReturnToOnboarding(true); setPanel("accounts"); }} onWorkspace={() => void window.grokDesktop.chooseWorkspace().then(async (cwd) => { if (cwd) { store.setSettings(await window.grokDesktop.getSettings()); store.setSessions(await window.grokDesktop.listSessions(cwd)); } })} />}
         {panel === "tasks" && <LazyTaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task) => { if (!task.sessionId) return; void openConversationTarget({ cwd: task.workspace, sessionId: task.sessionId }).catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "history" && store.activeSessionId && <SessionHistoryPanel sessionId={store.activeSessionId} confirmAction={askConfirm} onForked={async (result) => { setPanel(null); await openConversationTarget(result); }} onRewound={() => { setPanel(null); settleConversationBottom(store.activeSessionId); }} onClose={() => { setPanel(null); focusComposer(); }} />}
+        {panel === "feedback" && <OfficialFeedbackDialog sessionId={store.activeSessionId} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "providers" && <LazyProviderManagerDialog confirmAction={askConfirm} onError={store.setError} onSettingsChanged={() => void window.grokDesktop.getSettings().then(store.setSettings)} onClose={() => setPanel(null)}/>}
-        {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history", "providers"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onProviders={() => setPanel("providers")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
+        {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history", "providers", "feedback"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onProviders={() => setPanel("providers")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
         {activeComputerPermission && <ComputerPermissionDialog request={activeComputerPermission} onRespond={async (decision) => { try { await window.grokDesktop.respondComputerAppPermission(activeComputerPermission.requestId, decision); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerPermissions((current) => omitRecordKey(current, activeComputerPermission.sessionId)); focusComposer(); } }} />}
         {activeComputerRisk && <ComputerRiskDialog request={activeComputerRisk} onRespond={async (approved) => { try { await window.grokDesktop.respondComputerRisk(activeComputerRisk.requestId, approved); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerRisks((current) => omitRecordKey(current, activeComputerRisk.sessionId)); focusComposer(); } }} />}
         {dialog && <ActionDialog dialog={dialog} onClose={closeDialog} />}
@@ -1000,8 +1056,8 @@ export default function App(): React.JSX.Element {
   );
 }
 
-function WorkspaceEmptyState({ workspaces, onNew, onOpen }: { workspaces: WorkspaceSummary[]; onNew(): void; onOpen(cwd: string): void }): React.JSX.Element {
-  return <div className="workspace-empty"><div className="workspace-empty-intro"><span className="empty-kicker">Grok Build Desktop</span><h2>从一个任务开始</h2><p>选择项目并描述目标。文件、Git、Worktree 和 Agent 工具会围绕当前任务展开。</p><button className="primary" onClick={onNew}><UiIcon name="plus"/>新建任务</button></div>{workspaces.length > 0 && <div className="discovered-workspaces"><h3>最近项目</h3>{workspaces.slice(0, 6).map((workspace) => <button key={workspace.cwd} disabled={!workspace.exists} onClick={() => onOpen(workspace.cwd)}><UiIcon name="folder"/><span><strong>{workspace.name}</strong><small>{workspace.cwd}</small></span><em>{workspace.exists ? `${workspace.grokSessions} 个任务` : "路径已失效"}</em><UiIcon name="chevron-right" size={14}/></button>)}</div>}</div>;
+function WorkspaceEmptyState({ workspaces, onNew, onTemporary, onOpen }: { workspaces: WorkspaceSummary[]; onNew(): void; onTemporary(): void; onOpen(cwd: string): void }): React.JSX.Element {
+  return <div className="workspace-empty"><div className="workspace-empty-intro"><span className="empty-kicker">Grok Build Desktop</span><h2>从一个任务开始</h2><p>选择项目并描述目标。文件、Git、Worktree 和 Agent 工具会围绕当前任务展开。</p><div className="button-row"><button className="primary" onClick={onNew}><UiIcon name="plus"/>新建任务</button><button onClick={onTemporary}>无项目临时任务</button></div><small>临时任务只信任应用管理的独立目录，不会把整个用户主目录作为工作区。</small></div>{workspaces.length > 0 && <div className="discovered-workspaces"><h3>最近项目</h3>{workspaces.slice(0, 6).map((workspace) => <button key={workspace.cwd} disabled={!workspace.exists} onClick={() => onOpen(workspace.cwd)}><UiIcon name="folder"/><span><strong>{workspace.name}</strong><small>{workspace.cwd}</small></span><em>{workspace.exists ? `${workspace.grokSessions} 个任务` : "路径已失效"}</em><UiIcon name="chevron-right" size={14}/></button>)}</div>}</div>;
 }
 
 function ForeignSessionMirror({ source, detail, busy, onRefresh, onContinue, onHide }: { source: "Codex" | "Claude"; detail: CodexSessionDetail | ClaudeSessionDetail | null; busy: boolean; onRefresh(): Promise<void>; onContinue(): Promise<void>; onHide(): Promise<void> }): React.JSX.Element {

@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { PersistedPromptQueue, PromptQueueEntry, SessionRuntimePreferences } from "../../shared/types";
+import type { PersistedPromptQueue, PromptQueueEntry, SessionCompactionPolicy, SessionRuntimePreferences } from "../../shared/types";
 import { JsonStore } from "./json-store";
 
 interface RuntimeStateFile {
@@ -44,6 +44,22 @@ export class SessionRuntimeStateService {
       current.sessions[sessionId] = output;
     });
     return output;
+  }
+
+  async setCompactionPolicy(sessionId: string, policy: SessionCompactionPolicy): Promise<SessionRuntimePreferences> {
+    const normalized = normalizeSessionCompactionPolicy(policy);
+    let output: SessionRuntimePreferences | undefined;
+    await this.store.mutate((current) => {
+      const previous = current.sessions[sessionId];
+      if (!previous) throw new Error("会话运行配置尚未建立，请先打开会话");
+      output = {
+        ...previous,
+        compaction: normalized,
+        updatedAt: new Date().toISOString(),
+      };
+      current.sessions[sessionId] = output;
+    });
+    return output!;
   }
 
   /**
@@ -115,6 +131,15 @@ export class SessionRuntimeStateService {
   }
 }
 
+export function normalizeSessionCompactionPolicy(policy: SessionCompactionPolicy): SessionCompactionPolicy {
+  if (policy.mode === "inherit") return { mode: "inherit" };
+  const threshold = Number(policy.thresholdPercent);
+  if (!Number.isInteger(threshold) || threshold < 60 || threshold > 95) {
+    throw new Error("会话压缩阈值必须是 60% 到 95% 之间的整数");
+  }
+  return { mode: "custom", thresholdPercent: threshold };
+}
+
 /** Build the launch preferences for a fork without consulting global defaults. */
 export function buildForkRuntimePreferences(
   parent: SessionRuntimePreferences | undefined,
@@ -127,5 +152,6 @@ export function buildForkRuntimePreferences(
     effort: parent?.effort ?? fallback.effort,
     mode: parent?.mode ?? fallback.mode,
     profileId: parent?.profileId ?? fallback.profileId,
+    compaction: parent?.compaction ?? fallback.compaction,
   };
 }

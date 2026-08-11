@@ -17,6 +17,11 @@ import {
   type CliSessionUsage,
   type ChatEvent,
   type CliRuntimeHandshake,
+  type RuntimeEventEnvelope,
+  type SessionAttachPolicy,
+  type SessionCompactReceipt,
+  type SessionCloseOutcome,
+  type SessionCloseReceipt,
   type CommandInfo,
   type ModelInfo,
   type PermissionOption,
@@ -44,6 +49,8 @@ type JsonRpcId = string | number;
 // retain explicit Stop/cancel controls, while Provider idle timeouts continue
 // to detect a genuinely silent upstream connection.
 export const INTERACTIVE_PROMPT_TIMEOUT_MS: null = null;
+export const FIRST_EVENT_WAIT_MS = 20_000;
+export const FIRST_EVENT_DIAGNOSTIC_MS = 60_000;
 
 interface PendingRequest {
   method: string;
@@ -242,11 +249,32 @@ interface AdapterOptions extends SessionProcessOptions {
   onPromptQueueChanged?: (sessionId: string, entries: PromptQueueEntry[]) => void | Promise<void>;
   onPromptQueueTerminal?: (sessionId: string, entry: PromptQueueEntry) => void | Promise<void>;
   onRuntimeChanged?: (sessionId: string, patch: { modelId?: string; effort?: ReasoningEffort; mode?: SessionMode }) => void | Promise<void>;
+  sessionAttachPolicy?: SessionAttachPolicy;
 }
 
 export interface UserPromptPresentation {
   clientMessageId?: string;
   attachments?: UserMessageAttachmentPreview[];
+}
+
+export const DEFAULT_SESSION_ATTACH_POLICY: SessionAttachPolicy = {
+  nonInteractive: false,
+  deliveryTools: [],
+};
+
+export function buildSessionAttachMeta(
+  sessionMeta: Record<string, unknown> | undefined,
+  pluginDirs: string[] | undefined,
+  policy: SessionAttachPolicy = DEFAULT_SESSION_ATTACH_POLICY,
+): Record<string, unknown> {
+  return {
+    ...(sessionMeta ?? {}),
+    ...(pluginDirs?.length ? { pluginDirs: [...pluginDirs] } : {}),
+    startupHints: {
+      nonInteractive: policy.nonInteractive,
+      deliveryTools: [...policy.deliveryTools],
+    },
+  };
 }
 
 interface SessionResponse {
@@ -307,6 +335,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private readonly backgroundTasks = new Map<string, BackgroundTask>();
   private readonly completedBackgroundTasks = new Map<string, { update: Record<string, any>; at: number }>();
   private readonly recapHashes = new Set<string>();
+  private readonly pendingRecaps = new Map<string, { turnId?: string; text: string; contentHash: string }>();
   private readonly ownedQueuedPromptIds = new Set<string>();
   private promptQueue: PromptQueueEntry[] = [];
   private activeQueuedPromptId?: string;
@@ -337,6 +366,9 @@ export class GrokAcpAdapter extends EventEmitter {
   private upstreamModelId = "";
   private suspendModelRuntimePersistence = false;
   private planGateReleased = false;
+  private firstEventTurnId?: string;
+  private firstEventWaitTimer?: ReturnType<typeof setTimeout>;
+  private firstEventDiagnosticTimer?: ReturnType<typeof setTimeout>;
   sessionId = "";
   models: ModelInfo[] = [];
   commands: CommandInfo[] = [];
@@ -349,6 +381,7 @@ export class GrokAcpAdapter extends EventEmitter {
   needsUser = false;
   readonly extensionLeaseId?: string;
   runtimeHandshake?: CliRuntimeHandshake;
+  lastCloseReceipt?: SessionCloseReceipt;
 
   get cwd(): string { return this.options.cwd; }
   get effort(): ReasoningEffort { return this.currentEffort; }
@@ -407,6 +440,64 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
+    await this.launchAndInitialize();
+    const sessionParams = {
+      ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
+      cwd: this.options.cwd,
+      mcpServers: this.options.sessionMcpServers ?? [],
+      _meta: buildSessionAttachMeta(this.options.sessionMeta, this.options.pluginDirs, this.options.sessionAttachPolicy),
+    };
+    let response: SessionResponse;
+    if (!resumeSessionId) {
+      response = await this.request(acpMethods.agent.session.new, sessionParams, 120_000) as SessionResponse;
+    } else if (this.runtimeHandshake?.sessionCapabilities?.resume) {
+      // `session/resume` re-attaches without replaying the complete transcript.
+      // This is important for a second Desktop window and for long sessions;
+      // the local projection remains the source of visible history.
+      try {
+        const resumed = await this.request(acpMethods.agent.session.resume, sessionParams, 120_000) as SessionResponse | undefined;
+        // ACP 0.2.120 currently returns only modes/configuration for resume;
+        // tolerate an empty result and keep the requested identity rather than
+        // turning a successful re-attach into a renderer-visible crash.
+        response = { ...(resumed ?? {}), sessionId: resumed?.sessionId || resumeSessionId };
+      } catch (error) {
+        // A rolling CLI may advertise the capability before its worker is
+        // upgraded. Only method/parameter capability failures fall back to
+        // load; timeouts and transport errors are not retried against another
+        // session method because the server may already have resumed it.
+        if (!isAcpCapabilityError(error)) throw error;
+        await this.options.log.log(`session/resume 不可用，回退 session/load：${error instanceof Error ? error.message : String(error)}`);
+        response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
+      }
+    } else {
+      response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
+    }
+    if (resumeSessionId) this.sessionId = resumeSessionId;
+    this.sessionId = response.sessionId || resumeSessionId || "";
+    await this.completeSessionAttach(response, resumeSessionId);
+    return { sessionId: this.sessionId };
+  }
+
+  /**
+   * Create an official cross-working-directory fork without first creating a
+   * disposable blank session. This is used when a project's old path no
+   * longer exists: the source identity stays explicit and code restoration is
+   * never requested implicitly.
+   */
+  async forkExternal(sourceSessionId: string, sourceCwd: string, newCwd: string): Promise<Record<string, unknown>> {
+    await this.launchAndInitialize();
+    const result = await this.request("x.ai/session/fork", {
+      sourceSessionId,
+      sourceCwd,
+      newCwd,
+      sessionKind: "fork",
+    }, 120_000) as Record<string, unknown>;
+    this.observeRuntimeExtension("x.ai/session/fork");
+    return result;
+  }
+
+  private async launchAndInitialize(): Promise<void> {
+    if (this.process) throw new Error("Grok ACP 进程已经启动");
     const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag, { modelId: this.options.modelId, agentProfilePath: this.options.agentProfilePath, alwaysApprove: this.options.alwaysApprove });
     await this.options.log.log(`spawn ${this.options.cliPath} ${args.join(" ")} cwd=${this.options.cwd}`);
     const batch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
@@ -446,39 +537,9 @@ export class GrokAcpAdapter extends EventEmitter {
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
     this.emit("runtime-handshake", this.runtimeHandshake);
-    const sessionParams = {
-      ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
-      cwd: this.options.cwd,
-      mcpServers: this.options.sessionMcpServers ?? [],
-      ...((this.options.pluginDirs?.length || this.options.sessionMeta) ? { _meta: { ...(this.options.sessionMeta ?? {}), ...(this.options.pluginDirs?.length ? { pluginDirs: this.options.pluginDirs } : {}) } } : {}),
-    };
-    let response: SessionResponse;
-    if (!resumeSessionId) {
-      response = await this.request(acpMethods.agent.session.new, sessionParams, 120_000) as SessionResponse;
-    } else if (this.runtimeHandshake?.sessionCapabilities?.resume) {
-      // `session/resume` re-attaches without replaying the complete transcript.
-      // This is important for a second Desktop window and for long sessions;
-      // the local projection remains the source of visible history.
-      try {
-        const resumed = await this.request(acpMethods.agent.session.resume, sessionParams, 120_000) as SessionResponse | undefined;
-        // ACP 0.2.120 currently returns only modes/configuration for resume;
-        // tolerate an empty result and keep the requested identity rather than
-        // turning a successful re-attach into a renderer-visible crash.
-        response = { ...(resumed ?? {}), sessionId: resumed?.sessionId || resumeSessionId };
-      } catch (error) {
-        // A rolling CLI may advertise the capability before its worker is
-        // upgraded. Only method/parameter capability failures fall back to
-        // load; timeouts and transport errors are not retried against another
-        // session method because the server may already have resumed it.
-        if (!isAcpCapabilityError(error)) throw error;
-        await this.options.log.log(`session/resume 不可用，回退 session/load：${error instanceof Error ? error.message : String(error)}`);
-        response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
-      }
-    } else {
-      response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
-    }
-    if (resumeSessionId) this.sessionId = resumeSessionId;
-    this.sessionId = response.sessionId || resumeSessionId || "";
+  }
+
+  private async completeSessionAttach(response: SessionResponse, resumeSessionId?: string): Promise<void> {
     const availableModels: SessionModel[] = response.models?.availableModels?.length
       ? response.models.availableModels
       : ((this.runtimeHandshake?.models ?? []).map((model) => ({
@@ -525,7 +586,20 @@ export class GrokAcpAdapter extends EventEmitter {
     if (this.options.modelId && this.options.modelId !== reportedModelId) {
       await this.setModel(this.options.modelId, { localModelId: this.providerLocalModelId });
     }
-    await this.applyMode(this.mode, false);
+    const reportedModeId = response.modes?.currentModeId;
+    if (resumeSessionId && reportedModeId) {
+      // A resumed 1.0 session is authoritative about its persisted chat mode.
+      // Do not overwrite Plan/Agent state with whichever global default was
+      // active when Desktop opened the session.
+      this.mode = reportedModeId === "plan" ? "plan" : "agent";
+      this.autoApprove = false;
+      this.planActive = this.mode === "plan";
+      this.planGateReleased = false;
+      this.persistRuntimePatch({ mode: this.mode });
+      this.emitEvent({ type: "mode", sessionId: this.sessionId, mode: this.mode });
+    } else {
+      await this.applyMode(this.mode, false);
+    }
     this.emitEvent({
       type: "session-ready",
       sessionId: this.sessionId,
@@ -553,7 +627,6 @@ export class GrokAcpAdapter extends EventEmitter {
       if (persistedMeta) this.emitEvent({ type: "meta", sessionId: this.sessionId, meta: persistedMeta });
     }
     this.emitStatus("idle", "已连接");
-    return { sessionId: this.sessionId };
   }
 
   async extension(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -577,7 +650,7 @@ export class GrokAcpAdapter extends EventEmitter {
     }
     // The official CLI calls this a side question and requires the owning
     // session id plus `question`; `text` is not a recognized wire field.
-    const result = await this.extension("x.ai/btw", { session_id: this.sessionId, question: value });
+      const result = await this.extension("x.ai/btw", { sessionId: this.sessionId, question: value });
     const payload = unwrapExtResult(result);
     return {
       accepted: payload.accepted !== false && payload.ok !== false && payload.success !== false,
@@ -610,11 +683,11 @@ export class GrokAcpAdapter extends EventEmitter {
 
   /** x.ai/session/info is an optional read-only extension. */
   async sessionInfo(): Promise<CliSessionInfo> {
-    if (!this.runtimeSupportsExtension("x.ai/session/info")) {
-      return { supported: false, sessionId: this.sessionId, source: "unsupported" };
-    }
     try {
-      return normalizeCliSessionInfo(this.sessionId, unwrapExtResult(await this.extension("x.ai/session/info", { session_id: this.sessionId })));
+      // Grok Build 1.0 implements this extension without requiring clients to
+      // infer it from a version number. An actual successful request is the
+      // capability proof; method-not-found remains the fail-closed path.
+      return normalizeCliSessionInfo(this.sessionId, unwrapExtResult(await this.extension("x.ai/session/info", { sessionId: this.sessionId })));
     } catch (error) {
       if (isAcpCapabilityError(error)) return { supported: false, sessionId: this.sessionId, source: "unsupported" };
       throw error;
@@ -623,15 +696,103 @@ export class GrokAcpAdapter extends EventEmitter {
 
   /** x.ai/session/usage is optional; never infer token detail when absent. */
   async sessionUsage(): Promise<CliSessionUsage> {
-    if (!this.runtimeSupportsExtension("x.ai/session/usage")) {
-      return { supported: false, sessionId: this.sessionId, source: "unsupported" };
-    }
     try {
-      return normalizeCliSessionUsage(this.sessionId, unwrapExtResult(await this.extension("x.ai/session/usage", { session_id: this.sessionId })));
+      return normalizeCliSessionUsage(this.sessionId, unwrapExtResult(await this.extension("x.ai/session/usage", { sessionId: this.sessionId })));
     } catch (error) {
       if (isAcpCapabilityError(error)) return { supported: false, sessionId: this.sessionId, source: "unsupported" };
       throw error;
     }
+  }
+
+  /**
+   * Rename through the official session authority when the attached CLI
+   * implements x.ai/session/rename. Older builds remain a supported local-only
+   * fallback; any other failure is surfaced rather than creating two titles.
+   */
+  async renameSession(title: string): Promise<"official" | "unsupported"> {
+    const normalized = title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    if (!normalized) throw new Error("会话名称不能为空");
+    try {
+      await this.extension("x.ai/session/rename", {
+        title: normalized,
+        cwd: this.cwd,
+        kind: "build",
+      });
+      return "official";
+    } catch (error) {
+      if (isAcpCapabilityError(error)) return "unsupported";
+      throw error;
+    }
+  }
+
+  /** Grok Build 1.0 changed include_untracked to false by default. Never rely on wire defaults. */
+  async officialGitStatus(gitRoot?: string): Promise<Record<string, unknown> | undefined> {
+    try {
+      const result = await this.extension("x.ai/git/status", {
+        sessionId: this.sessionId,
+        ...(gitRoot ? { gitRoot } : {}),
+        includeUntracked: true,
+        includeStats: true,
+        includePatches: false,
+        ignoreSubmodules: true,
+      });
+      return unwrapExtResult(result);
+    } catch (error) {
+      if (isAcpCapabilityError(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async compact(): Promise<SessionCompactReceipt> {
+    if (!this.sessionId) throw new Error("会话尚未就绪");
+    if (this.working || this.needsUser) throw new Error("当前会话正在运行或等待操作，请先停止或处理当前请求");
+    const startedAt = new Date().toISOString();
+    const before = await this.sessionUsage().catch(() => undefined);
+    const beforeTokens = before?.supported ? before.totalTokens : undefined;
+    this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "started", trigger: "manual", beforeTokens });
+    try {
+      let source: SessionCompactReceipt["source"];
+      if (this.runtimeSupportsExtension("x.ai/session/compact")) {
+        await this.extension("x.ai/session/compact", { sessionId: this.sessionId });
+        source = "extension";
+      } else if (this.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "compact")) {
+        await this.prompt("/compact", [], INTERACTIVE_PROMPT_TIMEOUT_MS, { clientMessageId: `compact-${crypto.randomUUID()}` });
+        source = "slash-command";
+      } else {
+        this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "failed", trigger: "manual", beforeTokens, message: "当前 CLI 未声明 /compact" });
+        return { sessionId: this.sessionId, accepted: false, source: "unsupported", startedAt, beforeTokens, message: "当前 Grok CLI 未声明手动压缩能力" };
+      }
+      const after = await this.sessionUsage().catch(() => undefined);
+      const afterTokens = after?.supported ? after.totalTokens : undefined;
+      const completedAt = new Date().toISOString();
+      this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "completed", trigger: "manual", beforeTokens, afterTokens });
+      return { sessionId: this.sessionId, accepted: true, source, startedAt, completedAt, beforeTokens, afterTokens, message: "会话压缩已完成" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "failed", trigger: "manual", beforeTokens, message });
+      throw error;
+    }
+  }
+
+  feedbackCapability(): import("../../shared/types").OfficialFeedbackCapability {
+    const available = (this.commands || []).some((command) => command.name.replace(/^\//, "").toLowerCase() === "feedback");
+    return available
+      ? { available: true, sessionId: this.sessionId, source: "available-command" }
+      : { available: false, sessionId: this.sessionId, source: "unavailable", reason: "当前 CLI 会话未发布 /feedback；可能是版本不支持或官方反馈功能未启用。" };
+  }
+
+  async submitOfficialFeedback(text: string): Promise<import("../../shared/types").OfficialFeedbackReceipt> {
+    const normalized = text.trim();
+    if (!normalized) throw new Error("反馈内容不能为空");
+    if (Buffer.byteLength(normalized, "utf8") > 64 * 1024) throw new Error("反馈内容超过 64 KiB 限制");
+    const capability = this.feedbackCapability();
+    if (!capability.available) throw new Error(capability.reason || "当前 CLI 不支持官方反馈");
+    const result = unwrapExtResult(await this.extension("x.ai/feedback", {
+      session_id: this.sessionId,
+      feedback_text: normalized,
+    }));
+    if (result.success === false) throw new Error(firstNonEmptyString(result.message, result.error) || "官方反馈提交失败");
+    return { sessionId: this.sessionId, submitted: true, message: "反馈已通过当前 Grok Build CLI 提交。" };
   }
 
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
@@ -678,6 +839,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.activatePendingQueuedTurn();
       this.working = Boolean(this.activeTurn);
       this.needsUser = false;
+      this.flushPendingRecapsIfIdle();
       const terminalStatus = terminalOutcome === "failed" ? "error" : "idle";
       const terminalText = terminalOutcome === "cancelled" ? "已取消" : terminalOutcome === "failed" ? "执行失败" : "已完成";
       this.emitStatus(this.activeTurn ? "working" : terminalStatus, this.activeTurn ? "正在处理已提交的跟进消息…" : terminalText);
@@ -693,6 +855,7 @@ export class GrokAcpAdapter extends EventEmitter {
       // The structured error event above owns the visible card. A text-bearing
       // status event would append a second unstructured "Internal error" card.
       this.working = Boolean(this.activeTurn);
+      this.flushPendingRecapsIfIdle();
       this.emitStatus(this.activeTurn ? "working" : "error", this.activeTurn ? "上一回合失败；正在处理已提交的跟进消息…" : undefined);
       throw error;
     }
@@ -1187,6 +1350,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   async dispose(timeoutMs = 5_000): Promise<void> {
     this.disposed = true;
+    this.clearFirstEventWatchdog();
     if (this.restoredQueueTimer) clearTimeout(this.restoredQueueTimer);
     this.restoredQueueTimer = undefined;
     // Defensive for adapters whose process never reached normal field
@@ -1204,8 +1368,21 @@ export class GrokAcpAdapter extends EventEmitter {
       // Best effort is intentional: a dead or wedged CLI must never prevent
       // Desktop shutdown.
       try {
-        await this.request(acpMethods.agent.session.close, { sessionId: this.sessionId }, Math.min(5_000, timeoutMs));
+        const result = await this.request(acpMethods.agent.session.close, { sessionId: this.sessionId }, Math.min(5_000, timeoutMs));
+        this.lastCloseReceipt = normalizeSessionCloseReceipt(this.sessionId, result);
+        this.emitRuntimeUpdate("session", "session/close", this.lastCloseReceipt.message ?? this.lastCloseReceipt.rawOutcome, {
+          outcome: this.lastCloseReceipt.outcome,
+          completed: this.lastCloseReceipt.completed,
+          ...(this.lastCloseReceipt.rawOutcome ? { rawOutcome: this.lastCloseReceipt.rawOutcome } : {}),
+        });
       } catch (error) {
+        this.lastCloseReceipt = {
+          sessionId: this.sessionId,
+          outcome: "released-without-close",
+          completed: false,
+          at: new Date().toISOString(),
+          message: error instanceof Error ? error.message : String(error),
+        };
         await this.options.log.log(`session/close 未完成，继续释放 CLI 进程：${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -1241,17 +1418,29 @@ export class GrokAcpAdapter extends EventEmitter {
       if (message.error) {
         const errorObject = message.error as { code?: number; message?: string; data?: unknown };
         // `code` used to be dropped here, leaving the renderer with a bare
-        // string and no way to tell one failure class from another.
-        const error = Object.assign(new Error(errorObject.message || "ACP 请求失败"), { code: errorObject.code, data: errorObject.data });
+        // string and no way to tell one failure class from another. Grok Build
+        // 1.0 also uses the generic JSON-RPC text "Internal error" while the
+        // actionable upstream HTTP message lives in `error.data`; prefer that
+        // bounded detail without discarding the original code/data payload.
+        const error = Object.assign(new Error(jsonRpcErrorMessage(errorObject)), { code: errorObject.code, data: errorObject.data, rpcMessage: errorObject.message });
         pending.reject(error);
       } else pending.resolve(message.result);
       return;
     }
-    const method = String(message.method || "");
-    const params = (message.params || {}) as Record<string, any>;
-    if (method.startsWith("x.ai/") || method.startsWith("_x.ai/")) this.observeRuntimeExtension(method.replace(/^_/, ""));
+    const envelope = normalizeRuntimeEventEnvelope(
+      String(message.method || ""),
+      (message.params || {}) as Record<string, unknown>,
+      this.sessionId || undefined,
+    );
+    const method = envelope.method;
+    const params = envelope.payload as Record<string, any>;
+    if (method.startsWith("x.ai/")) this.observeRuntimeExtension(method);
     if (method === acpMethods.client.session.update) {
-      this.handleSessionUpdate(params.update);
+      // ACP metadata belongs to the SessionNotification envelope, not the
+      // nested SessionUpdate. Preserve it for 1.x SessionInfoUpdate title
+      // ownership; otherwise a reset-to-auto notification cannot clear a
+      // Desktop manual title.
+      this.handleSessionUpdate({ ...(params.update ?? {}), ...(params._meta ? { _meta: params._meta } : {}) });
       return;
     }
     await this.handleServerRequest(method, id, params);
@@ -1260,6 +1449,9 @@ export class GrokAcpAdapter extends EventEmitter {
   private handleSessionUpdate(update: any): void {
     if (!update) return;
     this.lastTouched = Date.now();
+    if (["agent_message_chunk", "agent_thought_chunk", "tool_call", "tool_call_update", "plan"].includes(String(update.sessionUpdate))) {
+      this.markFirstTurnEvent();
+    }
     switch (update.sessionUpdate) {
       case "agent_message_chunk": {
         if (update.content?.type === "text") this.emitProviderText(update.content.text || "");
@@ -1313,6 +1505,15 @@ export class GrokAcpAdapter extends EventEmitter {
         if (this.sessionId) this.emitEvent({ type: "commands", sessionId: this.sessionId, commands: this.commands });
         this.emit("commands-changed");
         break;
+      case "session_info_update": {
+        const meta = recordValue(update._meta);
+        const titleIsManual = meta?.["x.ai/titleIsManual"];
+        if (typeof titleIsManual !== "boolean") break;
+        const nested = recordValue(update.sessionInfoUpdate ?? update.session_info_update);
+        const title = firstNonEmptyString(update.title, nested?.title) ?? "";
+        this.emitEvent({ type: "session-title", sessionId: this.sessionId, title, manual: titleIsManual });
+        break;
+      }
       default:
         break;
     }
@@ -1375,6 +1576,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private handlePrivateSessionUpdate(update: Record<string, any>): void {
     const updateType = normalizePrivateUpdateName(String(update.sessionUpdate || ""));
+    if (updateType) this.markFirstTurnEvent();
     switch (updateType) {
       case "model_changed":
         this.handleModelChanged(update);
@@ -1419,6 +1621,7 @@ export class GrokAcpAdapter extends EventEmitter {
         if (completingActiveTurn) this.activatePendingQueuedTurn();
         this.working = Boolean(this.activeTurn);
         if (completingActiveTurn) this.needsUser = false;
+        this.flushPendingRecapsIfIdle();
         this.emitStatus(
           this.activeTurn ? "working" : terminalOutcome === "failed" ? "error" : "idle",
           this.activeTurn ? "正在处理已提交的跟进消息…" : terminalOutcome === "cancelled" ? "已取消" : terminalOutcome === "failed" ? "执行失败" : "已完成",
@@ -1445,13 +1648,32 @@ export class GrokAcpAdapter extends EventEmitter {
       case "auto_compact_failed":
       case "auto_compact_cancelled": {
         const status = updateType.slice("auto_compact_".length) as "started" | "completed" | "failed" | "cancelled";
-        this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status, message: firstNonEmptyString(update.message, update.error, update.reason) });
+        this.emitEvent({
+          type: "compact-status",
+          sessionId: this.sessionId,
+          status,
+          trigger: "automatic",
+          beforeTokens: optionalNonNegativeInteger(update.beforeTokens ?? update.before_tokens ?? update.tokensBefore ?? update.tokens_before),
+          afterTokens: optionalNonNegativeInteger(update.afterTokens ?? update.after_tokens ?? update.tokensAfter ?? update.tokens_after),
+          message: firstNonEmptyString(update.message, update.error, update.reason),
+        });
         this.emitRuntimeUpdate("session", updateType, firstNonEmptyString(update.message, update.error, update.reason));
         return;
       }
-      case "session_recap":
-      case "session_summary":
       case "session_summary_generated": {
+        const title = firstNonEmptyString(update.session_summary, update.sessionSummary, update.summary, update.title, update.text) ?? "";
+        const meta = recordValue(update._meta);
+        const titleIsManual = meta?.["x.ai/titleIsManual"];
+        // Absent meta is an automatic summary/title and must not clobber a
+        // Desktop/local manual rename. New shells explicitly send true/false
+        // for manual rename and reset-to-auto.
+        if (typeof titleIsManual === "boolean") {
+          this.emitEvent({ type: "session-title", sessionId: this.sessionId, title, manual: titleIsManual });
+        }
+        return;
+      }
+      case "session_recap":
+      case "session_summary": {
         const text = firstNonEmptyString(update.recap, update.summary, update.content?.text, update.text);
         if (!text) return;
         const turnId = firstNonEmptyString(update.turn_id, update.turnId);
@@ -1459,7 +1681,13 @@ export class GrokAcpAdapter extends EventEmitter {
         if (this.recapHashes.has(contentHash)) return;
         this.recapHashes.add(contentHash);
         if (this.recapHashes.size > 256) this.recapHashes.delete(this.recapHashes.values().next().value!);
-        this.emitEvent({ type: "session-recap", sessionId: this.sessionId, turnId, text, contentHash });
+        const recap = { ...(turnId ? { turnId } : {}), text, contentHash };
+        if (this.activeTurn || this.working) {
+          this.pendingRecaps.set(contentHash, recap);
+          while (this.pendingRecaps.size > 64) this.pendingRecaps.delete(this.pendingRecaps.keys().next().value!);
+        } else {
+          this.emitEvent({ type: "session-recap", sessionId: this.sessionId, ...recap });
+        }
         return;
       }
       case "goal_updated":
@@ -1548,12 +1776,30 @@ export class GrokAcpAdapter extends EventEmitter {
     this.backgroundTasks.delete(taskId);
   }
 
-  private emitRuntimeUpdate(kind: import("../../shared/types").CliRuntimeUpdate["kind"], name: string, summary?: string, data?: Record<string, unknown>): void {
+  private emitRuntimeUpdate(
+    kind: import("../../shared/types").CliRuntimeUpdate["kind"],
+    name: string,
+    summary?: string,
+    data?: Record<string, unknown>,
+    targetSessionId = this.sessionId,
+  ): void {
     this.emitEvent({
       type: "runtime-update",
-      sessionId: this.sessionId,
+      sessionId: targetSessionId,
       update: { kind, name, at: new Date().toISOString(), ...(summary ? { summary } : {}), ...(data ? { data } : {}) },
     });
+  }
+
+  /** Auto recap is presentation-only metadata. Buffer it until the session is
+   * genuinely idle so an early recap cannot appear between streaming chunks or
+   * ahead of an already accepted queued turn. */
+  private flushPendingRecapsIfIdle(): void {
+    const pending = this.pendingRecaps;
+    if (this.activeTurn || this.working || !pending?.size) return;
+    for (const recap of pending.values()) {
+      this.emitEvent({ type: "session-recap", sessionId: this.sessionId, ...recap });
+    }
+    pending.clear();
   }
 
   private observeRuntimeExtension(method: string): void {
@@ -1766,7 +2012,9 @@ export class GrokAcpAdapter extends EventEmitter {
         }
         case "x.ai/session_notification":
         case "_x.ai/session_notification": {
-          this.handleModelChanged(params.update ?? params);
+          const update = { ...(params.update ?? params), ...(params._meta ? { _meta: params._meta } : {}) };
+          this.handleModelChanged(update);
+          this.handlePrivateSessionUpdate(update);
           this.respondOk(id);
           return;
         }
@@ -1872,9 +2120,21 @@ export class GrokAcpAdapter extends EventEmitter {
         case "_x.ai/scheduled_task_deleted":
         case "x.ai/scheduled_task_inject":
         case "_x.ai/scheduled_task_inject":
+        case "x.ai/scheduled_task_inject_prompt":
+        case "_x.ai/scheduled_task_inject_prompt":
           this.emitRuntimeUpdate("scheduled-task", method.replace(/^_?x\.ai\//, ""), firstNonEmptyString(params.title, params.message, params.status));
           this.respondOk(id);
           return;
+        case "x.ai/mcp/init_progress":
+        case "_x.ai/mcp/init_progress":
+        case "x.ai/mcp/tools_changed":
+        case "_x.ai/mcp/tools_changed":
+        case "x.ai/mcp/server_status":
+        case "_x.ai/mcp/server_status":
+        case "x.ai/mcp/servers_updated":
+        case "_x.ai/mcp/servers_updated":
+        case "x.ai/mcp_initialized":
+        case "_x.ai/mcp_initialized":
         case "x.ai/mcp_init_progress":
         case "_x.ai/mcp_init_progress":
         case "x.ai/mcp_tools_changed":
@@ -1883,9 +2143,18 @@ export class GrokAcpAdapter extends EventEmitter {
         case "_x.ai/mcp_status_changed":
         case "x.ai/mcp_servers_changed":
         case "_x.ai/mcp_servers_changed":
-          this.emitRuntimeUpdate("mcp", method.replace(/^_?x\.ai\//, ""), firstNonEmptyString(params.server, params.name, params.message, params.status));
+          {
+          const targetSessionId = firstNonEmptyString(params.sessionId, params.session_id) ?? this.sessionId;
+          this.emitRuntimeUpdate(
+            "mcp",
+            method.replace(/^_?x\.ai\//, ""),
+            mcpRuntimeSummary(method, params),
+            mcpRuntimeData(params),
+            targetSessionId,
+          );
           this.respondOk(id);
           return;
+          }
         case "x.ai/git_head_changed":
         case "_x.ai/git_head_changed":
           this.emitRuntimeUpdate("git", "git_head_changed", firstNonEmptyString(params.head, params.branch, params.message));
@@ -1918,6 +2187,7 @@ export class GrokAcpAdapter extends EventEmitter {
       monotonicStartedAt: performance.now(),
     };
     this.activeTurn = presentation;
+    this.startFirstEventWatchdog(presentation.turnId);
     const { monotonicStartedAt: _ignored, ...publicPresentation } = presentation;
     this.emitEvent({ type: "turn-started", sessionId: this.sessionId, presentation: publicPresentation });
     return publicPresentation;
@@ -1926,6 +2196,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private finishTurn(outcome: TurnOutcome, usage?: TurnPresentation["usage"], expectedTurnId?: string): TurnPresentation | undefined {
     const active = this.activeTurn;
     if (!active || (expectedTurnId && active.turnId !== expectedTurnId)) return undefined;
+    this.clearFirstEventWatchdog(active.turnId);
     this.flushProviderText();
     this.activeTurn = undefined;
     const completedAt = new Date().toISOString();
@@ -1943,6 +2214,37 @@ export class GrokAcpAdapter extends EventEmitter {
     this.rememberSettledTurn(presentation);
     this.emitEvent({ type: "turn-completed", sessionId: this.sessionId, presentation });
     return presentation;
+  }
+
+  private startFirstEventWatchdog(turnId: string): void {
+    this.clearFirstEventWatchdog();
+    this.firstEventTurnId = turnId;
+    this.firstEventWaitTimer = setTimeout(() => {
+      if (this.activeTurn?.turnId !== turnId || this.firstEventTurnId !== turnId) return;
+      this.emitStatus("working", "仍在等待 Grok 返回首个事件…");
+      this.emitRuntimeUpdate("monitor", "first-event-waiting", "20 秒内尚未收到首个事件；请求仍在运行，不会自动取消。", { elapsedMs: FIRST_EVENT_WAIT_MS });
+    }, FIRST_EVENT_WAIT_MS);
+    this.firstEventWaitTimer.unref?.();
+    this.firstEventDiagnosticTimer = setTimeout(() => {
+      if (this.activeTurn?.turnId !== turnId || this.firstEventTurnId !== turnId) return;
+      this.emitStatus("working", "长时间未收到首个事件；可打开诊断或停止任务");
+      this.emitRuntimeUpdate("monitor", "first-event-diagnostic", "60 秒内尚未收到首个事件；Desktop 保持连接并提供诊断/停止，不主动取消。", { elapsedMs: FIRST_EVENT_DIAGNOSTIC_MS });
+    }, FIRST_EVENT_DIAGNOSTIC_MS);
+    this.firstEventDiagnosticTimer.unref?.();
+  }
+
+  private markFirstTurnEvent(): void {
+    if (!this.activeTurn || this.firstEventTurnId !== this.activeTurn.turnId) return;
+    this.clearFirstEventWatchdog(this.activeTurn.turnId);
+  }
+
+  private clearFirstEventWatchdog(expectedTurnId?: string): void {
+    if (expectedTurnId && this.firstEventTurnId && this.firstEventTurnId !== expectedTurnId) return;
+    if (this.firstEventWaitTimer) clearTimeout(this.firstEventWaitTimer);
+    if (this.firstEventDiagnosticTimer) clearTimeout(this.firstEventDiagnosticTimer);
+    this.firstEventWaitTimer = undefined;
+    this.firstEventDiagnosticTimer = undefined;
+    this.firstEventTurnId = undefined;
   }
 
   private rememberSettledTurn(presentation: TurnPresentation): void {
@@ -2383,6 +2685,7 @@ export function normalizeCliSessionList(value: Record<string, unknown>): CliSess
 export function normalizeCliSessionInfo(sessionId: string, value: Record<string, unknown>): CliSessionInfo {
   const row = recordValue(value.session) ?? value;
   const data = recordValue(row.data) ?? {};
+  const context = recordValue(row.context) ?? recordValue(data.context) ?? {};
   const rawMode = firstNonEmptyString(row.mode, row.modeId, row.mode_id, data.mode, data.modeId, data.mode_id);
   const rawEffort = normalizeReasoningEffort(row.effort ?? row.reasoningEffort ?? row.reasoning_effort ?? data.effort ?? data.reasoningEffort ?? data.reasoning_effort);
   return {
@@ -2390,9 +2693,24 @@ export function normalizeCliSessionInfo(sessionId: string, value: Record<string,
     sessionId: firstNonEmptyString(row.sessionId, row.session_id, row.id) ?? sessionId,
     cwd: firstNonEmptyString(row.cwd, row.workspace, row.directory),
     title: firstNonEmptyString(row.title, row.name, row.label, data.title),
-    modelId: firstNonEmptyString(row.modelId, row.model_id, data.modelId, data.model_id, data.resolvedModelId, data.resolved_model_id, data.model),
+    modelId: firstNonEmptyString(row.modelId, row.model_id, row.model, data.modelId, data.model_id, data.modelDisplayName, data.model_display_name, data.model),
+    resolvedModelId: firstNonEmptyString(row.resolvedModelId, row.resolved_model_id, data.resolvedModelId, data.resolved_model_id),
+    agentName: firstNonEmptyString(row.agentName, row.agent_name, data.agentName, data.agent_name),
     mode: rawMode === "agent" || rawMode === "plan" || rawMode === "auto" ? rawMode : undefined,
     effort: rawEffort,
+    sandbox: firstNonEmptyString(row.sandbox, row.sandboxMode, row.sandbox_mode, data.sandbox, data.sandboxMode, data.sandbox_mode),
+    contextWindowTokens: optionalNonNegativeInteger(context.total ?? context.contextWindowTokens ?? context.context_window_tokens ?? row.contextWindowTokens ?? row.context_window_tokens ?? data.contextWindowTokens ?? data.context_window_tokens),
+    contextUsedTokens: optionalNonNegativeInteger(context.used ?? context.contextUsedTokens ?? context.context_used_tokens ?? row.contextUsedTokens ?? row.context_used_tokens ?? data.contextUsedTokens ?? data.context_used_tokens ?? data.totalTokens ?? data.total_tokens),
+    contextFreeTokens: optionalNonNegativeInteger(context.freeTokens ?? context.free_tokens),
+    contextUsagePercent: optionalNonNegativeNumber(context.usagePct ?? context.usage_pct),
+    systemPromptTokens: optionalNonNegativeInteger(context.systemPromptTokens ?? context.system_prompt_tokens),
+    toolDefinitionsCount: optionalNonNegativeInteger(context.toolDefinitionsCount ?? context.tool_definitions_count),
+    toolDefinitionsTokens: optionalNonNegativeInteger(context.toolDefinitionsTokens ?? context.tool_definitions_tokens),
+    compactionCount: optionalNonNegativeInteger(context.compactionCount ?? context.compaction_count),
+    autoCompactThresholdPercent: optionalNonNegativeInteger(context.autoCompactThresholdPercent ?? context.auto_compact_threshold_percent),
+    turnCount: optionalNonNegativeInteger(data.turns ?? context.turnCount ?? context.turn_count),
+    toolCallCount: optionalNonNegativeInteger(context.toolCallCount ?? context.tool_call_count),
+    messageCount: optionalNonNegativeInteger(context.messageCount ?? context.message_count),
     createdAt: firstNonEmptyString(row.createdAt, row.created_at),
     updatedAt: firstNonEmptyString(row.updatedAt, row.updated_at, row.lastActivityAt),
     source: "acp",
@@ -2401,6 +2719,22 @@ export function normalizeCliSessionInfo(sessionId: string, value: Record<string,
 
 export function normalizeCliSessionUsage(sessionId: string, value: Record<string, unknown>): CliSessionUsage {
   const row = recordValue(value.usage) ?? value;
+  const costUsdTicks = optionalNonNegativeNumber(row.costUsdTicks ?? row.cost_usd_ticks ?? row.totalCostUsdTicks ?? row.total_cost_usd_ticks);
+  const modelUsageRows = recordValue(row.modelUsage ?? row.model_usage);
+  const modelUsage = modelUsageRows ? Object.fromEntries(Object.entries(modelUsageRows).flatMap(([modelId, raw]) => {
+    const model = recordValue(raw);
+    if (!model) return [];
+    const modelCostTicks = optionalNonNegativeNumber(model.costUsdTicks ?? model.cost_usd_ticks ?? model.totalCostUsdTicks ?? model.total_cost_usd_ticks);
+    return [[modelId, {
+      inputTokens: optionalNonNegativeInteger(model.inputTokens ?? model.input_tokens),
+      outputTokens: optionalNonNegativeInteger(model.outputTokens ?? model.output_tokens),
+      cachedReadTokens: optionalNonNegativeInteger(model.cachedReadTokens ?? model.cached_read_tokens),
+      reasoningTokens: optionalNonNegativeInteger(model.reasoningTokens ?? model.reasoning_tokens),
+      totalTokens: optionalNonNegativeInteger(model.totalTokens ?? model.total_tokens),
+      costUsd: optionalNonNegativeNumber(model.costUsd ?? model.cost_usd) ?? (modelCostTicks === undefined ? undefined : modelCostTicks / 10_000_000_000),
+      costIsPartial: typeof (model.costIsPartial ?? model.cost_is_partial) === "boolean" ? Boolean(model.costIsPartial ?? model.cost_is_partial) : undefined,
+    }]];
+  })) : undefined;
   return {
     supported: true,
     sessionId: firstNonEmptyString(row.sessionId, row.session_id, row.id) ?? sessionId,
@@ -2409,13 +2743,122 @@ export function normalizeCliSessionUsage(sessionId: string, value: Record<string
     cachedReadTokens: optionalNonNegativeInteger(row.cachedReadTokens ?? row.cached_read_tokens ?? row.cacheReadTokens),
     reasoningTokens: optionalNonNegativeInteger(row.reasoningTokens ?? row.reasoning_tokens),
     totalTokens: optionalNonNegativeInteger(row.totalTokens ?? row.total_tokens ?? row.tokens),
+    costUsd: optionalNonNegativeNumber(row.costUsd ?? row.cost_usd ?? row.totalCostUsd ?? row.total_cost_usd ?? row.cost)
+      ?? (costUsdTicks === undefined ? undefined : costUsdTicks / 10_000_000_000),
+    costUsdTicks,
+    costIsPartial: typeof (row.costIsPartial ?? row.cost_is_partial) === "boolean" ? Boolean(row.costIsPartial ?? row.cost_is_partial) : undefined,
+    usageIsIncomplete: typeof (row.usageIsIncomplete ?? row.usage_is_incomplete) === "boolean" ? Boolean(row.usageIsIncomplete ?? row.usage_is_incomplete) : undefined,
+    modelCalls: optionalNonNegativeInteger(row.modelCalls ?? row.model_calls),
+    apiDurationMs: optionalNonNegativeInteger(row.apiDurationMs ?? row.api_duration_ms),
+    numTurns: optionalNonNegativeInteger(row.numTurns ?? row.num_turns),
+    ...(modelUsage ? { modelUsage } : {}),
+    limitPercent: optionalNonNegativeNumber(row.limitPercent ?? row.limit_percent ?? row.usedPercent ?? row.used_percent),
+    resetAt: firstNonEmptyString(row.resetAt, row.reset_at),
     source: "acp",
+  };
+}
+
+export function normalizeSessionCloseReceipt(sessionId: string, value: unknown): SessionCloseReceipt {
+  const result = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const meta = result._meta && typeof result._meta === "object" ? result._meta as Record<string, unknown> : {};
+  const rawOutcome = firstNonEmptyString(meta["x.ai/closeOutcome"], meta.closeOutcome, result.closeOutcome, result.outcome);
+  const normalized = String(rawOutcome ?? "").trim().toLowerCase().replace(/_/g, "-");
+  let outcome: SessionCloseOutcome = "unknown";
+  if (/^(?:notresident|not-resident|already-closed)$/.test(normalized)) outcome = "not-resident";
+  else if (normalized === "superseded") outcome = "superseded";
+  else if (/^(?:closed|close|success|completed|cancelled-and-closed)$/.test(normalized)) outcome = "closed";
+  return {
+    sessionId,
+    outcome,
+    ...(rawOutcome ? { rawOutcome } : {}),
+    completed: outcome !== "unknown",
+    at: new Date().toISOString(),
+    ...(outcome === "not-resident" ? { message: "会话已不在当前 CLI 进程中，无需重复关闭" }
+      : outcome === "superseded" ? { message: "会话已由较新的附加进程接管，旧进程已释放" }
+      : outcome === "unknown" ? { message: rawOutcome ? `CLI 返回了未知关闭结果：${rawOutcome}` : "CLI 未返回结构化关闭结果" }
+      : {}),
+  };
+}
+
+export function normalizeRuntimeEventEnvelope(
+  rawMethod: string,
+  rawPayload: Record<string, unknown>,
+  sourceSessionId?: string,
+): RuntimeEventEnvelope {
+  let method = rawMethod.startsWith("_x.ai/") ? rawMethod.slice(1) : rawMethod;
+  let payload = rawPayload;
+  if ((rawMethod === "_x.ai/notification" || rawMethod === "_x.ai/event")
+    && typeof rawPayload.method === "string"
+    && /^_?x\.ai\//.test(rawPayload.method)) {
+    method = rawPayload.method.replace(/^_/, "");
+    payload = rawPayload.params && typeof rawPayload.params === "object"
+      ? rawPayload.params as Record<string, unknown>
+      : rawPayload.payload && typeof rawPayload.payload === "object"
+        ? rawPayload.payload as Record<string, unknown>
+        : {};
+  }
+  return {
+    rawMethod,
+    method,
+    schemaVersion: wireSchemaVersion(payload),
+    ...(sourceSessionId ? { sourceSessionId } : {}),
+    receivedAt: new Date().toISOString(),
+    payload,
   };
 }
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isInteger(number) && number >= 0 ? number : undefined;
+}
+
+function mcpRuntimeData(value: Record<string, unknown>): Record<string, unknown> {
+  const servers = Array.isArray(value.mcpServers)
+    ? value.mcpServers
+    : Array.isArray(value.servers)
+      ? value.servers
+      : undefined;
+  const tools = Array.isArray(value.tools) ? value.tools : undefined;
+  const progress = typeof value.progress === "number" && Number.isFinite(value.progress) ? value.progress : undefined;
+  const total = optionalNonNegativeInteger(value.total);
+  const connected = optionalNonNegativeInteger(value.connected);
+  const toolCount = optionalNonNegativeInteger(value.mcpToolCount ?? value.toolCount);
+  const elapsedMs = optionalNonNegativeInteger(value.elapsedMs ?? value.elapsed_ms);
+  return {
+    ...(firstNonEmptyString(value.sessionId, value.session_id) ? { sessionId: firstNonEmptyString(value.sessionId, value.session_id) } : {}),
+    ...(firstNonEmptyString(value.server, value.serverName, value.name) ? { server: firstNonEmptyString(value.server, value.serverName, value.name) } : {}),
+    ...(firstNonEmptyString(value.source) ? { source: firstNonEmptyString(value.source) } : {}),
+    ...(firstNonEmptyString(value.status, value.state) ? { status: firstNonEmptyString(value.status, value.state) } : {}),
+    ...(firstNonEmptyString(value.reason) ? { reason: firstNonEmptyString(value.reason) } : {}),
+    ...(firstNonEmptyString(value.detail) ? { detail: firstNonEmptyString(value.detail) } : {}),
+    ...(progress === undefined ? {} : { progress }),
+    ...(total === undefined ? {} : { total }),
+    ...(connected === undefined ? {} : { connected }),
+    ...(servers ? { serverCount: servers.length } : {}),
+    ...(toolCount === undefined ? (tools ? { toolCount: tools.length } : {}) : { toolCount }),
+    ...(elapsedMs === undefined ? {} : { elapsedMs }),
+    ...(typeof value.requiresAuth === "boolean" ? { requiresAuth: value.requiresAuth } : {}),
+    ...(typeof value.authRequired === "boolean" ? { requiresAuth: value.authRequired } : {}),
+    ...(typeof value.setupRequired === "boolean" ? { setupRequired: value.setupRequired } : {}),
+  };
+}
+
+function mcpRuntimeSummary(method: string, value: Record<string, unknown>): string | undefined {
+  const server = firstNonEmptyString(value.server, value.serverName, value.name);
+  const status = firstNonEmptyString(value.status, value.state);
+  const total = optionalNonNegativeInteger(value.total);
+  const connected = optionalNonNegativeInteger(value.connected);
+  const toolCount = optionalNonNegativeInteger(value.mcpToolCount ?? value.toolCount)
+    ?? (Array.isArray(value.tools) ? value.tools.length : undefined);
+  if (/init_progress$/.test(method) && total !== undefined && connected !== undefined) return `MCP 连接 ${connected}/${total}`;
+  if (/mcp_initialized$/.test(method)) return toolCount === undefined ? "MCP 初始化完成" : `MCP 初始化完成 · ${toolCount} 个工具`;
+  if (/tools_changed$/.test(method)) return `${server ? `${server} · ` : ""}${toolCount ?? 0} 个工具`;
+  if (/server_status$|status_changed$/.test(method)) return [server, status].filter(Boolean).join(" · ") || undefined;
+  if (/servers_updated$|servers_changed$/.test(method)) {
+    const servers = Array.isArray(value.mcpServers) ? value.mcpServers : Array.isArray(value.servers) ? value.servers : undefined;
+    return servers ? `MCP 服务器已更新 · ${servers.length} 个` : "MCP 服务器已更新";
+  }
+  return firstNonEmptyString(value.message, server, status);
 }
 
 function isMethodNotFound(error: unknown): boolean {
@@ -2638,6 +3081,21 @@ function httpStatusFromFailure(message: string, data: unknown): number | undefin
   const match = /\bHTTP\s+(\d{3})\b/i.exec(message) ?? /"code"\s*:\s*(\d{3})\b/.exec(message);
   const parsed = match ? Number(match[1]) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 100 && parsed < 600 ? parsed : undefined;
+}
+
+/** Prefer actionable bounded JSON-RPC data over Grok Build's generic wrapper. */
+function jsonRpcErrorMessage(error: { message?: string; data?: unknown }): string {
+  const wrapper = typeof error.message === "string" ? error.message.trim() : "";
+  if (wrapper && !/^(?:internal error|acp 请求失败)$/i.test(wrapper)) return wrapper.slice(0, 8_000);
+  let data = error.data;
+  if (typeof data === "string") {
+    const text = data.trim();
+    try { data = JSON.parse(text); } catch { return text.slice(0, 8_000) || wrapper || "ACP 请求失败"; }
+  }
+  const row = recordValue(data);
+  const nestedError = recordValue(row?.error);
+  const detail = firstNonEmptyString(row?.message, nestedError?.message, row?.detail, row?.error_description);
+  return (detail || wrapper || "ACP 请求失败").slice(0, 8_000);
 }
 
 function hasUsage(value: PromptMeta): boolean {

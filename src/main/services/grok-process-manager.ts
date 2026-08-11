@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, ProviderLaunchContext, ReasoningEffort, SessionMode } from "../../shared/types";
+import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, OfficialFeedbackCapability, OfficialFeedbackReceipt, ProviderLaunchContext, ReasoningEffort, SessionCompactReceipt, SessionMode } from "../../shared/types";
 import { buildCliEnv, detectEffortFlag, locateGrokCli } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
 import type { LogService } from "./log-service";
@@ -70,6 +70,53 @@ export class GrokProcessManager {
 
   async sessionUsage(sessionId: string): Promise<CliSessionUsage> {
     return this.get(sessionId).sessionUsage();
+  }
+
+  async renameSessionIfLoaded(sessionId: string, title: string): Promise<"official" | "unsupported" | "not-loaded"> {
+    const adapter = this.sessions.get(sessionId);
+    if (!adapter) return "not-loaded";
+    return adapter.renameSession(title);
+  }
+
+  async compactSession(sessionId: string): Promise<SessionCompactReceipt> {
+    return this.get(sessionId).compact();
+  }
+
+  feedbackCapability(sessionId: string): OfficialFeedbackCapability {
+    const adapter = this.sessions.get(sessionId);
+    return adapter?.feedbackCapability() ?? { available: false, sessionId, source: "unavailable", reason: "请先打开并连接一个 Grok 会话。" };
+  }
+
+  submitOfficialFeedback(sessionId: string, text: string): Promise<OfficialFeedbackReceipt> {
+    return this.get(sessionId).submitOfficialFeedback(text);
+  }
+
+  async forkToWorkspace(sourceSessionId: string, sourceCwd: string, newCwd: string): Promise<Record<string, unknown>> {
+    const loaded = this.sessions.get(sourceSessionId);
+    if (loaded) {
+      if (loaded.working || loaded.needsUser) throw new Error("会话正在运行或等待操作，完成后再重新绑定项目路径");
+      return loaded.fork(undefined, newCwd);
+    }
+    const settings = await this.getSettings();
+    const adapter = await this.spawn(newCwd, settings.defaultEffort, settings.defaultMode, settings.defaultModel);
+    try {
+      return await adapter.forkExternal(sourceSessionId, sourceCwd, newCwd);
+    } finally {
+      await adapter.dispose().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Grok Build 1.0 can load an existing session id against a moved cwd.  Only
+   * probe an unloaded session: replacing a resident adapter would be a
+   * destructive side effect if the CLI rejects the new directory.  The caller
+   * verifies that the CLI materialized the session in the target catalog and
+   * closes this probe before falling back to an official fork.
+   */
+  async tryMoveSessionToWorkspace(sessionId: string, newCwd: string): Promise<boolean> {
+    if (this.sessions.has(sessionId)) return false;
+    await this.open(newCwd, sessionId);
+    return true;
   }
 
   async btw(sessionId: string, text: string): Promise<CliBtwReceipt> {
@@ -159,6 +206,15 @@ export class GrokProcessManager {
 
   snapshots(): LiveSessionSnapshot[] {
     return Array.from(this.sessions, ([sessionId, session]) => ({ sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId, processOptions: session.processOptions }));
+  }
+
+  /** Prefer the official 1.0 Git status extension only when a matching live
+   * session is idle.  Review mutations continue to use the repository-scoped
+   * GitService so an active turn can never race a UI refresh. */
+  async officialGitStatusForWorkspace(cwd: string, gitRoot?: string): Promise<Record<string, unknown> | undefined> {
+    const target = workspaceKey(cwd);
+    const adapter = Array.from(this.sessions.values()).find((candidate) => workspaceKey(candidate.cwd) === target && !candidate.working && !candidate.needsUser);
+    return adapter?.officialGitStatus(gitRoot);
   }
 
   promptQueues(): Array<{ sessionId: string; entries: ReturnType<GrokAcpAdapter["queuedPrompts"]> }> {
@@ -524,7 +580,10 @@ export class GrokProcessManager {
     const extensions = await this.getSessionExtensions?.();
     const effectivePermissionDecider = permissionDecider ?? processOptions?.permissionDecider;
     const effectiveEnvironmentOverride = environmentOverride ?? processOptions?.environmentOverride;
-    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, effectiveEnvironmentOverride), workspaceEnvironment);
+    const compactionEnvironment = savedRuntime?.compaction?.mode === "custom" && savedRuntime.compaction.thresholdPercent
+      ? { GROK_AUTO_COMPACT_THRESHOLD_PERCENT: String(savedRuntime.compaction.thresholdPercent) }
+      : {};
+    const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, compactionEnvironment, effectiveEnvironmentOverride), workspaceEnvironment);
     const adapter = new GrokAcpAdapter({
       cliPath,
       cwd,
@@ -571,6 +630,7 @@ export class GrokProcessManager {
       effort: adapter.effort,
       mode: adapter.mode,
       profileId: previous?.profileId,
+      compaction: previous?.compaction,
     });
   }
 
@@ -602,6 +662,10 @@ export class GrokProcessManager {
     try { await this.beforeSessionClose(sessionId, session, reason); }
     catch (error) { await this.log.log(`session finalization failed: ${error instanceof Error ? error.message : String(error)}`); }
   }
+}
+
+function workspaceKey(value: string): string {
+  return value.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLocaleLowerCase("en-US");
 }
 
 export function isMutatingExtensionMethod(method: string): boolean {

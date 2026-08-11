@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildForkRuntimePreferences, SessionRuntimeStateService } from "./session-runtime-state-service";
+import { buildForkRuntimePreferences, normalizeSessionCompactionPolicy, SessionRuntimeStateService } from "./session-runtime-state-service";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -67,6 +67,23 @@ describe("SessionRuntimeStateService", () => {
     await service.reconcileSessionReady("s1", "new-official");
     expect(await service.get("s1")).toMatchObject({ modelId: "new-official" });
     expect((await service.get("s1"))?.providerId).toBeUndefined();
+  });
+
+  it("persists a validated per-session compaction threshold without changing the global CLI config", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-runtime-")); roots.push(root);
+    const service = new SessionRuntimeStateService(root);
+    await service.save({ sessionId: "s1", cwd: "C:\\work", effort: "high", mode: "agent" });
+    await service.setCompactionPolicy("s1", { mode: "custom", thresholdPercent: 72 });
+    expect(await new SessionRuntimeStateService(root).get("s1")).toMatchObject({
+      compaction: { mode: "custom", thresholdPercent: 72 },
+    });
+    await service.setCompactionPolicy("s1", { mode: "inherit" });
+    expect((await service.get("s1"))?.compaction).toEqual({ mode: "inherit" });
+  });
+
+  it("rejects compaction thresholds outside the supported 60-95 range", () => {
+    expect(() => normalizeSessionCompactionPolicy({ mode: "custom", thresholdPercent: 59 })).toThrow("60% 到 95%");
+    expect(() => normalizeSessionCompactionPolicy({ mode: "custom", thresholdPercent: 96 })).toThrow("60% 到 95%");
   });
 });
 

@@ -1,7 +1,7 @@
 import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
 import type {
@@ -13,6 +13,7 @@ import type {
   ReasoningEffort,
   SessionMode,
   SessionSummary,
+  SessionCompactionPolicy,
   UiDensity,
   WorkspaceSummary,
   CodexSessionDetail,
@@ -73,6 +74,8 @@ import type {
   AutomationGlobalPolicy,
   RewindPoint,
   SessionForkResult,
+  SessionRebindReceipt,
+  WorkspaceRebindReceipt,
   BackgroundTaskSummary,
   NotificationInboxItem,
   OfflineUiFixture,
@@ -139,6 +142,9 @@ import type {
   TurnFailure,
   ProviderLaunchContext,
   UserMessageAttachmentPreview,
+  OfficialFeedbackCapability,
+  OfficialFeedbackPreview,
+  OfficialFeedbackReceipt,
 } from "../shared/types";
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
@@ -148,6 +154,8 @@ import { AccountVault } from "./services/account-vault";
 import { AuthService } from "./services/auth-service";
 import { buildCliEnv, locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
+import { normalizeOfficialGitStatus } from "./services/official-git-status";
+import { setOfficialFeedbackMenuAvailable } from "./app-menu";
 import { deleteCliSession } from "./services/cli-session-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
 import { INTERACTIVE_PROMPT_TIMEOUT_MS } from "./services/grok-acp-adapter";
@@ -157,8 +165,10 @@ import { TurnFileChangeJournal } from "./services/turn-file-change-journal";
 import { MediaAccessService } from "./services/media-access-service";
 import { TokenActivityService } from "./services/token-activity-service";
 import { ConversationProjectionService } from "./services/conversation-projection-service";
+import { conversationProjectionMatches } from "./services/conversation-search";
 import { buildForkRuntimePreferences, SessionRuntimeStateService } from "./services/session-runtime-state-service";
-import { LogService, redactSecrets } from "./services/log-service";
+import { automaticUpdateCheckDecision } from "./services/update-check-policy";
+import { LogService, redactLogText, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
 import { ClaudeSessionCatalog } from "./services/claude-session-catalog";
@@ -215,6 +225,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultMode: "agent",
   showThinking: false,
   expandToolDetails: false,
+  automaticUpdateChecks: true,
   fontScale: 100,
   uiDensity: "balanced",
   conversationContentWidth: 780,
@@ -654,6 +665,8 @@ export class AppController {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState> { return this.onboarding.update(patch); }
   resetOnboarding(): Promise<OnboardingState> { return this.onboarding.reset(); }
   runDiagnostics(): Promise<SystemCompatibilityReport> { return this.diagnostics.run(); }
+  previewGrokDoctorFixes() { return this.diagnostics.previewDoctorFixes(); }
+  applyGrokDoctorFix(id: string, confirmationToken: string, confirmed: boolean) { return this.diagnostics.applyDoctorFix(id, confirmationToken, confirmed); }
   getTokenActivity(query: TokenActivityQuery = {}): Promise<TokenActivityReport> { return this.tokenActivity.report(query); }
   /** Scoped to one failed turn; does not re-run the four-subprocess install sweep. */
   diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport> { return this.diagnostics.diagnoseFailure(failure); }
@@ -678,6 +691,19 @@ export class AppController {
     return canonical;
   }
 
+  async createTemporaryWorkspace(): Promise<string> {
+    const root = join(this.userDataPath, "temporary-workspaces", `task-${new Date().toISOString().slice(0, 10)}-${randomUUID().slice(0, 8)}`);
+    await mkdir(root, { recursive: true });
+    const canonical = await canonicalExistingPath(root, "directory");
+    rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+    const settings = await this.settingsStore.get();
+    await this.settingsStore.patch({
+      activeWorkspace: canonical,
+      recentWorkspaces: [canonical, ...settings.recentWorkspaces.filter((value) => !samePath(value, canonical))].slice(0, 12),
+    });
+    return canonical;
+  }
+
   async setWorkspace(cwd: string): Promise<SessionSummary[]> {
     const settings = await this.settingsStore.get();
     const persisted = await Promise.all([settings.activeWorkspace, ...settings.recentWorkspaces]
@@ -694,19 +720,39 @@ export class AppController {
     return this.listSessions(canonical);
   }
 
+  async openWorkspaceOffline(cwd: string): Promise<SessionSummary[]> {
+    const settings = await this.settingsStore.get();
+    const rows = await this.workspaces.discover(settings, true, true);
+    const known = rows.find((row) => samePath(row.cwd, cwd));
+    if (!known) throw new Error("只能离线打开项目目录中已记录的失效工作区");
+    if (known.exists) throw new Error("该工作区仍然可用，请正常打开");
+    const recent = [known.cwd, ...settings.recentWorkspaces.filter((value) => !samePath(value, known.cwd))].slice(0, 12);
+    await this.settingsStore.patch({ activeWorkspace: known.cwd, recentWorkspaces: recent });
+    return this.listSessions(known.cwd);
+  }
+
   async listSessions(cwd?: string, query = ""): Promise<SessionSummary[]> {
     const workspace = cwd || (await this.settingsStore.get()).activeWorkspace;
     await this.syncSessionOrigins(workspace);
     const assignments = (await this.profiles.listAssignments()).filter((value) => samePath(value.sourceWorkspacePath, workspace));
     const roots = [...new Set([workspace, ...assignments.map((value) => value.cwd)])];
-    const rows = (await Promise.all(roots.map((root) => this.catalog.list(root, query, this.processes.liveStatuses())))).flat();
+    const rows = (await Promise.all(roots.map((root) => this.catalog.list(root, "", this.processes.liveStatuses())))).flat();
     const assignmentBySession = new Map(assignments.map((value) => [value.sessionId, value]));
     const queuedSessions = new Set(this.processes.promptQueues().filter((value) => value.entries.some((entry) => entry.state === "queued")).map((value) => value.sessionId));
-    return rows.map((row) => {
+    let result = rows.map((row) => {
       const assignment = assignmentBySession.get(row.id);
       const status = queuedSessions.has(row.id) && row.status !== "working" && row.status !== "needs-user" ? "queued" as const : row.status;
       return assignment ? { ...row, status, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : { ...row, status };
-    }).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index).sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.updatedAt.localeCompare(left.updatedAt));
+    }).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index);
+    const normalized = query.trim().toLocaleLowerCase();
+    if (normalized) {
+      const matches = await Promise.all(result.map(async (row) => {
+        if (row.title.toLocaleLowerCase().includes(normalized) || row.id.toLocaleLowerCase().includes(normalized)) return true;
+        return conversationProjectionMatches(await this.conversationProjections.restore(row.id).catch(() => undefined), normalized);
+      }));
+      result = result.filter((_row, index) => matches[index]);
+    }
+    return result.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || right.updatedAt.localeCompare(left.updatedAt));
   }
 
   listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult> {
@@ -719,6 +765,37 @@ export class AppController {
 
   getCliSessionUsage(sessionId: string): Promise<CliSessionUsage> {
     return this.processes.sessionUsage(sessionId);
+  }
+
+  getSessionRuntimePreferences(sessionId: string) {
+    return this.sessionRuntime.get(sessionId);
+  }
+
+  setSessionCompactionPolicy(sessionId: string, policy: SessionCompactionPolicy) {
+    return this.sessionRuntime.setCompactionPolicy(sessionId, policy);
+  }
+
+  compactSession(sessionId: string) {
+    return this.processes.compactSession(sessionId);
+  }
+
+  getOfficialFeedbackCapability(sessionId: string): OfficialFeedbackCapability {
+    const capability = this.processes.feedbackCapability(sessionId);
+    setOfficialFeedbackMenuAvailable(capability.available);
+    return capability;
+  }
+
+  previewOfficialFeedback(text: string): OfficialFeedbackPreview {
+    const normalized = text.trim();
+    if (!normalized) throw new Error("反馈内容不能为空");
+    if (Buffer.byteLength(normalized, "utf8") > 64 * 1024) throw new Error("反馈内容超过 64 KiB 限制");
+    const preview = redactLogText(normalized);
+    return { originalLength: normalized.length, preview, redacted: preview !== normalized };
+  }
+
+  async submitOfficialFeedback(sessionId: string, text: string): Promise<OfficialFeedbackReceipt> {
+    const preview = this.previewOfficialFeedback(text);
+    return this.processes.submitOfficialFeedback(sessionId, preview.preview);
   }
 
   sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt> {
@@ -811,7 +888,11 @@ export class AppController {
   getGitRepositoryTrust(cwd: string): Promise<GitRepositoryTrust> { return this.git.getRepositoryTrust(cwd); }
   getGitWorkspaceCapability(cwd: string): Promise<GitWorkspaceCapability> { return this.git.capability(cwd); }
   setGitRepositoryTrust(cwd: string, repositoryRoot: string, trusted: boolean): Promise<GitRepositoryTrust> { return this.git.setRepositoryTrust(cwd, repositoryRoot, trusted); }
-  getGitStatus(cwd: string): Promise<GitRepositoryStatus> { return this.git.status(cwd); }
+  async getGitStatus(cwd: string): Promise<GitRepositoryStatus> {
+    const official = await this.processes.officialGitStatusForWorkspace(cwd).catch(() => undefined);
+    const normalized = official && normalizeOfficialGitStatus(official, cwd);
+    return normalized ?? this.git.status(cwd);
+  }
   getGitDiff(cwd: string, staged: boolean, path?: string): Promise<GitDiffResult> { return this.git.diff(cwd, staged, path); }
   getGitReview(cwd: string, scope: GitReviewScope): Promise<GitReviewSnapshot> { return this.git.review(cwd, scope); }
   getGitReviewIndex(cwd: string, scope: GitReviewScope): Promise<GitReviewIndex> { return this.git.reviewIndex(cwd, scope); }
@@ -1073,7 +1154,13 @@ export class AppController {
   }
 
   async renameSession(sessionId: string, title: string): Promise<void> {
-    await this.catalog.rename(sessionId, title);
+    const normalized = title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+    if (!normalized) throw new Error("会话名称不能为空");
+    const source = await this.processes.renameSessionIfLoaded(sessionId, normalized);
+    await this.catalog.rename(sessionId, normalized);
+    if (source === "official") {
+      void this.cliCapabilities.recordRuntimeSupport(["session.rename"]).catch((error) => this.log.log(error));
+    }
   }
 
   async deleteSession(cwd: string, sessionId: string): Promise<void> {
@@ -1528,7 +1615,7 @@ export class AppController {
     const fixtureProject = await resolveProjectIdentity(workspace);
     const fixtureDraftKey = `new:${fixtureProject.id}`;
     if (!(await this.uiState.getDraft(fixtureDraftKey))) {
-      await this.uiState.setDraft(fixtureDraftKey, "0.7.3 本地草稿（尚未启动 CLI）", undefined, [], {
+      await this.uiState.setDraft(fixtureDraftKey, "0.8.0 本地草稿（尚未启动 CLI）", undefined, [], {
         projectId: fixtureProject.id,
         workspacePath: fixtureProject.canonicalPath,
         profileId: "builtin-normal",
@@ -1547,11 +1634,11 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.7.3 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.8.0 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
     const waitingSessionId = OFFLINE_UI_SESSION_IDS.waiting;
     const backgroundSessionId = OFFLINE_UI_SESSION_IDS.background;
-    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.7.3 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
-    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.7.3 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
+    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.8.0 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
+    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.8.0 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -2125,6 +2212,114 @@ export class AppController {
     if (inheritedWorktreeId) await this.catalog.recordOrigins([{ sessionId: childId, kind: "worktree", id: inheritedWorktreeId, title: compiled.profile.name, suggestedTitle: worktree?.name || "Worktree 分叉" }]);
     return { sessionId: childId, parentSessionId: sessionId, cwd, profileId: compiled.profile.id, worktreeId: inheritedWorktreeId };
   }
+
+  async rebindWorkspaceSessions(sourceCwd: string, targetCwd: string): Promise<WorkspaceRebindReceipt> {
+    const canonicalTarget = await canonicalExistingPath(targetCwd, "directory");
+    if (!hasCanonicalPath(this.trustedWorkspacePaths, canonicalTarget)) {
+      throw new Error("新项目位置必须通过应用文件夹选择器选择");
+    }
+    if (samePath(sourceCwd, canonicalTarget)) throw new Error("新旧项目位置相同");
+    const sessions = await this.catalog.list(sourceCwd, "", this.processes.liveStatuses());
+    if (!sessions.length) throw new Error("旧项目没有可重新绑定的 Grok 会话");
+    const receipt: WorkspaceRebindReceipt = { sourceCwd, targetCwd: canonicalTarget, completed: [], failures: [] };
+    for (const session of sessions) {
+      try {
+        receipt.completed.push(await this.rebindSession(session, canonicalTarget));
+      } catch (error) {
+        receipt.failures.push({ sessionId: session.id, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    if (!receipt.completed.length) throw new Error(`项目重新绑定失败：${receipt.failures.map((item) => `${item.sessionId}: ${item.message}`).join("；")}`);
+    await this.settingsStore.patch({
+      activeWorkspace: canonicalTarget,
+      recentWorkspaces: [canonicalTarget, ...(await this.settingsStore.get()).recentWorkspaces.filter((value) => !samePath(value, canonicalTarget))].slice(0, 12),
+    });
+    return receipt;
+  }
+
+  private async rebindSession(source: SessionSummary, targetCwd: string): Promise<SessionRebindReceipt> {
+    const parentRuntime = await this.sessionRuntime.get(source.id);
+    const parentAssignment = await this.profiles.assignment(source.id);
+    const transactionId = randomUUID();
+    await this.appendRebindJournal({ transactionId, status: "started", sessionId: source.id, sourceCwd: source.cwd, targetCwd, at: new Date().toISOString() });
+    try {
+      const attached = await this.processes.tryMoveSessionToWorkspace(source.id, targetCwd).catch(() => false);
+      if (attached) {
+        let materialized = false;
+        for (let attempt = 0; attempt < 6 && !materialized; attempt += 1) {
+          materialized = await this.catalog.has(targetCwd, source.id);
+          if (!materialized) await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+        }
+        if (materialized) {
+          if (parentAssignment) await this.profiles.assign({ ...structuredClone(parentAssignment), sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined, createdAt: new Date().toISOString() });
+          await this.sessionRuntime.patch(source.id, { cwd: targetCwd });
+          await this.tokenActivity.rebindSession(source.id, source.id, targetCwd);
+          const receipt: SessionRebindReceipt = {
+            sessionId: source.id, parentSessionId: source.id, cwd: targetCwd,
+            profileId: parentRuntime?.profileId ?? parentAssignment?.profileId,
+            sourceCwd: source.cwd, targetCwd, method: "official-move", codeRestored: false,
+            localProjectionCopied: true, attachmentLedgerCopied: true, mediaCacheCopied: true,
+            completedAt: new Date().toISOString(),
+          };
+          await this.appendRebindJournal({ transactionId, status: "completed", method: receipt.method, sessionId: source.id, targetSessionId: source.id, sourceCwd: source.cwd, targetCwd, at: receipt.completedAt });
+          return receipt;
+        }
+        await this.processes.close(source.id, false).catch(() => undefined);
+      }
+
+      const raw = await this.processes.forkToWorkspace(source.id, source.cwd, targetCwd);
+      const childId = String(raw.newSessionId ?? raw.new_session_id ?? raw.sessionId ?? raw.forkedSessionId ?? raw.session_id ?? "");
+      if (!childId) throw new Error("CLI 未返回重新绑定后的会话 ID");
+      await this.catalog.recordFork(source.id, childId);
+      await this.catalog.rename(childId, source.title);
+      if (parentAssignment) {
+        await this.profiles.assign({
+          ...structuredClone(parentAssignment), sessionId: childId,
+          sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined,
+          createdAt: new Date().toISOString(),
+        });
+      }
+      const settings = await this.settingsStore.get();
+      await this.sessionRuntime.save(buildForkRuntimePreferences(parentRuntime, {
+        sessionId: childId, cwd: targetCwd,
+        modelId: parentRuntime?.modelId ?? settings.defaultModel,
+        providerId: parentRuntime?.providerId,
+        effort: parentRuntime?.effort ?? settings.defaultEffort,
+        mode: parentRuntime?.mode ?? settings.defaultMode,
+        profileId: parentRuntime?.profileId,
+        compaction: parentRuntime?.compaction,
+      }));
+      const projectionCopied = Boolean(await this.conversationProjections.cloneSession(source.id, childId, targetCwd));
+      await this.attachmentCache.cloneSession(source.id, childId);
+      await this.turnPresentations.cloneSession(source.id, childId);
+      const mediaRoot = join(this.userDataPath, "session-media");
+      const sourceMedia = join(mediaRoot, sessionCacheKey(source.id));
+      const hasMedia = Boolean(await stat(sourceMedia).catch(() => undefined));
+      if (hasMedia) await cp(sourceMedia, join(mediaRoot, sessionCacheKey(childId)), { recursive: true, force: false, errorOnExist: false });
+      await this.tokenActivity.rebindSession(source.id, childId, targetCwd);
+      // Archiving the source is the commit point. Every local copy above must
+      // succeed first so a partial migration never hides the usable session.
+      await this.catalog.archive(source.id, true);
+      const receipt: SessionRebindReceipt = {
+        sessionId: childId, parentSessionId: source.id, cwd: targetCwd,
+        profileId: parentRuntime?.profileId ?? parentAssignment?.profileId,
+        sourceCwd: source.cwd, targetCwd, method: "official-fork", codeRestored: false,
+        localProjectionCopied: projectionCopied, attachmentLedgerCopied: true, mediaCacheCopied: true,
+        completedAt: new Date().toISOString(),
+      };
+      await this.appendRebindJournal({ transactionId, status: "completed", method: receipt.method, sessionId: source.id, targetSessionId: childId, sourceCwd: source.cwd, targetCwd, at: receipt.completedAt });
+      return receipt;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.appendRebindJournal({ transactionId, status: "failed", sessionId: source.id, sourceCwd: source.cwd, targetCwd, message, at: new Date().toISOString() }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async appendRebindJournal(entry: Record<string, unknown>): Promise<void> {
+    const path = join(this.userDataPath, "session-rebind-history.jsonl");
+    await appendFile(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
+  }
   listRewindPoints(sessionId: string): Promise<RewindPoint[]> { return this.processes.get(sessionId).rewindPoints(); }
   async rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
@@ -2271,6 +2466,20 @@ export class AppController {
   async switchAccount(id: string) { const result = await this.auth.switchAccount(id); this.quota.clear(); return result; }
   async removeAccount(id: string) { const result = await this.auth.removeAccount(id); this.quota.clear(); return result; }
   checkCliUpdate() { return this.updater.check(); }
+  async checkUpdatesAutomatically(): Promise<import("../shared/types").AutomaticUpdateCheckResult> {
+    const settings = await this.settingsStore.get();
+    const decision = automaticUpdateCheckDecision(settings);
+    if (!decision.shouldCheck) return decision.reason === "disabled"
+      ? { checked: false, reason: "disabled" }
+      : { checked: false, checkedAt: decision.checkedAt, nextCheckAt: decision.nextCheckAt, reason: "throttled" };
+    const [cli, appStatus] = await Promise.all([
+      this.updater.check().catch((error) => ({ found: false, error: error instanceof Error ? error.message : String(error) })),
+      this.appRelease.check(false).catch((error) => ({ configured: false, currentVersion: app.getVersion(), updateAvailable: false, checkedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) })),
+    ]);
+    const checkedAt = new Date().toISOString();
+    await this.settingsStore.patch({ lastAutomaticUpdateCheckAt: checkedAt });
+    return { checked: true, checkedAt, nextCheckAt: decision.nextCheckAt, reason: "checked", cli, app: appStatus };
+  }
   previewCliUpdate() { return this.updater.preview(); }
   applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) { return this.updater.apply(input); }
   getCliCompatibilitySnapshot() { return this.updater.compatibility(); }
@@ -2592,6 +2801,12 @@ export class AppController {
   }
 
   private async handleEvent(event: ChatEvent): Promise<void> {
+    if (event.type === "session-title") {
+      await this.catalog.syncOfficialTitle(event.sessionId, event.title, event.manual);
+    }
+    if (event.type === "commands") {
+      setOfficialFeedbackMenuAvailable(event.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "feedback"));
+    }
     if (event.type === "tool-call") {
       const snapshot = this.processes.snapshot(event.sessionId);
       try {

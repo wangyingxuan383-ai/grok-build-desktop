@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 - 2026-08-11
+
+### Grok Build CLI 1.0.0 完整适配与最终收口
+
+- 最终再审逐项清理历史计划状态并复核官方 Changelog、已安装 stable 和官方 main。新增官方 `x.ai/session/rename` 前向兼容、手动/自动标题所有权同步与旧 CLI 本地回退；stable 1.0.0 实机尚不提供该方法，因此不会错误显示为可用。
+- 修复 CLI 能力证据把 `cancelRewind` 当成完整 Rewind 支持的问题；`session.rewind` 与 `session.cancel-rewind` 现在分别记录，未知/未探测能力继续保持关闭。
+- 诊断中心补齐官方 Grok Doctor 自动修复：只接受 `doctor --json` 返回的安全修复 ID，使用五分钟一次性预览令牌、执行前重新验证和二次确认，以固定参数调用 `doctor fix`；当前机器没有可应用修复。
+- 官方上游快照更新至仓库 `b13fa526f5112c0b20dad5f1f2300d3d3b127895` / 源码 `a51a1dc62fe20029ac39a665985bba78edbb870f`，并加入 Session Rename/标题通知前向 Fixture；审计报告见 `docs/V080_FINAL_AUDIT.md`。
+- 再审后的完整套件为 101 个测试文件/733 项通过（6 个 live 文件/9 项按设计跳过）；TypeScript、资源/生产构建、365 文件公开扫描、分块、Native Host、零漏洞依赖审计、diff check 与当前生产构建 UI 通过。
+- 建立独立的 CLI 1.x 兼容档案、离线/运行时门禁及 1.0.0/未知未来主版本 Wire Fixture；未知主版本失败关闭，版本号不再被当成功能证据。
+- 受管 ACP 会话按 1.0 重新提交交互式附加策略，解析结构化 `closeOutcome`；MCP 斜杠事件、包装通知、Context/Usage/Session Info、Plan/Stop/Compact/Recap 和恢复后的真实模式均按会话归一化。
+- 官方 Git status 显式请求未跟踪文件、统计、补丁和子模块策略，避免 1.0 默认值改变让 Review 漏文件；官方返回不完整或没有匹配的空闲会话时回退现有受限系统 Git。
+- CLI 更新器继续禁止子进程自更新，只接受 stable 固定目标；跨主版本需要明确确认，更新后执行 ACP/Session/Git/Usage 探针，失败时精确回滚并恢复会话。应用更新只检测正式 GitHub Release，不从 `main` 安装。
+- 项目旧路径失效时新增本地投影离线查看；离线状态阻止发送和文件操作。重新绑定先尝试官方移动目录恢复，不支持时再官方 Fork，默认不恢复旧代码状态，并保留事务回滚记录。
+- 会话支持继承 CLI 或 60%–95% 自定义 Compact 阈值、立即压缩、压缩时间线及 Stop 取消；首事件只做 20/60 秒软提示，不再为长推理增加总时长上限。
+- 右栏增加官方会话数据视图；官方反馈按真实能力显示并在发送前脱敏预览。扩展列表统一排序/分组，Skills 可搜索；Markdown 表格、长脚本、Diff 与 CJK 正文恢复选择复制和独立滚动。
+- 支持包继续采用静态允许列表，明确排除会话正文、媒体、凭据和路径重新绑定日志。
+- Desktop 固定目标更新已将本机 CLI 从0.2.118升级到 stable `1.0.0 (3cd0d0cbce)`；核心 ACP、Resume、结构化 Close/Delete、真实只读 Plan、Stop、Compact、MCP 事件和双会话门禁通过。stable 暂无 `x.ai/git/status`/Session Usage 扩展时按运行时证据禁用并安全回退，不再回滚整个1.0升级。
+- 修复 CLI 1.0 将真实上游 HTTP 原因包在 JSON-RPC `error.data`、界面却只显示 `Internal error` 的问题；现在保留 JSON-RPC/HTTP 分类并优先展示受限长度的可操作错误。当前远程 CPA 实测返回 `403 cpa_local_only`，因此不声称 Provider 推理成功。
+- 最终源码门禁通过：101 个测试文件/733 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、365 文件公开扫描、Renderer 分块、Native/Fuses、零漏洞依赖审计、打包版与安装版 UI 通过。正式公开资产由 `v0.8.0` 标签工作流从最终提交重新构建，并在草稿回下载、SHA-256 与 Attestation 校验通过后发布。
 
 
 ### 0.7.3 0.7.x 总体改进合并候选（2026-08-10）

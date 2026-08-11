@@ -174,6 +174,32 @@ export class ConversationProjectionService {
     }));
   }
 
+  /** Copies the Desktop-visible history to an official fork immediately. */
+  async cloneSession(sourceSessionId: string, targetSessionId: string, targetCwd: string): Promise<ConversationProjection | undefined> {
+    const source = await this.restore(sourceSessionId);
+    if (!source) return undefined;
+    const events = source.events
+      .filter(isChatEventRecord)
+      .map((event) => ({ ...structuredClone(event), sessionId: targetSessionId } as ChatEvent));
+    const runtime = source.runtime
+      ? { ...structuredClone(source.runtime), sessionId: targetSessionId, cwd: targetCwd, updatedAt: new Date().toISOString() }
+      : undefined;
+    const queue = source.queue
+      ? {
+          ...structuredClone(source.queue),
+          sessionId: targetSessionId,
+          updatedAt: new Date().toISOString(),
+          entries: source.queue.entries.map((entry) => ({ ...entry, sessionId: targetSessionId })),
+          terminalEntries: source.queue.terminalEntries?.map((entry) => ({ ...entry, sessionId: targetSessionId })),
+        }
+      : undefined;
+    if (runtime || queue) this.states.set(targetSessionId, { runtime, queue });
+    await this.enqueue(targetSessionId, () => this.withSessionLock(targetSessionId, async () => {
+      await this.compactWithoutLock(targetSessionId, events.map((event) => projectionRecord(event)), 0);
+    }));
+    return this.restore(targetSessionId);
+  }
+
   /**
    * One-time, read-only recovery for pre-0.6.16 conversations whose ACP replay
    * has metrics but no visible assistant blocks. Only the strict
@@ -849,6 +875,10 @@ async function resolvePersistedWorkspace(cwd: string, sessionsRoot: string): Pro
     try { return decodeURIComponent(entry.name).toLocaleLowerCase() === wanted; } catch { return false; }
   });
   return workspace ? join(sessionsRoot, workspace.name) : join(sessionsRoot, encodeURIComponent(cwd));
+}
+
+function isChatEventRecord(event: Record<string, unknown>): event is ChatEvent {
+  return typeof event.type === "string" && typeof event.sessionId === "string";
 }
 
 function legacyUpdate(value: unknown, expectedSessionId: string): Record<string, unknown> | undefined {

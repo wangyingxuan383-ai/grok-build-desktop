@@ -19,6 +19,8 @@ const RULES: Record<string, Rule> = {
   "onboarding:update": (args) => objectArg(args, 0),
   "onboarding:reset": noArgs,
   "diagnostics:run": noArgs,
+  "diagnostics:doctor-fix-preview": noArgs,
+  "diagnostics:doctor-fix": (args) => { idArg(args, 0); stringArg(args, 1, 256); booleanArg(args, 2); },
   "diagnostics:failure": (args) => objectArg(args, 0),
   "diagnostics:cli-capabilities": (args) => optionalBooleanArg(args, 0),
   "diagnostics:support-preview": noArgs,
@@ -26,11 +28,14 @@ const RULES: Record<string, Rule> = {
   "app-update:check": (args) => optionalBooleanArg(args, 0),
   "app-update:open": (args) => optionalHttpUrlArg(args, 0),
   "workspace:choose": noArgs,
+  "workspace:create-temporary": noArgs,
   "workspace:set": (args) => absoluteFilesystemPathArg(args, 0, "工作区"),
+  "workspace:open-offline": (args) => pathArg(args, 0),
   "workspace:discover": (args) => optionalBooleanArg(args, 0),
   "workspace:pin": (args) => { pathArg(args, 0); booleanArg(args, 1); },
   "workspace:hidden:list": noArgs,
   "workspace:hidden:set": (args) => { pathArg(args, 0); booleanArg(args, 1); },
+  "workspace:rebind-sessions": (args) => { pathArg(args, 0); absoluteFilesystemPathArg(args, 1, "新工作区"); },
   "workspace:search-files": (args) => { pathArg(args, 0); stringArg(args, 1, 16_384); optionalIntegerArg(args, 2, 1, 10_000); },
   "workspace:tree:list": (args) => { pathArg(args, 0); optionalRelativePathArg(args, 1); optionalObjectArg(args, 2); },
   "editor:open": (args) => { pathArg(args, 0); pathArg(args, 1); },
@@ -168,6 +173,12 @@ const RULES: Record<string, Rule> = {
   "session:open": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:info": (args) => idArg(args, 0),
   "session:usage": (args) => idArg(args, 0),
+  "session:runtime": (args) => idArg(args, 0),
+  "session:compaction-policy": (args) => { idArg(args, 0); sessionCompactionPolicyArg(args, 1); },
+  "session:compact": (args) => idArg(args, 0),
+  "feedback:capability": (args) => idArg(args, 0),
+  "feedback:preview": (args) => stringArg(args, 0, 64 * 1024),
+  "feedback:submit": (args) => { idArg(args, 0); stringArg(args, 1, 64 * 1024); },
   "session:btw": (args) => { idArg(args, 0); stringArg(args, 1, 64 * 1024); },
   "session:rename": (args) => { idArg(args, 0); stringArg(args, 1, 4_096); },
   "session:delete": (args) => { pathArg(args, 0); idArg(args, 1); },
@@ -213,6 +224,7 @@ const RULES: Record<string, Rule> = {
   "auth:remove": (args) => idArg(args, 0),
   "settings:get": noArgs,
   "settings:update": (args) => settingsPatchArg(args, 0),
+  "updates:auto-check": noArgs,
   "theme:get": noArgs,
   "theme:update": (args) => objectArg(args, 0),
   "theme:pick-background": noArgs,
@@ -809,6 +821,12 @@ function cliUpdateInputArg(args: unknown[], index: number): void {
   const current = requiredRecordString(value, "expectedCurrentVersion", 64);
   if (!/^\d+\.\d+\.\d+$/.test(target) || !/^\d+\.\d+\.\d+$/.test(current)) throw new Error("IPC CLI 版本格式无效");
   optionalRecordBoolean(value, "allowMajorUpgrade");
+}
+function sessionCompactionPolicyArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, ["mode", "thresholdPercent"]);
+  const mode = requiredRecordEnum(value, "mode", ["inherit", "custom"]);
+  if (mode === "custom") requiredRecordInteger(value, "thresholdPercent", 60, 95);
+  else if (value.thresholdPercent !== undefined) throw new Error("继承 CLI 压缩策略时不能指定阈值");
 }
 function mediaSourceArg(args: unknown[], index: number, allowData: boolean): void {
   const value = stringArg(args, index, allowData ? 28 * 1024 * 1024 : 32_767);

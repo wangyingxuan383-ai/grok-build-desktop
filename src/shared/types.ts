@@ -43,7 +43,7 @@ export type AppMenuCommand =
   | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
   | "search-sessions" | "search-conversation" | "focus-composer" | "stop-generation" | "copy-final-answer"
   | "toggle-sidebar" | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
-  | "open-settings" | "open-diagnostics" | "open-onboarding" | "open-about" | "open-task-center";
+  | "open-settings" | "open-diagnostics" | "open-onboarding" | "open-about" | "open-task-center" | "open-feedback";
 
 export interface BuildInfo {
   productName: "Grok Build Desktop";
@@ -165,6 +165,26 @@ export interface SystemCompatibilityReport {
   effortFlag?: "--effort" | "--reasoning-effort";
 }
 
+export interface GrokDoctorFixCandidate {
+  id: string;
+  message: string;
+  note?: string;
+}
+
+export interface GrokDoctorFixPreview {
+  generatedAt: string;
+  fixes: GrokDoctorFixCandidate[];
+  confirmationToken?: string;
+  message: string;
+}
+
+export interface GrokDoctorFixReceipt {
+  id: string;
+  applied: boolean;
+  completedAt: string;
+  message: string;
+}
+
 export interface OnboardingState {
   version: number;
   completed: boolean;
@@ -193,6 +213,15 @@ export interface AppReleaseStatus {
   error?: string;
 }
 
+export interface AutomaticUpdateCheckResult {
+  checked: boolean;
+  checkedAt?: string;
+  nextCheckAt?: string;
+  reason?: "disabled" | "throttled" | "checked";
+  cli?: CliVersionStatus;
+  app?: AppReleaseStatus;
+}
+
 export interface WorkspaceFileCandidate {
   path: string;
   relativePath: string;
@@ -218,6 +247,10 @@ export interface AppSettings {
   defaultMode: SessionMode;
   showThinking: boolean;
   expandToolDetails: boolean;
+  /** Check the CLI stable channel and the Desktop GitHub Release on startup, then at most once per 24 hours. */
+  automaticUpdateChecks?: boolean;
+  /** Main-process maintained timestamp used to throttle automatic checks. */
+  lastAutomaticUpdateCheckAt?: string;
   fontScale: number;
   uiDensity: UiDensity;
   /** Conversation-only reading width. It must not resize workbenches or dialogs. */
@@ -627,7 +660,15 @@ export interface SessionRuntimePreferences {
   effort: ReasoningEffort;
   mode: SessionMode;
   profileId?: string;
+  /** Session compaction behavior. The CLI remains authoritative when omitted or set to inherit. */
+  compaction?: SessionCompactionPolicy;
   updatedAt: string;
+}
+
+export interface SessionCompactionPolicy {
+  mode: "inherit" | "custom";
+  /** Custom auto-compaction threshold, constrained to 60-95. */
+  thresholdPercent?: number;
 }
 
 /** Queue ownership survives a Desktop/CLI restart and is reconciled with the CLI queue by stable IDs. */
@@ -698,6 +739,24 @@ export interface SessionForkResult {
   worktreeId?: string;
 }
 
+export interface SessionRebindReceipt extends SessionForkResult {
+  sourceCwd: string;
+  targetCwd: string;
+  method: "official-move" | "official-fork";
+  codeRestored: false;
+  localProjectionCopied: boolean;
+  attachmentLedgerCopied: boolean;
+  mediaCacheCopied: boolean;
+  completedAt: string;
+}
+
+export interface WorkspaceRebindReceipt {
+  sourceCwd: string;
+  targetCwd: string;
+  completed: SessionRebindReceipt[];
+  failures: Array<{ sessionId: string; message: string }>;
+}
+
 export interface NotificationInboxItem {
   id: string;
   kind: "completion" | "failure" | "confirmation" | "info";
@@ -727,6 +786,8 @@ export interface SessionSummary {
   id: string;
   cwd: string;
   title: string;
+  /** CLI-produced previous-turn recap; never inferred from message count. */
+  preview?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -1485,8 +1546,9 @@ export type ChatEvent =
   | { type: "turn-started"; sessionId: string; presentation: TurnPresentation }
   | { type: "turn-completed"; sessionId: string; presentation?: TurnPresentation }
   | { type: "turn-retry"; sessionId: string; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
-  | { type: "compact-status"; sessionId: string; status: "started" | "completed" | "failed" | "cancelled"; message?: string }
+  | { type: "compact-status"; sessionId: string; status: "started" | "completed" | "failed" | "cancelled"; trigger?: "automatic" | "manual" | "unknown"; beforeTokens?: number; afterTokens?: number; message?: string }
   | { type: "session-recap"; sessionId: string; turnId?: string; text: string; contentHash: string }
+  | { type: "session-title"; sessionId: string; title: string; manual: boolean }
   | { type: "follow-ups"; sessionId: string; responseId?: string; promptId?: string; suggestions: Array<{ id: string; text: string }> }
   | { type: "runtime-update"; sessionId: string; update: CliRuntimeUpdate }
   | { type: "turn-presentations-restore"; sessionId: string; presentations: TurnPresentation[] }
@@ -1546,11 +1608,116 @@ export interface CliRuntimeHandshake {
   };
 }
 
+export interface SessionAttachPolicy {
+  /** Desktop renders permission, question, and Plan requests and is therefore interactive. */
+  nonInteractive: false;
+  /** Assistant text is visible in Desktop; delivery does not need an MCP hand-off tool. */
+  deliveryTools: string[];
+}
+
+/** Grok Build 1.0 wire outcomes are `closed`, `notResident` and
+ * `superseded`. `released-without-close` is a Desktop-only fallback when the
+ * ACP request could not complete before the process was released. */
+export type SessionCloseOutcome = "closed" | "not-resident" | "superseded" | "released-without-close" | "unknown";
+
+export interface SessionCloseReceipt {
+  sessionId: string;
+  outcome: SessionCloseOutcome;
+  rawOutcome?: string;
+  completed: boolean;
+  at: string;
+  message?: string;
+}
+
+export interface SessionCompactReceipt {
+  sessionId: string;
+  accepted: boolean;
+  source: "extension" | "slash-command" | "unsupported";
+  startedAt: string;
+  completedAt?: string;
+  beforeTokens?: number;
+  afterTokens?: number;
+  message: string;
+}
+
+export interface OfficialFeedbackCapability {
+  available: boolean;
+  sessionId?: string;
+  source: "available-command" | "unavailable";
+  reason?: string;
+}
+
+export interface OfficialFeedbackPreview {
+  originalLength: number;
+  preview: string;
+  redacted: boolean;
+}
+
+export interface OfficialFeedbackReceipt {
+  sessionId: string;
+  submitted: boolean;
+  message: string;
+}
+
+export interface RuntimeEventEnvelope {
+  rawMethod: string;
+  method: string;
+  schemaVersion: string;
+  sourceSessionId?: string;
+  receivedAt: string;
+  payload: Record<string, unknown>;
+}
+
+export interface CliCompatibilityCheck {
+  id: string;
+  label: string;
+  status: "passed" | "failed" | "pending" | "unsupported";
+  source: "fixture" | "runtime" | "live";
+  message?: string;
+}
+
+export interface CliMajorCompatibilityProfile {
+  major: number;
+  targetVersion: string;
+  label: string;
+  requiredChecks: string[];
+  changelogUrl: string;
+}
+
+export interface CliV1RuntimeSnapshot {
+  version: string;
+  observedAt: string;
+  attachPolicy: SessionAttachPolicy;
+  closeOutcomeSupported: boolean;
+  mcpMethods: string[];
+  gitStatusUsesExplicitOptions: boolean;
+  dataViews: Array<"context" | "usage" | "session-info">;
+}
+
+export interface CliCompatibilityGate {
+  targetVersion: string;
+  major: number;
+  status: "passed" | "failed" | "pending";
+  checkedAt: string;
+  checks: CliCompatibilityCheck[];
+  liveVerified: boolean;
+}
+
+export interface CliCompatibilityReceipt {
+  targetVersion: string;
+  accepted: boolean;
+  gate: CliCompatibilityGate;
+  message: string;
+}
+
 export interface CliCompatibilitySnapshot {
   cliVersion?: string;
   checkedAt: string;
   handshake?: CliRuntimeHandshake;
   capabilities: CliCapabilityEvidence[];
+  majorProfile?: CliMajorCompatibilityProfile;
+  v1?: CliV1RuntimeSnapshot;
+  gate?: CliCompatibilityGate;
 }
 
 export interface CliUpdatePreview {
@@ -1563,6 +1730,7 @@ export interface CliUpdatePreview {
   publicLatestVersion?: string;
   publicVersionAhead: boolean;
   majorUpgrade: boolean;
+  compatibilityGate?: CliCompatibilityGate;
 }
 
 export interface CliUpdateReceipt {
@@ -1612,6 +1780,21 @@ export interface CliSessionInfo {
   modelId?: string;
   mode?: SessionMode;
   effort?: ReasoningEffort;
+  sandbox?: string;
+  contextWindowTokens?: number;
+  contextUsedTokens?: number;
+  contextFreeTokens?: number;
+  contextUsagePercent?: number;
+  systemPromptTokens?: number;
+  toolDefinitionsCount?: number;
+  toolDefinitionsTokens?: number;
+  compactionCount?: number;
+  autoCompactThresholdPercent?: number;
+  turnCount?: number;
+  toolCallCount?: number;
+  messageCount?: number;
+  agentName?: string;
+  resolvedModelId?: string;
   createdAt?: string;
   updatedAt?: string;
   source: "acp" | "unsupported";
@@ -1625,6 +1808,24 @@ export interface CliSessionUsage {
   cachedReadTokens?: number;
   reasoningTokens?: number;
   totalTokens?: number;
+  costUsd?: number;
+  costUsdTicks?: number;
+  costIsPartial?: boolean;
+  usageIsIncomplete?: boolean;
+  modelCalls?: number;
+  apiDurationMs?: number;
+  numTurns?: number;
+  modelUsage?: Record<string, {
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedReadTokens?: number;
+    reasoningTokens?: number;
+    totalTokens?: number;
+    costUsd?: number;
+    costIsPartial?: boolean;
+  }>;
+  limitPercent?: number;
+  resetAt?: string;
   source: "acp" | "unsupported";
 }
 
@@ -1690,6 +1891,8 @@ export interface GrokDesktopApi {
   updateOnboarding(patch: Partial<OnboardingState>): Promise<OnboardingState>;
   resetOnboarding(): Promise<OnboardingState>;
   runDiagnostics(): Promise<SystemCompatibilityReport>;
+  previewGrokDoctorFixes(): Promise<GrokDoctorFixPreview>;
+  applyGrokDoctorFix(id: string, confirmationToken: string, confirmed: boolean): Promise<GrokDoctorFixReceipt>;
   diagnoseFailure(failure: TurnFailure): Promise<FailureDiagnosisReport>;
   getAgentChanges(sessionId: string, scope: "last-turn" | "session"): Promise<AgentChangeIndex>;
   getTokenActivity(query?: TokenActivityQuery): Promise<TokenActivityReport>;
@@ -1699,7 +1902,9 @@ export interface GrokDesktopApi {
   checkAppUpdate(force?: boolean): Promise<AppReleaseStatus>;
   openAppRelease(url?: string): Promise<void>;
   chooseWorkspace(): Promise<string | null>;
+  createTemporaryWorkspace(): Promise<string>;
   setWorkspace(cwd: string): Promise<SessionSummary[]>;
+  openWorkspaceOffline(cwd: string): Promise<SessionSummary[]>;
   discoverWorkspaces(force?: boolean): Promise<WorkspaceSummary[]>;
   pinWorkspace(cwd: string, pinned: boolean): Promise<WorkspaceSummary[]>;
   listHiddenWorkspaces(): Promise<WorkspaceSummary[]>;
@@ -1784,7 +1989,13 @@ export interface GrokDesktopApi {
   openSession(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: SessionHydrationState; message?: string }>;
   getCliSessionInfo(sessionId: string): Promise<CliSessionInfo>;
   getCliSessionUsage(sessionId: string): Promise<CliSessionUsage>;
+  getSessionRuntimePreferences(sessionId: string): Promise<SessionRuntimePreferences | undefined>;
+  setSessionCompactionPolicy(sessionId: string, policy: SessionCompactionPolicy): Promise<SessionRuntimePreferences>;
+  compactSession(sessionId: string): Promise<SessionCompactReceipt>;
   sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt>;
+  getOfficialFeedbackCapability(sessionId: string): Promise<OfficialFeedbackCapability>;
+  previewOfficialFeedback(text: string): Promise<OfficialFeedbackPreview>;
+  submitOfficialFeedback(sessionId: string, text: string): Promise<OfficialFeedbackReceipt>;
   renameSession(sessionId: string, title: string): Promise<void>;
   deleteSession(cwd: string, sessionId: string): Promise<void>;
   deleteDesktopSessionData(cwd: string, sessionId: string): Promise<void>;
@@ -1883,6 +2094,7 @@ export interface GrokDesktopApi {
   clearPromptQueue(sessionId: string): Promise<QueueOperationReceipt>;
   interjectQueuedPrompt(sessionId: string, id: string, text?: string): Promise<QueueOperationReceipt>;
   forkSession(sessionId: string, rewindPointId?: string, launch?: import("./workbench-types").ExecutionProfileLaunchInput): Promise<SessionForkResult>;
+  rebindWorkspaceSessions(sourceCwd: string, targetCwd: string): Promise<WorkspaceRebindReceipt>;
   listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
   rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void>;
   archiveSession(sessionId: string, archived: boolean): Promise<void>;
@@ -1932,6 +2144,7 @@ export interface GrokDesktopApi {
   getComputerSettings(): Promise<ComputerUseSettings>;
   updateComputerSettings(patch: Partial<ComputerUseSettings>): Promise<ComputerUseSettings>;
   checkCliUpdate(): Promise<CliVersionStatus>;
+  checkUpdatesAutomatically(): Promise<AutomaticUpdateCheckResult>;
   previewCliUpdate(): Promise<CliUpdatePreview>;
   applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }): Promise<CliUpdateReceipt>;
   getCliCompatibilitySnapshot(): Promise<CliCompatibilitySnapshot>;

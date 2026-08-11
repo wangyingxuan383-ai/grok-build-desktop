@@ -2,10 +2,39 @@ import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildGrokAgentArgs, buildPromptText, demuxProviderThinkingText, extractAcpToolDiff, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
+import { buildGrokAgentArgs, buildPromptText, buildSessionAttachMeta, demuxProviderThinkingText, extractAcpToolDiff, FIRST_EVENT_DIAGNOSTIC_MS, FIRST_EVENT_WAIT_MS, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, normalizeRuntimeEventEnvelope, normalizeSessionCloseReceipt, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
+  it("sends the interactive Desktop attach policy on every session attach", () => {
+    expect(buildSessionAttachMeta({ owner: "desktop" }, ["C:\\plugins\\one"])).toEqual({
+      owner: "desktop",
+      pluginDirs: ["C:\\plugins\\one"],
+      startupHints: { nonInteractive: false, deliveryTools: [] },
+    });
+  });
+
+  it("normalizes direct and wrapped x.ai runtime notifications", () => {
+    expect(normalizeRuntimeEventEnvelope("_x.ai/mcp/server_status", { server: "demo", status: "ready" }, "s1")).toMatchObject({
+      rawMethod: "_x.ai/mcp/server_status",
+      method: "x.ai/mcp/server_status",
+      sourceSessionId: "s1",
+      payload: { server: "demo", status: "ready" },
+    });
+    expect(normalizeRuntimeEventEnvelope("_x.ai/notification", { method: "x.ai/mcp/tools_changed", params: { toolCount: 4 } })).toMatchObject({
+      method: "x.ai/mcp/tools_changed",
+      payload: { toolCount: 4 },
+    });
+  });
+
+  it("parses Grok Build 1.0 close outcomes without collapsing unknown results", () => {
+    expect(normalizeSessionCloseReceipt("s1", { _meta: { "x.ai/closeOutcome": "closed" } })).toMatchObject({
+      sessionId: "s1", outcome: "closed", completed: true, rawOutcome: "closed",
+    });
+    expect(normalizeSessionCloseReceipt("s1", { _meta: { "x.ai/closeOutcome": "notResident" } })).toMatchObject({ outcome: "not-resident", completed: true });
+    expect(normalizeSessionCloseReceipt("s1", { _meta: { "x.ai/closeOutcome": "superseded" } })).toMatchObject({ outcome: "superseded", completed: true });
+    expect(normalizeSessionCloseReceipt("s1", {})).toMatchObject({ sessionId: "s1", outcome: "unknown", completed: false });
+  });
   it("normalizes capability-gated official session surfaces without preserving raw payloads", () => {
     expect(normalizeCliSessionList({ sessions: [{ id: "s1", cwd: "C:\\work", name: "审计", model_id: "grok-4.5", message_count: 3 }], next_cursor: "next" })).toEqual({
       supported: true,
@@ -13,16 +42,73 @@ describe("Grok ACP process arguments", () => {
       nextCursor: "next",
       source: "acp",
     });
-    expect(normalizeCliSessionInfo("s1", { session: { id: "s1", mode_id: "plan", reasoning_effort: "high", title: "计划" } })).toMatchObject({ supported: true, sessionId: "s1", title: "计划", mode: "plan", effort: "high", source: "acp" });
-    expect(normalizeCliSessionUsage("s1", { usage: { input_tokens: 10, output_tokens: 4, total_tokens: 14 } })).toEqual({ supported: true, sessionId: "s1", inputTokens: 10, outputTokens: 4, totalTokens: 14, source: "acp" });
+    expect(normalizeCliSessionInfo("s1", { sessionId: "s1", mode_id: "plan", reasoning_effort: "high", title: "计划", model: "grok-build", resolvedModelId: "grok-4.5", context: { used: 75, total: 100, freeTokens: 25, usagePct: 75, compactionCount: 2, autoCompactThresholdPercent: 85 } })).toMatchObject({ supported: true, sessionId: "s1", title: "计划", mode: "plan", effort: "high", modelId: "grok-build", resolvedModelId: "grok-4.5", contextUsedTokens: 75, contextWindowTokens: 100, contextFreeTokens: 25, contextUsagePercent: 75, compactionCount: 2, autoCompactThresholdPercent: 85, source: "acp" });
+    expect(normalizeCliSessionUsage("s1", { usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14, cachedReadTokens: 8, costUsdTicks: 25_000_000, usageIsIncomplete: false, modelUsage: { "grok-build": { inputTokens: 10, outputTokens: 4 } } } })).toMatchObject({ supported: true, sessionId: "s1", inputTokens: 10, outputTokens: 4, totalTokens: 14, cachedReadTokens: 8, costUsdTicks: 25_000_000, costUsd: 0.0025, usageIsIncomplete: false, source: "acp" });
   });
 
   it("does not infer unsupported official session features", async () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     Object.assign(adapter, { sessionId: "s1", runtimeHandshake: { extensions: [], sessionCapabilities: {} } });
+    adapter.extension = vi.fn().mockRejectedValue(new Error("Method not found (-32601)"));
     expect(await adapter.btw("hello")).toMatchObject({ accepted: false, source: "unsupported", sessionId: "s1" });
     expect(await adapter.sessionInfo()).toMatchObject({ supported: false, source: "unsupported", sessionId: "s1" });
     expect(await adapter.sessionUsage()).toMatchObject({ supported: false, source: "unsupported", sessionId: "s1" });
+    expect(adapter.feedbackCapability()).toMatchObject({ available: false, source: "unavailable", sessionId: "s1" });
+  });
+
+  it("exposes and submits official feedback only when the live session advertises /feedback", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    adapter.sessionId = "s1";
+    adapter.commands = [{ name: "feedback", description: "Send feedback" }];
+    adapter.extension = vi.fn().mockResolvedValue({ result: { success: true } });
+    expect(adapter.feedbackCapability()).toEqual({ available: true, sessionId: "s1", source: "available-command" });
+    await expect(adapter.submitOfficialFeedback("  CLI 反馈  ")).resolves.toMatchObject({ submitted: true, sessionId: "s1" });
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/feedback", { session_id: "s1", feedback_text: "CLI 反馈" });
+  });
+
+  it("creates a cross-directory fork without creating a disposable session", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    adapter.launchAndInitialize = vi.fn().mockResolvedValue(undefined);
+    adapter.request = vi.fn().mockResolvedValue({ newSessionId: "child" });
+    adapter.observeRuntimeExtension = vi.fn();
+    expect(await adapter.forkExternal("parent", "E:\\old", "C:\\new")).toEqual({ newSessionId: "child" });
+    expect(adapter.request).toHaveBeenCalledWith("x.ai/session/fork", {
+      sourceSessionId: "parent", sourceCwd: "E:\\old", newCwd: "C:\\new", sessionKind: "fork",
+    }, 120_000);
+  });
+
+  it("keeps the CLI-reported mode when resuming instead of applying the current global default", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-resume-mode-"));
+    try {
+      const events: any[] = [];
+      const adapter = Object.assign(Object.create(GrokAcpAdapter.prototype), {
+        sessionId: "s1",
+        mode: "agent",
+        currentEffort: "high",
+        currentModelId: "grok-4.5",
+        requestedModelId: "grok-4.5",
+        options: { cwd: root, modelId: "grok-4.5" },
+        runtimeHandshake: { models: [], extensions: [], features: {} },
+        promptQueue: [],
+        commands: [],
+        models: [],
+        restoredQueueIds: new Set(),
+        restoredQueueSeenIds: new Set(),
+        persistRuntimePatch: vi.fn(),
+        emitEvent: (event: any) => events.push(event),
+        emitStatus: vi.fn(),
+        applyMode: vi.fn(),
+      }) as any;
+      await adapter.completeSessionAttach({
+        sessionId: "s1",
+        models: { currentModelId: "grok-4.5", availableModels: [{ modelId: "grok-4.5", name: "Grok" }] },
+        modes: { currentModeId: "plan", availableModes: [{ id: "agent", name: "Agent" }, { id: "plan", name: "Plan" }] },
+      }, "s1");
+      expect(adapter.mode).toBe("plan");
+      expect(adapter.planActive).toBe(true);
+      expect(adapter.applyMode).not.toHaveBeenCalled();
+      expect(events).toContainEqual(expect.objectContaining({ type: "mode", sessionId: "s1", mode: "plan" }));
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it("calls x.ai/btw and ACP session/list only after runtime evidence", async () => {
@@ -32,16 +118,59 @@ describe("Grok ACP process arguments", () => {
     adapter.extension = vi.fn(async (method: string) => method === "x.ai/btw" ? { result: { answer: "侧边回答", request_id: "btw-1" } } : { result: { title: "T" } });
     adapter.request = vi.fn(async () => ({ sessions: [{ id: "s1", title: "T" }] }));
     expect(await adapter.btw("侧边问题")).toMatchObject({ accepted: true, requestId: "btw-1", message: "侧边回答", source: "acp" });
-    expect(adapter.extension).toHaveBeenCalledWith("x.ai/btw", { session_id: "s1", question: "侧边问题" });
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/btw", { sessionId: "s1", question: "侧边问题" });
     expect(await adapter.officialSessionList("C:\\work")).toMatchObject({ supported: true, sessions: [{ sessionId: "s1", title: "T" }] });
     expect(adapter.request).toHaveBeenCalledWith("session/list", { cwd: "C:\\work" }, 20_000);
     await adapter.sessionInfo();
     await adapter.sessionUsage();
-    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/info", { session_id: "s1" });
-    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/usage", { session_id: "s1" });
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/info", { sessionId: "s1" });
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/usage", { sessionId: "s1" });
+    adapter.options = { cwd: "C:\\work" };
+    adapter.extension.mockResolvedValueOnce({ result: { success: true } });
+    await expect(adapter.renameSession("  Manual\nTitle  ")).resolves.toBe("official");
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/session/rename", {
+      title: "Manual Title",
+      cwd: "C:\\work",
+      kind: "build",
+    });
+    adapter.extension.mockResolvedValueOnce({ result: { files: [] } });
+    await adapter.officialGitStatus("C:\\work");
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/git/status", {
+      sessionId: "s1",
+      gitRoot: "C:\\work",
+      includeUntracked: true,
+      includeStats: true,
+      includePatches: false,
+      ignoreSubmodules: true,
+    });
   });
   it("does not impose a Desktop wall-clock ceiling on interactive turns", () => {
     expect(INTERACTIVE_PROMPT_TIMEOUT_MS).toBeNull();
+  });
+
+  it("surfaces soft first-event diagnostics without cancelling the turn", () => {
+    vi.useFakeTimers();
+    try {
+      const statuses: string[] = [];
+      const runtime: string[] = [];
+      const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+      Object.assign(adapter, {
+        sessionId: "s1",
+        activeTurn: { turnId: "t1" },
+        emitStatus: (_status: string, text: string) => statuses.push(text),
+        emitRuntimeUpdate: (_kind: string, name: string) => runtime.push(name),
+      });
+      adapter.startFirstEventWatchdog("t1");
+      vi.advanceTimersByTime(FIRST_EVENT_WAIT_MS);
+      expect(statuses).toContain("仍在等待 Grok 返回首个事件…");
+      vi.advanceTimersByTime(FIRST_EVENT_DIAGNOSTIC_MS - FIRST_EVENT_WAIT_MS);
+      expect(runtime).toEqual(["first-event-waiting", "first-event-diagnostic"]);
+      expect(adapter.cancelRequested).not.toBe(true);
+      adapter.markFirstTurnEvent();
+      expect(adapter.firstEventTurnId).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["none", "minimal", "low", "medium", "high", "xhigh"] as const)(
@@ -748,6 +877,14 @@ describe("forward lifecycle compatibility", () => {
       backgroundTasks: new Map(),
       completedBackgroundTasks: new Map(),
       recapHashes: new Set(),
+      pendingRecaps: new Map(),
+      promptQueue: [],
+      ownedQueuedPromptIds: new Set(),
+      restoredQueueIds: new Set(),
+      restoredQueueSeenIds: new Set(),
+      pendingQueueOperations: new Map(),
+      queueRevision: 0,
+      working: false,
       models: [],
       runtimeHandshake: { protocolVersion: 1, checkedAt: new Date().toISOString(), models: [], commands: [], extensions: [], features: { recap: false, rewind: false, cancelRewind: false, pluginDirectories: false, fsNotifications: false, voiceMode: false } },
       options: { log: { log: async (value: string) => { logs.push(value); } } },
@@ -757,7 +894,7 @@ describe("forward lifecycle compatibility", () => {
     return { adapter: adapter as any, events, logs };
   }
 
-  async function eventFixture(version: "0.2.118" | "0.2.120") {
+  async function eventFixture(version: "0.2.118" | "0.2.120" | "1.0.0") {
     return JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", `events-${version}.json`), "utf8")) as Array<{
       method: string;
       params: Record<string, unknown>;
@@ -789,6 +926,36 @@ describe("forward lifecycle compatibility", () => {
     expect(events).toContainEqual(expect.objectContaining({ type: "runtime-update", update: expect.objectContaining({ kind: "settings", name: "settings/update" }) }));
   });
 
+  it("consumes Grok Build 1.0 slash MCP events and keeps payloads bounded", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    await adapter.handleServerRequest("x.ai/mcp/init_progress", "m1", { total: 2, connected: 1, sessionId: "s1", screenshot: "do-not-forward" });
+    await adapter.handleServerRequest("_x.ai/mcp/server_status", "m2", { sessionId: "s1", name: "alpha", source: "local", status: "ready", reason: "initialized", tools: new Array(7).fill({}) });
+    await adapter.handleServerRequest("x.ai/mcp_initialized", "m3", { sessionId: "s1", mcpToolCount: 7, elapsedMs: 250 });
+    const updates = events.filter((event) => event.type === "runtime-update" && event.update.kind === "mcp");
+    expect(updates).toHaveLength(3);
+    expect(updates[0]).toMatchObject({ sessionId: "s1", update: { name: "mcp/init_progress", summary: "MCP 连接 1/2", data: { sessionId: "s1", total: 2, connected: 1 } } });
+    expect(updates[1]).toMatchObject({ sessionId: "s1", update: { name: "mcp/server_status", summary: "alpha · ready", data: { sessionId: "s1", server: "alpha", source: "local", status: "ready", reason: "initialized", toolCount: 7 } } });
+    expect(updates[2]).toMatchObject({ sessionId: "s1", update: { name: "mcp_initialized", summary: "MCP 初始化完成 · 7 个工具", data: { sessionId: "s1", toolCount: 7, elapsedMs: 250 } } });
+    expect(JSON.stringify(updates)).not.toContain("do-not-forward");
+  });
+
+  it("replays the sanitized Grok Build 1.0 MCP fixture with the official field shapes", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    let requestId = 1;
+    for (const item of await eventFixture("1.0.0")) await adapter.handleServerRequest(item.method, `v1-${requestId++}`, item.params);
+    const updates = events.filter((event) => event.type === "runtime-update" && event.update.kind === "mcp");
+    expect(updates.map((event) => event.update.name)).toEqual([
+      "mcp/init_progress",
+      "mcp/server_status",
+      "mcp/tools_changed",
+      "mcp/servers_updated",
+      "mcp_initialized",
+    ]);
+    expect(updates).toContainEqual(expect.objectContaining({ sessionId: "session-fixture", update: expect.objectContaining({ data: expect.objectContaining({ toolCount: 3 }) }) }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "prompt-queue", sessionId: "session-1", entries: [] }));
+    expect(events).toContainEqual(expect.objectContaining({ type: "runtime-update", update: expect.objectContaining({ kind: "settings", name: "settings/update" }) }));
+  });
+
   it("keeps a fast completed task terminal when backgrounded arrives later", () => {
     const { adapter, events } = lifecycleAdapter();
     adapter.handlePrivateSessionUpdate({ sessionUpdate: "task_completed", task_id: "fast", exit_code: 0, output: "done" });
@@ -814,6 +981,39 @@ describe("forward lifecycle compatibility", () => {
     expect(logs.join("\n")).toContain("future_secret_event");
     expect(logs.join("\n")).toContain("schema=9");
     expect(logs.join("\n")).not.toContain("do-not-log");
+  });
+
+  it("treats SessionSummaryGenerated as a title signal instead of a visible recap", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "session-rename-upstream-main.json"), "utf8"));
+    await adapter.handleServerRequest(fixture.manualNotification.method, "rename", fixture.manualNotification.params);
+    await adapter.handleServerRequest(fixture.resetNotification.method, "auto", fixture.resetNotification.params);
+    expect(events).toContainEqual({ type: "session-title", sessionId: "session-1", title: "Pinned title", manual: true });
+    expect(events).toContainEqual({ type: "session-title", sessionId: "session-1", title: "Automatic title", manual: false });
+    expect(events.some((event) => event.type === "session-recap" && event.text === "Pinned title")).toBe(false);
+  });
+
+  it("preserves outer ACP metadata for 1.x SessionInfoUpdate title ownership", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "session-rename-upstream-main.json"), "utf8"));
+    await adapter.onLine(JSON.stringify(fixture.standardManualNotification));
+    await adapter.onLine(JSON.stringify(fixture.standardResetNotification));
+    expect(events).toEqual(expect.arrayContaining([
+      { type: "session-title", sessionId: "session-1", title: "Pinned title", manual: true },
+      { type: "session-title", sessionId: "session-1", title: "", manual: false },
+    ]));
+  });
+
+  it("buffers recaps until the session becomes idle", () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.activeTurn = { turnId: "turn-live" };
+    adapter.working = true;
+    adapter.handlePrivateSessionUpdate({ sessionUpdate: "session_recap", turn_id: "turn-live", recap: "Later" });
+    expect(events.filter((event) => event.type === "session-recap")).toEqual([]);
+    adapter.activeTurn = undefined;
+    adapter.working = false;
+    adapter.flushPendingRecapsIfIdle();
+    expect(events).toContainEqual(expect.objectContaining({ type: "session-recap", turnId: "turn-live", text: "Later" }));
   });
 
   it("clears follow-up suggestions on an empty live update and ignores replay", async () => {

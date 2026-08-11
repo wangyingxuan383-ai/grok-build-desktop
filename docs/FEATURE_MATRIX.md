@@ -1,5 +1,25 @@
 # Feature Matrix
 
+## 0.8.0 Grok Build CLI 1.0.0 public release (2026-08-11)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| Final historical-plan audit | Reviewed + full offline gate | Every remaining historical checkbox was reconciled against current 0.8.0 evidence. The only open item is the external remote CPA `403 cpa_local_only` boundary; no known P0/P1 source implementation gap remains in the reviewed scope. Final source gate: 101 files/733 tests, TypeScript/build/public/chunks/audit/diff and current UI pass. See `docs/V080_FINAL_AUDIT.md`. |
+| Official Session rename/title authority | Forward fixture + stable fallback verified | Official main exposes `x.ai/session/rename` and manual/auto title ownership metadata. Desktop normalizes private and standard notifications, but installed stable 1.0.0 returns method-not-found, so local catalog rename remains the truthful fallback and the capability stays unavailable. |
+| Grok Doctor automatic fixes | Focused + live no-fix verified | Diagnostics reads `doctor --json`, presents only named automatic remediations, uses a short-lived one-use token, revalidates before a fixed-argument `doctor fix` invocation and requires explicit confirmation. The installed CLI currently reports no automatic fixes. |
+| CLI 1.x gate and updater | Automated + installed-runtime verified | Desktop upgraded the installed CLI from 0.2.118 to stable `1.0.0 (3cd0d0cbce)` through the exact-target cross-major flow; initialize/new/close/delete and the core gate passed without rollback. Unknown future majors remain fail-closed. |
+| Session attach/close | Automated + live verified | Every new/load/resume attach sends interactive `startupHints`; a fresh 1.0 process resumed the same Session ID and structured close returned `closed`. |
+| MCP 1.0 events | Fixture + live observed | Direct/wrapped slash events are session-scoped. Live `/compact` observed wrapped init progress, server status, server list and initialized events on 1.0.0. Tool-list change remains event-fixture evidence. |
+| Session data views | Partial runtime capability | Stable 1.0.0 advertises `/context` and `/session-info`; ACP info/usage extensions are method-not-found and `/usage` is absent. UI exposes only observed views and leaves missing Usage disabled/unknown. |
+| Official Git status preference | Automated; stable method unavailable | Requests explicitly include untracked/stats/patch/submodule flags, but stable 1.0.0 returns method-not-found for `x.ai/git/status`. Restricted system Git remains the verified fallback; Review mutations still use the trusted Git service. |
+| Project path recovery | Source + TypeScript verified | Known missing projects may open local projections offline; Composer/model controls are disabled until reconnect/rebind. Rebind tries direct moved-directory attach before official Fork, records a transaction and never restores code implicitly. |
+| Compact and long-turn monitoring | Focused verified | Per-session inherited/custom threshold, manual Compact and lifecycle events exist. 20/60 second first-event notices are diagnostic only and do not cancel the request. |
+| Updates and upstream tracking | Focused verified | Automatic checks are optional and limited to startup/24h; app updates open official Releases, CLI updates require confirmation. Weekly upstream workflow opens a maintenance issue only. |
+| Privacy and interaction | Focused verified | Feedback is capability-gated and preview-redacted; support bundles exclude content/rebind logs. Long scripts/tables/diffs are selectable and bounded; extension families are grouped/searchable. |
+| Plan/Stop/Compact/parallel sessions | Live verified | Real read-only Plan passed without permission cards or writes; two ACP sessions started concurrently; `/compact` completed; `session/cancel` produced `stopReason=cancelled`; close outcomes were structured. |
+| Current managed Provider | Blocked by upstream policy | Desktop/CLI 1.0 reached the configured Responses gateway and preserved native reasoning choices, but the remote upstream returned `403 cpa_local_only`. The adapter now surfaces the actionable nested HTTP error instead of bare `Internal error`; no successful inference is claimed. |
+| 0.8.0 final gate | Packaged + installed + release workflow | 101 test files/733 tests pass; 6 live files/9 tests skip by design. TypeScript, production/resources, 365-file public scan, chunks, Native/Fuses, zero-vulnerability audit, packaged and installed UI, Setup/Portable/SBOM/licenses, installed About/diagnostics/ASAR and both shortcuts pass. Public assets are rebuilt from the tag and published only after SHA-256/Attestation verification. The remote CPA Provider remains explicitly blocked by upstream `cpa_local_only`. |
+
 
 ## 0.7.3 consolidated 0.7.x candidate (2026-08-10)
 

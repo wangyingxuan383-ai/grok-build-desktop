@@ -14,6 +14,17 @@ async function tempRoot(): Promise<string> {
 }
 
 describe("ConversationProjectionService", () => {
+  it("clones visible projection ownership to an official cross-directory fork", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "user-message", sessionId: "parent", text: "迁移我" });
+    await service.record({ type: "message-chunk", sessionId: "parent", text: "已保留" });
+    const cloned = await service.cloneSession("parent", "child", "C:\\moved");
+    expect(cloned?.events).toEqual([
+      expect.objectContaining({ type: "user-message", sessionId: "child", text: "迁移我" }),
+      expect.objectContaining({ type: "message-chunk", sessionId: "child", text: "已保留" }),
+    ]);
+  });
   it("persists partial assistant text across restart and ignores transport resets", async () => {
     const root = await tempRoot();
     const first = new ConversationProjectionService(root);

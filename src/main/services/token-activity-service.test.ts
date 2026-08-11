@@ -25,6 +25,15 @@ function turn(patch: Partial<TurnPresentation> & { at?: string; usage?: TurnPres
 const usage = (input: number, output: number) => ({ inputTokens: input, outputTokens: output, totalTokens: input + output, source: "acp-turn", exact: true } as TurnPresentation["usage"]);
 
 describe("token activity recording", () => {
+  it("rebinds per-turn ownership without changing aggregate totals", async () => {
+    const { service: activity } = await service();
+    await activity.record("parent", turn({ usage: usage(10, 2) }), { workspace: "E:\\old" });
+    await activity.rebindSession("parent", "child", "C:\\new");
+    const all = await activity.report();
+    const moved = await activity.report({ workspace: "C:\\new" });
+    expect(all.windows.today.totalTokens).toBe(12);
+    expect(moved.windows.today).toMatchObject({ turns: 1, totalTokens: 12 });
+  });
   it("sums only what was actually reported", async () => {
     const { service: activity } = await service();
     await activity.record("s1", turn({ usage: usage(100, 20) }));
