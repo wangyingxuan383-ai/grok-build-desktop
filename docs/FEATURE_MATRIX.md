@@ -1,5 +1,16 @@
 # Feature Matrix
 
+## 0.8.3 permissions, catalog and quota (2026-08-13)
+
+| Area | Status | Evidence |
+|---|---|---|
+| Auto / Plan permissions | Focused-tested | Auto and Plan select allow options (including short `allow` kinds) and never render permission cards. Agent still asks. |
+| Plan write gate | Focused-tested | `shouldBlockWrite`/`shouldBlockCommand` no longer reject ordinary files or mutating commands. plan.md is still recognized for plan text events. |
+| Auto resume | Focused-tested | `resolveModeAfterResume("auto", "default")` stays Auto. |
+| Settings model/effort | Source + focused | Settings select uses cached/live ACP `ModelInfo` and `effortControlState`, same as Composer. |
+| Monthly quota | Focused-tested | Parser accepts percent, nested subscription, and renamed credit fields. |
+| CLI 1.0.3 | Not confirmed on stable | Official open-source crate is 1.0.1; public changelog still lists 1.0.0. Desktop does not invent 1.0.3 features. |
+
 ## 0.8.2 settings IPC hotfix (2026-08-13)
 
 | Area | Status | Evidence |

@@ -225,6 +225,7 @@ const RULES: Record<string, Rule> = {
   "auth:remove": (args) => idArg(args, 0),
   "settings:get": noArgs,
   "settings:update": (args) => settingsPatchArg(args, 0),
+  "models:catalog": noArgs,
   "updates:auto-check": noArgs,
   "theme:get": noArgs,
   "theme:update": (args) => objectArg(args, 0),

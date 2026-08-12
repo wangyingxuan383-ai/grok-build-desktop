@@ -22,6 +22,7 @@ import type {
   ClaudeSessionSummary,
   GrokQuotaSnapshot,
   MediaCapabilities,
+  ModelInfo,
   MediaCreationKind,
   MediaCreationRequest,
   MediaGenerationJob,
@@ -1934,6 +1935,14 @@ export class AppController {
   }
 
   getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
+
+  private modelCatalog: ModelInfo[] = [];
+
+  listModelCatalog(): ModelInfo[] {
+    const live = this.processes.listKnownModels();
+    if (live.length) this.modelCatalog = live;
+    return this.modelCatalog.length ? this.modelCatalog : live;
+  }
   listProviders(): Promise<CustomProviderProfile[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
     return this.providers.list();
@@ -2808,6 +2817,14 @@ export class AppController {
     }
     const sessionId = event.sessionId ?? "";
     const readyModelId = event.type === "session-ready" ? event.currentModelId : undefined;
+    if (event.type === "session-ready" && event.models?.length) {
+      const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+      for (const model of event.models) {
+        if (model.modelId.startsWith("fixture-")) continue;
+        byId.set(model.modelId, model);
+      }
+      this.modelCatalog = [...byId.values()];
+    }
     if (event.type === "session-ready" && sessionId && readyModelId) {
       void this.providers.managedProviderForModel(readyModelId).then(async (provider) => {
         // Reconcile atomically: a managed session keeps its provider-scoped

@@ -40,7 +40,8 @@ import {
 } from "../../shared/types";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import { classifyTurnFailure } from "../../shared/turn-failure";
-import { isPlanSafeToolCall, shouldBlockCommand, shouldBlockWrite } from "./plan-gate";
+import { isCurrentSessionPlanFile, shouldBlockCommand } from "./plan-gate";
+import { resolveModeAfterResume, selectAllowPermissionOption, shouldAutoApproveToolPermissions } from "./permission-policy";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
 import type { LogService } from "./log-service";
 
@@ -589,12 +590,12 @@ export class GrokAcpAdapter extends EventEmitter {
       await this.setModel(this.options.modelId, { localModelId: this.providerLocalModelId });
     }
     const reportedModeId = response.modes?.currentModeId;
-    if (resumeSessionId && reportedModeId) {
-      // A resumed 1.0 session is authoritative about its persisted chat mode.
-      // Do not overwrite Plan/Agent state with whichever global default was
-      // active when Desktop opened the session.
-      this.mode = reportedModeId === "plan" ? "plan" : "agent";
-      this.autoApprove = false;
+    if (resumeSessionId && (reportedModeId || this.mode === "auto")) {
+      // CLI only reports plan vs default. Desktop Auto is a local overlay and
+      // must survive resume; otherwise the composer shows 自动批准 while the
+      // adapter silently falls back to asking for every tool.
+      this.mode = resolveModeAfterResume(this.mode, reportedModeId);
+      this.autoApprove = this.mode === "auto";
       this.planActive = this.mode === "plan";
       this.planGateReleased = false;
       this.persistRuntimePatch({ mode: this.mode });
@@ -1901,11 +1902,7 @@ export class GrokAcpAdapter extends EventEmitter {
           const planFilePath = this.sessionId
             ? await resolveSessionPlanFile(this.options.cwd, this.sessionId, this.options.env.GROK_HOME)
             : undefined;
-          const isCurrentPlanFile = Boolean(planFilePath) && !shouldBlockWrite(requestedPath, this.options.cwd, true, planFilePath);
-          if (shouldBlockWrite(requestedPath, this.options.cwd, this.planActive, planFilePath)) {
-            this.respondError(id, -32010, "Plan 模式仅允许写入当前会话的 plan.md");
-            return;
-          }
+          const isCurrentPlanFile = isCurrentSessionPlanFile(requestedPath, planFilePath);
           if (this.planActive && isCurrentPlanFile && (await lstat(requestedPath).catch(() => undefined))?.isSymbolicLink()) {
             this.respondError(id, -32010, "Plan 模式拒绝写入符号链接计划文件");
             return;
@@ -1953,29 +1950,16 @@ export class GrokAcpAdapter extends EventEmitter {
           this.pendingPermissionRequests.add(String(id));
           this.pendingInteractionRequestIds.set(String(id), id);
           const options = (params.options ?? []) as PermissionOption[];
-          if (this.planActive) {
-            // Plan mode must never strand the user behind repetitive approval
-            // cards. Known read-only inspection is allowed; mutating or unknown
-            // tools are rejected automatically. The fs/terminal handlers below
-            // remain the hard enforcement boundary even after permission.
-            const safe = isPlanSafeToolCall(params.toolCall);
-            const option = safe
-              ? options.find((value) => value.kind === "allow_once") ?? options.find((value) => value.kind === "allow_always")
-              : options.find((value) => /reject|deny/i.test(value.kind || ""));
-            if (option && id !== undefined) this.respondPermission(id, option.optionId);
+          if (shouldAutoApproveToolPermissions(this.mode, this.planActive)) {
+            const option = selectAllowPermissionOption(options);
+            if (option?.optionId) this.respondPermission(id, option.optionId);
             else this.cancelPermission(id);
           } else {
             const decided = await this.options.permissionDecider?.(params.toolCall);
             if (decided !== undefined) {
-              const option = decided ? options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once") : options.find((value) => /reject|deny/i.test(value.kind || ""));
-              if (option && id !== undefined) this.respondPermission(id, option.optionId);
+              const option = decided ? selectAllowPermissionOption(options) : options.find((value) => /reject|deny/i.test(value.kind || ""));
+              if (option?.optionId) this.respondPermission(id, option.optionId);
               else this.cancelPermission(id);
-            } else if (this.autoApprove) {
-            const option = options.find((value) => value.kind === "allow_always") ?? options.find((value) => value.kind === "allow_once");
-            const fallback = options.find((value) => /reject|deny/i.test(value.kind || ""));
-            if (option && id !== undefined) this.respondPermission(id, option.optionId);
-            else if (fallback && id !== undefined) this.respondPermission(id, fallback.optionId);
-            else this.cancelPermission(id);
             } else {
               this.needsUser = true;
               this.emitStatus("needs-user", "等待权限确认");

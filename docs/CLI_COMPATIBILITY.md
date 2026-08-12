@@ -1,5 +1,12 @@
 # Grok CLI Compatibility
 
+## Desktop 0.8.3 / Grok Build 1.0.x (2026-08-13)
+
+- Official open-source `xai-grok-version` crate on main is **1.0.1** (`be71313`). The public changelog page still advertises Latest v1.0.0.
+- No stable-channel evidence for 1.0.3 was found in the public changelog or GitHub source. Desktop therefore does not claim 1.0.3 APIs and does not auto-upgrade the installed CLI.
+- Desktop Auto remains a local overlay: CLI session modes are still only `plan` and `default`. Resume no longer drops Auto just because the CLI reported `default`.
+- Handshake fixture `initialize-1.0.0.json` already lists Grok 4.5 efforts including `xhigh`. Settings now consume the same ACP catalog instead of a hardcoded effort list.
+
 ## Desktop 0.8.2 / Grok Build 1.0.0 (2026-08-13)
 
 - Desktop-only hotfix: no CLI wire or capability change. Settings save now accepts the 0.8.0 automatic-update fields that the renderer already persisted and displayed.

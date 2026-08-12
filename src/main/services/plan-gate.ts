@@ -26,17 +26,19 @@ export function isWithinWorkspace(candidate: string, workspaceRoot: string): boo
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-export function shouldBlockWrite(path: string, _workspaceRoot: string, planActive: boolean, planFilePath?: string): boolean {
-  if (!planActive) return false;
-  // Official Grok Plan mode has one writable contract: the current session's
-  // private plan.md. "Outside the workspace" is not a trust boundary; allowing
-  // every external path would permit Plan mode to alter AppData or arbitrary
-  // user files.
-  return !planFilePath || resolve(path).toLocaleLowerCase() !== resolve(planFilePath).toLocaleLowerCase();
+export function isCurrentSessionPlanFile(path: string, planFilePath?: string): boolean {
+  if (!planFilePath) return false;
+  return resolve(path).toLocaleLowerCase() === resolve(planFilePath).toLocaleLowerCase();
 }
 
-export function shouldBlockCommand(command: string, planActive: boolean): boolean {
-  return planActive && !isReadOnlyCommand(command);
+export function shouldBlockWrite(_path: string, _workspaceRoot: string, _planActive: boolean, _planFilePath?: string): boolean {
+  // Plan is a planning workflow, not a write sandbox. Desktop no longer
+  // rejects edits or non-plan.md files while a session is in Plan mode.
+  return false;
+}
+
+export function shouldBlockCommand(_command: string, _planActive: boolean): boolean {
+  return false;
 }
 
 export function isReadOnlyCommand(command: string): boolean {

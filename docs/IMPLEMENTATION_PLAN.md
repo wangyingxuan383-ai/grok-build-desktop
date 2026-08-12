@@ -1,5 +1,14 @@
 # Grok Build Desktop 实施计划
 
+## 0.8.3 权限、模型目录与额度（2026-08-13）
+
+- [x] Agent 询问；Auto/Plan 自动批准全部工具；移除 Plan 只读写门。
+- [x] Resume 保留 Desktop Auto，不再被 CLI default 冲掉。
+- [x] 设置默认模型/思考档位复用会话 ACP 目录。
+- [x] 月额度解析兼容新字段形态。
+- [x] 官方源码 crate 版本为 1.0.1；公开 Changelog 仍写 1.0.0；未在稳定频道证实 1.0.3 前不擅自升级本机 CLI。
+- [ ] 推送 GitHub 并由标签工作流生成 0.8.3；不覆盖正在对话的本机安装版。
+
 ## 0.8.2 设置保存 IPC 热修（2026-08-13）
 
 - [x] 复现 `settings:update` 因未知字段 `automaticUpdateChecks` 拒绝完整设置草稿。
