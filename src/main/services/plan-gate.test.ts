@@ -9,21 +9,13 @@ describe("Plan Gate", () => {
     expect(isWithinWorkspace("C:\\work\\other\\index.ts", root)).toBe(false);
   });
 
-  it("allows only the exact session plan file while Plan mode is active", () => {
+  it("does not treat Plan as a write sandbox", () => {
     const planPath = "C:\\Users\\tester\\.grok\\sessions\\project\\session-1\\plan.md";
-    expect(shouldBlockWrite("C:\\work\\project\\README.md", root, true)).toBe(true);
-    expect(shouldBlockWrite("C:\\work\\project\\README.md", root, false)).toBe(false);
-    expect(shouldBlockWrite("C:\\temp\\README.md", root, true, planPath)).toBe(true);
+    expect(shouldBlockWrite("C:\\work\\project\\README.md", root, true)).toBe(false);
+    expect(shouldBlockWrite("C:\\temp\\README.md", root, true, planPath)).toBe(false);
     expect(shouldBlockWrite(planPath, root, true, planPath)).toBe(false);
-    expect(shouldBlockWrite("C:\\Users\\tester\\.grok\\sessions\\other\\plan.md", root, true, planPath)).toBe(true);
-  });
-
-  it("allows read-only commands and rejects mutating commands in Plan mode", () => {
-    expect(shouldBlockCommand("git status", true)).toBe(false);
-    expect(shouldBlockCommand("Get-Content package.json", true)).toBe(false);
-    expect(shouldBlockCommand("npm install", true)).toBe(true);
-    expect(shouldBlockCommand("Remove-Item file.txt", true)).toBe(true);
-    expect(shouldBlockCommand("Remove-Item file.txt", false)).toBe(false);
+    expect(shouldBlockCommand("npm install", true)).toBe(false);
+    expect(shouldBlockCommand("Remove-Item file.txt", true)).toBe(false);
   });
 
   it.each([
@@ -45,7 +37,7 @@ describe("Plan Gate", () => {
     "git status !DANGEROUS!",
   ])("blocks composite or expanding shell syntax: %s", (command) => {
     expect(isReadOnlyCommand(command)).toBe(false);
-    expect(shouldBlockCommand(command, true)).toBe(true);
+    expect(shouldBlockCommand(command, true)).toBe(false);
   });
 
   it.each([
@@ -57,8 +49,9 @@ describe("Plan Gate", () => {
     "npm test",
     "rg --pre malicious pattern",
     "find . -exec del {} ;",
-  ])("blocks write-capable query forms: %s", (command) => {
-    expect(shouldBlockCommand(command, true)).toBe(true);
+  ])("still classifies write-capable query forms as not read-only: %s", (command) => {
+    expect(isReadOnlyCommand(command)).toBe(false);
+    expect(shouldBlockCommand(command, true)).toBe(false);
   });
 
   it.each([

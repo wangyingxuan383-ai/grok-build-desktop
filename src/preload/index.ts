@@ -202,6 +202,7 @@ const api: GrokDesktopApi = {
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),
+  listModelCatalog: () => ipcRenderer.invoke("models:catalog"),
   getTheme: () => ipcRenderer.invoke("theme:get"),
   updateTheme: (patch) => ipcRenderer.invoke("theme:update", patch),
   pickThemeBackground: () => ipcRenderer.invoke("theme:pick-background"),

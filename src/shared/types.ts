@@ -2028,6 +2028,7 @@ export interface GrokDesktopApi {
   openExternal(url: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
+  listModelCatalog(): Promise<ModelInfo[]>;
   getTheme(): Promise<ThemeSettings>;
   updateTheme(patch: Partial<ThemeSettings>): Promise<AppSettings>;
   pickThemeBackground(): Promise<AppSettings | null>;
