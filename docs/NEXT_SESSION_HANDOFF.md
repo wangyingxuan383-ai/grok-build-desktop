@@ -1,4 +1,11 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-11，0.8.0 正式发布）
+# Grok Build Desktop 下一会话完整交接（2026-08-12，0.8.1 紧急修复候选）
+
+## 2026-08-12 0.8.1 当前状态
+
+- 分支 `codex/v0.8.1-critical-hotfix` 修复公开 0.8.0 的三项阻断回归：新建会话 `projectId` IPC 错误、设备登录错误 URL/诊断、项目重绑定全量 `Method not found`。
+- 本机 CLI 1.0.0 无推理实测证实未开放标准或私有 Fork；重新绑定现以完整会话目录事务复制并在目标目录真实 Resume 验证，不解析/改写官方 JSONL。
+- 完整离线门禁通过：102 个测试文件/740 项测试，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、369 文件公开扫描、Renderer 分块、Native Host、Fuses、打包版/Portable UI 和 Task Scheduler 通过。
+- 0.8.1 已在 C 盘正式打包并 per-user 覆盖安装。安装版 File `0.8.1` / Product `0.8.1.0`、可见冷启动、Fuses、桌面和开始菜单快捷方式通过。Setup SHA-256 `b3134c07d6094cf1ded23d347a6e92f70852b55820aa98926c7edc0b3731805c`；Portable SHA-256 `94628c323522c93bbdb7f48596682272a71bbd38c9240ab431d3e0ae82066e35`。用户未要求创建 0.8.1 Release，禁止提前发布。
 
 ## 2026-08-11 0.8.0 当前状态
 

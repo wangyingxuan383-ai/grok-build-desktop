@@ -742,7 +742,7 @@ export interface SessionForkResult {
 export interface SessionRebindReceipt extends SessionForkResult {
   sourceCwd: string;
   targetCwd: string;
-  method: "official-move" | "official-fork";
+  method: "official-move" | "official-fork" | "desktop-copy";
   codeRestored: false;
   localProjectionCopied: boolean;
   attachmentLedgerCopied: boolean;

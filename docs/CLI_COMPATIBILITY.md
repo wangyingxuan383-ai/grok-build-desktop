@@ -1,5 +1,11 @@
 # Grok CLI Compatibility
 
+## Desktop 0.8.1 / Grok Build 1.0.0 hotfix evidence (2026-08-12)
+
+- A no-prompt local ACP probe confirmed that stable CLI `1.0.0 (3cd0d0cbce)` advertises list/resume/close but not fork; both `session/fork` and legacy `x.ai/session/fork` are unavailable. Desktop therefore capability-gates future standard Fork and uses a verified opaque-directory copy transaction for current project rebinds.
+- A separate no-prompt probe confirmed a copied complete session directory can be resumed from the target cwd. Desktop does not parse or rewrite the CLI JSONL records, preserves the source until target resume succeeds, and updates its local runtime/projection binding only after verification.
+- CLI 1.0.0 login help does not expose `--no-browser`; the CLI remains the single browser owner. Desktop now filters token/device API endpoints from UI login links and reports proxy/network failure details.
+
 ## Desktop 0.8.0 / Grok Build 1.0.0 public release (2026-08-11)
 
 - A final upstream audit pinned official main repository commit `b13fa526f5112c0b20dad5f1f2300d3d3b127895` and source revision `a51a1dc62fe20029ac39a665985bba78edbb870f`. The public Changelog still ends at 1.0.0. Relative to the previous source snapshot, the important new public extension is `x.ai/session/rename` plus `x.ai/titleIsManual` title ownership notifications; no other unmapped stable public API was found.

@@ -111,6 +111,27 @@ describe("SessionCatalog", () => {
     });
   });
 
+  it("materializes an opaque CLI session at a rebound workspace without altering the source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-rebind-"));
+    const grokHome = join(root, ".grok");
+    const sourceCwd = "E:\\Old";
+    const targetCwd = "C:\\New";
+    const sessionId = "session";
+    const source = join(grokHome, "sessions", encodeURIComponent(sourceCwd), sessionId);
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, "chat_history.jsonl"), '{"type":"user","content":"hello"}\n');
+    const catalog = new SessionCatalog(join(root, "app-data"), grokHome);
+
+    await catalog.materializeAtWorkspace(sourceCwd, targetCwd, sessionId);
+
+    expect(await readFile(join(source, "chat_history.jsonl"), "utf8")).toContain("hello");
+    expect(await readFile(join(grokHome, "sessions", encodeURIComponent(targetCwd), sessionId, "chat_history.jsonl"), "utf8")).toContain("hello");
+    await expect(catalog.materializeAtWorkspace(sourceCwd, targetCwd, sessionId)).rejects.toThrow("未覆盖任何文件");
+    await catalog.removeWorkspaceCopy(sourceCwd, sessionId);
+    await expect(readFile(join(source, "chat_history.jsonl"), "utf8")).rejects.toThrow();
+    expect(await readFile(join(grokHome, "sessions", encodeURIComponent(targetCwd), sessionId, "chat_history.jsonl"), "utf8")).toContain("hello");
+  });
+
   it("synchronizes explicit official manual-title and reset notifications", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-catalog-title-sync-"));
     const appData = join(root, "app-data");
