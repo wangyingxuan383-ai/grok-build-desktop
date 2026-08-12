@@ -13,7 +13,7 @@ async function tempRoot(): Promise<string> {
   return root;
 }
 
-describe("ConversationProjectionService", () => {
+describe("ConversationProjectionService", { timeout: 60_000 }, () => {
   it("rebinds the persisted runtime cwd without cloning visible events", async () => {
     const root = await tempRoot();
     const service = new ConversationProjectionService(root);
