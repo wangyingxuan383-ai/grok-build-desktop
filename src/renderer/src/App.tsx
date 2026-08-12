@@ -30,6 +30,7 @@ import { ConversationViewport } from "./components/ConversationViewport";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationDerivedState } from "./hooks/use-conversation-derived-state";
 import { useNavigationController } from "./hooks/use-navigation-controller";
+import { launchInputFromDraft } from "./new-task-launch";
 
 const LazyExtensionsPanel = lazy(() => import("./components/ExtensionsPanel").then((module) => ({ default: module.ExtensionsPanel })));
 const LazyDiagnosticsPanel = lazy(() => import("./components/DiagnosticsPanel").then((module) => ({ default: module.DiagnosticsPanel })));
@@ -624,7 +625,7 @@ export default function App(): React.JSX.Element {
     let sessionId = store.activeSessionId;
     const submittedCapability = capability;
     try {
-      if (!sessionId) sessionId = await createSession(newTask ? { ...newTask } : undefined) || "";
+      if (!sessionId) sessionId = await createSession(newTask ? launchInputFromDraft(newTask) : undefined) || "";
       if (!sessionId) return;
       if (sourceDraftKey && sourceDraftKey !== sessionId) await window.grokDesktop.moveDraft(sourceDraftKey, sessionId);
       for (const key of sessionSubmissionKeys(sessionId, sourceDraftKey)) trackedSubmissionKeys.add(key);

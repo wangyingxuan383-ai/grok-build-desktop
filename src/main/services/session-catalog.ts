@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { LiveStatus, SessionOriginKind, SessionSummary } from "../../shared/types";
@@ -169,6 +169,36 @@ export class SessionCatalog {
     return stat(target).then((value) => value.isDirectory()).catch(() => false);
   }
 
+  /**
+   * Grok Build 1.0 can resume a conversation only when its persisted session
+   * directory exists under the target cwd. Its advertised ACP capabilities do
+   * not include session/fork, so rebind by copying the complete opaque session
+   * directory without parsing or rewriting the CLI JSONL files. The source is
+   * retained until the caller commits the wider Desktop transaction.
+   */
+  async materializeAtWorkspace(sourceCwd: string, targetCwd: string, sessionId: string): Promise<void> {
+    const sourceRoot = await this.resolveSessionRoot(sourceCwd);
+    const targetRoot = await this.resolveSessionRoot(targetCwd);
+    const source = safeSessionPath(sourceRoot, sessionId);
+    const target = safeSessionPath(targetRoot, sessionId);
+    const sourceInfo = await stat(source).catch(() => undefined);
+    if (!sourceInfo?.isDirectory()) throw new Error("旧项目中的 CLI 会话文件不存在");
+    if (await stat(target).catch(() => undefined)) throw new Error("新项目中已存在同 ID 会话，未覆盖任何文件");
+    await mkdir(targetRoot, { recursive: true });
+    try {
+      await cp(source, target, { recursive: true, force: false, errorOnExist: true });
+    } catch (error) {
+      await rm(target, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  /** Remove only the opaque CLI copy; keep global Desktop session metadata. */
+  async removeWorkspaceCopy(cwd: string, sessionId: string): Promise<void> {
+    const root = await this.resolveSessionRoot(cwd);
+    await rm(safeSessionPath(root, sessionId), { recursive: true, force: true });
+  }
+
   async delete(cwd: string, sessionId: string): Promise<void> {
     const root = await this.resolveSessionRoot(cwd);
     const target = resolve(root, sessionId);
@@ -216,6 +246,13 @@ export class SessionCatalog {
     }
     return `${output.join("\n").trim()}\n`;
   }
+}
+
+function safeSessionPath(root: string, sessionId: string): string {
+  const target = resolve(root, sessionId);
+  const rel = relative(resolve(root), target);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("非法会话路径");
+  return target;
 }
 
 function historyText(content: unknown): string {

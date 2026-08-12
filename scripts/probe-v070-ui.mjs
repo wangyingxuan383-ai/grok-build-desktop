@@ -3,7 +3,7 @@ if (!endpoint) throw new Error("Usage: node scripts/probe-v070-ui.mjs <cdp-endpo
 // This is the v0.7 acceptance gate, not a generic "whatever package.json
 // currently says" smoke test. Keeping the expected release explicit prevents
 // an older 0.6.x build from silently satisfying the current UI contract.
-const expectedVersion = "0.8.0";
+const expectedVersion = "0.8.1";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(120); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
 const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer unavailable");
@@ -211,7 +211,7 @@ try {
   await waitFor(() => callFunction("function () { return Array.from(document.querySelectorAll('.session-row.draft')).some((node) => (node.textContent || '').includes('未发送草稿')); }"), "Draft-first row did not appear");
   const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length");
   if (!(await clickExactText('.new-task-button', '新建任务'))) throw new Error('New-task button did not open the local draft');
-  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.8.0 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
+  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.8.1 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
   const draftState = await evaluate(`({
     historyCount: document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length,
     stop: Boolean(document.querySelector('.send-button.stop')),
@@ -219,12 +219,12 @@ try {
     model: document.querySelector('.draft-model-controls select')?.value || ''
   })`);
   if (draftState.historyCount !== historyCountBeforeDraft || draftState.stop || draftState.waiting || draftState.model !== 'fixture-draft-model') throw new Error(`Draft-first state is not isolated from CLI sessions: ${JSON.stringify(draftState)}`);
-  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.8.0 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
+  await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.8.1 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
   await sleep(700);
   await reloadFixture();
   await waitFor(() => evaluate("Boolean(document.querySelector('.session-row.draft'))"), "Persisted draft row was lost after restart");
   await evaluate("document.querySelector('.session-row.draft')?.click()");
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.0 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.1 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
   if ((await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
 
   // A background running conversation owns its own Stop button, queue and

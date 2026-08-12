@@ -14,6 +14,19 @@ async function tempRoot(): Promise<string> {
 }
 
 describe("ConversationProjectionService", () => {
+  it("rebinds the persisted runtime cwd without cloning visible events", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "session-ready", sessionId: "same", models: [], currentModelId: "grok-4.5", effort: "high" });
+    await service.record({ type: "user-message", sessionId: "same", text: "keep me" });
+    await service.restore("same");
+    await service.rebindRuntime("same", "C:\\new");
+
+    const projection = await service.restore("same");
+    expect(projection?.runtime?.cwd).toBe("C:\\new");
+    expect(projection?.events).toEqual([expect.objectContaining({ type: "user-message", text: "keep me" })]);
+  });
+
   it("clones visible projection ownership to an official cross-directory fork", async () => {
     const root = await tempRoot();
     const service = new ConversationProjectionService(root);

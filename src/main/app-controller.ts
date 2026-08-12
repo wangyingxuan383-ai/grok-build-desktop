@@ -1615,7 +1615,7 @@ export class AppController {
     const fixtureProject = await resolveProjectIdentity(workspace);
     const fixtureDraftKey = `new:${fixtureProject.id}`;
     if (!(await this.uiState.getDraft(fixtureDraftKey))) {
-      await this.uiState.setDraft(fixtureDraftKey, "0.8.0 本地草稿（尚未启动 CLI）", undefined, [], {
+      await this.uiState.setDraft(fixtureDraftKey, "0.8.1 本地草稿（尚未启动 CLI）", undefined, [], {
         projectId: fixtureProject.id,
         workspacePath: fixtureProject.canonicalPath,
         profileId: "builtin-normal",
@@ -1634,11 +1634,11 @@ export class AppController {
     const failed = await this.attachmentCache.prepare(sessionId, [{ id: "fixture-failed-image", name: "retry.png", kind: "image", mimeType: "image/png", size: 68, data: png }]);
     await this.attachmentCache.record(sessionId, "fixture-client-failed", "这条消息用于测试失败恢复。", failed.previews, "failed");
     const now = new Date().toISOString();
-    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.8.0 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
+    const session: SessionSummary = { id: sessionId, cwd: workspace, title: "0.8.1 会话生命周期与并发验收", createdAt: now, updatedAt: now, messageCount: 39, status: "cold", pinned: true, originKind: "normal" };
     const waitingSessionId = OFFLINE_UI_SESSION_IDS.waiting;
     const backgroundSessionId = OFFLINE_UI_SESSION_IDS.background;
-    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.8.0 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
-    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.8.0 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
+    const waitingSession: SessionSummary = { id: waitingSessionId, cwd: workspace, title: "0.8.1 Plan 与权限交互", createdAt: now, updatedAt: now, messageCount: 4, status: "needs-user", originKind: "normal" };
+    const backgroundSession: SessionSummary = { id: backgroundSessionId, cwd: workspace, title: "0.8.1 后台并行队列", createdAt: now, updatedAt: now, messageCount: 3, status: "working", originKind: "normal" };
     const legacyEvents: ChatEvent[] = Array.from({ length: 30 }, (_, index): ChatEvent[] => [
       { type: "tool-call", sessionId, tool: { toolCallId: `legacy-read-${index}`, title: `历史读取 ${index + 1}`, kind: "read_file", status: index % 11 === 0 ? "failed" : "completed", output: `历史执行片段 ${index + 1}`, locations: [{ path: "src/renderer/src/App.tsx", line: index + 1 }] } },
       { type: "turn-completed", sessionId },
@@ -2241,47 +2241,27 @@ export class AppController {
     const parentRuntime = await this.sessionRuntime.get(source.id);
     const parentAssignment = await this.profiles.assignment(source.id);
     const transactionId = randomUUID();
+    let targetMaterialized = false;
+    let committed = false;
     await this.appendRebindJournal({ transactionId, status: "started", sessionId: source.id, sourceCwd: source.cwd, targetCwd, at: new Date().toISOString() });
     try {
-      const attached = await this.processes.tryMoveSessionToWorkspace(source.id, targetCwd).catch(() => false);
-      if (attached) {
-        let materialized = false;
-        for (let attempt = 0; attempt < 6 && !materialized; attempt += 1) {
-          materialized = await this.catalog.has(targetCwd, source.id);
-          if (!materialized) await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
-        }
-        if (materialized) {
-          if (parentAssignment) await this.profiles.assign({ ...structuredClone(parentAssignment), sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined, createdAt: new Date().toISOString() });
-          await this.sessionRuntime.patch(source.id, { cwd: targetCwd });
-          await this.tokenActivity.rebindSession(source.id, source.id, targetCwd);
-          const receipt: SessionRebindReceipt = {
-            sessionId: source.id, parentSessionId: source.id, cwd: targetCwd,
-            profileId: parentRuntime?.profileId ?? parentAssignment?.profileId,
-            sourceCwd: source.cwd, targetCwd, method: "official-move", codeRestored: false,
-            localProjectionCopied: true, attachmentLedgerCopied: true, mediaCacheCopied: true,
-            completedAt: new Date().toISOString(),
-          };
-          await this.appendRebindJournal({ transactionId, status: "completed", method: receipt.method, sessionId: source.id, targetSessionId: source.id, sourceCwd: source.cwd, targetCwd, at: receipt.completedAt });
-          return receipt;
-        }
+      if (this.processes.snapshot(source.id)) await this.processes.close(source.id, false);
+      await this.catalog.materializeAtWorkspace(source.cwd, targetCwd, source.id);
+      targetMaterialized = true;
+      try {
+        await this.processes.open(targetCwd, source.id);
+      } catch (error) {
         await this.processes.close(source.id, false).catch(() => undefined);
+        await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
+        throw new Error(`复制后的会话无法由当前 CLI 重新打开：${error instanceof Error ? error.message : String(error)}`);
       }
-
-      const raw = await this.processes.forkToWorkspace(source.id, source.cwd, targetCwd);
-      const childId = String(raw.newSessionId ?? raw.new_session_id ?? raw.sessionId ?? raw.forkedSessionId ?? raw.session_id ?? "");
-      if (!childId) throw new Error("CLI 未返回重新绑定后的会话 ID");
-      await this.catalog.recordFork(source.id, childId);
-      await this.catalog.rename(childId, source.title);
-      if (parentAssignment) {
-        await this.profiles.assign({
-          ...structuredClone(parentAssignment), sessionId: childId,
-          sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined,
-          createdAt: new Date().toISOString(),
-        });
-      }
+      // From here the target copy is independently usable. Never discard it
+      // merely because a secondary Desktop metadata update fails.
+      committed = true;
+      if (parentAssignment) await this.profiles.assign({ ...structuredClone(parentAssignment), sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined, createdAt: new Date().toISOString() });
       const settings = await this.settingsStore.get();
       await this.sessionRuntime.save(buildForkRuntimePreferences(parentRuntime, {
-        sessionId: childId, cwd: targetCwd,
+        sessionId: source.id, cwd: targetCwd,
         modelId: parentRuntime?.modelId ?? settings.defaultModel,
         providerId: parentRuntime?.providerId,
         effort: parentRuntime?.effort ?? settings.defaultEffort,
@@ -2289,27 +2269,23 @@ export class AppController {
         profileId: parentRuntime?.profileId,
         compaction: parentRuntime?.compaction,
       }));
-      const projectionCopied = Boolean(await this.conversationProjections.cloneSession(source.id, childId, targetCwd));
-      await this.attachmentCache.cloneSession(source.id, childId);
-      await this.turnPresentations.cloneSession(source.id, childId);
-      const mediaRoot = join(this.userDataPath, "session-media");
-      const sourceMedia = join(mediaRoot, sessionCacheKey(source.id));
-      const hasMedia = Boolean(await stat(sourceMedia).catch(() => undefined));
-      if (hasMedia) await cp(sourceMedia, join(mediaRoot, sessionCacheKey(childId)), { recursive: true, force: false, errorOnExist: false });
-      await this.tokenActivity.rebindSession(source.id, childId, targetCwd);
-      // Archiving the source is the commit point. Every local copy above must
-      // succeed first so a partial migration never hides the usable session.
-      await this.catalog.archive(source.id, true);
+      await this.conversationProjections.rebindRuntime(source.id, targetCwd);
+      await this.tokenActivity.rebindSession(source.id, source.id, targetCwd);
       const receipt: SessionRebindReceipt = {
-        sessionId: childId, parentSessionId: source.id, cwd: targetCwd,
+        sessionId: source.id, parentSessionId: source.id, cwd: targetCwd,
         profileId: parentRuntime?.profileId ?? parentAssignment?.profileId,
-        sourceCwd: source.cwd, targetCwd, method: "official-fork", codeRestored: false,
-        localProjectionCopied: projectionCopied, attachmentLedgerCopied: true, mediaCacheCopied: true,
+        sourceCwd: source.cwd, targetCwd, method: "desktop-copy", codeRestored: false,
+        localProjectionCopied: true, attachmentLedgerCopied: true, mediaCacheCopied: true,
         completedAt: new Date().toISOString(),
       };
-      await this.appendRebindJournal({ transactionId, status: "completed", method: receipt.method, sessionId: source.id, targetSessionId: childId, sourceCwd: source.cwd, targetCwd, at: receipt.completedAt });
+      await this.appendRebindJournal({ transactionId, status: "completed", method: receipt.method, sessionId: source.id, targetSessionId: source.id, sourceCwd: source.cwd, targetCwd, at: receipt.completedAt });
+      await this.catalog.removeWorkspaceCopy(source.cwd, source.id).catch((error) => this.log.log(`旧路径会话副本清理失败（新路径副本已验证）：${error instanceof Error ? error.message : String(error)}`));
       return receipt;
     } catch (error) {
+      if (targetMaterialized && !committed) {
+        await this.processes.close(source.id, false).catch(() => undefined);
+        await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
+      }
       const message = error instanceof Error ? error.message : String(error);
       await this.appendRebindJournal({ transactionId, status: "failed", sessionId: source.id, sourceCwd: source.cwd, targetCwd, message, at: new Date().toISOString() }).catch(() => undefined);
       throw error;

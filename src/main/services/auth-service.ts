@@ -228,10 +228,15 @@ export class AuthService {
       let opened = false;
       const consume = (data: Buffer): void => {
         combined = `${combined}${data.toString()}`.slice(-LOGIN_OUTPUT_LIMIT);
-        const url = /https:\/\/[^\s\x1b]+/i.exec(combined)?.[0]?.replace(/[),.;]+$/, "");
+        const url = extractDeviceVerificationUrl(combined);
         const code = /(?:user[_ -]?code|confirmation code|验证码)\s*[:=]?\s*([A-Z0-9-]{4,})/i.exec(combined)?.[1]
           ?? (url ? /[?&]user_code=([^&\s]+)/i.exec(url)?.[1] : undefined);
-        this.updateLogin({ running: true, url, code: code ? decodeURIComponent(code) : undefined, message: "请在浏览器中完成登录" });
+        this.updateLogin({
+          running: true,
+          ...(url ? { url } : {}),
+          ...(code ? { code: decodeURIComponent(code) } : {}),
+          message: url || code ? "请在浏览器中完成登录" : "正在连接 Grok 登录服务…",
+        });
         if (appOwnsBrowser && url && !opened) {
           opened = true;
           void this.openExternal(url).catch(() => undefined);
@@ -240,7 +245,7 @@ export class AuthService {
       child.stdout.on("data", consume);
       child.stderr.on("data", consume);
       const code = await waitForProcessExit(child, this.loginTimeoutMs);
-      if (code !== 0) throw new Error(`登录失败（代码 ${String(code)}）`);
+      if (code !== 0) throw new Error(formatDeviceLoginFailure(code, combined));
       const raw = await readFile(this.authPath, "utf8");
       if (!raw.trim()) throw new Error("登录完成但 OAuth 凭据文件为空");
       const imported = await this.vault.importAuthJson(raw, true);
@@ -258,7 +263,13 @@ export class AuthService {
       const baseMessage = this.disposed ? "设备码登录已取消" : error instanceof DeviceLoginTimeoutError ? error.message : errorMessage(error);
       const message = rollbackError ? `${baseMessage}；恢复原账号失败：${errorMessage(rollbackError)}` : baseMessage;
       await this.log.log(`Device login failed: ${message}${combined ? `: ${combined}` : ""}`);
-      this.updateLogin({ ...this.loginState, running: false, error: message, message });
+      const verificationUrl = extractDeviceVerificationUrl(combined);
+      this.updateLogin({
+        running: false,
+        ...(verificationUrl ? { url: verificationUrl, code: this.loginState.code } : {}),
+        error: message,
+        message,
+      });
       return this.getLoginState();
     } finally {
       if (child) await this.terminateLogin(child).catch(() => undefined);
@@ -392,6 +403,34 @@ export class AuthService {
     this.loginState = next;
     if (!this.disposed) this.emitLogin(this.getLoginState());
   }
+}
+
+const ANSI_ESCAPE = /\x1B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+/** OAuth token/device endpoints are API endpoints, not pages a user should open. */
+export function extractDeviceVerificationUrl(output: string): string | undefined {
+  const candidates = output.match(/https:\/\/[^\s\x1b]+/gi) ?? [];
+  for (const candidate of candidates) {
+    const normalized = candidate.replace(/[),.;:'"\]}]+$/, "");
+    try {
+      const url = new URL(normalized);
+      const path = url.pathname.toLowerCase();
+      if (/\/(?:oauth2?\/)?(?:device\/code|token)(?:\/|$)/.test(path)) continue;
+      if (url.searchParams.has("user_code") || /\b(?:activate|verify|verification|device|login)\b/i.test(path)) return url.toString();
+    } catch { /* ignore malformed CLI output */ }
+  }
+  return undefined;
+}
+
+export function formatDeviceLoginFailure(code: number | null, output: string): string {
+  const clean = output.replace(ANSI_ESCAPE, "").replace(/\s+/g, " ").trim();
+  const prefix = `登录失败（代码 ${String(code)}）`;
+  if (/os error 10061|actively refused|积极拒绝|tcp connect error|tunnel error/i.test(clean)) {
+    return `${prefix}：登录服务连接被拒绝。请确认设置中的 HTTP/HTTPS 代理正在运行，或暂时清空代理后重试`;
+  }
+  if (/timed? out|timeout|超时/i.test(clean)) return `${prefix}：连接登录服务超时，请检查网络或代理后重试`;
+  const detail = clean.split(/\r?\n/).filter(Boolean).at(-1)?.slice(0, 600);
+  return detail ? `${prefix}：${detail}` : prefix;
 }
 
 async function supportsNoBrowser(cliPath: string, env: NodeJS.ProcessEnv): Promise<boolean> {

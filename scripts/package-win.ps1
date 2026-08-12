@@ -68,7 +68,7 @@ if ($HostedActions) {
     if ($LASTEXITCODE -ne 0) { throw 'Hosted Windows 打包内容验收失败。' }
 } else {
     & (Join-Path $PSScriptRoot 'probe-v070-ui.ps1') -Executable $ExpectedExecutable
-    if ($LASTEXITCODE -ne 0) { throw '当前 v0.8.0 打包 UI 验收失败。' }
+    if ($LASTEXITCODE -ne 0) { throw '当前 v0.8.1 打包 UI 验收失败。' }
 }
 
 # Generate distributable assets from the exact unpacked directory that passed
