@@ -84,6 +84,37 @@ describe("IPC runtime schemas", () => {
     expect(() => validateIpcInvocation("settings:update", [{ cliPath: "grok.exe" }], 1)).toThrow("绝对路径");
     expect(() => validateIpcInvocation("settings:update", [{ fontScale: 500 }], 1)).toThrow("85-130");
     expect(() => validateIpcInvocation("settings:update", [{ unexpected: true }], 1)).toThrow("未知字段");
+    expect(() => validateIpcInvocation("settings:update", [{
+      cliPath: "C:\\Users\\user\\.grok\\bin\\grok.exe",
+      httpProxy: "",
+      httpsProxy: "",
+      defaultModel: "",
+      defaultEffort: "",
+      defaultMode: "agent",
+      showThinking: false,
+      expandToolDetails: false,
+      automaticUpdateChecks: true,
+      lastAutomaticUpdateCheckAt: "2026-08-12T15:00:00.000Z",
+      fontScale: 100,
+      uiDensity: "balanced",
+      conversationContentWidth: 780,
+      conversationFontScale: 100,
+      recentWorkspaces: ["D:\\repo"],
+      activeWorkspace: "D:\\repo",
+      codexGroupCollapsed: true,
+      claudeGroupCollapsed: true,
+      projectToolsOpen: false,
+      sessionGroupCollapsed: { normal: false, automation: true },
+      showArchivedCodex: false,
+      theme: {
+        mode: "dark",
+        customBase: "dark",
+        colors: { background: "#0d0f12", surface: "#171a1f", text: "#e7e9ec", muted: "#9299a3", accent: "#45a9df", border: "#292e35" },
+        background: { enabled: false, scope: "conversation", fit: "cover", position: "center", opacity: 0.32, blur: 0, dim: 0.42 },
+      },
+    }], 1)).not.toThrow();
+    expect(() => validateIpcInvocation("settings:update", [{ automaticUpdateChecks: "yes" }], 1)).toThrow("布尔值");
+    expect(() => validateIpcInvocation("settings:update", [{ lastAutomaticUpdateCheckAt: "not-a-date" }], 1)).toThrow("lastAutomaticUpdateCheckAt");
 
     expect(() => validateIpcInvocation("workspace:set", ["D:\\repo"], 1)).not.toThrow();
     expect(() => validateIpcInvocation("workspace:open-offline", ["E:\\missing-repo"], 1)).not.toThrow();

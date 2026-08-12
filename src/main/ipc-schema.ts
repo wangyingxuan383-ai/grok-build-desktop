@@ -1,4 +1,5 @@
 import { extname, posix, win32 } from "node:path";
+import type { AppSettings, ComputerUseSettings } from "../shared/types";
 
 const MAX_IPC_DEPTH = 16;
 const MAX_IPC_NODES = 50_000;
@@ -550,12 +551,25 @@ function recordStringArray(record: Record<string, unknown>, key: string, maxLeng
   return value as string[];
 }
 
+const APP_SETTINGS_PATCH_KEYS = [
+  "cliPath", "httpProxy", "httpsProxy", "defaultModel", "defaultEffort", "defaultMode",
+  "showThinking", "expandToolDetails", "automaticUpdateChecks", "lastAutomaticUpdateCheckAt",
+  "fontScale", "uiDensity", "conversationContentWidth", "conversationFontScale", "recentWorkspaces", "activeWorkspace",
+  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme",
+] as const satisfies readonly (keyof AppSettings)[];
+type MissingAppSettingsPatchKey = Exclude<keyof AppSettings, (typeof APP_SETTINGS_PATCH_KEYS)[number]>;
+const _assertAppSettingsPatchKeys: [MissingAppSettingsPatchKey] extends [never] ? true : MissingAppSettingsPatchKey = true;
+void _assertAppSettingsPatchKeys;
+
+const COMPUTER_SETTINGS_PATCH_KEYS = [
+  "enabled", "experimentalUnlocked", "acceptanceVersion", "confirmNewApps", "alwaysAllowedAppIds", "maxScreenshotEdge", "emergencyShortcut",
+] as const satisfies readonly (keyof ComputerUseSettings)[];
+type MissingComputerSettingsPatchKey = Exclude<keyof ComputerUseSettings, (typeof COMPUTER_SETTINGS_PATCH_KEYS)[number]>;
+const _assertComputerSettingsPatchKeys: [MissingComputerSettingsPatchKey] extends [never] ? true : MissingComputerSettingsPatchKey = true;
+void _assertComputerSettingsPatchKeys;
+
 function settingsPatchArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, [
-    "cliPath", "httpProxy", "httpsProxy", "defaultModel", "defaultEffort", "defaultMode",
-    "showThinking", "expandToolDetails", "fontScale", "uiDensity", "conversationContentWidth", "conversationFontScale", "recentWorkspaces", "activeWorkspace",
-    "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme",
-  ]);
+  const value = strictRecordArg(args, index, APP_SETTINGS_PATCH_KEYS);
   if (value.cliPath !== undefined) cliPathSetting(value.cliPath);
   for (const key of ["httpProxy", "httpsProxy"] as const) {
     const proxy = optionalRecordStringAllowEmpty(value, key, 4_096);
@@ -570,6 +584,11 @@ function settingsPatchArg(args: unknown[], index: number): void {
   optionalRecordEnum(value, "defaultMode", ["agent", "plan", "auto"]);
   optionalRecordBoolean(value, "showThinking");
   optionalRecordBoolean(value, "expandToolDetails");
+  optionalRecordBoolean(value, "automaticUpdateChecks");
+  if (value.lastAutomaticUpdateCheckAt !== undefined) {
+    const stamp = requiredRecordString(value, "lastAutomaticUpdateCheckAt", 64);
+    if (Number.isNaN(Date.parse(stamp))) throw new Error("IPC 字段 lastAutomaticUpdateCheckAt 无效");
+  }
   optionalRecordInteger(value, "fontScale", 85, 130);
   optionalRecordInteger(value, "conversationContentWidth", 640, 1040);
   optionalRecordInteger(value, "conversationFontScale", 90, 135);
@@ -806,7 +825,7 @@ function computerStartArg(args: unknown[], index: number): void {
   optionalRecordString(value, "windowId", 512);
 }
 function computerSettingsArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["enabled", "experimentalUnlocked", "acceptanceVersion", "confirmNewApps", "alwaysAllowedAppIds", "maxScreenshotEdge", "emergencyShortcut"]);
+  const value = strictRecordArg(args, index, COMPUTER_SETTINGS_PATCH_KEYS);
   optionalRecordBoolean(value, "enabled");
   optionalRecordBoolean(value, "experimentalUnlocked");
   optionalRecordString(value, "acceptanceVersion", 512);

@@ -1,9 +1,12 @@
+import { readFileSync } from "node:fs";
+
 const endpoint = process.argv[2];
 if (!endpoint) throw new Error("Usage: node scripts/probe-v070-ui.mjs <cdp-endpoint>");
-// This is the v0.7 acceptance gate, not a generic "whatever package.json
-// currently says" smoke test. Keeping the expected release explicit prevents
-// an older 0.6.x build from silently satisfying the current UI contract.
-const expectedVersion = "0.8.1";
+// The footer must show this build's package version. Reading it from
+// package.json keeps the gate aligned with version bumps and still rejects an
+// older packaged binary whose About/footer text does not match the repo.
+const expectedVersion = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+if (!/^\d+\.\d+\.\d+$/.test(expectedVersion)) throw new Error(`Invalid package version: ${expectedVersion}`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(action, message, timeout = 30_000) { const end = Date.now() + timeout; let last; while (Date.now() < end) { try { const value = await action(); if (value) return value; } catch (error) { last = error; } await sleep(120); } throw new Error(`${message}${last ? `: ${last.message}` : ""}`); }
 const target = await waitFor(async () => (await fetch(`${endpoint}/json/list`).then((value) => value.json())).find((value) => value.type === "page"), "Renderer unavailable");

@@ -1811,6 +1811,7 @@ export class AppController {
   }
 
   async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
+    delete patch.lastAutomaticUpdateCheckAt;
     const current = await this.settingsStore.get();
     if (patch.activeWorkspace !== undefined && !samePath(patch.activeWorkspace, current.activeWorkspace)) {
       const canonical = patch.activeWorkspace
