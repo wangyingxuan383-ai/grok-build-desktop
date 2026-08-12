@@ -173,6 +173,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("system:open-external", (url: string) => controller.openExternal(url));
   handle("settings:get", () => controller.getSettings());
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
+  handle("models:catalog", () => controller.listModelCatalog());
   handle("theme:get", () => controller.getTheme());
   handle("theme:update", (patch: Partial<ThemeSettings>) => controller.updateTheme(patch));
   handle("theme:pick-background", () => controller.pickThemeBackground());

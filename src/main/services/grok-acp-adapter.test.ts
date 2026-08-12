@@ -340,40 +340,53 @@ describe("Plan permission handling", () => {
     expect(events.some((event) => event.type === "permission")).toBe(false);
   });
 
-  it("auto-rejects mutating Plan tools without rendering a permission card", async () => {
+  it("auto-allows mutating Plan tools without rendering a permission card", async () => {
     const { adapter, writes, events } = permissionFixture();
     await adapter.handleServerRequest("session/request_permission", "unsafe-write", {
       toolCall: { kind: "write_file", title: "Write package.json" },
       options: [{ optionId: "allow", kind: "allow_once" }, { optionId: "deny", kind: "reject_once" }],
     });
-    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "unsafe-write", result: { outcome: { outcome: "selected", optionId: "deny" } } });
+    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "unsafe-write", result: { outcome: { outcome: "selected", optionId: "allow" } } });
     expect(events.some((event) => event.type === "permission")).toBe(false);
   });
 
-  it("uses the Plan gate before a general permission decider", async () => {
+  it("auto-approves Auto mode even when the CLI uses a short allow kind", async () => {
     const { adapter, writes, events } = permissionFixture();
-    adapter.options.permissionDecider = vi.fn().mockResolvedValue(true);
+    adapter.planActive = false;
+    adapter.mode = "auto";
+    adapter.autoApprove = true;
+    await adapter.handleServerRequest("session/request_permission", "auto-write", {
+      toolCall: { kind: "execute", title: "npm install" },
+      options: [{ optionId: "yes", kind: "allow" }, { optionId: "no", kind: "reject_once" }],
+    });
+    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "auto-write", result: { outcome: { outcome: "selected", optionId: "yes" } } });
+    expect(events.some((event) => event.type === "permission")).toBe(false);
+  });
+
+  it("does not consult a permission decider once Auto or Plan will approve", async () => {
+    const { adapter, writes, events } = permissionFixture();
+    adapter.options.permissionDecider = vi.fn().mockResolvedValue(false);
     await adapter.handleServerRequest("session/request_permission", "unsafe-write", {
       toolCall: { kind: "write_file", title: "Write package.json" },
       options: [{ optionId: "allow", kind: "allow_always" }, { optionId: "deny", kind: "reject_once" }],
     });
     expect(adapter.options.permissionDecider).not.toHaveBeenCalled();
-    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "unsafe-write", result: { outcome: { outcome: "selected", optionId: "deny" } } });
+    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "unsafe-write", result: { outcome: { outcome: "selected", optionId: "allow" } } });
     expect(events.some((event) => event.type === "permission")).toBe(false);
   });
 
-  it("returns the ACP cancelled outcome when a rejected Plan tool has no reject option", async () => {
+  it("returns the ACP cancelled outcome when an auto-approved tool has no allow option", async () => {
     const { adapter, writes, events } = permissionFixture();
-    await adapter.handleServerRequest("session/request_permission", "unsafe-no-reject", {
-      toolCall: { kind: "other", title: "Search-looking unknown integration" },
-      options: [{ optionId: "allow", kind: "allow_once" }],
+    await adapter.handleServerRequest("session/request_permission", "no-allow", {
+      toolCall: { kind: "other", title: "Unknown integration" },
+      options: [{ optionId: "deny", kind: "reject_once" }],
     });
-    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "unsafe-no-reject", result: { outcome: { outcome: "cancelled" } } });
-    expect(writes.some((value) => value.id === "unsafe-no-reject" && value.error)).toBe(false);
+    expect(writes).toContainEqual({ jsonrpc: "2.0", id: "no-allow", result: { outcome: { outcome: "cancelled" } } });
+    expect(writes.some((value) => value.id === "no-allow" && value.error)).toBe(false);
     expect(events.some((event) => event.type === "permission")).toBe(false);
   });
 
-  it("enforces the exact session plan.md as the only Plan write target", async () => {
+  it("allows Plan mode to write ordinary files and still records plan.md", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-plan-write-gate-"));
     const cwd = join(root, "workspace");
     const grokHome = join(root, ".grok");
@@ -389,10 +402,10 @@ describe("Plan permission handling", () => {
       emitEvent: vi.fn((event: unknown) => events.push(event)),
     });
     try {
-      const external = join(root, "outside.txt");
-      await adapter.handleServerRequest("fs/write_text_file", "external-write", { path: external, content: "blocked" });
-      expect(writes).toContainEqual(expect.objectContaining({ id: "external-write", error: expect.objectContaining({ code: -32010 }) }));
-      expect(await stat(external).then(() => true).catch(() => false)).toBe(false);
+      const workspaceFile = join(cwd, "README.md");
+      await adapter.handleServerRequest("fs/write_text_file", "workspace-write", { path: workspaceFile, content: "edited" });
+      expect(await readFile(workspaceFile, "utf8")).toBe("edited");
+      expect(writes).toContainEqual({ jsonrpc: "2.0", id: "workspace-write", result: {} });
 
       const planPath = await resolveSessionPlanFile(cwd, "plan-session", grokHome);
       await adapter.handleServerRequest("fs/write_text_file", "plan-write", { path: planPath, content: "# Safe plan" });

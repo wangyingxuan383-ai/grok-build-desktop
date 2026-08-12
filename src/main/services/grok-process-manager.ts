@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, OfficialFeedbackCapability, OfficialFeedbackReceipt, ProviderLaunchContext, ReasoningEffort, SessionCompactReceipt, SessionMode } from "../../shared/types";
+import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, ModelInfo, OfficialFeedbackCapability, OfficialFeedbackReceipt, ProviderLaunchContext, ReasoningEffort, SessionCompactReceipt, SessionMode } from "../../shared/types";
 import { buildCliEnv, detectEffortFlag, locateGrokCli } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
 import type { LogService } from "./log-service";
@@ -197,6 +197,14 @@ export class GrokProcessManager {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error("会话当前未加载");
     return session;
+  }
+
+  listKnownModels(): ModelInfo[] {
+    const byId = new Map<string, ModelInfo>();
+    for (const session of this.sessions.values()) {
+      for (const model of session.models) byId.set(model.modelId, model);
+    }
+    return [...byId.values()];
   }
 
   snapshot(sessionId: string): LiveSessionSnapshot | undefined {

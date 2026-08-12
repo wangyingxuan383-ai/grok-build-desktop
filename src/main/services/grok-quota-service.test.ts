@@ -23,6 +23,15 @@ describe("Grok quota parsing", () => {
     expect(parseMonthly({ config: { monthly_limit: { val: 1000 }, used: { val: 150 }, on_demand_cap: { val: 0 } } }).monthly).toMatchObject({ remaining: 850 });
   });
 
+  it("accepts the newer monthly percent and nested subscription shapes", () => {
+    expect(parseMonthly({ config: { monthlyUsagePercent: 42, currentPeriod: { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z" } } }).monthly).toMatchObject({
+      used: 42, limit: 100, remaining: 58, unit: "percent", resetAt: "2026-09-01T00:00:00Z",
+    });
+    expect(parseMonthly({ config: { subscription: { monthlyCredits: { val: 2000 }, monthlyUsed: { val: 250 } } } }).monthly).toMatchObject({
+      used: 250, limit: 2000, remaining: 1750,
+    });
+  });
+
   it("keeps a rolling 24-hour token limit separate from billing windows", () => {
     expect(parseRolling24hQuota("rolling 24-hour window — tokens actual/limit: 1,056,458/1,000,000", "grok-free")).toMatchObject({
       label: "滚动 24 小时 Token", used: 1_056_458, limit: 1_000_000, remaining: 0, unit: "tokens", source: "cli-error", modelId: "grok-free",

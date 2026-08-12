@@ -171,17 +171,43 @@ export function parseWeekly(payload: BillingPayload): QuotaWindow | undefined {
 }
 
 export function parseMonthly(payload: BillingPayload): { monthly?: QuotaWindow; onDemand?: QuotaWindow } {
-  const config = payload.config;
+  const config = payload.config ? { ...payload.config, ...record(payload.config.subscription), ...record(payload.config.limits), ...record(payload.config.monthly) } : record(payload);
   if (!config) return {};
-  const limitCents = moneyValue(config.monthlyLimit ?? config.monthly_limit);
-  const usedCents = moneyValue(config.used);
-  const onDemandCap = moneyValue(config.onDemandCap ?? config.on_demand_cap);
+  const percent = numberValue(
+    config.monthlyUsagePercent
+    ?? config.monthly_usage_percent
+    ?? config.creditUsagePercent
+    ?? config.credit_usage_percent,
+  );
+  const limitCents = moneyValue(
+    config.monthlyLimit
+    ?? config.monthly_limit
+    ?? config.monthlyCredits
+    ?? config.monthly_credits
+    ?? config.includedLimit
+    ?? config.included_limit,
+  );
+  const usedCents = moneyValue(
+    config.monthlyUsed
+    ?? config.monthly_used
+    ?? config.used
+    ?? config.creditsUsed
+    ?? config.credits_used
+    ?? config.includedUsed
+    ?? config.included_used,
+  );
+  const onDemandCap = moneyValue(config.onDemandCap ?? config.on_demand_cap ?? config.onDemandLimit ?? config.on_demand_limit);
   const explicitOnDemand = moneyValue(config.onDemandUsed ?? config.on_demand_used);
   const includedUsed = usedCents === undefined ? undefined : limitCents !== undefined ? Math.min(usedCents, limitCents) : usedCents;
   const onDemandUsed = explicitOnDemand ?? (usedCents !== undefined && limitCents !== undefined ? Math.max(0, usedCents - limitCents) : undefined);
-  const start = stringValue(config.billingPeriodStart ?? config.billing_period_start);
-  const end = stringValue(config.billingPeriodEnd ?? config.billing_period_end);
-  const monthly = limitCents === undefined && usedCents === undefined ? undefined : {
+  const period = record(config.currentPeriod) ?? record(config.current_period) ?? {};
+  const start = stringValue(period.start ?? config.billingPeriodStart ?? config.billing_period_start ?? config.periodStart ?? config.period_start);
+  const end = stringValue(period.end ?? config.billingPeriodEnd ?? config.billing_period_end ?? config.periodEnd ?? config.period_end ?? config.resetAt ?? config.reset_at);
+  const monthly = limitCents === undefined && usedCents === undefined && percent === undefined ? undefined : percent !== undefined && limitCents === undefined ? {
+    label: "月度额度", used: percent, limit: 100,
+    remaining: Math.max(0, 100 - percent),
+    unit: "percent" as const, periodStart: start, periodEnd: end, resetAt: end,
+  } : {
     label: "月度赠送额度", used: includedUsed, limit: limitCents,
     remaining: limitCents === undefined || includedUsed === undefined ? undefined : Math.max(0, limitCents - includedUsed),
     unit: "credits" as const, periodStart: start, periodEnd: end, resetAt: end,
