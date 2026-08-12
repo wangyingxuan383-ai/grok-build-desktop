@@ -1,5 +1,9 @@
 # Grok CLI Compatibility
 
+## Desktop 0.8.2 / Grok Build 1.0.0 (2026-08-13)
+
+- Desktop-only hotfix: no CLI wire or capability change. Settings save now accepts the 0.8.0 automatic-update fields that the renderer already persisted and displayed.
+
 ## Desktop 0.8.1 / Grok Build 1.0.0 hotfix evidence (2026-08-12)
 
 - A no-prompt local ACP probe confirmed that stable CLI `1.0.0 (3cd0d0cbce)` advertises list/resume/close but not fork; both `session/fork` and legacy `x.ai/session/fork` are unavailable. Desktop therefore capability-gates future standard Fork and uses a verified opaque-directory copy transaction for current project rebinds.

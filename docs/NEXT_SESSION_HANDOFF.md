@@ -1,4 +1,12 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-12，0.8.1 紧急修复候选）
+# Grok Build Desktop 下一会话完整交接（2026-08-13，0.8.2 设置保存热修）
+
+## 2026-08-13 0.8.2 当前状态
+
+- 用户在已安装的 0.8.1 上复现：只要保存设置就报 `IPC 参数 1 包含未知字段 automaticUpdateChecks`。根因与 0.8.1 的 `projectId` 同类：设置页提交完整 `AppSettings` 草稿，IPC 白名单漏了 0.8.0 新增的自动更新字段。
+- 源码已修复并提升到 **0.8.2**。`lastAutomaticUpdateCheckAt` 可随草稿通过校验，但主进程会忽略 Renderer 写入，仍只由自动检查逻辑更新。
+- 同类审计：`session:create` 仍通过 `launchInputFromDraft()` 去掉 `projectId`；任务中心 `toInput()` 会剥离运行时字段；Computer/Theme/Automation 白名单与类型对齐。未改正在运行的桌面窗口，不在本机覆盖安装。
+- 正式资产只接受 GitHub `v0.8.2` 标签工作流重建后的 Setup/Portable。用户自行下载安装。
+- `v0.8.1` 已是公开 Latest；交接文档里旧的“禁止发布 0.8.1”和本地预发布哈希已过期。官方 Setup SHA-256 `68d1125a4ea45892cfe4e9ea936df032eb36b2079cf0cee24465b84f496fc135`；Portable `fbc06d98020c6fe368f21c62387858a06a909f704e3d21dab29aee01dc73441a`。
 
 ## 2026-08-12 0.8.1 当前状态
 
