@@ -1,5 +1,14 @@
 # Grok Build Desktop 实施计划
 
+## 0.8.1 紧急可用性修复（2026-08-12）
+
+- [x] 草稿到 `session:create` 增加显式 DTO 转换，`projectId` 保留在 Desktop 草稿而不跨越会话启动 IPC。
+- [x] 设备登录只识别真实浏览器验证 URL，排除 OAuth token/device API 端点；代理拒绝和网络超时提供可见诊断。
+- [x] 使用本机 Grok Build CLI 1.0.0 实测确认握手不声明 Fork，标准 `session/fork` 与旧 `x.ai/session/fork` 均返回 `Method not found`。
+- [x] 项目重新绑定改为不透明会话目录事务复制、新目录真实 Resume 验证、运行配置/投影 cwd 同步和失败回滚；不修改会话 JSONL 正文。
+- [x] 完整离线门禁通过：102 个测试文件/740 项测试，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、公开扫描、Renderer 分块、Native Host、Fuses、打包版/Portable UI 与 Task Scheduler 通过。
+- [x] C 盘生成 0.8.1 Setup/Portable/SBOM/许可证并完成 per-user 覆盖安装；安装版 File/Product、可见冷启动、Fuses、桌面和开始菜单快捷方式通过，已交用户验证。
+
 ## 0.8.0 最终再审与官方上游复核（2026-08-11）
 
 - [x] 当前版本完整 UI 探针改为“先等待 Renderer 首帧、再设置固定视口”，移除启动竞态中的合成 resize；CDP 超时请求可清理并重试。标签工作流在无交互 Hosted Windows 上改为验证 ASAR/Renderer 入口与生产资产、Overlay Root、资源清单/哈希、Fuses 和 Portable 结构；完整交互断言继续由同提交 PR/main CI 与本机打包门禁执行。

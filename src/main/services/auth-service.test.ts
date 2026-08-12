@@ -199,6 +199,39 @@ describe("AuthService lifecycle", () => {
     expect(harness.stopSessions).toHaveBeenCalledTimes(1);
   });
 
+  it("does not expose the OAuth device API endpoint as a browser verification page", async () => {
+    const harness = await createHarness(authJson("old", "old-token"), {
+      spawnLogin: spawnLoginScript(`
+        process.stderr.write("error sending request for url (https://auth.x.ai/oauth2/device/code): tunnel error: tcp connect error: os error 10061\\n");
+        process.exit(1);
+      `),
+    });
+
+    const result = await harness.service.loginDevice();
+
+    expect(result.running).toBe(false);
+    expect(result.url).toBeUndefined();
+    expect(result.code).toBeUndefined();
+    expect(result.error).toContain("代理正在运行");
+    expect(result.error).not.toContain("oauth2/device/code");
+  });
+
+  it("keeps a genuine verification URL available when login later exits", async () => {
+    const harness = await createHarness(authJson("old", "old-token"), {
+      spawnLogin: spawnLoginScript(`
+        process.stdout.write("Open https://auth.example.test/device?user_code=ABCD-EFGH\\n");
+        process.stderr.write("authorization cancelled\\n");
+        process.exit(2);
+      `),
+    });
+
+    const result = await harness.service.loginDevice();
+
+    expect(result.url).toBe("https://auth.example.test/device?user_code=ABCD-EFGH");
+    expect(result.code).toBe("ABCD-EFGH");
+    expect(result.error).toContain("authorization cancelled");
+  });
+
   it("rolls back an imported OAuth account when post-login verification fails", async () => {
     const oldRaw = authJson("old", "old-token");
     const newRaw = authJson("new", "new-token");

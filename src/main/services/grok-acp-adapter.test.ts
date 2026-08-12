@@ -66,15 +66,25 @@ describe("Grok ACP process arguments", () => {
     expect(adapter.extension).toHaveBeenCalledWith("x.ai/feedback", { session_id: "s1", feedback_text: "CLI 反馈" });
   });
 
-  it("creates a cross-directory fork without creating a disposable session", async () => {
+  it("uses standard ACP session/fork only when the runtime advertises it", async () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     adapter.launchAndInitialize = vi.fn().mockResolvedValue(undefined);
-    adapter.request = vi.fn().mockResolvedValue({ newSessionId: "child" });
-    adapter.observeRuntimeExtension = vi.fn();
-    expect(await adapter.forkExternal("parent", "E:\\old", "C:\\new")).toEqual({ newSessionId: "child" });
-    expect(adapter.request).toHaveBeenCalledWith("x.ai/session/fork", {
-      sourceSessionId: "parent", sourceCwd: "E:\\old", newCwd: "C:\\new", sessionKind: "fork",
+    adapter.runtimeHandshake = { sessionCapabilities: { fork: true } };
+    adapter.options = { sessionMcpServers: [], sessionMeta: {}, pluginDirs: [], sessionAttachPolicy: undefined };
+    adapter.request = vi.fn().mockResolvedValue({ sessionId: "child" });
+    expect(await adapter.forkExternal("parent", "E:\\old", "C:\\new")).toEqual({ sessionId: "child" });
+    expect(adapter.request).toHaveBeenCalledWith("session/fork", {
+      sessionId: "parent", cwd: "C:\\new", mcpServers: [], _meta: expect.any(Object),
     }, 120_000);
+  });
+
+  it("fails closed before calling an unadvertised fork method", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    adapter.launchAndInitialize = vi.fn().mockResolvedValue(undefined);
+    adapter.runtimeHandshake = { sessionCapabilities: {} };
+    adapter.request = vi.fn();
+    await expect(adapter.forkExternal("parent", "E:\\old", "C:\\new")).rejects.toThrow("未声明会话分叉能力");
+    expect(adapter.request).not.toHaveBeenCalled();
   });
 
   it("keeps the CLI-reported mode when resuming instead of applying the current global default", async () => {

@@ -486,13 +486,15 @@ export class GrokAcpAdapter extends EventEmitter {
    */
   async forkExternal(sourceSessionId: string, sourceCwd: string, newCwd: string): Promise<Record<string, unknown>> {
     await this.launchAndInitialize();
-    const result = await this.request("x.ai/session/fork", {
-      sourceSessionId,
-      sourceCwd,
-      newCwd,
-      sessionKind: "fork",
+    if (!this.runtimeHandshake?.sessionCapabilities?.fork) {
+      throw new Error("当前 Grok CLI 未声明会话分叉能力；请使用 Desktop 项目重新绑定，它会先复制并验证会话再切换路径");
+    }
+    const result = await this.request(acpMethods.agent.session.fork, {
+      sessionId: sourceSessionId,
+      cwd: newCwd,
+      mcpServers: this.options.sessionMcpServers ?? [],
+      _meta: buildSessionAttachMeta(this.options.sessionMeta, this.options.pluginDirs, this.options.sessionAttachPolicy),
     }, 120_000) as Record<string, unknown>;
-    this.observeRuntimeExtension("x.ai/session/fork");
     return result;
   }
 
@@ -1067,6 +1069,9 @@ export class GrokAcpAdapter extends EventEmitter {
   }
   async fork(targetPromptIndex?: string, newCwd = this.cwd): Promise<Record<string, unknown>> {
     const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
+    if (newCwd !== this.cwd && !this.runtimeHandshake?.sessionCapabilities?.fork) {
+      throw new Error("当前 Grok CLI 未声明跨目录会话分叉能力");
+    }
     return this.extension("x.ai/session/fork", {
       sourceSessionId: this.sessionId,
       sourceCwd: this.cwd,

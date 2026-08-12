@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1 - 2026-08-12
+
+### Fixed
+
+- 修复草稿首次发送把 Desktop 专用 `projectId` 透传给 `session:create`，导致所有新会话被 IPC 严格校验拒绝的问题；现在只发送明确的执行配置字段。
+- 修复设备码登录把 `oauth2/device/code` API 端点误当成用户验证页面的问题；代理拒绝、网络超时和 CLI 错误现在显示可操作的中文原因，且不会残留错误浏览器链接。
+- 修复项目路径重新绑定依赖未由 Grok Build CLI 1.0.0 声明的 `session/fork`，造成全部会话 `Method not found` 的问题。Desktop 现在以事务方式复制完整不透明 CLI 会话目录，在新目录真实 Resume 验证成功后才提交绑定并清理旧副本；失败不会覆盖源会话。
+- ACP Fork 调用改为能力门禁：只有运行时明确声明标准 `session/fork` 时才调用，禁止再盲调旧 `x.ai/session/fork`。
+
 ## 0.8.0 - 2026-08-11
 
 ### Grok Build CLI 1.0.0 完整适配与最终收口

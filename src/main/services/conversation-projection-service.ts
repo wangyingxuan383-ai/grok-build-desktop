@@ -200,6 +200,22 @@ export class ConversationProjectionService {
     return this.restore(targetSessionId);
   }
 
+  /** Keep the visible projection attached to the same logical session after a project move. */
+  async rebindRuntime(sessionId: string, targetCwd: string): Promise<void> {
+    await this.flush(sessionId);
+    const state = await this.loadState(sessionId);
+    if (state.runtime) {
+      const previousTime = Date.parse(state.runtime.updatedAt);
+      const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
+      state.runtime = { ...state.runtime, cwd: targetCwd, updatedAt };
+      this.states.set(sessionId, state);
+    }
+    await this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
+      const current = await this.restoreRecordsWithoutLock(sessionId);
+      await this.compactWithoutLock(sessionId, current.records, current.truncatedEventCount);
+    }));
+  }
+
   /**
    * One-time, read-only recovery for pre-0.6.16 conversations whose ACP replay
    * has metrics but no visible assistant blocks. Only the strict

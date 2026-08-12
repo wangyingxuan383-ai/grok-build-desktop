@@ -1,5 +1,14 @@
 # Feature Matrix
 
+## 0.8.1 critical hotfix (2026-08-12)
+
+| Area | Status | Evidence |
+|---|---|---|
+| Draft-first session creation | Focused-tested | Desktop-only `projectId` is removed by an explicit launch DTO before the strict session IPC call. |
+| Device login diagnostics | Focused-tested | OAuth API endpoints are rejected as browser pages; proxy refusal/timeout output is converted into actionable Chinese UI errors. |
+| Project path rebind on CLI 1.0.0 | Focused + live contract probed | Local CLI 1.0.0 does not advertise Fork and both fork wire methods return method-not-found. Rebind now copies the opaque session directory, verifies a real resume in the target cwd, then commits and retains rollback safety. |
+| 0.8.1 delivery | Packaged + installed | 102 files/740 tests pass; TypeScript, build/resources, 369-file public scan, chunks, Native/Fuses, packaged/Portable UI, scheduler, per-user install, visible cold launch and shortcuts pass. |
+
 ## 0.8.0 Grok Build CLI 1.0.0 public release (2026-08-11)
 
 | Area | Status | Evidence / boundary |
