@@ -1,5 +1,12 @@
 # Grok Build Desktop 实施计划
 
+## 0.8.2 设置保存 IPC 热修（2026-08-13）
+
+- [x] 复现 `settings:update` 因未知字段 `automaticUpdateChecks` 拒绝完整设置草稿。
+- [x] IPC 白名单补齐 `automaticUpdateChecks` / `lastAutomaticUpdateCheckAt`；主进程忽略 Renderer 提交的检查时间戳。
+- [x] 增加 `AppSettings`/`ComputerUseSettings` 编译期字段穷尽检查，并覆盖完整草稿回归测试。
+- [ ] 推送 GitHub 并由标签工作流生成 0.8.2 Setup/Portable；不在本机覆盖安装正在使用的对话窗口。
+
 ## 0.8.1 紧急可用性修复（2026-08-12）
 
 - [x] 草稿到 `session:create` 增加显式 DTO 转换，`projectId` 保留在 Desktop 草稿而不跨越会话启动 IPC。

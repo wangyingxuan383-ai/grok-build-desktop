@@ -1,5 +1,13 @@
 # Feature Matrix
 
+## 0.8.2 settings IPC hotfix (2026-08-13)
+
+| Area | Status | Evidence |
+|---|---|---|
+| Settings save | Focused-tested | Full persisted `AppSettings` draft including `automaticUpdateChecks` and `lastAutomaticUpdateCheckAt` now passes `settings:update`. Invalid boolean/date still rejected. |
+| IPC/type drift | Compile-time + focused | `AppSettings` and `ComputerUseSettings` patch keys are exhaustiveness-checked against their TypeScript types. |
+| 0.8.2 delivery | Source-ready | No local reinstall of the running desktop window. Public Setup/Portable come from the `v0.8.2` tag workflow after push. |
+
 ## 0.8.1 critical hotfix (2026-08-12)
 
 | Area | Status | Evidence |

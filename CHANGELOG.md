@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.2 - 2026-08-13
+
+### Fixed
+
+- 修复设置页任意保存都会失败的问题：界面会把完整 `AppSettings` 草稿提交给 `settings:update`，但 IPC 白名单漏了 0.8.0 新增的 `automaticUpdateChecks` 和主进程维护的 `lastAutomaticUpdateCheckAt`。现在这两个字段可被校验接受；时间戳仍只由主进程写入，Renderer 不能改节流记录。
+- 为 `AppSettings` 与 `ComputerUseSettings` 增加编译期字段穷尽检查，避免再出现“类型已加字段、IPC 仍拒收”的 0.8.1 `projectId` 同类回归。
+- 当前 UI 探针改为读取 `package.json` 版本，不再把页脚验收写死为 `0.8.1`。
+- Hosted Windows 上投影并发测试超时从 20 秒放宽到 60 秒，避免磁盘较慢时误杀与本次设置修复无关的门禁。
+
 ## 0.8.1 - 2026-08-12
 
 ### Fixed
