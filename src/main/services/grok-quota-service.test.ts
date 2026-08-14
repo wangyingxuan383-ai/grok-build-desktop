@@ -20,7 +20,7 @@ describe("Grok quota parsing", () => {
     expect(parseCurrentAllowance(payload)).toMatchObject({
       label: "本期额度（周）", periodType: "weekly", periodStart: "2026-08-10T00:00:00Z", resetAt: "2026-08-17T00:00:00Z", unifiedBilling: true,
     });
-    expect(parseCurrentAllowance(payload)?.used).toBeUndefined();
+    expect(parseCurrentAllowance(payload)?.used).toBe(0);
     expect(parsePayAsYouGo(payload)).toMatchObject({ used: 1200, limit: 5000, remaining: 3800 });
   });
 
@@ -31,6 +31,22 @@ describe("Grok quota parsing", () => {
       monthly_limit: { val: 9999 },
       used: { val: 9999 },
     } })).toMatchObject({ used: 42, limit: 100, remaining: 58, periodType: "monthly", resetAt: "2026-09-01" });
+  });
+
+  it("treats proto3 zero-value omissions as zero usage and hides empty optional money cards", () => {
+    const payload = { config: {
+      currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-08-17T00:00:00Z" },
+      onDemandCap: {},
+      onDemandUsed: {},
+      prepaidBalance: {},
+    } };
+    expect(parseCurrentAllowance(payload)).toMatchObject({ used: 0, remaining: 100, periodType: "weekly" });
+    expect(parsePayAsYouGo(payload)).toBeUndefined();
+  });
+
+  it("normalizes signed on-demand amounts and requires a positive cap", () => {
+    expect(parsePayAsYouGo({ config: { onDemandCap: { val: -5000 }, onDemandUsed: { val: -1200 } } }))
+      .toMatchObject({ used: 1200, limit: 5000, remaining: 3800 });
   });
 
   it("keeps a rolling 24-hour token limit separate from billing windows", () => {
@@ -93,7 +109,7 @@ describe("Grok quota requests", () => {
       return { config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-08-10", end: "2026-08-17" } } };
     }, async () => auth(), undefined, async () => { throw new Error("Method not found"); });
     const value = await service.get(true);
-    expect(value.currentAllowance).toMatchObject({ periodType: "weekly", source: "billing-api", resetAt: "2026-08-17" });
+    expect(value.currentAllowance).toMatchObject({ periodType: "weekly", source: "billing-api", resetAt: "2026-08-17", used: 0 });
     expect(value.monthly).toBeUndefined();
     expect(value.diagnostics[0]).toContain("CLI 账单扩展");
     expect(calls).toBe(1);

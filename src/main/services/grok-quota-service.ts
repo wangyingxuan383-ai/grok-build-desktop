@@ -124,7 +124,7 @@ export class GrokQuotaService {
       payAsYouGo,
       payAsYouGoEnabled: booleanValue(payload.onDemandEnabled ?? payload.on_demand_enabled),
       autoTopupRule,
-      prepaidBalance: moneyValue(payload.config?.prepaidBalance ?? payload.config?.prepaid_balance),
+      prepaidBalance: positiveMoneyValue(payload.config?.prepaidBalance ?? payload.config?.prepaid_balance),
       subscriptionTier: stringValue(payload.subscriptionTier ?? payload.subscription_tier),
       evidence,
       // Keep a bounded compatibility projection for an old renderer during an
@@ -227,7 +227,10 @@ export function parseCurrentAllowance(payload: BillingPayload, source: "cli-exte
   const productUsage = Array.isArray(config.productUsage ?? config.product_usage) ? (config.productUsage ?? config.product_usage) as unknown[] : [];
   const products = productUsage.map((item, index) => ({ label: stringValue(record(item)?.product) || `产品 ${index + 1}`, usedPercent: numberValue(record(item)?.usagePercent ?? record(item)?.usage_percent) }));
   const productPercent = products.map((item) => item.usedPercent).filter((value): value is number => value !== undefined);
-  const used = percent ?? (productPercent.length ? Math.max(...productPercent) : undefined);
+  // The credits endpoint is proto3 JSON. A real 0% scalar is omitted from the
+  // wire response, so a valid currentPeriod without a percentage means 0%, not
+  // "unknown". This mirrors Grok Build's credit_balance_from_config mapping.
+  const used = percent ?? (productPercent.length ? Math.max(...productPercent) : Object.keys(period).length ? 0 : undefined);
   const start = stringValue(period.start ?? config.billingPeriodStart ?? config.billing_period_start);
   const end = stringValue(period.end ?? config.billingPeriodEnd ?? config.billing_period_end);
   if (used === undefined && !start && !end) return undefined;
@@ -251,9 +254,11 @@ export function parseCurrentAllowance(payload: BillingPayload, source: "cli-exte
 export function parsePayAsYouGo(payload: BillingPayload, source: "cli-extension" | "credits-api" = "credits-api"): QuotaWindow | undefined {
   const config = payload.config;
   if (!config) return undefined;
-  const cap = moneyValue(config.onDemandCap ?? config.on_demand_cap);
-  const used = moneyValue(config.onDemandUsed ?? config.on_demand_used);
-  if (cap === undefined && used === undefined) return undefined;
+  const cap = positiveMoneyValue(config.onDemandCap ?? config.on_demand_cap);
+  // Grok Build treats a positive cap as the capability signal. Proto3 emits
+  // `{}` for zero-valued Cent messages, which must not create a fake $0/$0 card.
+  if (cap === undefined) return undefined;
+  const used = Math.abs(moneyValue(config.onDemandUsed ?? config.on_demand_used) ?? 0);
   return { label: "按量付费月上限", used, limit: cap, remaining: cap === undefined || used === undefined ? undefined : Math.max(0, cap - used), unit: "credits", source: source === "cli-extension" ? "cli-extension" : "billing-api", observedAt: new Date().toISOString() };
 }
 
@@ -342,6 +347,10 @@ function numberValue(value: unknown): number | undefined {
   return Number.isFinite(number) ? number : undefined;
 }
 function moneyValue(value: unknown): number | undefined { return numberValue(value); }
+function positiveMoneyValue(value: unknown): number | undefined {
+  const amount = moneyValue(value);
+  return amount === undefined || Math.abs(amount) <= 0 ? undefined : Math.abs(amount);
+}
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value ? value : undefined; }
 function booleanValue(value: unknown): boolean | undefined { return typeof value === "boolean" ? value : undefined; }
 

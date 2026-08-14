@@ -5,13 +5,14 @@
 - 当前分支 `codex/v0.9.0-cli-billing-finalization`，基线 `4bc1dc1`；0.9.0 本地候选已完成收口并准备提交。用户验收前禁止推送和创建 Release。
 - 源码与 lockfile 已提升到 0.9.0。本机 stable CLI 已固定升级并验证为 `1.0.3 (1a29d5bc12)`，旧 1.0.0 会话清单/回滚点已保存。所有受管 CLI 仍带 `--no-auto-update`。
 - 额度已改为官方 credits 语义：优先 `x.ai/billing`，无附加会话时使用 `billing?format=credits`。只显示服务端给出的一个 current allowance 周/月周期；PAYG、预付、滚动 24h、订阅和自动充值分离。deprecated monthly 字段不再推断月额度。
+- 用户验收截图暴露 proto3 零值省略：有效 `currentPeriod` 未携带 `creditUsagePercent` 时，官方 1.0.3 客户端按 `0%` 处理；零 on-demand cap 与零 prepaid balance 均不显示。Desktop 已同步该语义，避免“使用率未返回”和 `$0/$0` 假卡片。
 - 1.0.1+ Rewind 只回退对话；文件恢复独立走 Review/真实写入日志。模型目录动态刷新，当前模型暂时缺失时不切回 Grok 4.5。
 - 1.0.3 媒体能力从真实命令/工具证据读取，已无生成地验证 `bundled:imagine`、`image_gen`、`image_edit`、`image_to_video`、`reference_to_video`。不再因为 CLI 存在就声明媒体可用。
 - 会话关闭/删除会先用 `teardown` 停止所属后台任务并取消子 Agent。工具 `readOnly` 只消费 CLI 明确元数据。窗口状态与 100 Unicode 码点标题限制已完成。
 - 最终门禁：104 个测试文件/759 项通过，6 个 live 文件/9 项普通离线运行按设计跳过；TypeScript、生产/资源构建、385 文件公开扫描、Renderer 分块、当前 UI、多尺寸布局、Native Host、Fuses、ASAR 和 `npm audit`（0 漏洞）通过。
 - 实机契约：CLI 1.0.3 握手与 stable、credits 周期、媒体工具证据、Provider 回环、官方 Grok 4.6 Plan、两个并行 ACP 会话通过。当前默认 CPA 的真实 Plan 仍由其上游明确拒绝 `403 cpa_local_only`，测试已隔离到对应 Provider 边界。
-- 0.9.0 Setup/Portable/SBOM/许可证/SHA-256 已生成并完成 per-user 安装。安装版 File `0.9.0` / Product `0.9.0.0`、About、诊断、支持包附件排除、Fuses、桌面和开始菜单快捷方式通过。
-- Setup SHA-256 `d24391d79fa565adf08dbcdb68cb0ce3ee6f58b8cb535a580f43ada0227e4359`；Portable SHA-256 `85aac34d177a646e247a13ceacb48289f46aaf48d7dcebf4dbb5a6db5887f2b4`。
+- 0.9.0 Setup/Portable/SBOM/许可证/SHA-256 已在额度零值修复后重新生成并完成 per-user 覆盖安装。安装版 File `0.9.0` / Product `0.9.0.0`、打包 UI、Fuses 和冷启动通过。
+- Setup SHA-256 `3ec04e88a646af93bc0a5d7eaefed9f5aa08b6f57673806f92c8ddfed5b86fcb`；Portable SHA-256 `efc8ed1fa323ab4c4277636f76e754bcc302f17a7475665f039e3b3fbf0143ae`。
 - 当前状态是**本地候选已交付、等待用户验收**；尚未推送、未创建 GitHub Release。用户验收前不得发布。
 - Grox 最新审计截至 `eb5c4d5`。长工具/终态忙碌、窗口恢复、会话耐久、未跟踪文件、上游快照等值得吸收的可靠性行为均已映射或已有更严格实现；一键应用回滚不纳入 0.9.0，因为 Desktop 应用仍采用 GitHub Release 手动下载且用户未要求静默安装。
 

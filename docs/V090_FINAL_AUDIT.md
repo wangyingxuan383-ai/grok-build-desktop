@@ -24,6 +24,7 @@
 - CLI 1.0.3：版本范围、Fixture、stable 更新、未知版本失败关闭和 `--no-auto-update` 已完成。
 - Rewind：1.0.1+ 对话语义已完成；文件恢复不冒充官方 Rewind。
 - 额度：`x.ai/billing` / credits、一个 current period、PAYG/预付/滚动限制/档位/自动充值分离已完成。
+- credits proto3 零值：有效周期缺省百分比按官方客户端解释为 `0%`；零 PAYG cap、零预付余额和不适用的自动充值不渲染卡片。
 - 权限：显式 `readOnly` 元数据消费完成；不按名称猜测。
 - 模型：动态目录、未来新模型、当前缺失模型和 Provider 身份测试已保留。
 - 后台工作：关闭前 task teardown 与 subagent cancel 已完成。
@@ -49,6 +50,7 @@
 ## 5. 当前证据
 
 - `npm test`：104 个文件、759 项通过；6 个文件/9 项显式 live 跳过。
+- 用户额度截图后的聚焦回归：额度解析 15 项通过，TypeScript、生产构建、385 文件公开扫描、打包 UI、Fuses 和覆盖安装冷启动通过。
 - TypeScript、生产构建、公开扫描、Renderer 分块、当前 UI、Fuses、ASAR 与零漏洞依赖审计：通过。
 - CLI：`1.0.3 (1a29d5bc12)`；stable 检查无更新。
 - live credits 契约：读取成功，当前周期类型为服务端返回的 weekly；未保存凭据或余额。
@@ -56,5 +58,5 @@
 - live 官方 Plan：Grok 4.6 只读工作区回合提交/取消完成，无权限卡、无文件写入；当前默认 CPA 的 `403 cpa_local_only` 被隔离为 Provider 边界。
 - 双 ACP：两个并行进程返回不同 Session ID。
 - 安装版：File `0.9.0` / Product `0.9.0.0`，About、诊断、支持包隐私、Fuses、桌面/开始菜单快捷方式通过。
-- Setup SHA-256：`d24391d79fa565adf08dbcdb68cb0ce3ee6f58b8cb535a580f43ada0227e4359`。
-- Portable SHA-256：`85aac34d177a646e247a13ceacb48289f46aaf48d7dcebf4dbb5a6db5887f2b4`。
+- Setup SHA-256：`3ec04e88a646af93bc0a5d7eaefed9f5aa08b6f57673806f92c8ddfed5b86fcb`。
+- Portable SHA-256：`efc8ed1fa323ab4c4277636f76e754bcc302f17a7475665f039e3b3fbf0143ae`。
