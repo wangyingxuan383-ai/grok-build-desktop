@@ -490,6 +490,26 @@ export class GrokAcpAdapter extends EventEmitter {
     return { sessionId: this.sessionId };
   }
 
+  /** Read the model directory advertised by ACP initialize without creating a
+   * Grok session. New-task drafts use this so opening the composer never has
+   * to manufacture an empty history item just to discover Grok 4.6 or future
+   * models. */
+  async probeModelCatalog(): Promise<ModelInfo[]> {
+    await this.launchAndInitialize();
+    return (this.runtimeHandshake?.models ?? []).map((model) => {
+      const reasoningEfforts = (model.reasoningEfforts ?? [])
+        .filter((value): value is Exclude<ReasoningEffort, ""> => Boolean(value))
+        .map((value) => ({ value, label: value }));
+      return {
+        modelId: model.modelId,
+        name: model.name || model.modelId,
+        ...(reasoningEfforts.length ? { supportsReasoningEffort: true, reasoningEfforts } : {}),
+        ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
+        ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
+      };
+    });
+  }
+
   /**
    * Create an official cross-working-directory fork without first creating a
    * disposable blank session. This is used when a project's old path no

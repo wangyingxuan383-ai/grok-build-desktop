@@ -41,6 +41,21 @@ function fixture(effort: ReasoningEffort, setEffort = vi.fn().mockResolvedValue(
 }
 
 describe("Grok process reasoning effort switching", () => {
+  it("probes the initialize model catalog without retaining a session", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapter = {
+      probeModelCatalog: vi.fn().mockResolvedValue([{ modelId: "grok-4.6", name: "Grok 4.6" }]),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
+    await expect(manager.probeModelCatalog("C:\\work")).resolves.toEqual([{ modelId: "grok-4.6", name: "Grok 4.6" }]);
+    expect(adapter.probeModelCatalog).toHaveBeenCalledTimes(1);
+    expect(adapter.dispose).toHaveBeenCalledTimes(1);
+    expect((manager as any).sessions.size).toBe(0);
+    await manager.dispose();
+  });
+
   it("uses the live adapter path for a concrete effort", async () => {
     const { manager, setEffort } = fixture("high");
     const restart = vi.spyOn(manager, "restartWithEffort").mockResolvedValue(undefined);
@@ -441,6 +456,57 @@ describe("session finalization", () => {
     expect(adapter.taskKill).toHaveBeenCalledWith("task-live", "teardown");
     expect(adapter.subagentCancel.mock.calls).toEqual([["child-a"], ["child-b"]]);
     expect(adapter.dispose).toHaveBeenCalledTimes(1);
+    await manager.dispose();
+  });
+
+  it("tears down owned background work before shutdown disposes the ACP process", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapter = {
+      working: false,
+      needsUser: false,
+      taskList: vi.fn().mockResolvedValue({ tasks: [{ id: "background-task", status: "running" }] }),
+      taskKill: vi.fn().mockResolvedValue(undefined),
+      subagentListRunning: vi.fn().mockResolvedValue({ subagents: [{ id: "background-agent" }] }),
+      subagentCancel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    (manager as any).sessions.set("shutdown-parent", adapter);
+    await manager.stopAll(false);
+    expect(adapter.taskKill).toHaveBeenCalledWith("background-task", "teardown");
+    expect(adapter.subagentCancel).toHaveBeenCalledWith("background-agent");
+    expect(adapter.dispose).toHaveBeenCalledTimes(1);
+    await manager.dispose();
+  });
+
+  it("does not reap or cap-evict an idle session when its background teardown fails", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, async () => ({}), async () => ({}), async () => ({}), finalize);
+    const makeAdapter = (lastTouched: number) => ({
+      working: false,
+      needsUser: false,
+      lastTouched,
+      taskList: vi.fn().mockResolvedValue({ tasks: [{ id: "live-task", status: "running" }] }),
+      taskKill: vi.fn().mockRejectedValue(new Error("task refused teardown")),
+      subagentListRunning: vi.fn().mockResolvedValue({ subagents: [] }),
+      subagentCancel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    });
+    const reapVictim = makeAdapter(Date.now() - 2 * 60 * 60_000);
+    (manager as any).sessions.set("reap-victim", reapVictim);
+    await (manager as any).reap();
+    expect((manager as any).sessions.has("reap-victim")).toBe(true);
+    expect(reapVictim.dispose).not.toHaveBeenCalled();
+
+    (manager as any).focusedId = "focused";
+    (manager as any).sessions.set("focused", makeAdapter(Date.now()));
+    for (let index = 0; index < 7; index++) (manager as any).sessions.set(`busy-${index}`, { working: true, needsUser: false, lastTouched: Date.now() });
+    await (manager as any).enforceCap();
+    expect((manager as any).sessions.has("reap-victim")).toBe(true);
+    expect(reapVictim.dispose).not.toHaveBeenCalled();
+    expect(finalize).not.toHaveBeenCalledWith("reap-victim", reapVictim, expect.anything());
+    (manager as any).sessions.clear();
     await manager.dispose();
   });
 });

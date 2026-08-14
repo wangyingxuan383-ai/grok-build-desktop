@@ -115,6 +115,29 @@ describe("Grok quota requests", () => {
     expect(calls).toBe(1);
   });
 
+  it("falls back to billing?format=credits when no idle ACP session can serve the extension", async () => {
+    let calls = 0;
+    const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => {
+      calls++;
+      return { config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_MONTHLY", end: "2026-09-01" } } };
+    }, async () => auth(), undefined, async () => undefined);
+    const value = await service.get(true);
+    expect(value.currentAllowance).toMatchObject({ periodType: "monthly", used: 0, source: "billing-api" });
+    expect(value.evidence?.[0]?.source).toBe("credits-api");
+    expect(calls).toBe(1);
+  });
+
+  it("falls back when the billing extension returns an empty payload", async () => {
+    let calls = 0;
+    const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => {
+      calls++;
+      return { config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } } };
+    }, async () => auth(), undefined, async () => ({}));
+    const value = await service.get(true);
+    expect(value.currentAllowance).toMatchObject({ periodType: "weekly", used: 0, source: "billing-api" });
+    expect(calls).toBe(1);
+  });
+
   it("preserves snake-case prepaid balance and records only the observed billing field names", async () => {
     const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => ({
       config: {
@@ -132,6 +155,20 @@ describe("Grok quota requests", () => {
       "on_demand_enabled",
       "subscription_tier",
     ]);
+  });
+
+  it("omits zero-value prepaid messages and preserves Grok Build's signed-credit convention", async () => {
+    const load = async (prepaidBalance: unknown) => {
+      const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => ({
+        config: { prepaidBalance, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } },
+      }), async () => auth());
+      return service.get(true);
+    };
+    await expect(load({})).resolves.toMatchObject({ prepaidBalance: undefined });
+    await expect(load(0)).resolves.toMatchObject({ prepaidBalance: undefined });
+    // Official Grok Build stores purchased credits as negative accounting
+    // cents and renders their absolute value; a negative value is not debt.
+    await expect(load({ val: -453 })).resolves.toMatchObject({ prepaidBalance: 453 });
   });
 
   it("retries a 401 once with the current auth file", async () => {

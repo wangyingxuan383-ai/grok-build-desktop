@@ -27,7 +27,14 @@ if ((Test-Path -LiteralPath $Reader -PathType Leaf) -and $CodexFile -and (Get-Co
 $AuthPath = Join-Path $HOME '.grok\auth.json'
 if (Test-Path -LiteralPath $AuthPath -PathType Leaf) {
     try {
-        $Auth = Get-Content -LiteralPath $AuthPath -Raw | ConvertFrom-Json
+        try {
+            $Auth = Get-Content -LiteralPath $AuthPath -Raw | ConvertFrom-Json
+        } catch {
+            # ConvertFrom-Json includes the complete input document in some
+            # PowerShell 5.1 parse errors. Never let OAuth/refresh tokens escape
+            # through a live-probe diagnostic.
+            throw 'OAuth auth.json 无法解析；请在 Grok Build 中重新登录后再运行额度实机探针。'
+        }
         $Credential = $Auth.PSObject.Properties | Select-Object -First 1
         $Token = [string]$Credential.Value.key
         $UserId = [string]$Credential.Value.user_id
@@ -53,8 +60,13 @@ if (Test-Path -LiteralPath $AuthPath -PathType Leaf) {
         else { $Result.billingPeriodType = 'unknown' }
     } catch {
         $Result.billingCredits = 'unavailable'
-        $Result.diagnostics += "Quota adapter: $($_.Exception.Message -replace '(?i)Bearer\s+\S+','Bearer [REDACTED]')"
-        if ($RequireQuota) { throw "OAuth quota compatibility probe failed: $($_.Exception.Message)" }
+        $SafeQuotaError = [string]$_.Exception.Message
+        $SafeQuotaError = $SafeQuotaError -replace '(?i)Bearer\s+\S+','Bearer [REDACTED]'
+        $SafeQuotaError = $SafeQuotaError -replace '(?i)eyJ[A-Za-z0-9._-]{40,}','[REDACTED_TOKEN]'
+        $SafeQuotaError = $SafeQuotaError -replace '(?i)(refresh_token|access_token|"key")\s*[:=]\s*"?[A-Za-z0-9._-]+','$1=[REDACTED]'
+        if ($SafeQuotaError.Length -gt 400) { $SafeQuotaError = $SafeQuotaError.Substring(0, 400) + '…' }
+        $Result.diagnostics += "Quota adapter: $SafeQuotaError"
+        if ($RequireQuota) { throw "OAuth quota compatibility probe failed: $SafeQuotaError" }
     }
 } elseif ($RequireQuota) {
     throw 'OAuth quota compatibility probe requires ~/.grok/auth.json.'

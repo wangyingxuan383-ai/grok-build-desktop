@@ -207,6 +207,16 @@ export class GrokProcessManager {
     return [...byId.values()];
   }
 
+  /** Initialize a short-lived ACP process and read its runtime model state.
+   * The adapter is never attached to session/new, so this cannot create an
+   * empty Grok history entry while the user is only preparing a draft. */
+  async probeModelCatalog(cwd: string): Promise<ModelInfo[]> {
+    const settings = await this.getSettings();
+    const adapter = await this.spawn(cwd, settings.defaultEffort, settings.defaultMode);
+    try { return await adapter.probeModelCatalog(); }
+    finally { await adapter.dispose().catch(() => undefined); }
+  }
+
   snapshot(sessionId: string): LiveSessionSnapshot | undefined {
     const session = this.sessions.get(sessionId);
     return session ? { sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId, processOptions: session.processOptions } : undefined;
@@ -535,7 +545,16 @@ export class GrokProcessManager {
   async stopAll(finalize = true): Promise<void> {
     const sessions = Array.from(this.sessions.entries());
     this.sessions.clear();
-    await Promise.allSettled(sessions.map(async ([sessionId, session]) => { if (finalize) await this.finalizeSession(sessionId, session, "shutdown"); await session.dispose(); }));
+    await Promise.allSettled(sessions.map(async ([sessionId, session]) => {
+      // App shutdown/suspend will terminate the ACP process regardless. Give
+      // CLI-owned tasks and child agents an explicit teardown opportunity, but
+      // never let an unsupported extension strand the native process on exit.
+      await this.stopOwnedBackgroundWork(sessionId, session).catch(async (error) => {
+        await this.log.log(`session ${sessionId} shutdown cleanup failed; forcing process disposal: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      if (finalize) await this.finalizeSession(sessionId, session, "shutdown");
+      await session.dispose();
+    }));
   }
 
   async suspendAll(): Promise<LiveSessionSnapshot[]> {
@@ -654,6 +673,11 @@ export class GrokProcessManager {
       .sort((a, b) => a[1].lastTouched - b[1].lastTouched);
     while (this.sessions.size > 8 && candidates.length) {
       const [id, session] = candidates.shift()!;
+      try { await this.stopOwnedBackgroundWork(id, session); }
+      catch (error) {
+        await this.log.log(`session ${id} cap eviction skipped because background teardown failed: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       await this.finalizeSession(id, session, "cap");
       await session.dispose();
       this.sessions.delete(id);
@@ -664,6 +688,11 @@ export class GrokProcessManager {
     const cutoff = Date.now() - 60 * 60_000;
     const victims = Array.from(this.sessions.entries()).filter(([id, session]) => id !== this.focusedId && !session.working && !session.needsUser && session.lastTouched < cutoff);
     for (const [id, session] of victims) {
+      try { await this.stopOwnedBackgroundWork(id, session); }
+      catch (error) {
+        await this.log.log(`session ${id} idle reap skipped because background teardown failed: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       await this.finalizeSession(id, session, "reap");
       await session.dispose();
       this.sessions.delete(id);

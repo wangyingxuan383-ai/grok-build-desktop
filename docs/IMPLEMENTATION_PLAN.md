@@ -15,19 +15,22 @@
 ### 额度、诊断与常用流程
 
 - [x] 额度改用 `x.ai/billing` / `billing?format=credits`；当前周/月周期、滚动 24h、PAYG、预付余额、档位和自动充值分离展示。
-- [x] deprecated `monthly_limit/used` 不再用于推断月额度；缺少百分比时只显示周期与重置时间。
+- [x] deprecated `monthly_limit/used` 不再用于推断月额度；credits proto3 在有效 `currentPeriod` 中省略零值百分比时按官方客户端解释为 `0%`，只有周期本身无效时才保持未知。
 - [x] 诊断中心接入 `grok du --json`；Memory trace 作为显式高敏导出，不混入普通支持包。
-- [x] 会话关闭/删除先停止所属后台任务和子 Agent；任务停止使用 CLI 1.0.3 `teardown` 来源。
+- [x] 会话关闭、删除、空闲回收、并发上限淘汰和应用退出均先停止所属后台任务和子 Agent；任务停止使用 CLI 1.0.3 `teardown` 来源，回收清理失败时保留会话而不直接杀进程。
 - [x] 窗口尺寸、位置和最大化状态恢复；标题限制为 100 Unicode 码点并支持恢复自动标题。
 - [x] 视频时长扩为 1–15 秒并支持 4:3、3:4；语音选项继续透传实际媒体工具。
 - [x] 应用和 CLI 自动检查保持“只检测”；主进程 24 小时节流，CLI 只能手动固定目标更新并验证。
+- [x] 新任务草稿删除会取消待执行自动保存、失效正在恢复的草稿并容忍 Windows 临时占用附件缓存；删除正文后不会被空草稿重新创建。
+- [x] 新任务通过 initialize-only ACP 探针读取官方模型与真实思考档位，不创建空会话；同时合并启用的 Provider 模型并保留 Provider 身份。
+- [x] credits 返回 weekly 时明确说明官方没有返回独立月订阅额度；实机探针错误输出经过凭据脱敏。
 
 ### 上游与架构审计
 
 - [x] 对照官方 Grok Build 1.0.3 源码、stable、SOURCE_REV、Changelog 和运行时证据更新上游跟踪器。
 - [x] 复核 Grox 最近的长工具、终态忙碌、窗口恢复、会话耐久、未跟踪文件与上游快照改动；已存在的能力不建立第二套实现。
 - [x] 大型面板、Monaco、Markdown/Mermaid 和工作台继续按需加载；会话、Provider、额度、诊断、窗口和更新保持独立服务边界。
-- [x] 完整离线测试通过：104 个文件/759 项；6 个 live 文件/9 项保留为显式实机门禁。
+- [x] 完整离线测试通过：104 个文件/769 项；6 个 live 文件/9 项保留为显式实机门禁。
 - [x] 最终 TypeScript、生产构建、资源/公开/分块/UI/安全门禁通过；`npm audit` 为 0 漏洞。
 - [x] CLI 1.0.3 握手、credits、媒体证据、Provider 回环、官方 Grok 4.6 Plan 与双 ACP 并行契约通过；安装版 About/诊断/支持包隐私通过。
 - [x] 生成唯一一套 0.9.0 Setup/Portable/SHA-256/SBOM/许可证资产，完成 per-user 安装、冷启动、Fuses、ASAR、File/Product 版本和快捷方式检查。

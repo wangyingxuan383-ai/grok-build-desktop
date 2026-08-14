@@ -49,7 +49,7 @@
 
 ## 5. 当前证据
 
-- `npm test`：104 个文件、759 项通过；6 个文件/9 项显式 live 跳过。
+- `npm test`：104 个文件、769 项通过；6 个文件/9 项显式 live 跳过。
 - 用户额度截图后的聚焦回归：额度解析 15 项通过，TypeScript、生产构建、385 文件公开扫描、打包 UI、Fuses 和覆盖安装冷启动通过。
 - TypeScript、生产构建、公开扫描、Renderer 分块、当前 UI、Fuses、ASAR 与零漏洞依赖审计：通过。
 - CLI：`1.0.3 (1a29d5bc12)`；stable 检查无更新。
@@ -58,5 +58,6 @@
 - live 官方 Plan：Grok 4.6 只读工作区回合提交/取消完成，无权限卡、无文件写入；当前默认 CPA 的 `403 cpa_local_only` 被隔离为 Provider 边界。
 - 双 ACP：两个并行进程返回不同 Session ID。
 - 安装版：File `0.9.0` / Product `0.9.0.0`，About、诊断、支持包隐私、Fuses、桌面/开始菜单快捷方式通过。
-- Setup SHA-256：`3ec04e88a646af93bc0a5d7eaefed9f5aa08b6f57673806f92c8ddfed5b86fcb`。
-- Portable SHA-256：`efc8ed1fa323ab4c4277636f76e754bcc302f17a7475665f039e3b3fbf0143ae`。
+- Setup SHA-256：`4ae84dcdd09d64341b481210327a6b8d8b8b1a8b60e892a4826a578f753765d6`。
+- Portable SHA-256：`38f2dfb3d87b79a3d1656df82a0c2e2ef2087e6a5bf6ebcf4c89ffc8fc3dd1e2`。
+- SBOM SHA-256：`b5d7017390b3f299f0a0fe551cbab91771a8b742314b7e0f6bea984259edb0c7`；许可证报告：`b9b8d4e98b137977c4f9a097750b19e776c6eb3ece1fdf1a2055b49d3cfeb10f`。

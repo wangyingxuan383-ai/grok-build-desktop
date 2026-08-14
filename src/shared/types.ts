@@ -1288,6 +1288,8 @@ export interface ComputerCapability {
 export interface ModelInfo {
   modelId: string;
   name: string;
+  /** Desktop-managed Provider identity. Official ACP models omit this. */
+  providerId?: string;
   description?: string;
   totalContextTokens?: number;
   /** Runtime-declared image input support. Omitted means unknown, not false. */

@@ -14,6 +14,7 @@ export function useSessionDraft(input: {
   clearAttachments(): void;
   addAttachments(values: Attachment[]): void;
   onSessionChange(): void;
+  onError(error: unknown): void;
 }): {
   draftKey: string;
   activeSending: boolean;
@@ -23,6 +24,7 @@ export function useSessionDraft(input: {
   setCapability: React.Dispatch<React.SetStateAction<ComposerCapabilitySelection | undefined>>;
   newTask: NewTaskDraft | undefined;
   setNewTask: React.Dispatch<React.SetStateAction<NewTaskDraft | undefined>>;
+  discardCurrentDraft(): Promise<void>;
 } {
   const [composer, setComposerState] = useState("");
   const [capability, setCapabilityState] = useState<ComposerCapabilitySelection>();
@@ -34,6 +36,7 @@ export function useSessionDraft(input: {
   const attachmentFingerprint = fingerprintAttachments(input.attachments);
   const previousAttachmentFingerprintRef = useRef(attachmentFingerprint);
   const ignoredAttachmentFingerprintsRef = useRef(new Set<string>());
+  const saveTimerRef = useRef<number | undefined>(undefined);
   const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
   const activeSending = hasSessionSubmission(input.sendingSessionIds, input.activeSessionId, draftKey);
 
@@ -49,6 +52,30 @@ export function useSessionDraft(input: {
     if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
     setNewTaskState(value);
   }, []);
+
+  const discardCurrentDraft = useCallback(async (): Promise<void> => {
+    const key = draftKey;
+    if (!key) return;
+    // Invalidate an in-flight hydration and suspend autosave for this still
+    // mounted key. Without this, the render caused by clearing the fields can
+    // schedule a new empty draft immediately after clearDraft succeeds.
+    loadGenerationRef.current += 1;
+    touchedGenerationRef.current = loadGenerationRef.current;
+    setLoadedKey("");
+    if (saveTimerRef.current !== undefined) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = undefined;
+    }
+    // Clear renderer state before deleting the persisted row. This cancels the
+    // pending autosave render and prevents a prompt-containing draft from
+    // being recreated immediately after the user deletes it.
+    setComposerState("");
+    setCapabilityState(undefined);
+    setNewTaskState(undefined);
+    ignoredAttachmentFingerprintsRef.current.add("");
+    input.clearAttachments();
+    await window.grokDesktop.clearDraft(key);
+  }, [draftKey, input.clearAttachments]);
 
   useLayoutEffect(() => {
     if (previousAttachmentFingerprintRef.current === attachmentFingerprint) return;
@@ -104,11 +131,18 @@ export function useSessionDraft(input: {
 
   useEffect(() => {
     if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || activeSending) return;
-    const timer = window.setTimeout(() => void window.grokDesktop.setDraft(draftKey, composer, capability, input.attachments, newTask), 250);
-    return () => window.clearTimeout(timer);
-  }, [composer, capability, input.attachments, newTask, draftKey, loadedKey, input.foreignSessionOpen, activeSending]);
+    const timer = window.setTimeout(() => {
+      if (saveTimerRef.current === timer) saveTimerRef.current = undefined;
+      void window.grokDesktop.setDraft(draftKey, composer, capability, input.attachments, newTask).catch(input.onError);
+    }, 250);
+    saveTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (saveTimerRef.current === timer) saveTimerRef.current = undefined;
+    };
+  }, [composer, capability, input.attachments, newTask, draftKey, loadedKey, input.foreignSessionOpen, activeSending, input.onError]);
 
-  return { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask };
+  return { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask, discardCurrentDraft };
 }
 
 function fingerprintAttachments(values: Attachment[]): string {

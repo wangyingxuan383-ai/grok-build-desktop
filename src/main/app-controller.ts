@@ -1946,11 +1946,53 @@ export class AppController {
   getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
 
   private modelCatalog: ModelInfo[] = [];
+  private modelCatalogProbe?: Promise<ModelInfo[]>;
+  private modelCatalogProbedAt = 0;
 
-  listModelCatalog(): ModelInfo[] {
+  async listModelCatalog(): Promise<ModelInfo[]> {
     const live = this.processes.listKnownModels();
-    if (live.length) this.modelCatalog = live;
-    return this.modelCatalog.length ? this.modelCatalog : live;
+    if (live.length) {
+      const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+      for (const model of live) byId.set(model.modelId, model);
+      this.modelCatalog = [...byId.values()];
+    }
+    const settings = await this.settingsStore.get();
+    // Refresh at most once per minute unless a live session already supplied
+    // newer data. Concurrent settings/new-task requests share one ACP probe.
+    if (settings.activeWorkspace && (!this.modelCatalogProbedAt || Date.now() - this.modelCatalogProbedAt >= 60_000)) {
+      if (!this.modelCatalogProbe) {
+        this.modelCatalogProbedAt = Date.now();
+        this.modelCatalogProbe = this.processes.probeModelCatalog(settings.activeWorkspace)
+          .catch(async (error) => {
+            await this.log.log(`读取 ACP 模型目录失败：${error instanceof Error ? error.message : String(error)}`);
+            return [];
+          })
+          .finally(() => { this.modelCatalogProbe = undefined; });
+      }
+      const probed = await this.modelCatalogProbe;
+      const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+      for (const model of probed) byId.set(model.modelId, model);
+      this.modelCatalog = [...byId.values()];
+    }
+    const providers = await this.providers.list().catch(() => []);
+    const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+    for (const provider of providers) {
+      if (provider.enabled === false) continue;
+      for (const model of provider.models) {
+        if (model.enabled === false) continue;
+        const efforts = (model.reasoningEfforts ?? []).filter((value): value is Exclude<ReasoningEffort, ""> => Boolean(value));
+        byId.set(model.id, {
+          modelId: model.id,
+          name: `${provider.name} · ${model.name || model.model}`,
+          providerId: provider.id,
+          description: model.description,
+          totalContextTokens: model.contextWindow,
+          supportsReasoningEffort: efforts.length > 0,
+          reasoningEfforts: efforts.map((value) => ({ value, label: value })),
+        });
+      }
+    }
+    return [...byId.values()];
   }
   listProviders(): Promise<CustomProviderProfile[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);

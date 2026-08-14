@@ -7,15 +7,18 @@
 | CLI 1.0.3 compatibility | Offline + live contract verified | Installed CLI is `1.0.3`; compatibility profile covers 1.0.0–1.0.3, versioned fixtures exist for every patch, and unknown future versions fail closed. |
 | Managed CLI updates | Focused + live stable check | Every managed launch uses `--no-auto-update`; only the exact-target updater can mutate the CLI and it retains rollback. |
 | Billing credits | Focused + redacted live contract | Uses `x.ai/billing` or `billing?format=credits`; one server-declared current period is shown as weekly/monthly. Deprecated monthly fields cannot fabricate an allowance. |
-| Quota surfaces | Focused | Current allowance, rolling 24h, PAYG, prepaid balance, subscription tier and auto top-up remain separate; missing usage percent stays unknown. |
+| Quota surfaces | Focused | Current allowance, rolling 24h, PAYG, prepaid balance, subscription tier and auto top-up remain separate. For the proto3 credits contract, a valid current period with an omitted zero scalar is rendered as 0%; an absent/invalid period remains unknown. Zero-valued optional money messages stay hidden. |
 | Rewind 1.0.1+ | Focused | Official rewind is conversation-only. File restoration is an explicit Review/journal workflow. |
 | Runtime models | Contract-tested | Dynamic model updates and current-but-temporarily-missing identity are preserved. New official models appear from the ACP catalog without a Desktop release. |
+| New-task model catalog | Focused + live initialize evidence | A short-lived initialize-only ACP probe discovers official models/efforts without creating a session; enabled Provider models retain their Provider identity. |
+| Draft deletion | Focused | Cancels pending autosave/hydration before authoritative deletion; transient Windows attachment locks cannot turn successful logical deletion into a false failure. |
 | Tool permission evidence | Focused | Explicit top-level/nested `readOnly` is consumed for audit; no tool-name inference. Agent asks, Auto/Plan select CLI allow options. |
-| Owned background cleanup | Focused | Session release stops running tasks with `source=teardown` and cancels running child agents before disposal. |
+| Owned background cleanup | Focused | Close, delete, shutdown, idle reap and session-cap eviction stop running tasks with `source=teardown` and cancel running child agents before disposal. Reap/cap preserve the session when teardown fails. |
 | CLI media capabilities | Focused + live no-generation probe | Detects 1.0.3 `bundled:imagine` and registered image/video tools. No capability is inferred merely because the CLI executable exists. |
 | Diagnostics | Focused | `grok du --json` is parsed; Memory trace is an explicit high-sensitivity export and excluded from ordinary support bundles. |
+| Quota period explanation | Redacted live contract | The live credits endpoint returned one weekly current period. Desktop explains that no separate monthly subscription figure was supplied and does not reconstruct one from deprecated fields. |
 | Window/session ergonomics | Focused | Window state restore, 100-code-point titles, projection-first hydration, draft-first creation, multi-session isolation and compact lifecycle remain covered. |
-| Offline gate | Passed | 104 test files / 759 tests passed; 6 live files / 9 live tests are intentionally opt-in. |
+| Offline gate | Passed | 104 test files / 769 tests passed; 6 live files / 9 live tests are intentionally opt-in. |
 | 0.9.0 delivery | Packaged + installed local candidate | TypeScript/build/public/chunks/UI/Fuses/ASAR/audit pass. Setup, Portable, SBOM, licenses and SHA-256 exist; per-user install reports 0.9.0 and installed About/Diagnostics/privacy/shortcuts pass. No push or Release before user acceptance. |
 
 ## 0.8.3 permissions, catalog and quota (2026-08-13)

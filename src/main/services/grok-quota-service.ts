@@ -266,10 +266,15 @@ function unwrapExtensionBilling(value: Record<string, unknown> | undefined): Bil
   if (!value) return undefined;
   const meta = record(value._meta);
   const raw = meta?.["x.ai/ext_result"] ?? meta?.extResult ?? value.result ?? value;
+  let decoded: unknown = raw;
   if (typeof raw === "string") {
-    try { return JSON.parse(raw) as BillingPayload; } catch { return undefined; }
+    try { decoded = JSON.parse(raw); } catch { return undefined; }
   }
-  return record(raw) as BillingPayload | undefined;
+  const payload = record(decoded);
+  // A successful extension call with an empty/malformed result is not billing
+  // evidence. Fall back to billing?format=credits instead of suppressing the
+  // only authoritative source available when an attached session is stale.
+  return record(payload?.config) ? payload as BillingPayload : undefined;
 }
 
 export function parseRolling24hQuota(message: string, modelId?: string): QuotaWindow | undefined {

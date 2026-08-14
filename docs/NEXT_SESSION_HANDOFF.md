@@ -1,20 +1,28 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-14，0.9.0 CLI 1.0.3/额度收口）
+# Grok Build Desktop 下一会话完整交接（2026-08-15，0.9.0 CLI 1.0.3/草稿与模型收口）
 
 ## 2026-08-14 0.9.0 当前状态
 
-- 当前分支 `codex/v0.9.0-cli-billing-finalization`，基线 `4bc1dc1`；0.9.0 本地候选已完成收口并准备提交。用户验收前禁止推送和创建 Release。
+- 当前分支 `codex/v0.9.0-cli-billing-finalization`，已提交基线 `d8086a1`，其上包含草稿/模型目录/额度说明与后台清理的最终未提交收口；0.9.0 本地候选已重新安装。用户验收前禁止推送和创建 Release。
 - 源码与 lockfile 已提升到 0.9.0。本机 stable CLI 已固定升级并验证为 `1.0.3 (1a29d5bc12)`，旧 1.0.0 会话清单/回滚点已保存。所有受管 CLI 仍带 `--no-auto-update`。
 - 额度已改为官方 credits 语义：优先 `x.ai/billing`，无附加会话时使用 `billing?format=credits`。只显示服务端给出的一个 current allowance 周/月周期；PAYG、预付、滚动 24h、订阅和自动充值分离。deprecated monthly 字段不再推断月额度。
 - 用户验收截图暴露 proto3 零值省略：有效 `currentPeriod` 未携带 `creditUsagePercent` 时，官方 1.0.3 客户端按 `0%` 处理；零 on-demand cap 与零 prepaid balance 均不显示。Desktop 已同步该语义，避免“使用率未返回”和 `$0/$0` 假卡片。
 - 1.0.1+ Rewind 只回退对话；文件恢复独立走 Review/真实写入日志。模型目录动态刷新，当前模型暂时缺失时不切回 Grok 4.5。
 - 1.0.3 媒体能力从真实命令/工具证据读取，已无生成地验证 `bundled:imagine`、`image_gen`、`image_edit`、`image_to_video`、`reference_to_video`。不再因为 CLI 存在就声明媒体可用。
-- 会话关闭/删除会先用 `teardown` 停止所属后台任务并取消子 Agent。工具 `readOnly` 只消费 CLI 明确元数据。窗口状态与 100 Unicode 码点标题限制已完成。
-- 最终门禁：104 个测试文件/759 项通过，6 个 live 文件/9 项普通离线运行按设计跳过；TypeScript、生产/资源构建、385 文件公开扫描、Renderer 分块、当前 UI、多尺寸布局、Native Host、Fuses、ASAR 和 `npm audit`（0 漏洞）通过。
+- 会话关闭、删除、应用退出、空闲回收和并发上限淘汰会先用 `teardown` 停止所属后台任务并取消子 Agent；回收清理失败时保留会话。工具 `readOnly` 只消费 CLI 明确元数据。窗口状态与 100 Unicode 码点标题限制已完成。
+- 最终门禁：104 个测试文件/769 项通过，6 个 live 文件/9 项普通离线运行按设计跳过；TypeScript、生产/资源构建、385 文件公开扫描、Renderer 分块、当前 UI、多尺寸布局、Native Host、Fuses、ASAR 和 `npm audit`（0 漏洞）通过。
 - 实机契约：CLI 1.0.3 握手与 stable、credits 周期、媒体工具证据、Provider 回环、官方 Grok 4.6 Plan、两个并行 ACP 会话通过。当前默认 CPA 的真实 Plan 仍由其上游明确拒绝 `403 cpa_local_only`，测试已隔离到对应 Provider 边界。
 - 0.9.0 Setup/Portable/SBOM/许可证/SHA-256 已在额度零值修复后重新生成并完成 per-user 覆盖安装。安装版 File `0.9.0` / Product `0.9.0.0`、打包 UI、Fuses 和冷启动通过。
-- Setup SHA-256 `3ec04e88a646af93bc0a5d7eaefed9f5aa08b6f57673806f92c8ddfed5b86fcb`；Portable SHA-256 `efc8ed1fa323ab4c4277636f76e754bcc302f17a7475665f039e3b3fbf0143ae`。
+- 草稿/模型目录修复后的最终 Setup SHA-256 `4ae84dcdd09d64341b481210327a6b8d8b8b1a8b60e892a4826a578f753765d6`；Portable SHA-256 `38f2dfb3d87b79a3d1656df82a0c2e2ef2087e6a5bf6ebcf4c89ffc8fc3dd1e2`；SBOM `b5d7017390b3f299f0a0fe551cbab91771a8b742314b7e0f6bea984259edb0c7`；许可证 `b9b8d4e98b137977c4f9a097750b19e776c6eb3ece1fdf1a2055b49d3cfeb10f`。
 - 当前状态是**本地候选已交付、等待用户验收**；尚未推送、未创建 GitHub Release。用户验收前不得发布。
 - Grox 最新审计截至 `eb5c4d5`。长工具/终态忙碌、窗口恢复、会话耐久、未跟踪文件、上游快照等值得吸收的可靠性行为均已映射或已有更严格实现；一键应用回滚不纳入 0.9.0，因为 Desktop 应用仍采用 GitHub Release 手动下载且用户未要求静默安装。
+
+## 2026-08-15 草稿、模型目录与额度说明收口
+
+- 用户复现新任务草稿在输入正文后偶发删除失败。根因是 Renderer 250ms 自动保存/恢复与删除竞争，以及 Windows 临时占用草稿附件目录。删除现在先失效恢复、停止自动保存并暂停该 key 的后续空保存；主进程先删除权威 JSON 行，缓存目录使用重试并由启动清理兜底。
+- 新任务不再依赖已经打开的会话收集模型。主进程运行一次 initialize-only ACP 探针，不调用 `session/new`，并合并启用的自定义 Provider 模型。实时只读握手已观测到 Grok 4.6、Grok 4.5 等模型及各自声明的思考档位；模型切换会清除不兼容档位并保留自定义 Provider 身份。
+- 2026-08-15 的脱敏实机 credits 探针成功，当前账号只返回 `weekly` current period。官方协议一次只给一个当前周/月订阅周期，因此没有独立月额度可展示；Desktop 现在在额度页直接解释这一点，不读取 deprecated 字段伪造月额度。
+- PowerShell 5.1 在 JSON 解析失败时可能把输入原文塞进异常。额度探针已改为固定安全错误并对令牌形态再次脱敏；普通输出只保留 reader、credits 成功状态和周期类型。
+- 修复后唯一一套 0.9.0 资产已在 C 盘完成完整打包门禁和 per-user 覆盖安装。安装 ASAR 与 `release/win-unpacked` 哈希一致，File `0.9.0` / Product `0.9.0.0`，桌面与开始菜单快捷方式均指向安装目录；应用已冷启动交给用户验收。
 
 ## 2026-08-13 0.8.3 当前状态
 

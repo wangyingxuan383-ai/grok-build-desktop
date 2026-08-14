@@ -19,6 +19,24 @@ describe("Grok ACP process arguments", () => {
     });
   });
 
+  it("reads initialize model capabilities without creating a session", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    adapter.launchAndInitialize = vi.fn().mockResolvedValue(undefined);
+    adapter.runtimeHandshake = {
+      models: [
+        { modelId: "grok-4.6", name: "Grok 4.6", reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"], acceptsImages: true },
+        { modelId: "future-model", name: "Future" },
+      ],
+    };
+    adapter.request = vi.fn();
+    await expect(adapter.probeModelCatalog()).resolves.toEqual([
+      expect.objectContaining({ modelId: "grok-4.6", name: "Grok 4.6", supportsReasoningEffort: true, acceptsImages: true, reasoningEfforts: expect.arrayContaining([{ value: "xhigh", label: "xhigh" }]) }),
+      expect.objectContaining({ modelId: "future-model", name: "Future" }),
+    ]);
+    expect(adapter.launchAndInitialize).toHaveBeenCalledTimes(1);
+    expect(adapter.request).not.toHaveBeenCalled();
+  });
+
   it("normalizes direct and wrapped x.ai runtime notifications", () => {
     expect(normalizeRuntimeEventEnvelope("_x.ai/mcp/server_status", { server: "demo", status: "ready" }, "s1")).toMatchObject({
       rawMethod: "_x.ai/mcp/server_status",
