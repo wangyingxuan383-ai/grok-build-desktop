@@ -410,7 +410,7 @@ describe("session finalization", () => {
     const log = { log: vi.fn().mockResolvedValue(undefined) };
     const finalize = vi.fn().mockResolvedValue(undefined);
     const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn(), undefined, undefined, undefined, async () => ({}), async () => ({}), async () => ({}), finalize);
-    const first = { working: false, needsUser: false, dispose: vi.fn().mockResolvedValue(undefined) };
+    const first = { working: false, needsUser: false, taskList: vi.fn().mockResolvedValue({ tasks: [] }), subagentListRunning: vi.fn().mockResolvedValue({ subagents: [] }), dispose: vi.fn().mockResolvedValue(undefined) };
     (manager as any).sessions.set("close-me", first);
     await manager.close("close-me");
     expect(finalize).toHaveBeenCalledWith("close-me", first, "close");
@@ -418,6 +418,29 @@ describe("session finalization", () => {
     (manager as any).sessions.set("suspend-me", second);
     await manager.suspendAll();
     expect(finalize).toHaveBeenCalledTimes(1);
+    await manager.dispose();
+  });
+
+  it("stops every running child agent before releasing a deleted conversation", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    const adapter = {
+      working: false,
+      needsUser: false,
+      taskList: vi.fn().mockResolvedValue({ tasks: [
+        { taskId: "task-live", completed: false },
+        { task_id: "task-done", completed: true },
+      ] }),
+      taskKill: vi.fn().mockResolvedValue(undefined),
+      subagentListRunning: vi.fn().mockResolvedValue({ subagents: [{ subagentId: "child-a" }, { subagent_id: "child-b" }] }),
+      subagentCancel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    (manager as any).sessions.set("parent", adapter);
+    await manager.close("parent");
+    expect(adapter.taskKill).toHaveBeenCalledWith("task-live", "teardown");
+    expect(adapter.subagentCancel.mock.calls).toEqual([["child-a"], ["child-b"]]);
+    expect(adapter.dispose).toHaveBeenCalledTimes(1);
     await manager.dispose();
   });
 });

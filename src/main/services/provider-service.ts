@@ -476,6 +476,7 @@ export class ProviderService {
     aspectRatio: MediaAspectRatio;
     duration: number;
     resolution: string;
+    voice?: string;
     referencePaths?: string[];
     signal: AbortSignal;
   }): Promise<MediaArtifact[]> {
@@ -503,6 +504,7 @@ export class ProviderService {
         aspect_ratio: input.aspectRatio === "auto" ? undefined : input.aspectRatio,
         duration: input.duration,
         resolution: input.resolution,
+        ...(input.voice?.trim() ? { voice: input.voice.trim() } : {}),
         ...(referenceImages.length ? { reference_images: referenceImages } : {}),
       }),
       redirect: "manual",

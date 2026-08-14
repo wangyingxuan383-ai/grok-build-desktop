@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, screen, shell } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { createReadStream } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -12,10 +12,12 @@ import { configureAutomationWorkerStorage } from "./automation-worker-storage";
 import { parseByteRange } from "./media-range";
 import { isAllowedThemeBackgroundUrl } from "./services/theme-service";
 import { createRendererTrustPolicy, isAllowedExternalUrl, isTrustedRendererUrl, trustedDevelopmentUrl } from "./security-policy";
+import { WindowStateService } from "./services/window-state-service";
 
 let mainWindow: BrowserWindow | undefined;
 let controller: AppController | undefined;
 let computerOverlay: ComputerUseOverlay | undefined;
+let windowState: WindowStateService | undefined;
 let quitting = false;
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +83,8 @@ else {
   app.whenReady().then(async () => {
     app.setAppUserModelId("io.github.grokbuilddesktop.community");
     controller = new AppController(app.getPath("userData"));
+    windowState = new WindowStateService(app.getPath("userData"));
+    const restoredWindow = await windowState.load(screen.getAllDisplays().map((display) => display.workArea));
     const startupTheme = await controller.prepareAppearance();
     protocol.handle("grok-theme", async (request) => {
       if (!isAllowedThemeBackgroundUrl(request.url)) return new Response("Not found", { status: 404 });
@@ -123,8 +127,10 @@ else {
     const developmentUrl = trustedDevelopmentUrl(process.env.ELECTRON_RENDERER_URL, app.isPackaged);
     const rendererTrust = createRendererTrustPolicy(rendererEntry, developmentUrl);
     mainWindow = new BrowserWindow({
-      width: 1440,
-      height: 920,
+      x: restoredWindow.x,
+      y: restoredWindow.y,
+      width: restoredWindow.width,
+      height: restoredWindow.height,
       minWidth: 820,
       minHeight: 620,
       show: false,
@@ -137,6 +143,11 @@ else {
         sandbox: true,
       },
     });
+    if (restoredWindow.maximized) mainWindow.maximize();
+    mainWindow.on("move", () => mainWindow && windowState?.scheduleSave(mainWindow));
+    mainWindow.on("resize", () => mainWindow && windowState?.scheduleSave(mainWindow));
+    mainWindow.on("maximize", () => mainWindow && windowState?.scheduleSave(mainWindow));
+    mainWindow.on("unmaximize", () => mainWindow && windowState?.scheduleSave(mainWindow));
     controller.setWindow(mainWindow);
     mainWindow.webContents.on("context-menu", (_event, params) => controller?.showContextMenu(params));
     registerIpc(controller, mainWindow, rendererTrust);
@@ -163,7 +174,7 @@ else {
         event.preventDefault();
         const action = new URL(url).hostname;
         if (action === "reload") void loadRenderer().catch((error) => showStartupError(String(error)));
-        else if (action === "reset-window") { mainWindow?.setSize(1280, 800); mainWindow?.center(); void loadRenderer().catch((error) => showStartupError(String(error))); }
+        else if (action === "reset-window") { void windowState?.reset(); mainWindow?.unmaximize(); mainWindow?.setSize(1280, 800); mainWindow?.center(); void loadRenderer().catch((error) => showStartupError(String(error))); }
         else if (action === "open-logs") void shell.openPath(join(app.getPath("userData"), "logs"));
         else if (action === "export-support") void controller?.exportSupportBundle();
         return;
@@ -206,7 +217,7 @@ else {
     computerOverlay?.dispose();
     computerOverlay = undefined;
     globalShortcut.unregisterAll();
-    void controller?.dispose().finally(() => app.quit());
+    void windowState?.dispose(mainWindow).catch(() => undefined).finally(() => controller?.dispose().finally(() => app.quit()));
   });
 }
 

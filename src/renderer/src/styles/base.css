@@ -284,6 +284,7 @@ button.session-group-heading { width: 100%; border: 0; background: transparent; 
 .thought-card > :not(summary), .tool-detail { padding: 0 13px 12px; }
 .tool-icon { font-family: Consolas, monospace; }
 .tool-status { margin-left: auto; font-size: .6875em; }
+.tool-access { flex: 0 0 auto; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-tertiary); font-size: .625em; }
 .tool-card.failed { border-color: color-mix(in srgb, var(--danger) 64%, var(--border)); }
 .tool-card.failed .tool-status, .error-text { color: var(--danger); }
 .tool-detail pre { max-height: 360px; overflow: auto; background: var(--input-bg); border-radius: 7px; padding: 10px; white-space: pre-wrap; }

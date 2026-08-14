@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.0 - 2026-08-14
+
+### Added
+
+- 为 Grok Build CLI 1.0.1–1.0.3 增加版本化运行时证据：兼容范围、固定 stable 目标、1.0.1/1.0.2/1.0.3 脱敏 Wire Fixture、未知未来版本失败关闭和改进后的上游跟踪快照。
+- 诊断中心新增 `grok du --json` 存储占用视图和显式 Memory trace 导出。Trace 可能包含会话内容，因此与普通脱敏支持包严格分开。
+- 保存并恢复窗口位置、尺寸及最大化状态；失效的屏幕坐标会回退到当前显示器可见区域。
+- 媒体能力现在记录 CLI 实际注册工具，识别 1.0.3 的 `bundled:imagine`、`image_gen`、`image_edit`、`image_to_video` 和 `reference_to_video`。
+
+### Changed
+
+- 本机 CLI 已通过 Desktop 固定目标流程升级到 `1.0.3`；所有受管 ACP、媒体、自动化和探针仍强制 `--no-auto-update`，CLI 不能绕过 Desktop 的验证与回滚。
+- 额度模型改用 `billing?format=credits` 和已附加会话的 `x.ai/billing`。界面只显示服务端实际返回的当前周/月周期，并把滚动 24 小时、PAYG、预付余额、订阅档位和自动充值分开；不再从 deprecated `monthly_limit/used` 伪造月额度。
+- CLI 1.0.1+ 的回退只回退对话；文件恢复继续使用 Git Review 或 `TurnFileChangeJournal`，不再提供误导性的“对话和文件/仅文件”官方回退选项。
+- 工具只读状态只消费 CLI 明确的 `readOnly` 元数据，不根据工具名猜测。Agent 继续询问，Auto 和 Plan 按用户设置自动选择 CLI 提供的允许选项。
+- 应用更新在启动后自动检查，并由主进程限制为每 24 小时最多一次；应用只提示 GitHub Release，CLI 仍要求用户点击“更新并验证”。
+- 会话删除或关闭前会以 1.0.3 `teardown` 语义停止所属后台任务和子 Agent，避免后台事件在会话释放后继续回写。
+
+### Fixed
+
+- 修复 1.0.3 将媒体工作流命名为 `bundled:imagine` 后 Desktop 误判图片/视频不可用的问题；不再仅凭 CLI 存在就虚构媒体能力。
+- 修复额度接口返回单个 weekly/monthly `currentPeriod` 时仍被旧 UI 强制拆成“周＋月”导致的空白、零额度或错误标签。
+- 修复长标题破坏侧栏布局；标题限制为 100 个 Unicode 码点，仍可恢复 CLI 自动标题。
+- 修复完成回合后残留后台任务/工具状态可能继续占用会话关闭流程的问题。
+
+### Verification
+
+- 104 个测试文件、759 项测试通过；6 个实机测试文件、9 项测试按设计仅在显式 live 环境运行。TypeScript、生产构建、385 文件公开扫描、Renderer 分块、当前 UI、Native Host、Fuses、ASAR 和零漏洞依赖审计通过。
+- CLI 1.0.3/credits/媒体证据、Provider 回环、官方 Grok 4.6 Plan 和双 ACP 并行契约通过；0.9.0 Setup/Portable/SBOM/许可证已生成并完成 per-user 安装、About/诊断/隐私及快捷方式验收。
+- 修复最终门禁发现的 `nanoid <3.3.18` high 级依赖漏洞；固定到 3.3.18 后 `npm audit` 为 0 漏洞。
+
 ## 0.8.3 - 2026-08-13
 
 ### Changed

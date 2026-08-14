@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, CliCompatibilitySnapshot, CliVersionStatus } from "../../shared/types";
-import { CliUpdateService, compatibilityEvidence, offlineCompatibilityGate, runtimeV1Compatibility, type CliUpdateServiceRuntime } from "./cli-update-service";
+import { CLI_V1_COMPATIBILITY_PROFILE, CliUpdateService, compatibilityEvidence, offlineCompatibilityGate, runtimeV1Compatibility, type CliUpdateServiceRuntime } from "./cli-update-service";
 import { normalizeRuntimeHandshake } from "./grok-acp-adapter";
 
 const roots: string[] = [];
@@ -97,6 +97,25 @@ describe("CliUpdateService", () => {
     expect(handshake.mcpCapabilities).toMatchObject({ http: true, sse: true });
     expect(result.gate).toMatchObject({ status: "passed", liveVerified: true, major: 1 });
     expect(result.snapshot).toMatchObject({ closeOutcomeSupported: true, gitStatusUsesExplicitOptions: true });
+  });
+
+  it("keeps sanitized fixtures for every verified 1.0 patch and records the live 1.0.3 baseline", async () => {
+    expect(CLI_V1_COMPATIBILITY_PROFILE).toMatchObject({
+      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.3", stableTargetVersion: "1.0.3", liveVerifiedVersion: "1.0.3",
+      fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3"],
+    });
+    for (const version of CLI_V1_COMPATIBILITY_PROFILE.fixtureVersions) {
+      const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", `initialize-${version}.json`), "utf8"));
+      const events = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", `events-${version}.json`), "utf8"));
+      expect(normalizeRuntimeHandshake(fixture).agentVersion).toBe(version);
+      expect(Array.isArray(events)).toBe(true);
+    }
+  });
+
+  it("fails closed for an unknown future 1.x patch instead of enabling it from the major number", () => {
+    expect(offlineCompatibilityGate("1.0.4")).toMatchObject({
+      status: "failed", major: 1, checks: [expect.objectContaining({ id: "unverified-minor" })],
+    });
   });
 
   it("accepts the stable 1.0.0 core contract when only context and session-info commands are present", async () => {

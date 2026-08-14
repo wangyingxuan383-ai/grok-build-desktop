@@ -25,6 +25,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("diagnostics:cli-capabilities", (force?: boolean) => controller.getCliCapabilities(force));
   handle("diagnostics:support-preview", () => controller.previewSupportBundle());
   handle("diagnostics:support-export", () => controller.exportSupportBundle());
+  handle("diagnostics:trace-export", (sessionId: string) => controller.exportSessionTrace(sessionId));
   handle("app-update:check", (force?: boolean) => controller.checkAppUpdate(force));
   handle("app-update:open", (url?: string) => controller.openAppRelease(url));
   handle("workspace:choose", () => controller.chooseWorkspace());
@@ -146,7 +147,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:fork", (sessionId: string, pointId?: string, launch?: ExecutionProfileLaunchInput) => controller.forkSession(sessionId, pointId, launch));
   handle("workspace:rebind-sessions", (sourceCwd: string, targetCwd: string) => controller.rebindWorkspaceSessions(sourceCwd, targetCwd));
   handle("session:rewind-points", (sessionId: string) => controller.listRewindPoints(sessionId));
-  handle("session:rewind", (sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files") => controller.rewindSession(sessionId, pointId, mode));
+  handle("session:rewind", (sessionId: string, pointId: string) => controller.rewindSession(sessionId, pointId));
   handle("session:archive", (sessionId: string, archived: boolean) => controller.archiveSession(sessionId, archived));
   handle("tasks:list", () => controller.listBackgroundTasks());
   handle("tasks:kill", (id: string) => controller.killBackgroundTask(id));

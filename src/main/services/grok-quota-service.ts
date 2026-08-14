@@ -2,16 +2,15 @@ import { session } from "electron";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AppSettings, GrokQuotaSnapshot, QuotaWindow } from "../../shared/types";
+import type { AppSettings, AutoTopupRuleSnapshot, BillingAllowance, BillingCapabilityEvidence, GrokQuotaSnapshot, QuotaWindow } from "../../shared/types";
 import type { AccountVault } from "./account-vault";
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
 
 const WEEKLY_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
-const MONTHLY_URL = "https://cli-chat-proxy.grok.com/v1/billing";
-
-type BillingPayload = { config?: Record<string, unknown> };
+type BillingPayload = { config?: Record<string, unknown>; onDemandEnabled?: unknown; on_demand_enabled?: unknown; subscriptionTier?: unknown; subscription_tier?: unknown };
 type QuotaRequester = (url: string, headers: Record<string, string>, proxy: string) => Promise<BillingPayload>;
+type BillingExtensionRequester = (method: "x.ai/billing" | "x.ai/auto-topup-rule") => Promise<Record<string, unknown> | undefined>;
 interface QuotaPersistence { rolling24h: Record<string, QuotaWindow>; }
 
 export class GrokQuotaService {
@@ -28,6 +27,7 @@ export class GrokQuotaService {
     private readonly requester: QuotaRequester = electronRequest,
     private readonly readCurrentAuth: () => Promise<string> = () => readFile(join(homedir(), ".grok", "auth.json"), "utf8"),
     persistencePath?: string,
+    private readonly extensionRequester?: BillingExtensionRequester,
   ) {
     if (persistencePath) this.store = new JsonStore(persistencePath, { rolling24h: {} });
   }
@@ -55,25 +55,42 @@ export class GrokQuotaService {
       Accept: "application/json",
     };
 
-    const [weeklyResult, monthlyResult] = await Promise.allSettled([
-      this.requestWith401Retry(WEEKLY_URL, headers, proxy),
-      this.requestWith401Retry(MONTHLY_URL, headers, proxy),
-    ]);
+    let source: BillingCapabilityEvidence["source"] = "credits-api";
+    let payload: BillingPayload | undefined;
+    let autoTopupRule: AutoTopupRuleSnapshot | undefined;
     const diagnostics: string[] = [];
-    if (weeklyResult.status === "rejected") diagnostics.push(classifyError("周额度", weeklyResult.reason));
-    if (monthlyResult.status === "rejected") diagnostics.push(classifyError("月度额度", monthlyResult.reason));
-    const weekly = weeklyResult.status === "fulfilled" ? parseWeekly(weeklyResult.value) : undefined;
-    const monthlyParsed = monthlyResult.status === "fulfilled" ? parseMonthly(monthlyResult.value) : {};
-    if (weekly && weekly.used === undefined) diagnostics.push("周额度接口未返回使用率；仍显示本周周期与重置时间。");
+    if (this.extensionRequester) {
+      try {
+        const result = await this.extensionRequester("x.ai/billing");
+        const normalized = unwrapExtensionBilling(result);
+        if (normalized) { payload = normalized; source = "cli-extension"; }
+      } catch (error) {
+        diagnostics.push(classifyError("CLI 账单扩展", error));
+      }
+    }
+    if (payload && source === "cli-extension" && this.extensionRequester) {
+      try {
+        autoTopupRule = parseAutoTopupRule(await this.extensionRequester("x.ai/auto-topup-rule"));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (!/method not found/i.test(detail)) diagnostics.push(classifyError("自动充值规则", error));
+      }
+    }
+    if (!payload) {
+      try { payload = await this.requestWith401Retry(WEEKLY_URL, headers, proxy); }
+      catch (error) { diagnostics.push(classifyError("本期额度", error)); }
+    }
+    const allowance = payload ? parseCurrentAllowance(payload, source) : undefined;
+    const payAsYouGo = payload ? parsePayAsYouGo(payload, source) : undefined;
+    if (allowance && allowance.used === undefined) diagnostics.push(`${allowance.label}接口未返回使用率；仅显示周期与重置时间。`);
 
     const previous = this.cache.get(active.profile.id);
-    const bothFailed = weeklyResult.status === "rejected" && monthlyResult.status === "rejected";
-    if (bothFailed && previous) {
+    if (!payload && previous) {
       const stale = { ...previous, stale: true, partial: true, diagnostics, fetchedAt: previous.fetchedAt };
       this.cache.set(active.profile.id, stale);
       return structuredClone(stale);
     }
-    if (bothFailed) {
+    if (!payload) {
       const failed: GrokQuotaSnapshot = {
         accountId: active.profile.id,
         supported: true,
@@ -86,17 +103,35 @@ export class GrokQuotaService {
       return failed;
     }
 
+    const evidence: BillingCapabilityEvidence[] = [{
+      source,
+      observedAt: new Date().toISOString(),
+      ...(allowance ? { periodType: allowance.periodType } : {}),
+      fields: [
+        ...Object.keys(payload.config ?? {}).map((field) => `config.${field}`),
+        ...Object.keys(payload).filter((field) => field !== "config"),
+      ].sort(),
+    }];
+
     const snapshot: GrokQuotaSnapshot = {
       accountId: active.profile.id,
       supported: true,
       fetchedAt: new Date().toISOString(),
       stale: false,
-      partial: weeklyResult.status === "rejected" || monthlyResult.status === "rejected",
+      partial: false,
       rolling24h: this.rolling.get(active.profile.id),
-      weekly: weekly ?? (weeklyResult.status === "rejected" ? previous?.weekly : undefined),
-      monthly: monthlyParsed.monthly ?? (monthlyResult.status === "rejected" ? previous?.monthly : undefined),
-      onDemand: monthlyParsed.onDemand ?? (monthlyResult.status === "rejected" ? previous?.onDemand : undefined),
-      prepaidBalance: weeklyResult.status === "fulfilled" ? moneyValue(weeklyResult.value.config?.prepaidBalance) : previous?.prepaidBalance,
+      currentAllowance: allowance,
+      payAsYouGo,
+      payAsYouGoEnabled: booleanValue(payload.onDemandEnabled ?? payload.on_demand_enabled),
+      autoTopupRule,
+      prepaidBalance: moneyValue(payload.config?.prepaidBalance ?? payload.config?.prepaid_balance),
+      subscriptionTier: stringValue(payload.subscriptionTier ?? payload.subscription_tier),
+      evidence,
+      // Keep a bounded compatibility projection for an old renderer during an
+      // in-place application update. 0.9 UI reads currentAllowance.
+      ...(allowance?.periodType === "weekly" ? { weekly: allowance } : {}),
+      ...(allowance?.periodType === "monthly" ? { monthly: allowance } : {}),
+      ...(payAsYouGo ? { onDemand: payAsYouGo } : {}),
       diagnostics,
     };
     this.cache.set(active.profile.id, snapshot);
@@ -155,69 +190,81 @@ export class GrokQuotaService {
   }
 }
 
-export function parseWeekly(payload: BillingPayload): QuotaWindow | undefined {
+export function parseAutoTopupRule(value: Record<string, unknown> | undefined): AutoTopupRuleSnapshot | undefined {
+  if (!value) return undefined;
+  const meta = record(value._meta);
+  const raw = meta?.["x.ai/ext_result"] ?? meta?.extResult ?? value.result ?? value;
+  let decoded: unknown = raw;
+  if (typeof raw === "string") {
+    try { decoded = JSON.parse(raw); } catch { return undefined; }
+  }
+  const rule = record(record(decoded)?.rule);
+  // A valid empty response means auto top-up is disabled. A malformed payload
+  // remains unknown instead of overwriting a previously observed state.
+  if (!rule && record(decoded) && Object.hasOwn(record(decoded)!, "rule")) return {
+    enabled: false,
+    source: "cli-extension",
+    observedAt: new Date().toISOString(),
+  };
+  if (!rule) return undefined;
+  return {
+    enabled: booleanValue(rule.enabled) ?? false,
+    minBeforeLimit: moneyValue(rule.minBeforeHittingSl ?? rule.min_before_hitting_sl),
+    topupAmount: moneyValue(rule.topupAmount ?? rule.topup_amount),
+    monthlyCap: moneyValue(rule.maxAmountPerMonth ?? rule.max_amount_per_month),
+    source: "cli-extension",
+    observedAt: new Date().toISOString(),
+  };
+}
+
+export function parseCurrentAllowance(payload: BillingPayload, source: "cli-extension" | "credits-api" = "credits-api"): BillingAllowance | undefined {
   const config = payload.config;
   if (!config) return undefined;
-  const period = record(config.currentPeriod) ?? {};
+  const period = record(config.currentPeriod ?? config.current_period) ?? {};
+  const rawPeriodType = (stringValue(period.type ?? period.periodType ?? period.period_type) ?? "").toUpperCase();
+  const periodType = rawPeriodType.includes("WEEK") ? "weekly" : rawPeriodType.includes("MONTH") ? "monthly" : "unknown";
   const percent = numberValue(config.creditUsagePercent ?? config.credit_usage_percent);
-  const start = stringValue(period.start ?? config.billingPeriodStart ?? config.billing_period_start);
-  const end = stringValue(period.end ?? config.billingPeriodEnd ?? config.billing_period_end);
   const productUsage = Array.isArray(config.productUsage ?? config.product_usage) ? (config.productUsage ?? config.product_usage) as unknown[] : [];
   const products = productUsage.map((item, index) => ({ label: stringValue(record(item)?.product) || `产品 ${index + 1}`, usedPercent: numberValue(record(item)?.usagePercent ?? record(item)?.usage_percent) }));
   const productPercent = products.map((item) => item.usedPercent).filter((value): value is number => value !== undefined);
   const used = percent ?? (productPercent.length ? Math.max(...productPercent) : undefined);
+  const start = stringValue(period.start ?? config.billingPeriodStart ?? config.billing_period_start);
+  const end = stringValue(period.end ?? config.billingPeriodEnd ?? config.billing_period_end);
   if (used === undefined && !start && !end) return undefined;
-  return { label: "周额度", used, limit: used === undefined ? undefined : 100, remaining: used === undefined ? undefined : Math.max(0, 100 - used), unit: "percent", periodStart: start, periodEnd: end, resetAt: end, products };
+  return {
+    label: periodType === "weekly" ? "本期额度（周）" : periodType === "monthly" ? "本期额度（月）" : "本期额度",
+    periodType,
+    used,
+    limit: used === undefined ? undefined : 100,
+    remaining: used === undefined ? undefined : Math.max(0, 100 - used),
+    unit: "percent",
+    periodStart: start,
+    periodEnd: end,
+    resetAt: end,
+    products,
+    source: source === "cli-extension" ? "cli-extension" : "billing-api",
+    observedAt: new Date().toISOString(),
+    unifiedBilling: booleanValue(config.isUnifiedBillingUser ?? config.is_unified_billing_user),
+  };
 }
 
-export function parseMonthly(payload: BillingPayload): { monthly?: QuotaWindow; onDemand?: QuotaWindow } {
-  const config = payload.config ? { ...payload.config, ...record(payload.config.subscription), ...record(payload.config.limits), ...record(payload.config.monthly) } : record(payload);
-  if (!config) return {};
-  const percent = numberValue(
-    config.monthlyUsagePercent
-    ?? config.monthly_usage_percent
-    ?? config.creditUsagePercent
-    ?? config.credit_usage_percent,
-  );
-  const limitCents = moneyValue(
-    config.monthlyLimit
-    ?? config.monthly_limit
-    ?? config.monthlyCredits
-    ?? config.monthly_credits
-    ?? config.includedLimit
-    ?? config.included_limit,
-  );
-  const usedCents = moneyValue(
-    config.monthlyUsed
-    ?? config.monthly_used
-    ?? config.used
-    ?? config.creditsUsed
-    ?? config.credits_used
-    ?? config.includedUsed
-    ?? config.included_used,
-  );
-  const onDemandCap = moneyValue(config.onDemandCap ?? config.on_demand_cap ?? config.onDemandLimit ?? config.on_demand_limit);
-  const explicitOnDemand = moneyValue(config.onDemandUsed ?? config.on_demand_used);
-  const includedUsed = usedCents === undefined ? undefined : limitCents !== undefined ? Math.min(usedCents, limitCents) : usedCents;
-  const onDemandUsed = explicitOnDemand ?? (usedCents !== undefined && limitCents !== undefined ? Math.max(0, usedCents - limitCents) : undefined);
-  const period = record(config.currentPeriod) ?? record(config.current_period) ?? {};
-  const start = stringValue(period.start ?? config.billingPeriodStart ?? config.billing_period_start ?? config.periodStart ?? config.period_start);
-  const end = stringValue(period.end ?? config.billingPeriodEnd ?? config.billing_period_end ?? config.periodEnd ?? config.period_end ?? config.resetAt ?? config.reset_at);
-  const monthly = limitCents === undefined && usedCents === undefined && percent === undefined ? undefined : percent !== undefined && limitCents === undefined ? {
-    label: "月度额度", used: percent, limit: 100,
-    remaining: Math.max(0, 100 - percent),
-    unit: "percent" as const, periodStart: start, periodEnd: end, resetAt: end,
-  } : {
-    label: "月度赠送额度", used: includedUsed, limit: limitCents,
-    remaining: limitCents === undefined || includedUsed === undefined ? undefined : Math.max(0, limitCents - includedUsed),
-    unit: "credits" as const, periodStart: start, periodEnd: end, resetAt: end,
-  };
-  const onDemand = onDemandCap === undefined && onDemandUsed === undefined ? undefined : {
-    label: "按量付费", used: onDemandUsed, limit: onDemandCap,
-    remaining: onDemandCap === undefined || onDemandUsed === undefined ? undefined : Math.max(0, onDemandCap - onDemandUsed),
-    unit: "credits" as const, periodStart: start, periodEnd: end, resetAt: end,
-  };
-  return { monthly, onDemand };
+export function parsePayAsYouGo(payload: BillingPayload, source: "cli-extension" | "credits-api" = "credits-api"): QuotaWindow | undefined {
+  const config = payload.config;
+  if (!config) return undefined;
+  const cap = moneyValue(config.onDemandCap ?? config.on_demand_cap);
+  const used = moneyValue(config.onDemandUsed ?? config.on_demand_used);
+  if (cap === undefined && used === undefined) return undefined;
+  return { label: "按量付费月上限", used, limit: cap, remaining: cap === undefined || used === undefined ? undefined : Math.max(0, cap - used), unit: "credits", source: source === "cli-extension" ? "cli-extension" : "billing-api", observedAt: new Date().toISOString() };
+}
+
+function unwrapExtensionBilling(value: Record<string, unknown> | undefined): BillingPayload | undefined {
+  if (!value) return undefined;
+  const meta = record(value._meta);
+  const raw = meta?.["x.ai/ext_result"] ?? meta?.extResult ?? value.result ?? value;
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw) as BillingPayload; } catch { return undefined; }
+  }
+  return record(raw) as BillingPayload | undefined;
 }
 
 export function parseRolling24hQuota(message: string, modelId?: string): QuotaWindow | undefined {
@@ -296,5 +343,6 @@ function numberValue(value: unknown): number | undefined {
 }
 function moneyValue(value: unknown): number | undefined { return numberValue(value); }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value ? value : undefined; }
+function booleanValue(value: unknown): boolean | undefined { return typeof value === "boolean" ? value : undefined; }
 
-export { WEEKLY_URL, MONTHLY_URL };
+export { WEEKLY_URL };

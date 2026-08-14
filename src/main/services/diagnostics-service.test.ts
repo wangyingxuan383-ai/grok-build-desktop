@@ -1,8 +1,42 @@
 import { describe, expect, it, vi } from "vitest";
 import { strFromU8, unzipSync } from "fflate";
-import { buildSupportBundleArchive, DiagnosticsService, parseGrokDoctorFixes, redactDiagnosticText } from "./diagnostics-service";
+import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildSupportBundleArchive, DiagnosticsService, parseGrokDiskUsage, parseGrokDoctorFixes, redactDiagnosticText } from "./diagnostics-service";
 
 describe("diagnostic redaction", () => {
+  it("exports an explicit local session trace with fixed arguments", async () => {
+    const output = join(tmpdir(), `grok-trace-test-${randomUUID()}.json`);
+    const runner = vi.fn(async (_cliPath: string, args: string[]) => {
+      await writeFile(String(args[args.indexOf("-o") + 1]), "{}", "utf8");
+      return { stdout: "", stderr: "" };
+    });
+    const service = new DiagnosticsService(
+      "C:\\AppData", {} as never, async () => ({}) as never, async () => undefined,
+      async () => ({ available: false, diagnostics: [] }) as never, {} as never, "C:\\fake-grok.exe",
+      { traceCommandRunner: runner },
+    );
+    try {
+      await service.exportSessionTrace("019f-session_test", output);
+      expect(runner).toHaveBeenCalledWith("C:\\fake-grok.exe", ["--no-auto-update", "trace", "--local", "--json", "-o", output, "019f-session_test"], expect.objectContaining({ timeout: 300_000 }));
+    } finally { await rm(output, { force: true }); }
+  });
+  it("normalizes bounded grok du JSON without exposing paths", () => {
+    expect(parseGrokDiskUsage({
+      total_bytes: 5 * 1024 * 1024,
+      top_level_dirs: [{ name: "sessions", bytes: 4 * 1024 * 1024 }, { name: "cache", bytes: 1024 }],
+      worktrees: [{ id: "one" }],
+      skipped_entries: 1,
+    })).toEqual(expect.objectContaining({
+      id: "grok-du",
+      status: "warning",
+      summary: "GROK_HOME 共 5.0 MiB · 1 个受管 Worktree",
+      details: ["sessions：4.0 MiB", "cache：1.0 KiB", "1 个条目无法读取"],
+    }));
+  });
+
   it("only exposes named Grok Doctor remediations and rejects forged ids", () => {
     expect(parseGrokDoctorFixes({ findings: [
       { id: "terminal.ssh-wrap", message: "Install wrapper", automaticRemediation: { kind: "config" } },
@@ -108,9 +142,10 @@ describe("failure-scoped diagnosis", () => {
   });
 
   it("reports only real quota windows and never invents one", async () => {
-    const withQuota = await service([], { rolling24h: { label: "滚动 24 小时 Token", used: 1_056_458, limit: 1_000_000 } })
+    const withQuota = await service([], { rolling24h: { label: "滚动 24 小时 Token", used: 1_056_458, limit: 1_000_000 }, currentAllowance: { label: "本期额度（周）", periodType: "weekly", unit: "percent" } })
       .diagnoseFailure(failure({ classification: "quota-exhausted", providerId: undefined }));
     expect(withQuota.items.find((item) => item.id === "quota")?.details?.[0]).toContain("1056458/1000000");
+    expect(withQuota.items.find((item) => item.id === "quota")?.details?.[1]).toContain("本期额度（周）");
 
     const without = await service([]).diagnoseFailure(failure({ classification: "quota-exhausted", providerId: undefined }));
     expect(without.items.find((item) => item.id === "quota")?.summary).toContain("未能读取");

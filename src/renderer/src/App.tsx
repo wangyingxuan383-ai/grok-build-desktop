@@ -199,6 +199,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     let queued: ChatEvent[] = [];
     let frame = 0;
+    let automaticUpdateTimer: number | undefined;
     const flush = (): void => {
       frame = 0;
       const events = queued;
@@ -259,13 +260,21 @@ export default function App(): React.JSX.Element {
         void window.grokDesktop.listCodexSessions(data.settings.activeWorkspace, data.settings.showArchivedCodex).then((values) => useAppStore.getState().setCodexSessions(values)).catch(() => undefined);
         void window.grokDesktop.listClaudeSessions(data.settings.activeWorkspace).then((values) => useAppStore.getState().setClaudeSessions(values)).catch(() => undefined);
       }
-      window.setTimeout(() => void window.grokDesktop.checkUpdatesAutomatically().then((result) => {
+      const checkUpdates = (): void => { void window.grokDesktop.checkUpdatesAutomatically().then((result) => {
         if (result.cli) useAppStore.getState().setCli(result.cli);
         if (result.app) useAppStore.getState().setAppRelease(result.app);
-      }).catch(() => undefined), 500);
+      }).catch(() => undefined); };
+      automaticUpdateTimer = window.setTimeout(() => {
+        checkUpdates();
+        // The main process remains the source of truth for the 24-hour gate.
+        // A six-hour wakeup means an app left open for days eventually observes
+        // a new stable CLI/App release without issuing frequent network calls.
+        automaticUpdateTimer = window.setInterval(checkUpdates, 6 * 60 * 60_000);
+      }, 500);
     }).catch((error) => useAppStore.getState().setError(error instanceof Error ? error.message : String(error)));
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
+      if (automaticUpdateTimer !== undefined) window.clearInterval(automaticUpdateTimer);
       flush();
       removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeComputer(); removeAutomation();
     };

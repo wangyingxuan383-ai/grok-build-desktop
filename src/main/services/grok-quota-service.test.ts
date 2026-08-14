@@ -2,34 +2,35 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { GrokQuotaService, parseMonthly, parseRolling24hQuota, parseWeekly } from "./grok-quota-service";
+import { GrokQuotaService, parseAutoTopupRule, parseCurrentAllowance, parsePayAsYouGo, parseRolling24hQuota } from "./grok-quota-service";
 import { LogService } from "./log-service";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
 describe("Grok quota parsing", () => {
-  it("parses weekly utilization and reset window", () => {
-    expect(parseWeekly({ config: { creditUsagePercent: 37.5, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-07-14T00:00:00Z", end: "2026-07-21T00:00:00Z" } } })).toMatchObject({ used: 37.5, remaining: 62.5, resetAt: "2026-07-21T00:00:00Z" });
-  });
-
-  it("derives monthly included and on-demand usage", () => {
-    const parsed = parseMonthly({ config: { monthlyLimit: { val: 10_000 }, used: { val: 11_500 }, onDemandCap: { val: 5_000 } } });
-    expect(parsed.monthly).toMatchObject({ used: 10_000, limit: 10_000, remaining: 0 });
-    expect(parsed.onDemand).toMatchObject({ used: 1_500, limit: 5_000, remaining: 3_500 });
-  });
-
-  it("accepts snake-case provider responses", () => {
-    expect(parseMonthly({ config: { monthly_limit: { val: 1000 }, used: { val: 150 }, on_demand_cap: { val: 0 } } }).monthly).toMatchObject({ remaining: 850 });
-  });
-
-  it("accepts the newer monthly percent and nested subscription shapes", () => {
-    expect(parseMonthly({ config: { monthlyUsagePercent: 42, currentPeriod: { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z" } } }).monthly).toMatchObject({
-      used: 42, limit: 100, remaining: 58, unit: "percent", resetAt: "2026-09-01T00:00:00Z",
+  it("uses the single period returned by billing?format=credits without inventing a monthly allowance", () => {
+    const payload = { config: {
+      currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-08-10T00:00:00Z", end: "2026-08-17T00:00:00Z" },
+      prepaidBalance: { val: 1250 },
+      onDemandCap: { val: 5000 },
+      onDemandUsed: { val: 1200 },
+      isUnifiedBillingUser: true,
+    } };
+    expect(parseCurrentAllowance(payload)).toMatchObject({
+      label: "本期额度（周）", periodType: "weekly", periodStart: "2026-08-10T00:00:00Z", resetAt: "2026-08-17T00:00:00Z", unifiedBilling: true,
     });
-    expect(parseMonthly({ config: { subscription: { monthlyCredits: { val: 2000 }, monthlyUsed: { val: 250 } } } }).monthly).toMatchObject({
-      used: 250, limit: 2000, remaining: 1750,
-    });
+    expect(parseCurrentAllowance(payload)?.used).toBeUndefined();
+    expect(parsePayAsYouGo(payload)).toMatchObject({ used: 1200, limit: 5000, remaining: 3800 });
+  });
+
+  it("uses currentPeriod rather than deprecated monthly_limit/used fields", () => {
+    expect(parseCurrentAllowance({ config: {
+      credit_usage_percent: 42,
+      current_period: { type: "USAGE_PERIOD_TYPE_MONTHLY", start: "2026-08-01", end: "2026-09-01" },
+      monthly_limit: { val: 9999 },
+      used: { val: 9999 },
+    } })).toMatchObject({ used: 42, limit: 100, remaining: 58, periodType: "monthly", resetAt: "2026-09-01" });
   });
 
   it("keeps a rolling 24-hour token limit separate from billing windows", () => {
@@ -37,6 +38,14 @@ describe("Grok quota parsing", () => {
       label: "滚动 24 小时 Token", used: 1_056_458, limit: 1_000_000, remaining: 0, unit: "tokens", source: "cli-error", modelId: "grok-free",
     });
     expect(parseRolling24hQuota("monthly actual/limit: 10/20")).toBeUndefined();
+  });
+
+  it("parses the 1.0.3 auto top-up rule without inventing omitted values", () => {
+    expect(parseAutoTopupRule({ rule: { enabled: true, minBeforeHittingSl: { val: 500 }, topupAmount: { val: 2000 }, maxAmountPerMonth: { val: 10000 } } })).toMatchObject({
+      enabled: true, minBeforeLimit: 500, topupAmount: 2000, monthlyCap: 10000, source: "cli-extension",
+    });
+    expect(parseAutoTopupRule({ rule: {} })).toMatchObject({ enabled: false });
+    expect(parseAutoTopupRule({ rule: null })).toMatchObject({ enabled: false });
   });
 });
 
@@ -49,22 +58,64 @@ describe("Grok quota requests", () => {
     let calls = 0;
     const service = new GrokQuotaService(vault, settings, async () => "0.1.101", {} as never, async (url) => {
       calls++;
-      return url.includes("format=credits") ? { config: { creditUsagePercent: 10 } } : { config: { monthlyLimit: { val: 100 }, used: { val: 10 } } };
+      expect(url).toContain("format=credits");
+      return { config: { creditUsagePercent: 10, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } } };
     }, async () => auth());
-    expect((await service.get()).monthly?.remaining).toBe(90);
+    expect((await service.get()).currentAllowance?.remaining).toBe(90);
+    expect((await service.get()).monthly).toBeUndefined();
     await service.get();
-    expect(calls).toBe(2);
+    expect(calls).toBe(1);
   });
 
-  it("returns partial data when one endpoint fails", async () => {
-    const service = new GrokQuotaService(vault, settings, async () => "0.1.101", {} as never, async (url) => {
-      if (!url.includes("format=credits")) throw new Error("HTTP 503");
-      return { config: { creditUsagePercent: 11 } };
-    }, async () => auth());
+  it("prefers the live x.ai/billing extension and does not call the HTTP fallback", async () => {
+    let httpCalls = 0;
+    const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => {
+      httpCalls++;
+      throw new Error("HTTP fallback must not be used");
+    }, async () => auth(), undefined, async (method) => method === "x.ai/billing"
+      ? { config: { creditUsagePercent: 11, currentPeriod: { type: "USAGE_PERIOD_TYPE_MONTHLY" } }, on_demand_enabled: false, subscription_tier: "SuperGrok Heavy" }
+      : { rule: { enabled: true, topupAmount: { val: 2500 } } });
     const value = await service.get(true);
-    expect(value.partial).toBe(true);
-    expect(value.weekly?.used).toBe(11);
-    expect(value.diagnostics[0]).toContain("月度额度");
+    expect(value.partial).toBe(false);
+    expect(value.currentAllowance).toMatchObject({ used: 11, periodType: "monthly", source: "cli-extension" });
+    expect(value.monthly?.used).toBe(11);
+    expect(value.autoTopupRule).toMatchObject({ enabled: true, topupAmount: 2500 });
+    expect(value.payAsYouGoEnabled).toBe(false);
+    expect(value.subscriptionTier).toBe("SuperGrok Heavy");
+    expect(httpCalls).toBe(0);
+  });
+
+  it("falls back to billing?format=credits when x.ai/billing is unavailable", async () => {
+    let calls = 0;
+    const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async (url) => {
+      calls++;
+      expect(url).toContain("format=credits");
+      return { config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-08-10", end: "2026-08-17" } } };
+    }, async () => auth(), undefined, async () => { throw new Error("Method not found"); });
+    const value = await service.get(true);
+    expect(value.currentAllowance).toMatchObject({ periodType: "weekly", source: "billing-api", resetAt: "2026-08-17" });
+    expect(value.monthly).toBeUndefined();
+    expect(value.diagnostics[0]).toContain("CLI 账单扩展");
+    expect(calls).toBe(1);
+  });
+
+  it("preserves snake-case prepaid balance and records only the observed billing field names", async () => {
+    const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => ({
+      config: {
+        prepaid_balance: { val: 321 },
+        currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" },
+      },
+      on_demand_enabled: true,
+      subscription_tier: "SuperGrok",
+    }), async () => auth());
+    const value = await service.get(true);
+    expect(value.prepaidBalance).toBe(321);
+    expect(value.evidence?.[0]?.fields).toEqual([
+      "config.currentPeriod",
+      "config.prepaid_balance",
+      "on_demand_enabled",
+      "subscription_tier",
+    ]);
   });
 
   it("retries a 401 once with the current auth file", async () => {
@@ -73,10 +124,10 @@ describe("Grok quota requests", () => {
       const attempt = (attempts.get(url) ?? 0) + 1; attempts.set(url, attempt);
       if (attempt === 1) throw new Error("HTTP 401");
       expect(headers.Authorization).toBe("Bearer refreshed-test-token");
-      return url.includes("format=credits") ? { config: { creditUsagePercent: 5 } } : { config: { monthlyLimit: { val: 100 }, used: { val: 5 } } };
+      return { config: { creditUsagePercent: 5, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } } };
     }, async () => auth("refreshed-test-token"));
     expect((await service.get(true)).partial).toBe(false);
-    expect(Array.from(attempts.values())).toEqual([2, 2]);
+    expect(Array.from(attempts.values())).toEqual([2]);
   });
 
   it("never rejects when the vault is unavailable, so the error event it rides along with still reaches the user", async () => {
@@ -99,9 +150,7 @@ describe("Grok quota requests", () => {
   it("persists rolling 24-hour CLI limits across service restarts", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-quota-store-")); roots.push(root);
     const path = join(root, "quota.json");
-    const requester = async (url: string) => url.includes("format=credits")
-      ? { config: { creditUsagePercent: 5 } }
-      : { config: { monthlyLimit: { val: 100 }, used: { val: 5 } } };
+    const requester = async () => ({ config: { creditUsagePercent: 5, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } } });
     const first = new GrokQuotaService(vault, settings, async () => "0.1.101", {} as never, requester, async () => auth(), path);
     await first.captureError("rolling 24-hour window, actual/limit: 125/1000 tokens", "grok-free");
     const second = new GrokQuotaService(vault, settings, async () => "0.1.101", {} as never, requester, async () => auth(), path);
@@ -128,15 +177,13 @@ describe("Grok quota requests", () => {
         observedAt: "2026-01-01T00:00:00.000Z",
       },
     } }));
-    const requester = async (url: string) => url.includes("format=credits")
-      ? { config: { creditUsagePercent: 5 } }
-      : { config: { monthlyLimit: { val: 100 }, used: { val: 5 } } };
+    const requester = async () => ({ config: { creditUsagePercent: 5, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY" } } });
     const service = new GrokQuotaService(vault, settings, async () => "0.1.101", {} as never, requester, async () => auth(), path);
 
     expect((await service.get(true)).rolling24h?.expired).toBe(true);
   });
 
-  it("keeps the persisted rolling window visible when both billing endpoints are offline", async () => {
+  it("keeps the persisted rolling window visible when the credits endpoint is offline", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-quota-offline-")); roots.push(root);
     const path = join(root, "quota.json");
     const first = new GrokQuotaService(

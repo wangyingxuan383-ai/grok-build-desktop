@@ -1,0 +1,41 @@
+[
+  {
+    "method": "x.ai/models/update",
+    "params": {
+      "sessionId": "session-fixture",
+      "currentModelId": "grok-4.5",
+      "availableModels": []
+    }
+  },
+  {
+    "method": "x.ai/billing",
+    "params": {
+      "config": {
+        "currentPeriod": {
+          "start": "2026-08-10T00:00:00Z",
+          "end": "2026-08-17T00:00:00Z",
+          "type": "USAGE_PERIOD_TYPE_WEEKLY"
+        },
+        "creditUsagePercent": 25
+      },
+      "sessionId": "session-fixture"
+    }
+  },
+  {
+    "method": "x.ai/mcp/server_status",
+    "params": {
+      "name": "fixture",
+      "sessionId": "session-fixture",
+      "tools": [],
+      "status": "ready"
+    }
+  },
+  {
+    "method": "x.ai/tool/update",
+    "params": {
+      "sessionId": "session-fixture",
+      "toolCallId": "tool-fixture",
+      "readOnly": true
+    }
+  }
+]

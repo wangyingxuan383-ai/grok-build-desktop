@@ -233,6 +233,10 @@ export class GrokProcessManager {
     return this.get(sessionId).waitForCommands(timeoutMs);
   }
 
+  mediaCapabilityEvidence(sessionId: string): { commands: CommandInfo[]; tools: string[] } {
+    return this.get(sessionId).mediaCapabilityEvidence();
+  }
+
   async backgroundTaskResults(): Promise<Array<{ sessionId: string; result: Record<string, unknown>; subagents?: Record<string, unknown> }>> {
     const output: Array<{ sessionId: string; result: Record<string, unknown>; subagents?: Record<string, unknown> }> = [];
     for (const [sessionId, adapter] of this.sessions) {
@@ -482,6 +486,7 @@ export class GrokProcessManager {
   async close(sessionId: string, finalize = true): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    await this.stopOwnedBackgroundWork(sessionId, session);
     if (finalize) await this.finalizeSession(sessionId, session, "close");
     await session.dispose();
     this.sessions.delete(sessionId);
@@ -669,6 +674,46 @@ export class GrokProcessManager {
     if (!this.beforeSessionClose || session.working || session.needsUser) return;
     try { await this.beforeSessionClose(sessionId, session, reason); }
     catch (error) { await this.log.log(`session finalization failed: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  private async stopOwnedBackgroundWork(sessionId: string, session: GrokAcpAdapter): Promise<void> {
+    const failures: string[] = [];
+    try {
+      const payload = await session.taskList();
+      const rows = Array.isArray(payload.tasks) ? payload.tasks : [];
+      for (const item of rows) {
+        const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+        const id = String(row.taskId ?? row.task_id ?? row.id ?? "").trim();
+        const completed = row.completed === true
+          || row.endTime !== undefined
+          || row.end_time !== undefined
+          || /^(?:completed|failed|cancelled|killed|exited)$/i.test(String(row.status ?? row.state ?? ""));
+        if (!id || completed) continue;
+        await session.taskKill(id, "teardown").catch((error) => failures.push(`后台任务 ${id}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    } catch (error) {
+      if (!/method not found|not supported|unsupported/i.test(error instanceof Error ? error.message : String(error))) {
+        failures.push(`查询后台任务: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    try {
+      const payload = await session.subagentListRunning();
+      const rows = Array.isArray(payload.subagents) ? payload.subagents : [];
+      for (const item of rows) {
+        const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+        const id = String(row.subagentId ?? row.subagent_id ?? row.id ?? "").trim();
+        if (!id) continue;
+        await session.subagentCancel(id).catch((error) => failures.push(`子 Agent ${id}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    } catch (error) {
+      if (!/method not found|not supported|unsupported/i.test(error instanceof Error ? error.message : String(error))) {
+        failures.push(`查询子 Agent: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length) {
+      await this.log.log(`session ${sessionId} background cleanup was incomplete: ${failures.join("; ")}`);
+      throw new Error(`仍有属于该会话的后台工作未能停止：${failures.join("；")}`);
+    }
   }
 }
 

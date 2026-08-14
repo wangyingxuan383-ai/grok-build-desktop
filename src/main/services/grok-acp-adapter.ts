@@ -44,6 +44,7 @@ import { isCurrentSessionPlanFile, shouldBlockCommand } from "./plan-gate";
 import { resolveModeAfterResume, selectAllowPermissionOption, shouldAutoApproveToolPermissions } from "./permission-policy";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
 import type { LogService } from "./log-service";
+import { rejectSymbolicLink, resolveExistingWorkspacePath, resolveNewWorkspacePath } from "./workspace-path-policy";
 
 type JsonRpcId = string | number;
 // Interactive turns intentionally have no Desktop wall-clock ceiling. Users
@@ -288,6 +289,8 @@ interface SessionResponse {
       description?: string;
       _meta?: {
         totalContextTokens?: number;
+        acceptsImages?: boolean;
+        inputModalities?: unknown[];
         supportsReasoningEffort?: boolean;
         reasoningEfforts?: Array<{
           value?: unknown;
@@ -373,6 +376,7 @@ export class GrokAcpAdapter extends EventEmitter {
   sessionId = "";
   models: ModelInfo[] = [];
   commands: CommandInfo[] = [];
+  registeredTools: string[] = [];
   currentModelId = "";
   mode: SessionMode;
   planActive = false;
@@ -418,6 +422,13 @@ export class GrokAcpAdapter extends EventEmitter {
       const timer = setTimeout(finish, timeoutMs);
       this.once("commands-changed", finish);
     });
+  }
+
+  mediaCapabilityEvidence(): { commands: CommandInfo[]; tools: string[] } {
+    return {
+      commands: this.commands.map((command) => ({ ...command })),
+      tools: [...this.registeredTools],
+    };
   }
 
   constructor(private readonly options: AdapterOptions) {
@@ -566,6 +577,7 @@ export class GrokAcpAdapter extends EventEmitter {
         name: model.name,
         description: model.description,
         totalContextTokens: model._meta?.totalContextTokens,
+        ...normalizeImageInputCapability(model._meta),
         supportsReasoningEffort: model._meta?.supportsReasoningEffort === true && reasoningEfforts.length > 0,
         reasoningEfforts,
       };
@@ -579,6 +591,8 @@ export class GrokAcpAdapter extends EventEmitter {
         modelId: model.modelId,
         name: model.name,
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((item) => item.value) } : {}),
+        ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
+        ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
       }));
     }
     if (resumeSessionId) this.currentEffort = await readPersistedEffort(this.options.cwd, this.sessionId) ?? this.currentEffort;
@@ -715,6 +729,7 @@ export class GrokAcpAdapter extends EventEmitter {
   async renameSession(title: string): Promise<"official" | "unsupported"> {
     const normalized = title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
     if (!normalized) throw new Error("会话名称不能为空");
+    if ([...normalized].length > 100) throw new Error("会话名称不能超过 100 个字符");
     try {
       await this.extension("x.ai/session/rename", {
         title: normalized,
@@ -1092,11 +1107,10 @@ export class GrokAcpAdapter extends EventEmitter {
       throw error;
     }
   }
-  async rewind(pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void> {
+  async rewind(pointId: string): Promise<void> {
     const targetPromptIndex = Number.parseInt(pointId, 10);
     if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) throw new Error("CLI 返回的回退点无效");
-    const wireMode = mode === "conversation" ? "conversation_only" : mode === "files" ? "files_only" : "all";
-    await this.extension("x.ai/rewind/execute", { targetPromptIndex, force: false, mode: wireMode });
+    await this.extension("x.ai/rewind/execute", { targetPromptIndex, force: false, mode: "conversation_only" });
   }
   async taskList(): Promise<Record<string, unknown>> {
     return unwrapExtResult(await this.extension("x.ai/task/list"));
@@ -1104,8 +1118,8 @@ export class GrokAcpAdapter extends EventEmitter {
   async subagentListRunning(): Promise<Record<string, unknown>> {
     return unwrapExtResult(await this.extension("x.ai/subagent/list_running"));
   }
-  async taskKill(taskId: string): Promise<void> {
-    const response = unwrapExtResult(await this.extension("x.ai/task/kill", { taskId }));
+  async taskKill(taskId: string, source: "clientUi" | "teardown" = "clientUi"): Promise<void> {
+    const response = unwrapExtResult(await this.extension("x.ai/task/kill", { taskId, source }));
     if (response.success === false) throw new Error(String(response.error ?? "后台任务停止失败"));
   }
   async subagentCancel(subagentId: string): Promise<void> {
@@ -1502,6 +1516,7 @@ export class GrokAcpAdapter extends EventEmitter {
       }
       case "available_commands_update":
         this.commands = (update.availableCommands ?? []).map((command: any) => ({ name: command.name, description: command.description, inputHint: command.input?.hint }));
+        this.registeredTools = normalizeRegisteredToolNames(update._meta?.tools ?? update.meta?.tools);
         if (this.runtimeHandshake) {
           this.runtimeHandshake.commands = this.commands.map((command) => command.name);
           const commandNames = new Set(this.runtimeHandshake.commands.map((command) => command.replace(/^\//, "").toLowerCase()));
@@ -1536,6 +1551,7 @@ export class GrokAcpAdapter extends EventEmitter {
       toolCallId,
       title: update.title || update.rawInput?.name || "工具调用",
       ...(update.kind !== undefined ? { kind: update.kind } : {}),
+      ...(normalizeToolReadOnly(update) !== undefined ? { readOnly: normalizeToolReadOnly(update) } : {}),
       status,
       ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
       ...(update.content !== undefined ? { content: update.content } : {}),
@@ -1843,6 +1859,7 @@ export class GrokAcpAdapter extends EventEmitter {
         name: firstNonEmptyString(row.name, row.label) ?? modelId,
         description: firstNonEmptyString(row.description),
         totalContextTokens: optionalPositiveInteger(meta.totalContextTokens ?? row.totalContextTokens),
+        ...normalizeImageInputCapability(meta, row),
         supportsReasoningEffort: meta.supportsReasoningEffort === true && reasoningEfforts.length > 0,
         reasoningEfforts,
       }];
@@ -1859,6 +1876,8 @@ export class GrokAcpAdapter extends EventEmitter {
         modelId: model.modelId,
         name: model.name,
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((entry) => entry.value) } : {}),
+        ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
+        ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
       }));
     }
     if (this.sessionId) this.emitEvent({
@@ -1893,7 +1912,15 @@ export class GrokAcpAdapter extends EventEmitter {
       if (method.startsWith("x.ai/") || method.startsWith("_x.ai/")) this.observeRuntimeExtension(method.replace(/^_/, ""));
       switch (method) {
         case acpMethods.client.fs.readTextFile: {
-          const content = await readFile(params.path, "utf8");
+          const requestedPath = String(params.path ?? "");
+          const planFilePath = this.sessionId
+            ? await resolveSessionPlanFile(this.options.cwd, this.sessionId, this.options.env.GROK_HOME)
+            : undefined;
+          const resolvedPath = isCurrentSessionPlanFile(requestedPath, planFilePath)
+            ? requestedPath
+            : (await resolveExistingWorkspacePath(this.options.cwd, requestedPath, false)).path;
+          await rejectSymbolicLink(resolvedPath);
+          const content = await readFile(resolvedPath, "utf8");
           this.respondOk(id, { content });
           return;
         }
@@ -1903,13 +1930,19 @@ export class GrokAcpAdapter extends EventEmitter {
             ? await resolveSessionPlanFile(this.options.cwd, this.sessionId, this.options.env.GROK_HOME)
             : undefined;
           const isCurrentPlanFile = isCurrentSessionPlanFile(requestedPath, planFilePath);
-          if (this.planActive && isCurrentPlanFile && (await lstat(requestedPath).catch(() => undefined))?.isSymbolicLink()) {
-            this.respondError(id, -32010, "Plan 模式拒绝写入符号链接计划文件");
-            return;
+          let resolvedPath: string;
+          if (isCurrentPlanFile) {
+            resolvedPath = requestedPath;
+            if ((await lstat(resolvedPath).catch(() => undefined))?.isSymbolicLink()) {
+              this.respondError(id, -32010, "拒绝写入符号链接计划文件");
+              return;
+            }
+            this.emitEvent({ type: "plan", sessionId: this.sessionId, text: params.content || "" });
+            await mkdir(dirname(resolvedPath), { recursive: true });
+          } else {
+            resolvedPath = await resolveAcpWorkspaceWritePath(this.options.cwd, requestedPath);
           }
-          if (isCurrentPlanFile) this.emitEvent({ type: "plan", sessionId: this.sessionId, text: params.content || "" });
-          await mkdir(dirname(requestedPath), { recursive: true });
-          await writeFile(requestedPath, params.content ?? "", "utf8");
+          await writeFile(resolvedPath, params.content ?? "", "utf8");
           this.respondOk(id);
           return;
         }
@@ -2986,7 +3019,12 @@ export function normalizeRuntimeHandshake(value: Record<string, unknown>): CliRu
           const normalized = normalizeReasoningEffort(effortRow?.value ?? effort);
           return normalized ? [normalized] : [];
         });
-      return [{ modelId, name: firstNonEmptyString(row.name, row.label), ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}) }];
+      return [{
+        modelId,
+        name: firstNonEmptyString(row.name, row.label),
+        ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}),
+        ...normalizeImageInputCapability(modelMeta, row),
+      }];
     }),
     commands: normalizedCommands,
     extensions: [...new Set([
@@ -3010,8 +3048,42 @@ function recordValue(value: unknown): Record<string, any> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : undefined;
 }
 
+function normalizeImageInputCapability(
+  primary: Record<string, unknown> | undefined,
+  secondary?: Record<string, unknown>,
+): Pick<ModelInfo, "acceptsImages" | "inputModalities"> {
+  const rawModalities = arrayValue(primary?.inputModalities)
+    ?? arrayValue(primary?.input_modalities)
+    ?? arrayValue(secondary?.inputModalities)
+    ?? arrayValue(secondary?.input_modalities);
+  const inputModalities = rawModalities
+    ?.filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+    .map((value) => value.trim().toLowerCase());
+  const explicit = primary?.acceptsImages ?? primary?.accepts_images
+    ?? secondary?.acceptsImages ?? secondary?.accepts_images;
+  const acceptsImages = typeof explicit === "boolean"
+    ? explicit
+    : inputModalities?.length
+      ? inputModalities.includes("image")
+      : undefined;
+  return {
+    ...(acceptsImages !== undefined ? { acceptsImages } : {}),
+    ...(inputModalities?.length ? { inputModalities: [...new Set(inputModalities)] } : {}),
+  };
+}
+
 function arrayValue(value: unknown): unknown[] | undefined {
   return Array.isArray(value) ? value : undefined;
+}
+
+function normalizeRegisteredToolNames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.flatMap((item) => {
+    if (typeof item === "string") return [item.trim().toLowerCase()];
+    const row = recordValue(item);
+    const name = firstNonEmptyString(row?.name, row?.toolName, row?.tool_name, row?.id);
+    return name ? [name.trim().toLowerCase()] : [];
+  }).filter(Boolean))];
 }
 
 function flattenBooleanRecord(value: Record<string, any> | undefined, prefix = ""): Record<string, boolean> | undefined {
@@ -3036,6 +3108,29 @@ function normalizePrivateUpdateName(value: string): string {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s.-]+/g, "_")
     .toLowerCase();
+}
+
+/**
+ * Grok Build has emitted the read-only hint in more than one shape while the
+ * 1.x tool metadata contract was settling.  Treat it as display/audit
+ * evidence only and never infer it from the tool name.
+ */
+export function normalizeToolReadOnly(value: Record<string, any>): boolean | undefined {
+  const meta = recordValue(value._meta) ?? recordValue(value.meta);
+  const toolMeta = recordValue(meta?.["x.ai/tool"])
+    ?? recordValue(meta?.tool)
+    ?? recordValue(value.tool);
+  for (const candidate of [
+    value.readOnly,
+    value.read_only,
+    meta?.readOnly,
+    meta?.read_only,
+    toolMeta?.readOnly,
+    toolMeta?.read_only,
+  ]) {
+    if (typeof candidate === "boolean") return candidate;
+  }
+  return undefined;
 }
 
 function wireSchemaVersion(value: Record<string, any>): string {
@@ -3119,6 +3214,17 @@ async function readPersistedEffort(cwd: string, sessionId: string): Promise<Reas
 
 export async function resolveSessionPlanFile(cwd: string, sessionId: string, grokHome = join(homedir(), ".grok")): Promise<string> {
   return join(await resolvePersistedWorkspace(cwd, join(grokHome, "sessions")), sessionId, "plan.md");
+}
+
+async function resolveAcpWorkspaceWritePath(cwd: string, requestedPath: string): Promise<string> {
+  try {
+    const resolved = await resolveExistingWorkspacePath(cwd, requestedPath, false);
+    await rejectSymbolicLink(resolved.path);
+    return resolved.path;
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "文件或目录不存在") throw error;
+    return (await resolveNewWorkspacePath(cwd, requestedPath)).path;
+  }
 }
 
 async function resolvePersistedWorkspace(cwd: string, sessionsRoot = join(homedir(), ".grok", "sessions")): Promise<string> {

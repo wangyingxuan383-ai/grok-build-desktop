@@ -27,21 +27,23 @@ jobs:
         if: steps.upstream.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STABLE_VERSION: ${{ steps.upstream.outputs.stable_version }}
           UPSTREAM_COMMIT: ${{ steps.upstream.outputs.commit }}
           SOURCE_REVISION: ${{ steps.upstream.outputs.source_revision }}
         run: |
-          title="维护：审计 Grok Build 上游变化 ${UPSTREAM_COMMIT:0:12}"
+          title="维护：适配 Grok Build stable v${STABLE_VERSION}"
           body=$(cat <<EOF
-          自动跟踪发现官方 Grok Build 源码快照已变化。
+          自动跟踪发现官方 Grok Build stable 已超过 Desktop 的实机验证基线。
 
+          - Stable 版本：\`${STABLE_VERSION}\`
           - 仓库提交：\`${UPSTREAM_COMMIT}\`
           - SOURCE_REV：\`${SOURCE_REVISION}\`
           - 工作流：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
 
-          请人工更新 Wire Fixture、运行时能力矩阵和兼容测试。此工作流不会自动合并或发布上游代码。
+          请人工核对 Changelog、ACP 扩展、Wire Fixture 缺口并运行固定目标升级/回滚验收。此工作流不会自动合并或发布上游代码。
           EOF
           )
-          existing=$(gh issue list --state open --search 'in:title 维护：审计 Grok Build 上游变化' --json number --jq '.[0].number // empty')
+          existing=$(gh issue list --state open --search "in:title 维护：适配 Grok Build stable v${STABLE_VERSION}" --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else

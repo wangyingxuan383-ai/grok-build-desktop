@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Result = [ordered]@{ reader = 'skipped'; quotaWeekly = 'skipped'; quotaMonthly = 'skipped'; diagnostics = @() }
+$Result = [ordered]@{ reader = 'skipped'; billingCredits = 'skipped'; billingPeriodType = 'unknown'; diagnostics = @() }
 
 $Reader = Join-Path $HOME '.grok\bundled\skills\shared\resume-session\session_reader.py'
 $CodexFile = Get-ChildItem -LiteralPath (Join-Path $HOME '.codex\sessions') -Filter '*.jsonl' -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
@@ -43,12 +43,16 @@ if (Test-Path -LiteralPath $AuthPath -PathType Leaf) {
         }
         $Invoke = @{ Headers = $Headers; TimeoutSec = 30; ErrorAction = 'Stop' }
         if ($Proxy) { $Invoke.Proxy = $Proxy }
-        [void](Invoke-RestMethod 'https://cli-chat-proxy.grok.com/v1/billing?format=credits' @Invoke)
-        $Result.quotaWeekly = 'ok'
-        [void](Invoke-RestMethod 'https://cli-chat-proxy.grok.com/v1/billing' @Invoke)
-        $Result.quotaMonthly = 'ok'
+        $Billing = Invoke-RestMethod 'https://cli-chat-proxy.grok.com/v1/billing?format=credits' @Invoke
+        if (-not $Billing.config) { throw 'credits response has no config object' }
+        $Result.billingCredits = 'ok'
+        $PeriodType = [string]$Billing.config.currentPeriod.type
+        if (-not $PeriodType) { $PeriodType = [string]$Billing.config.current_period.type }
+        if ($PeriodType -match 'WEEK') { $Result.billingPeriodType = 'weekly' }
+        elseif ($PeriodType -match 'MONTH') { $Result.billingPeriodType = 'monthly' }
+        else { $Result.billingPeriodType = 'unknown' }
     } catch {
-        if ($Result.quotaWeekly -ne 'ok') { $Result.quotaWeekly = 'unavailable' } else { $Result.quotaMonthly = 'unavailable' }
+        $Result.billingCredits = 'unavailable'
         $Result.diagnostics += "Quota adapter: $($_.Exception.Message -replace '(?i)Bearer\s+\S+','Bearer [REDACTED]')"
         if ($RequireQuota) { throw "OAuth quota compatibility probe failed: $($_.Exception.Message)" }
     }
