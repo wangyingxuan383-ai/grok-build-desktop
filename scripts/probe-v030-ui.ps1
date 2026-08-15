@@ -43,18 +43,21 @@ try {
     [IO.File]::WriteAllText($evidencePath, ([string]$jsonLine + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     Write-Host 'v0.3 Electron UI acceptance passed.' -ForegroundColor Green
 } finally {
-    if ($desktopProcess -and -not $desktopProcess.HasExited) { [void]$desktopProcess.CloseMainWindow(); if (-not $desktopProcess.WaitForExit(5000)) { $desktopProcess.Kill() } }
+    try { if ($desktopProcess -and -not $desktopProcess.HasExited) { [void]$desktopProcess.CloseMainWindow(); if (-not $desktopProcess.WaitForExit(5000)) { $desktopProcess.Kill() } } }
+    catch { Write-Warning "v0.3 UI 桌面进程清理失败：$($_.Exception.Message)" }
     $testTargets = @(Get-Process -Name GrokComputerTestPage -ErrorAction SilentlyContinue | Where-Object { $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $TestApp })
     if ($testTargets.Count) { $testTargets | Stop-Process -Force -ErrorAction SilentlyContinue }
-    if ($Fixture.StartsWith($AllowedOut, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $Fixture)) { Remove-Item -LiteralPath $Fixture -Recurse -Force }
-    if ($LiveRiskWorkspace.StartsWith($AllowedOut, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $LiveRiskWorkspace)) { Remove-Item -LiteralPath $LiveRiskWorkspace -Recurse -Force }
-    $GrokWorkspaceHistory = Join-Path (Join-Path $HOME '.grok\sessions') ([Uri]::EscapeDataString($LiveRiskWorkspace))
-    if (Test-Path -LiteralPath $GrokWorkspaceHistory -PathType Container) {
-        $HistoryChildren = @(Get-ChildItem -LiteralPath $GrokWorkspaceHistory -Force)
-        if (-not ($HistoryChildren | Where-Object { $_.PSIsContainer -or $_.Name -ne 'prompt_history.jsonl' })) {
-            $PromptHistory = Join-Path $GrokWorkspaceHistory 'prompt_history.jsonl'
-            if (Test-Path -LiteralPath $PromptHistory -PathType Leaf) { Remove-Item -LiteralPath $PromptHistory -Force }
-            Remove-Item -LiteralPath $GrokWorkspaceHistory -Force
+    try {
+        if ($Fixture.StartsWith($AllowedOut, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $Fixture)) { Remove-Item -LiteralPath $Fixture -Recurse -Force }
+        if ($LiveRiskWorkspace.StartsWith($AllowedOut, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $LiveRiskWorkspace)) { Remove-Item -LiteralPath $LiveRiskWorkspace -Recurse -Force }
+        $GrokWorkspaceHistory = Join-Path (Join-Path $HOME '.grok\sessions') ([Uri]::EscapeDataString($LiveRiskWorkspace))
+        if (Test-Path -LiteralPath $GrokWorkspaceHistory -PathType Container) {
+            $HistoryChildren = @(Get-ChildItem -LiteralPath $GrokWorkspaceHistory -Force)
+            if (-not ($HistoryChildren | Where-Object { $_.PSIsContainer -or $_.Name -ne 'prompt_history.jsonl' })) {
+                $PromptHistory = Join-Path $GrokWorkspaceHistory 'prompt_history.jsonl'
+                if (Test-Path -LiteralPath $PromptHistory -PathType Leaf) { Remove-Item -LiteralPath $PromptHistory -Force }
+                Remove-Item -LiteralPath $GrokWorkspaceHistory -Force
+            }
         }
-    }
+    } catch { Write-Warning "v0.3 UI 夹具清理失败：$($_.Exception.Message)" }
 }

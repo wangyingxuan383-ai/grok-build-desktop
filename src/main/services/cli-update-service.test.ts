@@ -23,10 +23,10 @@ function createService(root: string): CliUpdateService {
   );
 }
 
-function createUpdateHarness(root: string, options: { failTarget?: boolean; failRollback?: boolean; failProbeAtTarget?: boolean; stableTarget?: string } = {}) {
+function createUpdateHarness(root: string, options: { failTarget?: boolean; failRollback?: boolean; failProbeAtTarget?: boolean; failRestore?: boolean; stableTarget?: string } = {}) {
   let version = "0.2.117";
   const updates: string[][] = [];
-  const restored = vi.fn(async () => undefined);
+  const restored = vi.fn(async () => { if (options.failRestore) throw new Error("restore failed"); });
   const suspended = [{ sessionId: "session-a" }] as any[];
   const compatibility = (): CliCompatibilitySnapshot => ({
     cliVersion: version,
@@ -276,6 +276,15 @@ describe("CliUpdateService", () => {
       ["update", "--version", "0.2.118"],
       ["update", "--version", "0.2.117"],
     ]);
+    expect(harness.restored).toHaveBeenCalledTimes(1);
+  });
+  it("keeps the rollback failure visible when suspended-session restoration also fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const harness = createUpdateHarness(root, { failProbeAtTarget: true, failRollback: true, failRestore: true });
+    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).rejects.toThrow(
+      /CLI 更新失败且回滚未通过.*部分会话恢复失败/,
+    );
     expect(harness.restored).toHaveBeenCalledTimes(1);
   });
 });

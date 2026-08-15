@@ -14,6 +14,8 @@
 
 ### 额度、诊断与常用流程
 
+- [x] 修复 Issue #39 暴露的 Task Scheduler 探针错误覆盖：不再写入与生产不一致的 `UserId`，只有成功创建后才删除任务，主错误与清理错误分别结算；一键贡献者构建可在策略阻止调度器时降级，正式打包仍严格失败。
+- [x] 审计并修复同类清理遮蔽路径：CLI 更新/回滚、会话恢复、ACP 启动、登录验证、插件预览、自动化锁/并发槽位和 Windows 冒烟脚本均保留首要错误；聚焦 6 文件/91 项测试及 PowerShell 7/5.1 全脚本解析通过。
 - [x] 额度改用 `x.ai/billing` / `billing?format=credits`；当前周/月周期、滚动 24h、PAYG、预付余额、档位和自动充值分离展示。
 - [x] deprecated `monthly_limit/used` 不再用于推断月额度；credits proto3 在有效 `currentPeriod` 中省略零值百分比时按官方客户端解释为 `0%`，只有周期本身无效时才保持未知。
 - [x] 诊断中心接入 `grok du --json`；Memory trace 作为显式高敏导出，不混入普通支持包。
@@ -30,11 +32,11 @@
 - [x] 对照官方 Grok Build 1.0.3 源码、stable、SOURCE_REV、Changelog 和运行时证据更新上游跟踪器。
 - [x] 复核 Grox 最近的长工具、终态忙碌、窗口恢复、会话耐久、未跟踪文件与上游快照改动；已存在的能力不建立第二套实现。
 - [x] 大型面板、Monaco、Markdown/Mermaid 和工作台继续按需加载；会话、Provider、额度、诊断、窗口和更新保持独立服务边界。
-- [x] 完整离线测试通过：104 个文件/769 项；6 个 live 文件/9 项保留为显式实机门禁。
+- [x] 完整离线测试通过：105 个文件/775 项；6 个 live 文件/9 项保留为显式实机门禁。
 - [x] 最终 TypeScript、生产构建、资源/公开/分块/UI/安全门禁通过；`npm audit` 为 0 漏洞。
 - [x] CLI 1.0.3 握手、credits、媒体证据、Provider 回环、官方 Grok 4.6 Plan 与双 ACP 并行契约通过；安装版 About/诊断/支持包隐私通过。
 - [x] 生成唯一一套 0.9.0 Setup/Portable/SHA-256/SBOM/许可证资产，完成 per-user 安装、冷启动、Fuses、ASAR、File/Product 版本和快捷方式检查。
-- [x] 0.9.0 仅作为本地候选交付；未推送、未创建 GitHub Release，等待用户验收。
+- [x] 0.9.0 本地候选完成验收，用户于 2026-08-15 批准推送并创建正式 Release；公开资产必须由 `v0.9.0` 标签工作流重新构建、回下载校验 SHA-256/Attestation 后发布为 Latest。
 
 ## 0.8.3 权限、模型目录与额度（2026-08-13）
 

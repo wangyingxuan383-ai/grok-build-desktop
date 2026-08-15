@@ -21,7 +21,10 @@ npm ci
 if ($LASTEXITCODE -ne 0) { throw 'npm ci 失败。' }
 
 if (-not $SkipTests) { & (Join-Path $PSScriptRoot 'verify.ps1') }
-& (Join-Path $PSScriptRoot 'package-win.ps1') -SkipVerification:$SkipTests
+# A contributor machine may have Task Scheduler disabled by organization or
+# local policy. That must not discard an otherwise valid Setup/Portable build;
+# release maintainers still run package-win.ps1 directly with the strict gate.
+& (Join-Path $PSScriptRoot 'package-win.ps1') -SkipVerification:$SkipTests -AllowUnavailableTaskScheduler
 
 if ($CreateShortcut) {
     & (Join-Path $PSScriptRoot 'create-shortcut.ps1')

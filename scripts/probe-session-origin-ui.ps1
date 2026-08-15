@@ -49,6 +49,7 @@ try {
     if ($process -and -not $process.HasExited) { [void]$process.CloseMainWindow(); if (-not $process.WaitForExit(5000)) { $process.Kill() } }
     $resolved = [IO.Path]::GetFullPath($root)
     if ($resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $resolved) -like 'Grok-Origin-Smoke-*' -and (Test-Path -LiteralPath $resolved -PathType Container)) {
-        Remove-Item -LiteralPath $resolved -Recurse -Force
+        try { Remove-Item -LiteralPath $resolved -Recurse -Force }
+        catch { Write-Warning "Session-origin 临时目录清理失败：$($_.Exception.Message)" }
     }
 }

@@ -2193,9 +2193,15 @@ export class AppController {
           if (inactivityPoll) clearInterval(inactivityPoll);
           signal.removeEventListener("abort", forwardCancellation);
           runController.signal.removeEventListener("abort", stopAdapter);
-          await this.processes.close(result.sessionId);
+          await this.processes.close(result.sessionId).catch(async (error) => {
+            await this.log.log(`自动化会话清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+          });
         }
-      } finally { await accountContext.cleanup(); }
+      } finally {
+        await accountContext.cleanup().catch(async (error) => {
+          await this.log.log(`自动化账号上下文清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+        });
+      }
     });
   }
   async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {

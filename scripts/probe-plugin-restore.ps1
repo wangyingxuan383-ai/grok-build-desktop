@@ -95,14 +95,20 @@ try {
 } catch {
   $failure = $_.Exception.Message
 } finally {
-  $current = Get-Plugin
-  if ($current) {
-    $currentlyDisabled = Test-PluginDisabled
-    if ($beforeStatus -eq "disabled" -and -not $currentlyDisabled) {
-      Invoke-GrokMutation -Arguments @("plugin", "disable", $PluginName) | Out-Null
-    } elseif ($beforeStatus -ne "disabled" -and $currentlyDisabled) {
-      Invoke-GrokMutation -Arguments @("plugin", "enable", $PluginName) | Out-Null
+  try {
+    $current = Get-Plugin
+    if ($current) {
+      $currentlyDisabled = Test-PluginDisabled
+      if ($beforeStatus -eq "disabled" -and -not $currentlyDisabled) {
+        Invoke-GrokMutation -Arguments @("plugin", "disable", $PluginName) | Out-Null
+      } elseif ($beforeStatus -ne "disabled" -and $currentlyDisabled) {
+        Invoke-GrokMutation -Arguments @("plugin", "enable", $PluginName) | Out-Null
+      }
     }
+  } catch {
+    $restoreMessage = "Plugin 原始状态恢复失败：$($_.Exception.Message)"
+    $failure = if ($failure) { "$failure；$restoreMessage" } else { $restoreMessage }
+    $passed = $false
   }
 }
 

@@ -21,6 +21,9 @@
 
 ### Fixed
 
+- 修复 Windows Task Scheduler 探针在“创建任务被拒绝”后仍无条件删除任务，导致 PowerShell 5.1 用二次“任务不存在”错误覆盖真正的访问拒绝原因；探针现在与生产 XML 一致地省略显式 `UserId`、仅清理成功创建的任务，并分别保留主错误与清理诊断。
+- 一键本地构建在组策略禁止 Task Scheduler 时会明确警告并继续生成 Setup/Portable；维护者直接执行正式 Windows 打包仍保持严格调度器门禁，避免把未验收资产当成发布候选。
+- 系统性修复同类“清理失败覆盖主错误”：CLI 更新/回滚与会话恢复、ACP 启动、登录验证、插件预览、自动化锁/槽位释放及 Windows 冒烟脚本现在保留原始失败，次要清理问题只写入诊断。
 - 修复 credits 接口以 proto3 省略零值时把真实 `0%` 误显示为“使用率未返回”的问题；同时按官方 1.0.3 客户端语义隐藏 `$0/$0` 的按量付费卡和 `$0` 预付余额，不再把未启用能力伪装成零额度。
 - 修复 1.0.3 将媒体工作流命名为 `bundled:imagine` 后 Desktop 误判图片/视频不可用的问题；不再仅凭 CLI 存在就虚构媒体能力。
 - 修复额度接口返回单个 weekly/monthly `currentPeriod` 时仍被旧 UI 强制拆成“周＋月”导致的空白、零额度或错误标签。
@@ -33,7 +36,7 @@
 
 ### Verification
 
-- 104 个测试文件、769 项测试通过；6 个实机测试文件、9 项测试按设计仅在显式 live 环境运行。TypeScript、生产构建、385 文件公开扫描、Renderer 分块、当前 UI、Native Host、Fuses、ASAR 和零漏洞依赖审计通过。
+- 105 个测试文件、775 项测试通过；6 个实机测试文件、9 项测试按设计仅在显式 live 环境运行。TypeScript、生产构建、385 文件公开扫描、Renderer 分块、当前 UI、Native Host、Fuses、ASAR 和零漏洞依赖审计通过。
 - CLI 1.0.3/credits/媒体证据、Provider 回环、官方 Grok 4.6 Plan 和双 ACP 并行契约通过；0.9.0 Setup/Portable/SBOM/许可证已生成并完成 per-user 安装、About/诊断/隐私及快捷方式验收。
 - 修复最终门禁发现的 `nanoid <3.3.18` high 级依赖漏洞；固定到 3.3.18 后 `npm audit` 为 0 漏洞。
 

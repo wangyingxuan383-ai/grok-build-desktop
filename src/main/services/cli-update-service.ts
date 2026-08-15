@@ -263,6 +263,7 @@ export class CliUpdateService {
     if (!stable.updateAvailable) throw new Error(`stable 更新源不再提供 ${input.targetVersion}`);
     const suspended = await this.suspendSessions();
     let primaryFailure: unknown;
+    let terminalFailure: unknown;
     try {
       await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", input.targetVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", input.targetVersion], env));
       const current = parseVersion(await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env)))?.join(".");
@@ -300,7 +301,8 @@ export class CliUpdateService {
       } catch (rollbackError) {
         const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
         await this.record({ at: new Date().toISOString(), from: previous, status: "failed", message: `更新失败且回滚未通过：${rollbackMessage}` });
-        throw new Error(`CLI 更新失败且回滚未通过：${rollbackMessage}`);
+        terminalFailure = new Error(`CLI 更新失败且回滚未通过：${rollbackMessage}`);
+        throw terminalFailure;
       }
     } finally {
       if (suspended.length) {
@@ -309,6 +311,10 @@ export class CliUpdateService {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           await this.log.log(`CLI update session restore failed: ${message}`);
+          if (terminalFailure) {
+            const terminalMessage = terminalFailure instanceof Error ? terminalFailure.message : String(terminalFailure);
+            throw new Error(`${terminalMessage}；此外，部分会话恢复失败：${message}`);
+          }
           throw new Error(`${primaryFailure ? "CLI 更新验证结束后" : "CLI 已更新，但"}部分会话恢复失败：${message}`);
         }
       }
@@ -382,7 +388,9 @@ export class CliUpdateService {
       return snapshot;
     } finally {
       await adapter.dispose().catch(() => undefined);
-      await rm(cwd, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true }).catch(async (error) => {
+        await this.log.log(`CLI compatibility probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      });
     }
   }
 

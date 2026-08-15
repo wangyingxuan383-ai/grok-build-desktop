@@ -1,8 +1,16 @@
 # Grok Build Desktop 下一会话完整交接（2026-08-15，0.9.0 CLI 1.0.3/草稿与模型收口）
 
+## 2026-08-15 Issue #39 与清理错误优先级修复
+
+- Issue #39 的根因不是普通“任务不存在”，而是 Task Scheduler 创建先因权限/策略失败，旧探针仍在 `finally` 无条件执行 `/Delete`；Windows PowerShell 5.1 将删除命令的本地化 stderr 提升为异常，覆盖了真正的 `Access is denied`。
+- `probe-task-scheduler.ps1` 现在使用受控 `schtasks.exe` 调用、与生产 XML 一致地省略显式 `UserId`、仅在创建成功后删除任务，并分别保存主错误和清理错误。它不会在修复验证中实际修改用户的正式任务配置。
+- `bootstrap.ps1` 的贡献者一键构建在本机策略禁止创建计划任务时会给出明确警告并继续生成 Setup/Portable；维护者直接运行 `package-win.ps1` 或 `npm run package:win` 时仍保持严格 Task Scheduler 门禁。
+- 同类审计扩展到 CLI 更新/回滚和会话恢复、失败 ACP 的释放、OAuth 验证、插件预览、自动化锁/槽位释放以及打包/Computer Use/安装冒烟脚本。首要失败不再被二次清理错误替换，清理问题只进入脱敏日志或警告。
+- 验证证据：6 个聚焦测试文件/91 项通过，完整离线套件 105 个文件/775 项通过（6 个 live 文件/9 项按设计跳过），TypeScript 通过；生产构建及仅候选源码的 385 文件公开扫描通过，仓库全部 23 个 PowerShell 脚本同时通过 PowerShell 7.6.4 与 Windows PowerShell 5.1 解析。没有运行真实 Task Scheduler 创建/删除，也没有重新打包或安装。
+
 ## 2026-08-14 0.9.0 当前状态
 
-- 当前分支 `codex/v0.9.0-cli-billing-finalization`，已提交基线 `d8086a1`，其上包含草稿/模型目录/额度说明与后台清理的最终未提交收口；0.9.0 本地候选已重新安装。用户验收前禁止推送和创建 Release。
+- 当前分支 `codex/v0.9.0-cli-billing-finalization` 包含 CLI/额度、草稿/模型目录、后台清理和 Issue #39 Task Scheduler 错误优先级修复；0.9.0 本地候选已重新安装。用户已于 2026-08-15 批准推送并创建正式 `v0.9.0` Release。
 - 源码与 lockfile 已提升到 0.9.0。本机 stable CLI 已固定升级并验证为 `1.0.3 (1a29d5bc12)`，旧 1.0.0 会话清单/回滚点已保存。所有受管 CLI 仍带 `--no-auto-update`。
 - 额度已改为官方 credits 语义：优先 `x.ai/billing`，无附加会话时使用 `billing?format=credits`。只显示服务端给出的一个 current allowance 周/月周期；PAYG、预付、滚动 24h、订阅和自动充值分离。deprecated monthly 字段不再推断月额度。
 - 用户验收截图暴露 proto3 零值省略：有效 `currentPeriod` 未携带 `creditUsagePercent` 时，官方 1.0.3 客户端按 `0%` 处理；零 on-demand cap 与零 prepaid balance 均不显示。Desktop 已同步该语义，避免“使用率未返回”和 `$0/$0` 假卡片。
@@ -13,7 +21,7 @@
 - 实机契约：CLI 1.0.3 握手与 stable、credits 周期、媒体工具证据、Provider 回环、官方 Grok 4.6 Plan、两个并行 ACP 会话通过。当前默认 CPA 的真实 Plan 仍由其上游明确拒绝 `403 cpa_local_only`，测试已隔离到对应 Provider 边界。
 - 0.9.0 Setup/Portable/SBOM/许可证/SHA-256 已在额度零值修复后重新生成并完成 per-user 覆盖安装。安装版 File `0.9.0` / Product `0.9.0.0`、打包 UI、Fuses 和冷启动通过。
 - 草稿/模型目录修复后的最终 Setup SHA-256 `4ae84dcdd09d64341b481210327a6b8d8b8b1a8b60e892a4826a578f753765d6`；Portable SHA-256 `38f2dfb3d87b79a3d1656df82a0c2e2ef2087e6a5bf6ebcf4c89ffc8fc3dd1e2`；SBOM `b5d7017390b3f299f0a0fe551cbab91771a8b742314b7e0f6bea984259edb0c7`；许可证 `b9b8d4e98b137977c4f9a097750b19e776c6eb3ece1fdf1a2055b49d3cfeb10f`。
-- 当前状态是**本地候选已交付、等待用户验收**；尚未推送、未创建 GitHub Release。用户验收前不得发布。
+- 当前状态是**本地候选已验收并获准正式发布**；公开资产只接受 `v0.9.0` 标签工作流从最终提交重建、回下载验证 SHA-256/Attestation 后发布为 Latest。
 - Grox 最新审计截至 `eb5c4d5`。长工具/终态忙碌、窗口恢复、会话耐久、未跟踪文件、上游快照等值得吸收的可靠性行为均已映射或已有更严格实现；一键应用回滚不纳入 0.9.0，因为 Desktop 应用仍采用 GitHub Release 手动下载且用户未要求静默安装。
 
 ## 2026-08-15 草稿、模型目录与额度说明收口

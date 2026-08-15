@@ -169,7 +169,7 @@ export class GrokProcessManager {
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
-        await adapter.dispose();
+        await this.disposeFailedAdapter(adapter, `extension reload ${snapshot.sessionId}`);
         failures.push(`${snapshot.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -269,7 +269,7 @@ export class GrokProcessManager {
       result = await adapter.start();
       await this.rememberSession(result.sessionId, adapter);
     } catch (error) {
-      await adapter.dispose();
+      await this.disposeFailedAdapter(adapter, "session create");
       throw error;
     }
     this.sessions.set(result.sessionId, adapter);
@@ -289,7 +289,10 @@ export class GrokProcessManager {
       this.focusedId = result.sessionId;
       await this.enforceCap();
       return result;
-    } catch (error) { await adapter.dispose(); throw error; }
+    } catch (error) {
+      await this.disposeFailedAdapter(adapter, "configured session create");
+      throw error;
+    }
   }
 
   async openConfigured(cwd: string, sessionId: string, effort: ReasoningEffort, mode: SessionMode, modelId: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv, processOptions?: SessionProcessOptions, restoreRuntimePreferences = false): Promise<{ sessionId: string }> {
@@ -323,7 +326,10 @@ export class GrokProcessManager {
       this.focusedId = sessionId;
       await this.enforceCap();
       return { sessionId };
-    } catch (error) { await adapter.dispose(); throw error; }
+    } catch (error) {
+      await this.disposeFailedAdapter(adapter, `configured session open ${sessionId}`);
+      throw error;
+    }
   }
 
   async open(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
@@ -342,7 +348,7 @@ export class GrokProcessManager {
       await adapter.start(sessionId);
       await this.rememberSession(sessionId, adapter);
     } catch (error) {
-      await adapter.dispose();
+      await this.disposeFailedAdapter(adapter, `session open ${sessionId}`);
       throw error;
     }
     this.sessions.set(sessionId, adapter);
@@ -412,7 +418,7 @@ export class GrokProcessManager {
       this.sessions.set(sessionId, replacement);
       this.focusedId = sessionId;
     } catch (restartError) {
-      await replacement?.dispose();
+      if (replacement) await this.disposeFailedAdapter(replacement, `effort switch ${sessionId}`);
       this.onEvent({ type: "session-reset", sessionId });
       this.onEvent({ type: "status", sessionId, status: "working", text: "新强度启动失败，正在恢复原设置…" });
       const rollback = await this.spawn(cwd, previousEffort, mode, model, undefined, undefined, processOptions, sessionId);
@@ -423,7 +429,7 @@ export class GrokProcessManager {
         this.sessions.set(sessionId, rollback);
         this.focusedId = sessionId;
       } catch (rollbackError) {
-        await rollback.dispose();
+        await this.disposeFailedAdapter(rollback, `effort rollback ${sessionId}`);
         throw new Error(`推理强度切换失败，且原设置恢复失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
       throw new Error(`推理强度切换失败，已恢复原设置：${restartError instanceof Error ? restartError.message : String(restartError)}`);
@@ -446,7 +452,7 @@ export class GrokProcessManager {
       this.sessions.set(sessionId, replacement);
       this.focusedId = sessionId;
     } catch (error) {
-      await replacement.dispose();
+      await this.disposeFailedAdapter(replacement, `session restart ${sessionId}`);
       throw error;
     }
   }
@@ -476,7 +482,7 @@ export class GrokProcessManager {
         this.sessions.set(sessionId, replacement);
         this.focusedId = sessionId;
       } catch (restartError) {
-        await replacement.dispose();
+        await this.disposeFailedAdapter(replacement, `model switch ${sessionId}`);
         const rollback = await this.spawn(cwd, effort, mode, previousModelId, undefined, undefined, processOptions, sessionId, identity.previous);
         try {
           await rollback.start(sessionId);
@@ -485,7 +491,7 @@ export class GrokProcessManager {
           this.sessions.set(sessionId, rollback);
           this.focusedId = sessionId;
         } catch (rollbackError) {
-          await rollback.dispose();
+          await this.disposeFailedAdapter(rollback, `model rollback ${sessionId}`);
           throw new Error(`模型热切换失败，且原模型恢复失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}；目标错误：${restartError instanceof Error ? restartError.message : String(restartError)}`);
         }
         throw new Error(`模型热切换失败，已尝试恢复原模型：${restartError instanceof Error ? restartError.message : String(restartError)}；原错误：${error instanceof Error ? error.message : String(error)}`);
@@ -537,7 +543,7 @@ export class GrokProcessManager {
       this.focusedId = sessionId;
       this.onEvent({ type: "status", sessionId, status: "idle", text: "已停止并恢复会话" });
     } catch (error) {
-      await replacement.dispose();
+      await this.disposeFailedAdapter(replacement, `stop recovery ${sessionId}`);
       throw new Error(`停止后恢复会话失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -581,7 +587,7 @@ export class GrokProcessManager {
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
-        await adapter.dispose();
+        await this.disposeFailedAdapter(adapter, `bulk restore ${snapshot.sessionId}`);
         failures.push(`${snapshot.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -663,6 +669,12 @@ export class GrokProcessManager {
       mode: adapter.mode,
       profileId: previous?.profileId,
       compaction: previous?.compaction,
+    });
+  }
+
+  private async disposeFailedAdapter(adapter: GrokAcpAdapter, context: string): Promise<void> {
+    await adapter.dispose().catch(async (cleanupError) => {
+      await this.log.log(`${context} adapter cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`).catch(() => undefined);
     });
   }
 
