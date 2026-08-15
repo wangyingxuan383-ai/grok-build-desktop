@@ -77,7 +77,11 @@ export class UiStateService {
 
   async clearDraft(key: string): Promise<void> {
     await this.store.mutate((data) => { delete data.drafts[normalizeKey(key)]; });
-    await rm(this.draftDirectory(key), { recursive: true, force: true });
+    // The JSON row is authoritative. Windows Search/antivirus can briefly hold
+    // a pasted-text attachment after the row has been removed; retry cache
+    // cleanup, then leave any survivor for sweepDraftAttachments on startup
+    // instead of reporting a false "draft deletion failed" to the user.
+    await rm(this.draftDirectory(key), { recursive: true, force: true, maxRetries: 3, retryDelay: 80 }).catch(() => undefined);
   }
 
   async createTextDraftAttachment(key: string, text: string): Promise<Attachment> {

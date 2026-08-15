@@ -63,6 +63,7 @@ try {
     Write-Host "Computer Host Calculator loop passed: DPI=$($after.window.dpi), elements=$(@($after.elements).Count), action=$($button.name)" -ForegroundColor Green
 } finally {
     try { $script:hostInput.Close() } catch {}
-    if (-not $process.WaitForExit(1500)) { $process.Kill() }
+    try { if (-not $process.WaitForExit(1500)) { $process.Kill() } }
+    catch { Write-Warning "Computer Host 进程清理失败：$($_.Exception.Message)" }
     if ($RunSafeAction -and -not $alreadyRunning) { Get-Process -Name CalculatorApp,Calculator -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 }

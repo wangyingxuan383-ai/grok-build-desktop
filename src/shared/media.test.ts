@@ -11,10 +11,33 @@ describe("media creation helpers", () => {
       image: true,
       video: true,
       commands: ["imagine", "imagine-video", "compact"],
+      tools: [],
       imageCommand: "imagine",
       videoCommand: "imagine-video",
       diagnostic: undefined,
     });
+  });
+
+  it("recognizes namespaced 1.0 skills and registered media tools", () => {
+    expect(detectMediaCapabilities(
+      [{ name: "bundled:imagine" }, { name: "compact" }],
+      ["image_gen", "image_to_video", "reference_to_video"],
+    )).toEqual({
+      image: true,
+      video: true,
+      commands: ["bundled:imagine", "compact"],
+      tools: ["image_gen", "image_to_video", "reference_to_video"],
+      imageCommand: "bundled:imagine",
+      videoCommand: "bundled:imagine",
+      diagnostic: undefined,
+    });
+  });
+
+  it("does not invent video support when only the raw image tool is registered", () => {
+    const result = detectMediaCapabilities([], ["image_gen"]);
+    expect(result.image).toBe(true);
+    expect(result.video).toBe(false);
+    expect(result.diagnostic).toContain("ZDR");
   });
 
   it("blocks media generation when the CLI does not publish either command", () => {
@@ -53,6 +76,8 @@ describe("media creation helpers", () => {
       duration: 10,
       resolution: "720p",
     })).toBe("/imagine-video 雨夜中的霓虹街道 画面比例 9:16。 生成 10 秒视频，分辨率 720p。");
+    expect(buildMediaSlashCommand({ kind: "video", prompt: "参考短片", aspectRatio: "4:3", duration: 15, resolution: "480p", voice: "温和旁白" }))
+      .toContain("生成 15 秒视频，分辨率 480p。 参考视频声音：温和旁白。");
   });
 
   it("rejects empty prompts and unsupported video values", () => {
@@ -61,8 +86,8 @@ describe("media creation helpers", () => {
       kind: "video",
       prompt: "test",
       aspectRatio: "auto",
-      duration: 8 as 6,
-      resolution: "4k" as "480p",
+      duration: 16 as 15,
+      resolution: "480p",
     })).toThrow("时长");
   });
 });

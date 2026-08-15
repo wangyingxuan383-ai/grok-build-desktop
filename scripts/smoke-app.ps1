@@ -66,9 +66,11 @@ if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.
         [IO.File]::WriteAllText((Join-Path $ProfileRoot 'settings.json'), $ThemeSettings, [Text.UTF8Encoding]::new($false))
     }
 }
-$Process = [System.Diagnostics.Process]::Start($Info)
+$Process = $null
 $PreviousExpectedAppVersion = $env:GROK_EXPECTED_APP_VERSION
 try {
+    $Process = [System.Diagnostics.Process]::Start($Info)
+    if (-not $Process) { throw 'Application process could not be started.' }
     $Ready = $false
     for ($Attempt = 0; $Attempt -lt 30; $Attempt++) {
         Start-Sleep -Milliseconds 500
@@ -89,15 +91,19 @@ try {
 } finally {
     if ($null -eq $PreviousExpectedAppVersion) { Remove-Item Env:GROK_EXPECTED_APP_VERSION -ErrorAction SilentlyContinue }
     else { $env:GROK_EXPECTED_APP_VERSION = $PreviousExpectedAppVersion }
-    if (-not $Process.HasExited) {
-        [void]$Process.CloseMainWindow()
-        if (-not $Process.WaitForExit(5000)) { $Process.Kill() }
-    }
-    if (Test-Path -LiteralPath $ProfileRoot -PathType Container) {
-        $ResolvedProfile = (Resolve-Path -LiteralPath $ProfileRoot).Path
-        $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
-        if ($ResolvedProfile.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $ResolvedProfile) -like 'Grok-Build-Desktop-smoke-*') {
-            Remove-Item -LiteralPath $ResolvedProfile -Recurse -Force
+    try {
+        if ($Process -and -not $Process.HasExited) {
+            [void]$Process.CloseMainWindow()
+            if (-not $Process.WaitForExit(5000)) { $Process.Kill() }
         }
-    }
+    } catch { Write-Warning "应用冒烟进程清理失败：$($_.Exception.Message)" }
+    try {
+        if (Test-Path -LiteralPath $ProfileRoot -PathType Container) {
+            $ResolvedProfile = (Resolve-Path -LiteralPath $ProfileRoot).Path
+            $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+            if ($ResolvedProfile.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $ResolvedProfile) -like 'Grok-Build-Desktop-smoke-*') {
+                Remove-Item -LiteralPath $ResolvedProfile -Recurse -Force
+            }
+        }
+    } catch { Write-Warning "应用冒烟临时目录清理失败：$($_.Exception.Message)" }
 }

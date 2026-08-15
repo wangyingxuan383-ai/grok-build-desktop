@@ -6,6 +6,7 @@ export function DiagnosticsPanel({ onClose, confirmAction }: { onClose(): void; 
   const [preview, setPreview] = useState<SupportBundlePreview>();
   const [cliCompatibility, setCliCompatibility] = useState<CliCompatibilitySnapshot>();
   const [doctorFixes, setDoctorFixes] = useState<GrokDoctorFixPreview>();
+  const [traceSessionId, setTraceSessionId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -48,6 +49,16 @@ export function DiagnosticsPanel({ onClose, confirmAction }: { onClose(): void; 
     } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   };
+  const exportTrace = async (): Promise<void> => {
+    const sessionId = traceSessionId.trim();
+    if (!sessionId) { setMessage("请输入要导出的 Grok Session ID"); return; }
+    setBusy(true); setMessage("");
+    try {
+      const path = await window.grokDesktop.exportSessionTrace(sessionId);
+      setMessage(path ? `会话 Trace 已保存：${path}` : "已取消导出会话 Trace");
+    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
 
   return <div className="modal-backdrop"><section className="control-panel diagnostics-panel" role="dialog" aria-modal="true">
     <header><div><h2>兼容诊断中心</h2><p>只执行无模型消耗的能力探测；额度与真实会话不会被读取。</p></div><button className="icon-button" onClick={onClose}>×</button></header>
@@ -56,6 +67,7 @@ export function DiagnosticsPanel({ onClose, confirmAction }: { onClose(): void; 
       <div className="diagnostic-list">{report?.items.map((item) => <article className={`diagnostic-item ${item.status}`} key={item.id}><span className="diagnostic-dot"/><div><strong>{item.label}</strong><p>{item.summary}</p>{item.details?.map((line) => <code key={line}>{line}</code>)}</div></article>)}</div>
       {cliCompatibility && <section className="support-preview"><h3>CLI 运行时握手</h3><p>CLI {cliCompatibility.cliVersion || "未知"} · Agent {cliCompatibility.handshake?.agentVersion || "未知"} · ACP {cliCompatibility.handshake?.protocolVersion ?? "未知"}</p><p>模型 {cliCompatibility.handshake?.models.length ?? 0} · 命令 {cliCompatibility.handshake?.commands.length ?? 0} · 证据 {cliCompatibility.capabilities.filter((item) => item.state === "supported").length}/{cliCompatibility.capabilities.length}</p><div className="diagnostic-capability-grid">{cliCompatibility.capabilities.map((item) => <span key={item.name} className={item.state}><strong>{item.name}</strong><small>{item.state} · {item.source}</small></span>)}</div></section>}
       {doctorFixes && <section className="support-preview"><h3>Grok Doctor 官方修复</h3><p>{doctorFixes.message}</p>{doctorFixes.fixes.map((fix) => <div className="doctor-fix-row" key={fix.id}><div><strong>{fix.id}</strong><p>{fix.message}</p>{fix.note && <small>{fix.note}</small>}</div><button disabled={busy || !doctorFixes.confirmationToken} onClick={() => void applyDoctorFix(fix.id)}>预览并修复</button></div>)}</section>}
+      <section className="support-preview"><h3>导出会话 Trace</h3><p>使用官方 <code>grok trace --local</code> 导出指定会话。Trace 可能包含会话和工具内容，不会进入脱敏支持包。</p><div className="doctor-fix-row"><input value={traceSessionId} onChange={(event) => setTraceSessionId(event.currentTarget.value)} placeholder="Grok Session ID" aria-label="Grok Session ID"/><button disabled={busy || !traceSessionId.trim()} onClick={() => void exportTrace()}>选择位置并导出</button></div></section>
       {preview && <section className="support-preview"><h3>脱敏支持包</h3><p>将包含：{preview.fields.join("、")}</p><p>明确排除：{preview.excluded.join("、")}</p>{preview.files.map((file) => <div key={file.name}><code>{file.name}</code> — {file.description}</div>)}</section>}
       {message && <p className="panel-message">{message}</p>}
     </div>

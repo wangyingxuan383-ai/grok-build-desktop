@@ -45,7 +45,9 @@ try {
     if (-not (Test-Path -LiteralPath $Marker -PathType Leaf)) { throw '卸载程序删除了默认应保留的 AppData 用户数据。' }
     Write-Host 'NSIS 首次安装、覆盖升级、卸载与 AppData 保留测试通过。' -ForegroundColor Green
 } finally {
-    if (Test-Path -LiteralPath $Marker -PathType Leaf) { Remove-Item -LiteralPath $Marker -Force }
-    if ((Test-Path -LiteralPath $DataDir -PathType Container) -and @(Get-ChildItem -LiteralPath $DataDir -Force).Count -eq 0) { Remove-Item -LiteralPath $DataDir -Force }
-    if ((Test-Path -LiteralPath $TestRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $TestRoot -Force).Count -eq 0) { Remove-Item -LiteralPath $TestRoot -Force }
+    try {
+        if (Test-Path -LiteralPath $Marker -PathType Leaf) { Remove-Item -LiteralPath $Marker -Force }
+        if ((Test-Path -LiteralPath $DataDir -PathType Container) -and @(Get-ChildItem -LiteralPath $DataDir -Force).Count -eq 0) { Remove-Item -LiteralPath $DataDir -Force }
+        if ((Test-Path -LiteralPath $TestRoot -PathType Container) -and @(Get-ChildItem -LiteralPath $TestRoot -Force).Count -eq 0) { Remove-Item -LiteralPath $TestRoot -Force }
+    } catch { Write-Warning "安装生命周期夹具清理失败：$($_.Exception.Message)" }
 }

@@ -1,5 +1,43 @@
 # Grok Build Desktop 实施计划
 
+## 0.9.0 CLI 1.0.3、额度与全项目收口（2026-08-14）
+
+### CLI 与官方接口
+
+- [x] 本机 CLI 固定升级到 `1.0.3`，保存 1.0.0 回滚点，并验证 stable 当前目标。
+- [x] 兼容档案改为 `minSupportedVersion`、`maxVerifiedVersion`、`stableTargetVersion`、Fixture 与 live 证据；未知未来版本失败关闭。
+- [x] 增加 1.0.1、1.0.2、1.0.3 initialize/事件 Fixture；所有受管 CLI 继续使用 `--no-auto-update`。
+- [x] 1.0.1+ Rewind 只保留对话回退，文件恢复与 Git Review/写入日志分离。
+- [x] 模型目录与 `x.ai/models/update` 保持运行时驱动；当前模型临时缺失时保留身份，不自动切回 Grok 4.5。
+- [x] 媒体检测消费 1.0.3 实际命令与工具注册，兼容 `bundled:imagine` 和真实图片/视频工具。
+- [x] 工具 `readOnly` 只采纳 CLI 显式元数据；Plan/Auto 自动批准、Agent 询问的用户策略保持不变。
+
+### 额度、诊断与常用流程
+
+- [x] 修复 Issue #39 暴露的 Task Scheduler 探针错误覆盖：不再写入与生产不一致的 `UserId`，只有成功创建后才删除任务，主错误与清理错误分别结算；一键贡献者构建可在策略阻止调度器时降级，正式打包仍严格失败。
+- [x] 审计并修复同类清理遮蔽路径：CLI 更新/回滚、会话恢复、ACP 启动、登录验证、插件预览、自动化锁/并发槽位和 Windows 冒烟脚本均保留首要错误；聚焦 6 文件/91 项测试及 PowerShell 7/5.1 全脚本解析通过。
+- [x] 额度改用 `x.ai/billing` / `billing?format=credits`；当前周/月周期、滚动 24h、PAYG、预付余额、档位和自动充值分离展示。
+- [x] deprecated `monthly_limit/used` 不再用于推断月额度；credits proto3 在有效 `currentPeriod` 中省略零值百分比时按官方客户端解释为 `0%`，只有周期本身无效时才保持未知。
+- [x] 诊断中心接入 `grok du --json`；Memory trace 作为显式高敏导出，不混入普通支持包。
+- [x] 会话关闭、删除、空闲回收、并发上限淘汰和应用退出均先停止所属后台任务和子 Agent；任务停止使用 CLI 1.0.3 `teardown` 来源，回收清理失败时保留会话而不直接杀进程。
+- [x] 窗口尺寸、位置和最大化状态恢复；标题限制为 100 Unicode 码点并支持恢复自动标题。
+- [x] 视频时长扩为 1–15 秒并支持 4:3、3:4；语音选项继续透传实际媒体工具。
+- [x] 应用和 CLI 自动检查保持“只检测”；主进程 24 小时节流，CLI 只能手动固定目标更新并验证。
+- [x] 新任务草稿删除会取消待执行自动保存、失效正在恢复的草稿并容忍 Windows 临时占用附件缓存；删除正文后不会被空草稿重新创建。
+- [x] 新任务通过 initialize-only ACP 探针读取官方模型与真实思考档位，不创建空会话；同时合并启用的 Provider 模型并保留 Provider 身份。
+- [x] credits 返回 weekly 时明确说明官方没有返回独立月订阅额度；实机探针错误输出经过凭据脱敏。
+
+### 上游与架构审计
+
+- [x] 对照官方 Grok Build 1.0.3 源码、stable、SOURCE_REV、Changelog 和运行时证据更新上游跟踪器。
+- [x] 复核 Grox 最近的长工具、终态忙碌、窗口恢复、会话耐久、未跟踪文件与上游快照改动；已存在的能力不建立第二套实现。
+- [x] 大型面板、Monaco、Markdown/Mermaid 和工作台继续按需加载；会话、Provider、额度、诊断、窗口和更新保持独立服务边界。
+- [x] 完整离线测试通过：105 个文件/775 项；6 个 live 文件/9 项保留为显式实机门禁。
+- [x] 最终 TypeScript、生产构建、资源/公开/分块/UI/安全门禁通过；`npm audit` 为 0 漏洞。
+- [x] CLI 1.0.3 握手、credits、媒体证据、Provider 回环、官方 Grok 4.6 Plan 与双 ACP 并行契约通过；安装版 About/诊断/支持包隐私通过。
+- [x] 生成唯一一套 0.9.0 Setup/Portable/SHA-256/SBOM/许可证资产，完成 per-user 安装、冷启动、Fuses、ASAR、File/Product 版本和快捷方式检查。
+- [x] 0.9.0 本地候选完成验收，用户于 2026-08-15 批准推送并创建正式 Release；公开资产必须由 `v0.9.0` 标签工作流重新构建、回下载校验 SHA-256/Attestation 后发布为 Latest。
+
 ## 0.8.3 权限、模型目录与额度（2026-08-13）
 
 - [x] Agent 询问；Auto/Plan 自动批准全部工具；移除 Plan 只读写门。
@@ -7,14 +45,14 @@
 - [x] 设置默认模型/思考档位复用会话 ACP 目录。
 - [x] 月额度解析兼容新字段形态。
 - [x] 官方源码 crate 版本为 1.0.1；公开 Changelog 仍写 1.0.0；未在稳定频道证实 1.0.3 前不擅自升级本机 CLI。
-- [ ] 推送 GitHub 并由标签工作流生成 0.8.3；不覆盖正在对话的本机安装版。
+- [x] `v0.8.3` 已于 2026-08-13 公开发布；0.9.0 不再重复执行这项历史交付。
 
 ## 0.8.2 设置保存 IPC 热修（2026-08-13）
 
 - [x] 复现 `settings:update` 因未知字段 `automaticUpdateChecks` 拒绝完整设置草稿。
 - [x] IPC 白名单补齐 `automaticUpdateChecks` / `lastAutomaticUpdateCheckAt`；主进程忽略 Renderer 提交的检查时间戳。
 - [x] 增加 `AppSettings`/`ComputerUseSettings` 编译期字段穷尽检查，并覆盖完整草稿回归测试。
-- [ ] 推送 GitHub 并由标签工作流生成 0.8.2 Setup/Portable；不在本机覆盖安装正在使用的对话窗口。
+- [x] `v0.8.2` 已于 2026-08-13 公开发布；0.9.0 不再重复执行这项历史交付。
 
 ## 0.8.1 紧急可用性修复（2026-08-12）
 
@@ -63,7 +101,7 @@
 - [x] 最终完整门禁通过：101 个测试文件/734 项测试通过，6 个 live 文件/9 项按设计跳过；TypeScript、资源/生产构建、367 文件公开扫描、Renderer 分块、Native Host、Electron Fuses、`npm audit`（0 漏洞）和 `git diff --check` 通过。
 - [x] 通过 Desktop 受控更新将本机 0.2.118 升级到 stable `1.0.0 (3cd0d0cbce)`；initialize/new/resume/close/delete、真实只读 Plan、Stop、Compact、MCP 事件与双 ACP 会话实机门禁通过，未触发回滚。
 - [x] 记录 stable 二进制与公开源码快照的能力偏差：`x.ai/git/status`、`x.ai/session/info`、`x.ai/session/usage` 均返回 method-not-found；Git 使用受限系统回退，数据视图仅启用实际存在的 Context/Session Info，不把可选能力缺失误判成核心更新失败。
-- [ ] 当前远程 CPA Provider 的最小 Responses 请求被上游明确拒绝为 `403 cpa_local_only`；Desktop 已确认请求实际到达网关并显示真实错误，但在上游恢复远程推理前不声明 Provider 实机成功。
+- [x] 远程 CPA Provider 的 `403 cpa_local_only` 已复核为上游部署策略边界；Desktop 确认请求到达网关并显示真实错误，且文档不把该外部拒绝写成 Provider 实机成功。
 - [x] 本地 0.8.0 Setup/Portable/SHA-256/SBOM/许可证候选已完成 per-user 覆盖安装；打包版和安装版 UI、About/诊断导航、File/Product 版本、ASAR、Fuses、桌面/开始菜单快捷方式均通过。此前本地候选 Setup/Portable SHA-256 为 `1c6d06a00f2dc8b6f35f4b5fd7507d8217a6c03272009ccceac5471e233aa294` / `e451bc124fcea1fc079a140873939d0986593b41032d6b37c8b74545b6024b16`，仅作预发布证据；用户已要求从最终提交重新构建、回下载校验并公开 `v0.8.0`。
 
 

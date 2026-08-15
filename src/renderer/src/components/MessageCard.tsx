@@ -145,7 +145,7 @@ function ToolCard({ message, open, sessionId, navigationRoot, onNavigate }: { me
     } catch (error) { setNavigationError(error instanceof Error ? error.message : String(error)); }
   };
   return <details className={`tool-card ${tool.status}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-    <summary><span className="tool-icon">{tool.kind === "computer_use" ? "◉" : "›_"}</span><span>{tool.title}</span><span className="tool-status">{statusLabel(tool.status)}</span></summary>
+    <summary><span className="tool-icon">{tool.kind === "computer_use" ? "◉" : "›_"}</span><span>{tool.title}</span>{typeof tool.readOnly === "boolean" && <span className="tool-access" title="由 Grok Build CLI 声明的工具访问性质">{tool.readOnly ? "只读" : "可写"}</span>}<span className="tool-status">{statusLabel(tool.status)}</span></summary>
     {expanded && <div className="tool-detail">
       {locations.length > 0 && <div className="tool-locations">{locations.map((location) => <button key={`${location.path}:${location.line ?? 1}`} title={location.path} onClick={() => void openLocation(location.path, location.line)}>在编辑器打开 {shortLocation(location.path, location.line)}</button>)}</div>}
       {navigationError && <div className="error-text">{navigationError}</div>}

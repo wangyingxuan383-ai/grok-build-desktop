@@ -189,7 +189,9 @@ export class AutomationService {
       await this.writeTask(task);
       this.options.onChanged?.({ taskId: id, task: stripPrompt(task, this.now()) });
     } finally {
-      await lock.release();
+      await lock.release().catch(async (error) => {
+        await this.log.log(`自动化任务绑定锁清理失败：${sanitizeError(error)}`).catch(() => undefined);
+      });
     }
     return this.list();
   }
@@ -266,8 +268,12 @@ export class AutomationService {
     } finally {
       clearInterval(cancellationPoll);
       this.activeRunControllers.delete(id);
-      if (slot) await slot.release();
-      await lock.release();
+      if (slot) await slot.release().catch(async (error) => {
+        await this.log.log(`自动化并发槽位清理失败：${sanitizeError(error)}`).catch(() => undefined);
+      });
+      await lock.release().catch(async (error) => {
+        await this.log.log(`自动化任务锁清理失败：${sanitizeError(error)}`).catch(() => undefined);
+      });
     }
     await this.writeRun(run); this.options.onChanged?.({ taskId, run });
     return run;
@@ -434,13 +440,23 @@ export class SafeStorageCipher implements AutomationCipher {
 }
 
 export class WindowsTaskScheduler implements TaskSchedulerAdapter {
+  constructor(
+    private readonly command: typeof runSchtasks = runSchtasks,
+    private readonly removeTemporaryFile: (path: string) => Promise<void> = async (path) => { await rm(path, { force: true }); },
+  ) {}
   supported(): boolean { return process.platform === "win32"; }
   async register(task: AutomationTask, executable: string, baseArgs: string[]): Promise<void> {
     const xml = buildTaskXml(task, executable, [...baseArgs, "--scheduler-worker", task.id, "scheduled"]);
     const temp = join(process.env.TEMP || process.cwd(), `grok-desktop-task-${task.id}.xml`); await writeFile(temp, `\ufeff${xml}`, "utf16le");
-    try { await runSchtasks(["/Create", "/TN", taskName(task.id), "/XML", temp, "/F"], "register"); } finally { await rm(temp, { force: true }); }
+    let primaryFailure: unknown;
+    try { await this.command(["/Create", "/TN", taskName(task.id), "/XML", temp, "/F"], "register"); }
+    catch (error) { primaryFailure = error; throw error; }
+    finally {
+      try { await this.removeTemporaryFile(temp); }
+      catch (cleanupError) { if (!primaryFailure) throw cleanupError; }
+    }
   }
-  async unregister(taskId: string): Promise<void> { await runSchtasks(["/Delete", "/TN", taskName(taskId), "/F"], "unregister").catch((error) => { if (!/cannot find|找不到/i.test(String(error))) throw error; }); }
+  async unregister(taskId: string): Promise<void> { await this.command(["/Delete", "/TN", taskName(taskId), "/F"], "unregister").catch((error) => { if (!isMissingScheduledTaskError(error)) throw error; }); }
 }
 
 export function buildTaskXml(task: AutomationTask, executable: string, args: string[]): string {
@@ -504,6 +520,12 @@ function registrationDiagnostic(error: unknown, operation: "register" | "unregis
   const message = normalizeRegistrationError(sanitizeError(error)) ?? "Windows 任务计划程序操作失败";
   return { operation: error instanceof SchedulerCommandError ? error.operation : operation, exitCode: error instanceof SchedulerCommandError ? error.exitCode : undefined, code: message.includes("历史任务注册错误文本编码损坏") ? "historical-encoding-damaged" : "scheduler-command-failed", message, repairable: true };
 }
+function isMissingScheduledTaskError(error: unknown): boolean {
+  // schtasks.exe unfortunately returns the same process exit code for several
+  // failures. Cover the localized messages observed in supported Windows
+  // environments while preserving access-denied and policy errors.
+  return /cannot find|not found|找不到|未找到|指定されたファイルが見つかりません|das system kann die angegebene datei nicht finden|le fichier spécifié est introuvable|el sistema no puede encontrar el archivo especificado/i.test(String(error));
+}
 function quoteArg(value: string): string { return `"${value.replace(/"/g, '\\"')}"`; }
 function xml(value: unknown): string { return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]!); }
 function safeId(value: string): string { if (!/^[A-Za-z0-9-]+$/.test(value)) throw new Error("无效任务标识"); return value; }
@@ -518,7 +540,7 @@ function stripPrompt(value: StoredAutomationTask, now = new Date()): AutomationT
 function validateTaskInput(value: AutomationTaskInput, requirePrompt: boolean): void { if (!value.name.trim()) throw new Error("任务名称不能为空"); if (!value.workspace.trim()) throw new Error("任务工作区不能为空"); if (requirePrompt && !value.prompt?.trim()) throw new Error("任务提示词不能为空"); if (!(value.contextPolicy === "reuse" || value.contextPolicy === "fresh")) throw new Error("任务上下文策略无效"); if (!(["run-once", "skip"] as const).includes(value.missedRunPolicy)) throw new Error("错过运行策略无效"); if (value.skillCommand && !/^\/[A-Za-z0-9._-]+$/.test(value.skillCommand.trim())) throw new Error("Skill 命令必须以 / 开头且不包含参数"); if (value.schedule.kind === "interval" && (!Number.isInteger(value.schedule.minutes) || value.schedule.minutes < 1)) throw new Error("固定间隔不得小于一分钟"); if (value.schedule.kind === "daily" || value.schedule.kind === "weekly") { if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.schedule.time)) throw new Error("任务执行时间格式无效"); } if (value.schedule.kind === "weekly" && (!value.schedule.days.length || value.schedule.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("每周任务至少选择一个有效星期"); if (value.schedule.kind === "once" && !Number.isFinite(new Date(value.schedule.at).getTime())) throw new Error("单次任务时间无效"); }
 function sanitizeError(value: unknown, sensitive: string[] = []): string { let text = value instanceof Error ? value.message : String(value); for (const item of sensitive.filter(Boolean)) text = text.split(item).join("[REDACTED]"); return text.replace(/(?:sk|xai|ghp|github_pat)_[A-Za-z0-9_-]{8,}/gi, "[REDACTED]").slice(0, 1000); }
 async function readJson<T>(path: string): Promise<T> { return JSON.parse(await readFile(path, "utf8")) as T; }
-async function atomicJson(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); const temp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`; try { await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8"); await renameSafe(temp, path); } catch (error) { await rm(temp, { force: true }); throw error; } }
+async function atomicJson(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); const temp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`; try { await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8"); await renameSafe(temp, path); } catch (error) { await rm(temp, { force: true }).catch(() => undefined); throw error; } }
 async function renameSafe(from: string, to: string): Promise<void> { const { rename } = await import("node:fs/promises"); try { await rename(from, to); } catch (error: any) { if (!["EEXIST", "EPERM"].includes(error?.code)) throw error; await rm(to, { force: true }); await rename(from, to); } }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function isProcessAlive(pid: number): boolean {

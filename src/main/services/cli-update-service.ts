@@ -19,7 +19,12 @@ export interface CliUpdateServiceRuntime {
 
 export const CLI_V1_COMPATIBILITY_PROFILE: CliMajorCompatibilityProfile = {
   major: 1,
-  targetVersion: "1.0.0",
+  targetVersion: "1.0.3",
+  minSupportedVersion: "1.0.0",
+  maxVerifiedVersion: "1.0.3",
+  stableTargetVersion: "1.0.3",
+  fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3"],
+  liveVerifiedVersion: "1.0.3",
   label: "Grok Build CLI 1.x",
   requiredChecks: [
     "v1-wire-fixture",
@@ -45,6 +50,23 @@ export function offlineCompatibilityGate(targetVersion: string): CliCompatibilit
     liveVerified: false,
     checks: [{ id: "unknown-major", label: `CLI ${major}.x 兼容契约`, status: "failed", source: "fixture", message: "Desktop 尚未记录该主版本的 Wire Fixture" }],
   };
+  if (compareVersions(targetVersion, CLI_V1_COMPATIBILITY_PROFILE.minSupportedVersion) < 0
+    || compareVersions(targetVersion, CLI_V1_COMPATIBILITY_PROFILE.maxVerifiedVersion) > 0) {
+    return {
+      targetVersion,
+      major,
+      status: "failed",
+      checkedAt: at,
+      liveVerified: false,
+      checks: [{
+        id: "unverified-minor",
+        label: `CLI ${targetVersion} 兼容契约`,
+        status: "failed",
+        source: "fixture",
+        message: `Desktop 当前仅验证 ${CLI_V1_COMPATIBILITY_PROFILE.minSupportedVersion}–${CLI_V1_COMPATIBILITY_PROFILE.maxVerifiedVersion}；未知版本保持失败关闭`,
+      }],
+    };
+  }
   return {
     targetVersion,
     major,
@@ -54,7 +76,7 @@ export function offlineCompatibilityGate(targetVersion: string): CliCompatibilit
     checks: CLI_V1_COMPATIBILITY_PROFILE.requiredChecks.map((id) => ({
       id,
       label: ({
-        "v1-wire-fixture": "1.0.0 initialize/事件 Wire Fixture",
+        "v1-wire-fixture": "1.0.0–1.0.3 initialize/事件 Wire Fixture",
         "desktop-attach-policy": "交互式 Session 附加策略",
         "session-close-outcome": "session/close 结构化结果解析",
         "mcp-slash-events": "MCP 1.0 斜杠事件规范化",
@@ -102,7 +124,7 @@ export function runtimeV1Compatibility(
       label: "Context / Usage / Session Info",
       status: completeDataViews ? "passed" : "pending",
       source: "runtime",
-      ...(!completeDataViews ? { message: `当前 1.0.0 实际提供：${[...dataViews].join("、") || "未观察到"}；缺失视图保持禁用，不阻止核心 ACP 更新` } : {}),
+      ...(!completeDataViews ? { message: `当前 ${cliVersion} 实际提供：${[...dataViews].join("、") || "未观察到"}；缺失视图保持禁用，不阻止核心 ACP 更新` } : {}),
     },
     { id: "managed-no-auto-update", label: "受管 CLI 禁止自动更新", status: "passed", source: "runtime" },
     {
@@ -241,6 +263,7 @@ export class CliUpdateService {
     if (!stable.updateAvailable) throw new Error(`stable 更新源不再提供 ${input.targetVersion}`);
     const suspended = await this.suspendSessions();
     let primaryFailure: unknown;
+    let terminalFailure: unknown;
     try {
       await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", input.targetVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", input.targetVersion], env));
       const current = parseVersion(await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env)))?.join(".");
@@ -278,7 +301,8 @@ export class CliUpdateService {
       } catch (rollbackError) {
         const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
         await this.record({ at: new Date().toISOString(), from: previous, status: "failed", message: `更新失败且回滚未通过：${rollbackMessage}` });
-        throw new Error(`CLI 更新失败且回滚未通过：${rollbackMessage}`);
+        terminalFailure = new Error(`CLI 更新失败且回滚未通过：${rollbackMessage}`);
+        throw terminalFailure;
       }
     } finally {
       if (suspended.length) {
@@ -287,6 +311,10 @@ export class CliUpdateService {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           await this.log.log(`CLI update session restore failed: ${message}`);
+          if (terminalFailure) {
+            const terminalMessage = terminalFailure instanceof Error ? terminalFailure.message : String(terminalFailure);
+            throw new Error(`${terminalMessage}；此外，部分会话恢复失败：${message}`);
+          }
           throw new Error(`${primaryFailure ? "CLI 更新验证结束后" : "CLI 已更新，但"}部分会话恢复失败：${message}`);
         }
       }
@@ -324,7 +352,7 @@ export class CliUpdateService {
       const { sessionId } = await adapter.start();
       const declaredExtensions = new Set(adapter.runtimeHandshake?.extensions ?? []);
       const successfulExtensions = new Set<string>();
-      for (const method of ["x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
+      for (const method of ["x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list", "x.ai/billing", "x.ai/auto-topup-rule"]) {
         await adapter.extension(method, method === "x.ai/mcp/list" ? { cache: false } : {})
           .then(() => {
             successfulExtensions.add(method);
@@ -360,7 +388,9 @@ export class CliUpdateService {
       return snapshot;
     } finally {
       await adapter.dispose().catch(() => undefined);
-      await rm(cwd, { recursive: true, force: true });
+      await rm(cwd, { recursive: true, force: true }).catch(async (error) => {
+        await this.log.log(`CLI compatibility probe cleanup failed: ${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      });
     }
   }
 
@@ -507,7 +537,7 @@ export function compatibilityEvidence(
   declared("voice", handshake.features.voiceMode);
   if (handshake.commands.length) evidence.push({ name: "commands", state: "supported", source: "runtime-declaration", observedAt: at });
   if (handshake.models.length) evidence.push({ name: "models", state: "supported", source: "runtime-declaration", observedAt: at });
-  for (const extension of ["x.ai/btw", "x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update", "x.ai/session/info", "x.ai/session/usage", "x.ai/session/delete", "x.ai/session/rename", "x.ai/git/status", "x.ai/mcp/status", "x.ai/mcp/init_progress", "x.ai/mcp/tools_changed", "x.ai/mcp/server_status", "x.ai/mcp/servers_updated", "x.ai/mcp_initialized", "x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
+  for (const extension of ["x.ai/billing", "x.ai/auto-topup-rule", "x.ai/btw", "x.ai/follow_ups", "x.ai/models/update", "x.ai/settings/update", "x.ai/session/info", "x.ai/session/usage", "x.ai/session/delete", "x.ai/session/rename", "x.ai/git/status", "x.ai/mcp/status", "x.ai/mcp/init_progress", "x.ai/mcp/tools_changed", "x.ai/mcp/server_status", "x.ai/mcp/servers_updated", "x.ai/mcp_initialized", "x.ai/plugins/list", "x.ai/mcp/list", "x.ai/commands/list"]) {
     const declared = declaredExtensions.has(extension);
     const probed = successfulExtensions.has(extension);
     evidence.push({

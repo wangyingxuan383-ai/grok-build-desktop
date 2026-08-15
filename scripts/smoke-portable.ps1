@@ -34,7 +34,8 @@ try {
     if (Test-Path -LiteralPath $Target -PathType Container) {
         $Resolved = (Resolve-Path -LiteralPath $Target).Path
         if ($Resolved -eq $Target -and $Resolved.StartsWith($RootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-            Remove-Item -LiteralPath $Resolved -Recurse -Force
+            try { Remove-Item -LiteralPath $Resolved -Recurse -Force }
+            catch { Write-Warning "便携版临时目录清理失败：$($_.Exception.Message)" }
         } else {
             Write-Warning "未清理意外路径：$Resolved"
         }

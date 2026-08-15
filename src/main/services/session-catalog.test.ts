@@ -142,4 +142,13 @@ describe("SessionCatalog", () => {
     await catalog.syncOfficialTitle("session", "", false);
     expect(JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session).toBeUndefined();
   });
+
+  it("bounds locally persisted titles to the official 100-character surface", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-catalog-title-limit-"));
+    const appData = join(root, "app-data");
+    const catalog = new SessionCatalog(appData, join(root, ".grok"));
+    await catalog.rename("session", "题".repeat(101));
+    const title = JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session as string;
+    expect([...title]).toHaveLength(100);
+  });
 });

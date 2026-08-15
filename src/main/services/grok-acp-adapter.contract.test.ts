@@ -51,7 +51,7 @@ rl.on("line", async (line) => {
   if (message.method === "initialize") return send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1, agentCapabilities: { sessionCapabilities: { resume: {}, close: {} } }, _meta: { modelState: { currentModelId: "grok-4.5", availableModels: [{ modelId: "grok-4.5", name: "Official Grok" }, { modelId: "openai-compatible-grok-4.5", name: "CPA Grok" }] } } } });
   if (message.method === "session/new") {
     send({ jsonrpc: "2.0", id: "server-unknown", method: "x.test/future_request", params: {} });
-    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "imagine", description: "Create media" }] } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "bundled:imagine", description: "Create media" }], _meta: { tools: ["image_gen", { name: "image_to_video" }, { tool_name: "reference_to_video" }] } } } });
     return send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "fake-session", models: { currentModelId: "grok-test", availableModels: [{ modelId: "grok-test", name: "Grok Test", _meta: { totalContextTokens: 100000, supportsReasoningEffort: true, reasoningEfforts: [{ value: "low", label: "Low" }, { value: "high", label: "High", default: true }] } }] } } });
   }
   if (message.method === "session/load") {
@@ -124,7 +124,11 @@ rl.on("line", async (line) => {
         supportsReasoningEffort: true,
         reasoningEfforts: [{ value: "low", label: "Low" }, { value: "high", label: "High", default: true }],
       });
-      expect(await adapter.waitForCommands()).toEqual([{ name: "imagine", description: "Create media", inputHint: undefined }]);
+      expect(await adapter.waitForCommands()).toEqual([{ name: "bundled:imagine", description: "Create media", inputHint: undefined }]);
+      expect(adapter.mediaCapabilityEvidence()).toEqual({
+        commands: [{ name: "bundled:imagine", description: "Create media", inputHint: undefined }],
+        tools: ["image_gen", "image_to_video", "reference_to_video"],
+      });
       await adapter.setEffort("low");
       expect(adapter.effort).toBe("low");
       await waitForFile(effortMarker);
@@ -171,9 +175,9 @@ rl.on("line", async (line) => {
         await unsupportedRewind.start();
         expect(await unsupportedRewind.rewindPoints()).toEqual([]);
       } finally { await unsupportedRewind.dispose(500); }
-      await adapter.rewind("3", "conversation-and-files");
+      await adapter.rewind("3");
       await waitForFile(rewindMarker);
-      expect(JSON.parse(await readFile(rewindMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", targetPromptIndex: 3, force: false, mode: "all" });
+      expect(JSON.parse(await readFile(rewindMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", targetPromptIndex: 3, force: false, mode: "conversation_only" });
       expect(await adapter.taskList()).toMatchObject({ tasks: [{ taskId: "task-1" }] });
       await adapter.taskKill("task-1");
       expect(await adapter.subagentListRunning()).toMatchObject({ subagents: [{ subagentId: "sub-1" }] });
@@ -211,7 +215,7 @@ rl.on("line", async (line) => {
         expect.objectContaining({ type: "thought-chunk", sessionId: "fake-session", text: "thinking" }),
         expect.objectContaining({ type: "user-message", sessionId: "fake-session", clientMessageId: "client-replayed", attachments: [expect.objectContaining({ name: "notes.md", kind: "file" })] }),
         expect.objectContaining({ type: "message-chunk", sessionId: "fake-session", text: "hello" }),
-        expect.objectContaining({ type: "commands", sessionId: "fake-session", commands: [expect.objectContaining({ name: "imagine" })] }),
+        expect.objectContaining({ type: "commands", sessionId: "fake-session", commands: [expect.objectContaining({ name: "bundled:imagine" })] }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: "aGVsbG8=", isData: true }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: join(root, "images", "generated.jpg") }),
         // turn_completed is the authoritative terminal payload. A later/absent

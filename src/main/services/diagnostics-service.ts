@@ -1,7 +1,7 @@
 import { safeStorage } from "electron";
 import { randomUUID } from "node:crypto";
 import { spawn, execFile } from "node:child_process";
-import { access, readFile, rm, writeFile } from "node:fs/promises";
+import { access, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, release as osRelease, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -32,6 +32,8 @@ export class DiagnosticsService {
       quota?: () => Promise<GrokQuotaSnapshot>;
       /** Test seam for the fixed-argument Grok Doctor contract. */
       doctorCommandRunner?: DoctorCommandRunner;
+      /** Test seam for the fixed-argument, explicit session trace export. */
+      traceCommandRunner?: DoctorCommandRunner;
     } = {},
   ) {}
 
@@ -75,7 +77,7 @@ export class DiagnosticsService {
 
     if (failure.classification === "quota-exhausted") {
       const quota = await this.optional.quota?.().catch(() => undefined);
-      const windows = [quota?.rolling24h, quota?.weekly, quota?.monthly].filter(Boolean);
+      const windows = [quota?.rolling24h, quota?.currentAllowance, quota?.payAsYouGo].filter(Boolean);
       items.push({
         id: "quota", label: "额度",
         status: "warning",
@@ -161,6 +163,7 @@ export class DiagnosticsService {
       const extensions = await execFileAsync(cliPath, ["--no-auto-update", "plugin", "--help"], { env, timeout: 15_000, windowsHide: true }).then(() => true).catch(() => false);
       items.push({ id: "extensions", label: "扩展与媒体", status: extensions ? "ok" : "warning", summary: extensions ? "插件命令可用；媒体能力将在会话中动态探测" : "插件命令不可用，扩展功能将降级" });
       items.push(await runGrokDoctor(cliPath, env, this.optional.doctorCommandRunner));
+      items.push(await runGrokDiskUsage(cliPath, env));
     }
 
     const reader = join(homedir(), ".grok", "bundled", "skills", "shared", "resume-session", "session_reader.py");
@@ -245,7 +248,62 @@ export class DiagnosticsService {
     });
     await writeFile(path, archive);
   }
+
+  /**
+   * Session traces can contain conversation and tool content. They are therefore
+   * exported only as an explicit standalone action and are never added to the
+   * redacted support bundle or ordinary application logs.
+   */
+  async exportSessionTrace(sessionId: string, outputPath: string): Promise<void> {
+    const normalizedSessionId = sessionId.trim();
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(normalizedSessionId)) throw new Error("会话 ID 格式无效");
+    const settings = await this.getSettings();
+    const cliPath = this.mockCliPath || await locateGrokCli(settings.cliPath);
+    if (!cliPath) throw new Error("未找到 Grok CLI");
+    const env = buildCliEnv(settings, await this.getApiKey());
+    await runDoctorCommand(this.optional.traceCommandRunner, cliPath, ["--no-auto-update", "trace", "--local", "--json", "-o", outputPath, normalizedSessionId], {
+      env,
+      timeout: 5 * 60_000,
+      windowsHide: true,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const info = await stat(outputPath).catch(() => undefined);
+    if (!info?.isFile() || info.size === 0) throw new Error("Grok CLI 未生成有效的 Trace 文件");
+  }
 }
+
+async function runGrokDiskUsage(cliPath: string, env: NodeJS.ProcessEnv): Promise<SystemDiagnosticItem> {
+  try {
+    const { stdout } = await execFileAsync(cliPath, ["--no-auto-update", "du", "--json"], { env, timeout: 60_000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 });
+    return parseGrokDiskUsage(JSON.parse(String(stdout)));
+  } catch (error) {
+    return { id: "grok-du", label: "Grok 本地空间", status: "warning", summary: "当前 CLI 未提供 grok du --json 或统计失败", details: [redactDiagnosticText(error instanceof Error ? error.message : String(error))] };
+  }
+}
+
+export function parseGrokDiskUsage(value: unknown): SystemDiagnosticItem {
+  const report = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const total = nonNegativeNumber(report.total_bytes);
+  const largest = (Array.isArray(report.top_level_dirs) ? report.top_level_dirs : [])
+    .flatMap((raw) => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+      const item = raw as Record<string, unknown>;
+      const bytes = nonNegativeNumber(item.bytes);
+      return bytes === undefined ? [] : [{ name: typeof item.name === "string" ? item.name.slice(0, 120) : "unknown", bytes }];
+    })
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 5)
+    .map((item) => `${item.name}：${formatBytes(item.bytes)}`);
+  const unreadable = (nonNegativeNumber(report.skipped_entries) ?? 0) + (nonNegativeNumber(report.unreadable_dirs) ?? 0);
+  return {
+    id: "grok-du", label: "Grok 本地空间", status: unreadable ? "warning" : "ok",
+    summary: total === undefined ? "CLI 未返回可用的空间统计" : `GROK_HOME 共 ${formatBytes(total)} · ${Array.isArray(report.worktrees) ? report.worktrees.length : 0} 个受管 Worktree`,
+    details: [...largest, ...(unreadable ? [`${unreadable} 个条目无法读取`] : [])],
+  };
+}
+
+function nonNegativeNumber(value: unknown): number | undefined { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined; }
+function formatBytes(value: number): string { const units = ["B", "KiB", "MiB", "GiB", "TiB"]; let amount = value; let unit = 0; while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++; } return `${amount.toFixed(unit ? 1 : 0)} ${units[unit]}`; }
 
 async function runGrokDoctor(cliPath: string, env: NodeJS.ProcessEnv, runner?: DoctorCommandRunner): Promise<SystemDiagnosticItem> {
   try {

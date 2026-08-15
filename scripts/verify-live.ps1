@@ -129,7 +129,7 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Real Grok CLI ACP probe failed.' }
         }
 
-        Invoke-LiveGate 'CLI 插件与兼容性' '官方 Marketplace、插件恢复、额度兼容及托管 Provider 配置探针通过。' {
+        Invoke-LiveGate 'CLI 插件与兼容性' '官方 Marketplace、插件恢复、credits 当前周期额度及托管 Provider 配置探针通过。' {
             $AvailablePlugins = & $Cli --no-auto-update plugin list --available --json | ConvertFrom-Json
             if (-not ($AvailablePlugins | Where-Object { $_.name -in @('chrome-devtools', 'chrome-devtools-mcp') })) { throw 'Grok extension fallback probe did not find the official Chrome DevTools plugin.' }
             $Marketplaces = @(& $Cli --no-auto-update plugin marketplace list --json | ConvertFrom-Json)

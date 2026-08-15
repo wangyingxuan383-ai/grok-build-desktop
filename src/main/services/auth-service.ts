@@ -190,9 +190,15 @@ export class AuthService {
     try {
       await adapter.start();
     } finally {
-      await adapter.dispose();
-      await rm(join(homedir(), ".grok", "sessions", encodeURIComponent(cwd)), { recursive: true, force: true });
-      await rm(cwd, { recursive: true, force: true });
+      await adapter.dispose().catch(async (error) => {
+        await this.log.log(`OAuth 验证 ACP 清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      });
+      await rm(join(homedir(), ".grok", "sessions", encodeURIComponent(cwd)), { recursive: true, force: true }).catch(async (error) => {
+        await this.log.log(`OAuth 验证会话目录清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      });
+      await rm(cwd, { recursive: true, force: true }).catch(async (error) => {
+        await this.log.log(`OAuth 验证临时目录清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      });
     }
   }
 

@@ -12,6 +12,7 @@ export function MediaStudioPanel({ hasGrokConversation, commands, onCreate, onCl
   const [aspectRatio, setAspectRatio] = useState<MediaAspectRatio>("16:9");
   const [duration, setDuration] = useState<MediaVideoDuration>(6);
   const [resolution, setResolution] = useState<MediaVideoResolution>("480p");
+  const [voice, setVoice] = useState("");
   const [route, setRoute] = useState<"auto" | "cli" | "provider">("auto");
   const [providers, setProviders] = useState<CustomProviderProfile[]>([]);
   const [providerModel, setProviderModel] = useState("");
@@ -49,6 +50,7 @@ export function MediaStudioPanel({ hasGrokConversation, commands, onCreate, onCl
         aspectRatio,
         duration,
         resolution,
+        voice: voice.trim() || undefined,
         referencePaths: references.flatMap((attachment) => attachment.path ? [attachment.path] : []),
         route,
         providerId: selectedMediaModel?.provider.id,
@@ -73,7 +75,7 @@ export function MediaStudioPanel({ hasGrokConversation, commands, onCreate, onCl
         {!hasGrokConversation && <div className="media-capability new-session">当前没有打开 Grok 会话。开始创作时会新建一个会话，并把结果附到该会话。</div>}
         <label>创作描述<textarea ref={promptRef} value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={kind === "image" ? "例如：雨夜东京街头，一只撑着透明伞的橘猫，电影感光影" : "例如：一艘飞船缓慢穿过云海，镜头从侧后方平稳跟随"} /></label>
         <label>画面比例<select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value as MediaAspectRatio)}><option value="auto">自动</option><option value="1:1">1:1 方形</option><option value="16:9">16:9 横屏</option><option value="9:16">9:16 竖屏</option><option value="4:3">4:3</option><option value="3:4">3:4</option></select></label>
-        {kind === "video" && <div className="media-video-options"><label>时长<select value={duration} onChange={(event) => setDuration(Number(event.target.value) as MediaVideoDuration)}><option value={6}>6 秒</option><option value={10}>10 秒</option></select></label><label>分辨率<select value={resolution} onChange={(event) => setResolution(event.target.value as MediaVideoResolution)}><option value="480p">480p</option><option value="720p">720p</option></select></label></div>}
+        {kind === "video" && <div className="media-video-options"><label>时长<select value={duration} onChange={(event) => setDuration(Number(event.target.value) as MediaVideoDuration)}>{Array.from({ length: 15 }, (_, index) => index + 1).map((seconds) => <option key={seconds} value={seconds}>{seconds} 秒</option>)}</select></label><label>分辨率<select value={resolution} onChange={(event) => setResolution(event.target.value as MediaVideoResolution)}><option value="480p">480p</option><option value="720p">720p</option></select></label><label>参考视频声音<input value={voice} onChange={(event) => setVoice(event.target.value)} placeholder="留空继承/无声音" /></label></div>}
         {kind === "video" && <div className="media-reference-row"><button disabled={busy} onClick={() => void window.grokDesktop.pickAttachments().then((items) => setReferences(items.filter((item) => item.kind === "image" && Boolean(item.path))))}>添加参考图</button>{references.map((item) => <span key={item.id}>{item.name}<button onClick={() => setReferences((values) => values.filter((value) => value.id !== item.id))}>×</button></span>)}</div>}
         <p className="media-workflow">{kind === "image" ? "图片由 image_gen 生成并保存到当前 Grok 会话。" : "视频会先规划并生成源图，再由 image_to_video 动画化；720p 和 10 秒通常耗时更长。"}</p>
         {job && <div className={`media-job-state ${job.status}`}><strong>{job.message}</strong><progress value={job.progress ?? 0} max={100}/>{job.artifacts.map((artifact) => <button key={artifact.id} onClick={() => void window.grokDesktop.openMedia(artifact.source)}>{artifact.name || "打开结果"}</button>)}</div>}

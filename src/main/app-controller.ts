@@ -417,6 +417,7 @@ export class AppController {
       undefined,
       undefined,
       join(userDataPath, "quota.json"),
+      (method) => this.processes.extensionRequest(method),
     );
     this.extensions = new ExtensionService(() => this.settingsStore.get(), (method, params) => this.processes.extensionRequest(method, params), this.log, (name, values) => this.vault.setMcpSecrets(name, values), (name) => this.vault.removeMcpSecrets(name), () => this.processes.reloadIdleExtensions());
     this.codexPlugins = new CodexPluginService(userDataPath, this.log);
@@ -677,6 +678,17 @@ export class AppController {
     const target = await dialog.showSaveDialog(this.window!, { title: "导出脱敏支持包", defaultPath: `grok-build-desktop-support-${new Date().toISOString().slice(0, 10)}.zip`, filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }] });
     if (target.canceled || !target.filePath) return null;
     await this.diagnostics.createBundle(target.filePath);
+    return target.filePath;
+  }
+  async exportSessionTrace(sessionId: string): Promise<string | null> {
+    const safeId = sessionId.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 48) || "session";
+    const target = await dialog.showSaveDialog(this.window!, {
+      title: "导出 Grok 会话 Trace",
+      defaultPath: `grok-session-trace-${safeId}.json`,
+      filters: [{ name: "JSON Trace", extensions: ["json"] }],
+    });
+    if (target.canceled || !target.filePath) return null;
+    await this.diagnostics.exportSessionTrace(sessionId, target.filePath);
     return target.filePath;
   }
   checkAppUpdate(force = false): Promise<AppReleaseStatus> { return this.appRelease.check(force); }
@@ -1157,6 +1169,7 @@ export class AppController {
   async renameSession(sessionId: string, title: string): Promise<void> {
     const normalized = title.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
     if (!normalized) throw new Error("会话名称不能为空");
+    if ([...normalized].length > 100) throw new Error("会话名称不能超过 100 个字符");
     const source = await this.processes.renameSessionIfLoaded(sessionId, normalized);
     await this.catalog.rename(sessionId, normalized);
     if (source === "official") {
@@ -1235,13 +1248,9 @@ export class AppController {
   }
 
   async getMediaCapabilities(sessionId: string): Promise<MediaCapabilities> {
-    const commands = await this.processes.waitForCommands(sessionId).catch(() => []);
-    const advertised = detectMediaCapabilities(commands);
-    const settings = await this.settingsStore.get();
-    const cliPath = await locateGrokCli(settings.cliPath);
-    return cliPath
-      ? { ...advertised, image: true, video: true, diagnostic: "主进程可通过固定 image_gen / video_gen 工具白名单启动媒体任务；不再依赖 ACP 斜杠命令清单。" }
-      : advertised;
+    await this.processes.waitForCommands(sessionId).catch(() => []);
+    const evidence = this.processes.mediaCapabilityEvidence(sessionId);
+    return detectMediaCapabilities(evidence.commands, evidence.tools);
   }
 
   async startMediaGeneration(request: MediaCreationRequest & { sessionId: string }): Promise<MediaGenerationJob> {
@@ -1558,7 +1567,7 @@ export class AppController {
     if (!request.providerId || !request.modelId) throw new Error("Provider 媒体路由缺少提供商或模型");
     return request.kind === "image"
       ? this.providers.generateImage({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, signal })
-      : this.providers.generateVideo({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, duration: request.duration ?? 6, resolution: request.resolution ?? "480p", referencePaths: request.referencePaths, signal });
+      : this.providers.generateVideo({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, duration: request.duration ?? 6, resolution: request.resolution ?? "480p", voice: request.voice, referencePaths: request.referencePaths, signal });
   }
 
   private async providerMediaAllowedOrigins(providerId?: string): Promise<string[]> {
@@ -1937,11 +1946,53 @@ export class AppController {
   getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
 
   private modelCatalog: ModelInfo[] = [];
+  private modelCatalogProbe?: Promise<ModelInfo[]>;
+  private modelCatalogProbedAt = 0;
 
-  listModelCatalog(): ModelInfo[] {
+  async listModelCatalog(): Promise<ModelInfo[]> {
     const live = this.processes.listKnownModels();
-    if (live.length) this.modelCatalog = live;
-    return this.modelCatalog.length ? this.modelCatalog : live;
+    if (live.length) {
+      const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+      for (const model of live) byId.set(model.modelId, model);
+      this.modelCatalog = [...byId.values()];
+    }
+    const settings = await this.settingsStore.get();
+    // Refresh at most once per minute unless a live session already supplied
+    // newer data. Concurrent settings/new-task requests share one ACP probe.
+    if (settings.activeWorkspace && (!this.modelCatalogProbedAt || Date.now() - this.modelCatalogProbedAt >= 60_000)) {
+      if (!this.modelCatalogProbe) {
+        this.modelCatalogProbedAt = Date.now();
+        this.modelCatalogProbe = this.processes.probeModelCatalog(settings.activeWorkspace)
+          .catch(async (error) => {
+            await this.log.log(`读取 ACP 模型目录失败：${error instanceof Error ? error.message : String(error)}`);
+            return [];
+          })
+          .finally(() => { this.modelCatalogProbe = undefined; });
+      }
+      const probed = await this.modelCatalogProbe;
+      const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+      for (const model of probed) byId.set(model.modelId, model);
+      this.modelCatalog = [...byId.values()];
+    }
+    const providers = await this.providers.list().catch(() => []);
+    const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
+    for (const provider of providers) {
+      if (provider.enabled === false) continue;
+      for (const model of provider.models) {
+        if (model.enabled === false) continue;
+        const efforts = (model.reasoningEfforts ?? []).filter((value): value is Exclude<ReasoningEffort, ""> => Boolean(value));
+        byId.set(model.id, {
+          modelId: model.id,
+          name: `${provider.name} · ${model.name || model.model}`,
+          providerId: provider.id,
+          description: model.description,
+          totalContextTokens: model.contextWindow,
+          supportsReasoningEffort: efforts.length > 0,
+          reasoningEfforts: efforts.map((value) => ({ value, label: value })),
+        });
+      }
+    }
+    return [...byId.values()];
   }
   listProviders(): Promise<CustomProviderProfile[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return Promise.resolve([]);
@@ -2142,9 +2193,15 @@ export class AppController {
           if (inactivityPoll) clearInterval(inactivityPoll);
           signal.removeEventListener("abort", forwardCancellation);
           runController.signal.removeEventListener("abort", stopAdapter);
-          await this.processes.close(result.sessionId);
+          await this.processes.close(result.sessionId).catch(async (error) => {
+            await this.log.log(`自动化会话清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+          });
         }
-      } finally { await accountContext.cleanup(); }
+      } finally {
+        await accountContext.cleanup().catch(async (error) => {
+          await this.log.log(`自动化账号上下文清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+        });
+      }
     });
   }
   async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
@@ -2307,9 +2364,9 @@ export class AppController {
     await appendFile(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
   }
   listRewindPoints(sessionId: string): Promise<RewindPoint[]> { return this.processes.get(sessionId).rewindPoints(); }
-  async rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void> {
+  async rewindSession(sessionId: string, pointId: string): Promise<void> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
-    await this.processes.get(sessionId).rewind(pointId, mode);
+    await this.processes.get(sessionId).rewind(pointId);
     await this.processes.close(sessionId, false);
     await this.handleEvent({ type: "session-reset", sessionId });
     await this.processes.open(snapshot.cwd, sessionId);
@@ -3140,7 +3197,8 @@ function mediaToolPrompt(request: MediaCreationRequest): string {
   const once = "只调用一次媒体工具；成功时返回实际产物路径，失败时原样返回第一次错误并立即停止，不要重试或改用其它媒体工具。";
   if (request.kind === "image") return `${request.prompt.trim()}${aspect}。使用 image_gen 生成图片。${once}`;
   const references = (request.referencePaths ?? []).map((path) => `@${path}`).join("\n");
-  return `${request.prompt.trim()}${aspect}，时长 ${request.duration ?? 6} 秒，分辨率 ${request.resolution ?? "480p"}。${references ? `参考图：\n${references}\n` : ""}无参考图时使用 video_gen；有一张参考图时使用 image_to_video，多张参考图时使用 reference_to_video。${once}`;
+  const voice = request.voice?.trim() ? `，参考视频声音 ${request.voice.trim()}` : "";
+  return `${request.prompt.trim()}${aspect}，时长 ${request.duration ?? 6} 秒，分辨率 ${request.resolution ?? "480p"}${voice}。${references ? `参考图：\n${references}\n` : ""}无参考图时使用 video_gen；有一张参考图时使用 image_to_video，多张参考图时使用 reference_to_video。${once}`;
 }
 
 export function normalizeMediaJobError(error: unknown): string {

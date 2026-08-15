@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Result = [ordered]@{ reader = 'skipped'; quotaWeekly = 'skipped'; quotaMonthly = 'skipped'; diagnostics = @() }
+$Result = [ordered]@{ reader = 'skipped'; billingCredits = 'skipped'; billingPeriodType = 'unknown'; diagnostics = @() }
 
 $Reader = Join-Path $HOME '.grok\bundled\skills\shared\resume-session\session_reader.py'
 $CodexFile = Get-ChildItem -LiteralPath (Join-Path $HOME '.codex\sessions') -Filter '*.jsonl' -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
@@ -27,7 +27,14 @@ if ((Test-Path -LiteralPath $Reader -PathType Leaf) -and $CodexFile -and (Get-Co
 $AuthPath = Join-Path $HOME '.grok\auth.json'
 if (Test-Path -LiteralPath $AuthPath -PathType Leaf) {
     try {
-        $Auth = Get-Content -LiteralPath $AuthPath -Raw | ConvertFrom-Json
+        try {
+            $Auth = Get-Content -LiteralPath $AuthPath -Raw | ConvertFrom-Json
+        } catch {
+            # ConvertFrom-Json includes the complete input document in some
+            # PowerShell 5.1 parse errors. Never let OAuth/refresh tokens escape
+            # through a live-probe diagnostic.
+            throw 'OAuth auth.json 无法解析；请在 Grok Build 中重新登录后再运行额度实机探针。'
+        }
         $Credential = $Auth.PSObject.Properties | Select-Object -First 1
         $Token = [string]$Credential.Value.key
         $UserId = [string]$Credential.Value.user_id
@@ -43,14 +50,23 @@ if (Test-Path -LiteralPath $AuthPath -PathType Leaf) {
         }
         $Invoke = @{ Headers = $Headers; TimeoutSec = 30; ErrorAction = 'Stop' }
         if ($Proxy) { $Invoke.Proxy = $Proxy }
-        [void](Invoke-RestMethod 'https://cli-chat-proxy.grok.com/v1/billing?format=credits' @Invoke)
-        $Result.quotaWeekly = 'ok'
-        [void](Invoke-RestMethod 'https://cli-chat-proxy.grok.com/v1/billing' @Invoke)
-        $Result.quotaMonthly = 'ok'
+        $Billing = Invoke-RestMethod 'https://cli-chat-proxy.grok.com/v1/billing?format=credits' @Invoke
+        if (-not $Billing.config) { throw 'credits response has no config object' }
+        $Result.billingCredits = 'ok'
+        $PeriodType = [string]$Billing.config.currentPeriod.type
+        if (-not $PeriodType) { $PeriodType = [string]$Billing.config.current_period.type }
+        if ($PeriodType -match 'WEEK') { $Result.billingPeriodType = 'weekly' }
+        elseif ($PeriodType -match 'MONTH') { $Result.billingPeriodType = 'monthly' }
+        else { $Result.billingPeriodType = 'unknown' }
     } catch {
-        if ($Result.quotaWeekly -ne 'ok') { $Result.quotaWeekly = 'unavailable' } else { $Result.quotaMonthly = 'unavailable' }
-        $Result.diagnostics += "Quota adapter: $($_.Exception.Message -replace '(?i)Bearer\s+\S+','Bearer [REDACTED]')"
-        if ($RequireQuota) { throw "OAuth quota compatibility probe failed: $($_.Exception.Message)" }
+        $Result.billingCredits = 'unavailable'
+        $SafeQuotaError = [string]$_.Exception.Message
+        $SafeQuotaError = $SafeQuotaError -replace '(?i)Bearer\s+\S+','Bearer [REDACTED]'
+        $SafeQuotaError = $SafeQuotaError -replace '(?i)eyJ[A-Za-z0-9._-]{40,}','[REDACTED_TOKEN]'
+        $SafeQuotaError = $SafeQuotaError -replace '(?i)(refresh_token|access_token|"key")\s*[:=]\s*"?[A-Za-z0-9._-]+','$1=[REDACTED]'
+        if ($SafeQuotaError.Length -gt 400) { $SafeQuotaError = $SafeQuotaError.Substring(0, 400) + '…' }
+        $Result.diagnostics += "Quota adapter: $SafeQuotaError"
+        if ($RequireQuota) { throw "OAuth quota compatibility probe failed: $SafeQuotaError" }
     }
 } elseif ($RequireQuota) {
     throw 'OAuth quota compatibility probe requires ~/.grok/auth.json.'
