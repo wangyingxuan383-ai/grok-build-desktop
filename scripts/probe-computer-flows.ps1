@@ -95,7 +95,8 @@ try {
     Write-Output $OutputPath
 } finally {
     try { $script:hostInput.Close() } catch {}
-    if (-not $hostProcess.HasExited -and -not $hostProcess.WaitForExit(1500)) { $hostProcess.Kill() }
+    try { if (-not $hostProcess.HasExited -and -not $hostProcess.WaitForExit(1500)) { $hostProcess.Kill() } }
+    catch { Write-Warning "Computer Flow Host 进程清理失败：$($_.Exception.Message)" }
     $targets = @(Get-Process -Name GrokComputerTestPage -ErrorAction SilentlyContinue | Where-Object { $_.Path -and [System.IO.Path]::GetFullPath($_.Path) -eq $TestApp })
     if ($targets.Count) { $targets | Stop-Process -Force -ErrorAction SilentlyContinue }
     Get-Process -Name CalculatorApp,Calculator -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue

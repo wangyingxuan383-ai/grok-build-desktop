@@ -119,14 +119,27 @@ try {
     .filter((value) => value.params?.update?.sessionUpdate === "available_commands_update")
     .flatMap((value) => value.params.update.availableCommands ?? [])
     .map((value) => String(value.name || "").replace(/^\//, ""));
-  const mediaCommands = [...new Set(availableCommands.filter((value) => value === "imagine" || value === "imagine-video"))];
-  const videoStrategy = mediaCommands.includes("imagine-video")
-    ? "imagine-video"
-    : mediaCommands.includes("imagine")
-      ? "imagine:image_to_video"
+  const advertisedTools = notifications
+    .filter((value) => value.params?.update?.sessionUpdate === "available_commands_update")
+    .flatMap((value) => value.params.update?._meta?.tools ?? value.params.update?.meta?.tools ?? [])
+    .map((value) => typeof value === "string" ? value : String(value?.name || value?.toolName || value?.tool_name || ""))
+    .filter(Boolean);
+  const mediaCommands = [...new Set(availableCommands.filter((value) => {
+    const leaf = value.split(":").at(-1);
+    return leaf === "imagine" || leaf === "imagine-video";
+  }))];
+  const directVideoCommand = mediaCommands.find((value) => value.split(":").at(-1) === "imagine-video");
+  const imageCommand = mediaCommands.find((value) => value.split(":").at(-1) === "imagine");
+  const videoTools = [...new Set(advertisedTools.filter((value) => ["video_gen", "image_to_video", "reference_to_video"].includes(value)))];
+  const videoStrategy = directVideoCommand
+    ? directVideoCommand
+    : videoTools.length
+      ? videoTools.join(",")
+      : imageCommand
+      ? `${imageCommand}:image_to_video`
       : undefined;
-  if (requireMedia && (!mediaCommands.includes("imagine") || !videoStrategy)) {
-    throw new Error(`Grok CLI did not publish a usable Imagine workflow (found: ${mediaCommands.join(", ") || "none"})`);
+  if (requireMedia && (!imageCommand && !advertisedTools.includes("image_gen"))) {
+    throw new Error(`Grok CLI did not publish a usable Imagine workflow (commands: ${mediaCommands.join(", ") || "none"}; tools: ${advertisedTools.join(", ") || "none"})`);
   }
   let extensionProbe;
   if (requireExtensions) {
@@ -151,7 +164,7 @@ try {
       && value.params?.update?.reasoning_effort === effort);
     if (!confirmed) throw new Error(`session/set_model did not confirm reasoning effort ${effort}`);
   }
-  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, renameProbe: { supported: renameProbe.ok, ...(renameProbe.error ? { error: renameProbe.error } : {}) }, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, videoStrategy, extensionProbe, notifications: notifications.filter((value) => {
+  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, renameProbe: { supported: renameProbe.ok, ...(renameProbe.error ? { error: renameProbe.error } : {}) }, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, mediaTools: [...new Set(advertisedTools)], videoStrategy, extensionProbe, notifications: notifications.filter((value) => {
     const update = value.params?.update;
     return value.method === "_x.ai/session_notification" && (update?.sessionUpdate === "model_changed" || update?.sessionUpdate === "current_mode_update");
   }).slice(-5) })}\n`);

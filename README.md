@@ -74,6 +74,8 @@ npm run package:win
 .\scripts\bootstrap.ps1
 ```
 
+一键脚本会尝试验收 Windows Task Scheduler；若本机策略禁止创建任务，会明确警告并继续生成 Setup/Portable。正式发布维护者直接运行 `npm run package:win` 时仍把任务调度验收作为强制门禁。
+
 默认不会修改贡献者桌面；只有显式传入 `-CreateShortcut` 才创建开发版快捷方式。
 
 本地调试可将 `app.local.example.json` 复制为被 Git 忽略的 `app.local.json`，然后使用 `npm run dev:local`。该文件不得保存 Token、API Key 或账号。

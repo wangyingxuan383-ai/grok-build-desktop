@@ -1,17 +1,40 @@
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildGrokAgentArgs, buildPromptText, buildSessionAttachMeta, demuxProviderThinkingText, extractAcpToolDiff, FIRST_EVENT_DIAGNOSTIC_MS, FIRST_EVENT_WAIT_MS, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, normalizeRuntimeEventEnvelope, normalizeSessionCloseReceipt, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
+import { buildGrokAgentArgs, buildPromptText, buildSessionAttachMeta, demuxProviderThinkingText, extractAcpToolDiff, FIRST_EVENT_DIAGNOSTIC_MS, FIRST_EVENT_WAIT_MS, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, normalizeRuntimeEventEnvelope, normalizeRuntimeHandshake, normalizeSessionCloseReceipt, normalizeToolReadOnly, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
+  it("consumes explicit 1.x read-only tool metadata without name inference", () => {
+    expect(normalizeToolReadOnly({ readOnly: true })).toBe(true);
+    expect(normalizeToolReadOnly({ _meta: { "x.ai/tool": { read_only: false } } })).toBe(false);
+    expect(normalizeToolReadOnly({ title: "read_file" })).toBeUndefined();
+  });
   it("sends the interactive Desktop attach policy on every session attach", () => {
     expect(buildSessionAttachMeta({ owner: "desktop" }, ["C:\\plugins\\one"])).toEqual({
       owner: "desktop",
       pluginDirs: ["C:\\plugins\\one"],
       startupHints: { nonInteractive: false, deliveryTools: [] },
     });
+  });
+
+  it("reads initialize model capabilities without creating a session", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    adapter.launchAndInitialize = vi.fn().mockResolvedValue(undefined);
+    adapter.runtimeHandshake = {
+      models: [
+        { modelId: "grok-4.6", name: "Grok 4.6", reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"], acceptsImages: true },
+        { modelId: "future-model", name: "Future" },
+      ],
+    };
+    adapter.request = vi.fn();
+    await expect(adapter.probeModelCatalog()).resolves.toEqual([
+      expect.objectContaining({ modelId: "grok-4.6", name: "Grok 4.6", supportsReasoningEffort: true, acceptsImages: true, reasoningEfforts: expect.arrayContaining([{ value: "xhigh", label: "xhigh" }]) }),
+      expect.objectContaining({ modelId: "future-model", name: "Future" }),
+    ]);
+    expect(adapter.launchAndInitialize).toHaveBeenCalledTimes(1);
+    expect(adapter.request).not.toHaveBeenCalled();
   });
 
   it("normalizes direct and wrapped x.ai runtime notifications", () => {
@@ -143,6 +166,7 @@ describe("Grok ACP process arguments", () => {
       cwd: "C:\\work",
       kind: "build",
     });
+    await expect(adapter.renameSession("界".repeat(101))).rejects.toThrow("100 个字符");
     adapter.extension.mockResolvedValueOnce({ result: { files: [] } });
     await adapter.officialGitStatus("C:\\work");
     expect(adapter.extension).toHaveBeenCalledWith("x.ai/git/status", {
@@ -412,6 +436,37 @@ describe("Plan permission handling", () => {
       expect(await readFile(planPath, "utf8")).toBe("# Safe plan");
       expect(writes).toContainEqual({ jsonrpc: "2.0", id: "plan-write", result: {} });
       expect(events).toContainEqual({ type: "plan", sessionId: "plan-session", text: "# Safe plan" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("binds ACP file reads and writes to the active workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-acp-fs-boundary-"));
+    const cwd = join(root, "workspace");
+    const outside = join(root, "outside.txt");
+    await mkdir(cwd, { recursive: true });
+    await writeFile(join(cwd, "inside.txt"), "inside", "utf8");
+    await writeFile(outside, "outside", "utf8");
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const writes: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "boundary-session",
+      planActive: false,
+      options: { cwd, env: {}, log: { log: vi.fn() } },
+      write: vi.fn((value: unknown) => { writes.push(value); return true; }),
+      emitEvent: vi.fn(),
+    });
+    try {
+      await adapter.handleServerRequest("fs/read_text_file", "relative-read", { path: "inside.txt" });
+      expect(writes).toContainEqual({ jsonrpc: "2.0", id: "relative-read", result: { content: "inside" } });
+
+      await adapter.handleServerRequest("fs/read_text_file", "outside-read", { path: outside });
+      expect(writes.find((value) => value.id === "outside-read")?.error?.message).toContain("路径超出当前工作区");
+
+      await adapter.handleServerRequest("fs/write_text_file", "outside-write", { path: outside, content: "tampered" });
+      expect(writes.find((value) => value.id === "outside-write")?.error?.message).toContain("路径超出当前工作区");
+      expect(await readFile(outside, "utf8")).toBe("outside");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1063,5 +1118,28 @@ describe("forward lifecycle compatibility", () => {
     expect(adapter.currentEffort).toBe("xhigh");
     expect(events).toContainEqual(expect.objectContaining({ type: "session-ready", currentModelId: "provider:model", effort: "xhigh" }));
     expect(adapter.runtimeHandshake.extensions).toContain("x.ai/models/update");
+  });
+
+  it("preserves the official image-input model metadata on initialize and catalog refresh", async () => {
+    expect(normalizeRuntimeHandshake({
+      protocolVersion: 1,
+      _meta: { modelState: { availableModels: [
+        { modelId: "vision", name: "Vision", _meta: { inputModalities: ["text", "image"] } },
+        { modelId: "text", name: "Text", _meta: { acceptsImages: false } },
+      ] } },
+    })).toMatchObject({ models: [
+      { modelId: "vision", acceptsImages: true, inputModalities: ["text", "image"] },
+      { modelId: "text", acceptsImages: false },
+    ] });
+
+    const { adapter, events } = lifecycleAdapter();
+    await adapter.handleServerRequest("x.ai/models/update", "models-media", {
+      currentModelId: "vision",
+      availableModels: [{ modelId: "vision", name: "Vision", _meta: { acceptsImages: true } }],
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "session-ready",
+      models: [expect.objectContaining({ modelId: "vision", acceptsImages: true })],
+    }));
   });
 });

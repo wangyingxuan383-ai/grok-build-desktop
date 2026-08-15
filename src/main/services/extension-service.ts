@@ -89,7 +89,11 @@ export class ExtensionService {
       }
       if (!/^[0-9a-f]{40}$/i.test(commit)) throw new Error("无法固定 Git 插件提交");
       return inspectGitPlugin(bare, commit, parsed.subdir, parsed.pinned(commit));
-    } finally { await rm(temp, { recursive: true, force: true }); }
+    } finally {
+      await rm(temp, { recursive: true, force: true }).catch(async (error) => {
+        await this.log.log(`Plugin preview temporary cleanup failed: ${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      });
+    }
   }
 
   async action(id: string, action: "enable" | "disable" | "update" | "uninstall" | "reload"): Promise<PluginSummary[]> {

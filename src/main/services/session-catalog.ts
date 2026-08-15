@@ -58,7 +58,7 @@ export class SessionCatalog {
     const rows = await Promise.all(dirs.filter((entry) => entry.isDirectory()).map(async (entry): Promise<SessionSummary | null> => {
       try {
         const summary = JSON.parse(await readFile(join(root, entry.name, "summary.json"), "utf8")) as GrokSummary;
-        const title = metadata.renames[entry.name] || summary.generated_title || summary.session_summary || "新会话";
+        const title = boundedSessionTitle(metadata.renames[entry.name] || summary.generated_title || summary.session_summary || "新会话");
         const unread = metadata.unread[entry.name];
         const status = live.get(entry.name) ?? (unread === "error" ? "error" : unread === "ok" ? "unread" : "cold");
         return {
@@ -102,7 +102,8 @@ export class SessionCatalog {
   }
 
   async rename(sessionId: string, title: string): Promise<void> {
-    await this.meta.mutate((metadata) => { metadata.renames[sessionId] = title.trim() || "新会话"; });
+    const normalized = boundedSessionTitle(title);
+    await this.meta.mutate((metadata) => { metadata.renames[sessionId] = normalized; });
   }
 
   async syncOfficialTitle(sessionId: string, title: string, manual: boolean): Promise<void> {
@@ -111,7 +112,7 @@ export class SessionCatalog {
         delete metadata.renames[sessionId];
         return;
       }
-      const normalized = title.trim();
+      const normalized = boundedSessionTitle(title, "");
       if (normalized) metadata.renames[sessionId] = normalized;
     });
   }
@@ -246,6 +247,10 @@ export class SessionCatalog {
     }
     return `${output.join("\n").trim()}\n`;
   }
+}
+
+function boundedSessionTitle(value: string, fallback = "新会话"): string {
+  return [...value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim()].slice(0, 100).join("") || fallback;
 }
 
 function safeSessionPath(root: string, sessionId: string): string {

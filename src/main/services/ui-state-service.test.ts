@@ -16,6 +16,16 @@ describe("UiStateService", () => {
     expect(await service.getDraft("session-a")).toBeNull();
   });
 
+  it("keeps deletion authoritative when a prompt autosave was already queued", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-ui-state-delete-race-"));
+    const service = new UiStateService(root);
+    await service.setDraft("new:project", "正在输入的正文", undefined, [], { projectId: "project", workspacePath: root });
+    const alreadyQueuedSave = service.setDraft("new:project", "最后一次自动保存", undefined, [], { projectId: "project", workspacePath: root });
+    const deletion = service.clearDraft("new:project");
+    await Promise.all([alreadyQueuedSave, deletion]);
+    expect(await service.getDraft("new:project")).toBeNull();
+  });
+
   it("persists a one-shot capability even when the prompt is still empty", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-ui-capability-"));
     const service = new UiStateService(root);

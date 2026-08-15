@@ -169,7 +169,7 @@ export class GrokProcessManager {
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
-        await adapter.dispose();
+        await this.disposeFailedAdapter(adapter, `extension reload ${snapshot.sessionId}`);
         failures.push(`${snapshot.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -207,6 +207,16 @@ export class GrokProcessManager {
     return [...byId.values()];
   }
 
+  /** Initialize a short-lived ACP process and read its runtime model state.
+   * The adapter is never attached to session/new, so this cannot create an
+   * empty Grok history entry while the user is only preparing a draft. */
+  async probeModelCatalog(cwd: string): Promise<ModelInfo[]> {
+    const settings = await this.getSettings();
+    const adapter = await this.spawn(cwd, settings.defaultEffort, settings.defaultMode);
+    try { return await adapter.probeModelCatalog(); }
+    finally { await adapter.dispose().catch(() => undefined); }
+  }
+
   snapshot(sessionId: string): LiveSessionSnapshot | undefined {
     const session = this.sessions.get(sessionId);
     return session ? { sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId, processOptions: session.processOptions } : undefined;
@@ -233,6 +243,10 @@ export class GrokProcessManager {
     return this.get(sessionId).waitForCommands(timeoutMs);
   }
 
+  mediaCapabilityEvidence(sessionId: string): { commands: CommandInfo[]; tools: string[] } {
+    return this.get(sessionId).mediaCapabilityEvidence();
+  }
+
   async backgroundTaskResults(): Promise<Array<{ sessionId: string; result: Record<string, unknown>; subagents?: Record<string, unknown> }>> {
     const output: Array<{ sessionId: string; result: Record<string, unknown>; subagents?: Record<string, unknown> }> = [];
     for (const [sessionId, adapter] of this.sessions) {
@@ -255,7 +269,7 @@ export class GrokProcessManager {
       result = await adapter.start();
       await this.rememberSession(result.sessionId, adapter);
     } catch (error) {
-      await adapter.dispose();
+      await this.disposeFailedAdapter(adapter, "session create");
       throw error;
     }
     this.sessions.set(result.sessionId, adapter);
@@ -275,7 +289,10 @@ export class GrokProcessManager {
       this.focusedId = result.sessionId;
       await this.enforceCap();
       return result;
-    } catch (error) { await adapter.dispose(); throw error; }
+    } catch (error) {
+      await this.disposeFailedAdapter(adapter, "configured session create");
+      throw error;
+    }
   }
 
   async openConfigured(cwd: string, sessionId: string, effort: ReasoningEffort, mode: SessionMode, modelId: string, permissionDecider?: (toolCall: unknown) => Promise<boolean | undefined>, environmentOverride?: NodeJS.ProcessEnv, processOptions?: SessionProcessOptions, restoreRuntimePreferences = false): Promise<{ sessionId: string }> {
@@ -309,7 +326,10 @@ export class GrokProcessManager {
       this.focusedId = sessionId;
       await this.enforceCap();
       return { sessionId };
-    } catch (error) { await adapter.dispose(); throw error; }
+    } catch (error) {
+      await this.disposeFailedAdapter(adapter, `configured session open ${sessionId}`);
+      throw error;
+    }
   }
 
   async open(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
@@ -328,7 +348,7 @@ export class GrokProcessManager {
       await adapter.start(sessionId);
       await this.rememberSession(sessionId, adapter);
     } catch (error) {
-      await adapter.dispose();
+      await this.disposeFailedAdapter(adapter, `session open ${sessionId}`);
       throw error;
     }
     this.sessions.set(sessionId, adapter);
@@ -398,7 +418,7 @@ export class GrokProcessManager {
       this.sessions.set(sessionId, replacement);
       this.focusedId = sessionId;
     } catch (restartError) {
-      await replacement?.dispose();
+      if (replacement) await this.disposeFailedAdapter(replacement, `effort switch ${sessionId}`);
       this.onEvent({ type: "session-reset", sessionId });
       this.onEvent({ type: "status", sessionId, status: "working", text: "新强度启动失败，正在恢复原设置…" });
       const rollback = await this.spawn(cwd, previousEffort, mode, model, undefined, undefined, processOptions, sessionId);
@@ -409,7 +429,7 @@ export class GrokProcessManager {
         this.sessions.set(sessionId, rollback);
         this.focusedId = sessionId;
       } catch (rollbackError) {
-        await rollback.dispose();
+        await this.disposeFailedAdapter(rollback, `effort rollback ${sessionId}`);
         throw new Error(`推理强度切换失败，且原设置恢复失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
       throw new Error(`推理强度切换失败，已恢复原设置：${restartError instanceof Error ? restartError.message : String(restartError)}`);
@@ -432,7 +452,7 @@ export class GrokProcessManager {
       this.sessions.set(sessionId, replacement);
       this.focusedId = sessionId;
     } catch (error) {
-      await replacement.dispose();
+      await this.disposeFailedAdapter(replacement, `session restart ${sessionId}`);
       throw error;
     }
   }
@@ -462,7 +482,7 @@ export class GrokProcessManager {
         this.sessions.set(sessionId, replacement);
         this.focusedId = sessionId;
       } catch (restartError) {
-        await replacement.dispose();
+        await this.disposeFailedAdapter(replacement, `model switch ${sessionId}`);
         const rollback = await this.spawn(cwd, effort, mode, previousModelId, undefined, undefined, processOptions, sessionId, identity.previous);
         try {
           await rollback.start(sessionId);
@@ -471,7 +491,7 @@ export class GrokProcessManager {
           this.sessions.set(sessionId, rollback);
           this.focusedId = sessionId;
         } catch (rollbackError) {
-          await rollback.dispose();
+          await this.disposeFailedAdapter(rollback, `model rollback ${sessionId}`);
           throw new Error(`模型热切换失败，且原模型恢复失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}；目标错误：${restartError instanceof Error ? restartError.message : String(restartError)}`);
         }
         throw new Error(`模型热切换失败，已尝试恢复原模型：${restartError instanceof Error ? restartError.message : String(restartError)}；原错误：${error instanceof Error ? error.message : String(error)}`);
@@ -482,6 +502,7 @@ export class GrokProcessManager {
   async close(sessionId: string, finalize = true): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
+    await this.stopOwnedBackgroundWork(sessionId, session);
     if (finalize) await this.finalizeSession(sessionId, session, "close");
     await session.dispose();
     this.sessions.delete(sessionId);
@@ -522,7 +543,7 @@ export class GrokProcessManager {
       this.focusedId = sessionId;
       this.onEvent({ type: "status", sessionId, status: "idle", text: "已停止并恢复会话" });
     } catch (error) {
-      await replacement.dispose();
+      await this.disposeFailedAdapter(replacement, `stop recovery ${sessionId}`);
       throw new Error(`停止后恢复会话失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -530,7 +551,16 @@ export class GrokProcessManager {
   async stopAll(finalize = true): Promise<void> {
     const sessions = Array.from(this.sessions.entries());
     this.sessions.clear();
-    await Promise.allSettled(sessions.map(async ([sessionId, session]) => { if (finalize) await this.finalizeSession(sessionId, session, "shutdown"); await session.dispose(); }));
+    await Promise.allSettled(sessions.map(async ([sessionId, session]) => {
+      // App shutdown/suspend will terminate the ACP process regardless. Give
+      // CLI-owned tasks and child agents an explicit teardown opportunity, but
+      // never let an unsupported extension strand the native process on exit.
+      await this.stopOwnedBackgroundWork(sessionId, session).catch(async (error) => {
+        await this.log.log(`session ${sessionId} shutdown cleanup failed; forcing process disposal: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      if (finalize) await this.finalizeSession(sessionId, session, "shutdown");
+      await session.dispose();
+    }));
   }
 
   async suspendAll(): Promise<LiveSessionSnapshot[]> {
@@ -557,7 +587,7 @@ export class GrokProcessManager {
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
-        await adapter.dispose();
+        await this.disposeFailedAdapter(adapter, `bulk restore ${snapshot.sessionId}`);
         failures.push(`${snapshot.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -642,6 +672,12 @@ export class GrokProcessManager {
     });
   }
 
+  private async disposeFailedAdapter(adapter: GrokAcpAdapter, context: string): Promise<void> {
+    await adapter.dispose().catch(async (cleanupError) => {
+      await this.log.log(`${context} adapter cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`).catch(() => undefined);
+    });
+  }
+
   private async enforceCap(): Promise<void> {
     if (this.sessions.size <= 8) return;
     const candidates = Array.from(this.sessions.entries())
@@ -649,6 +685,11 @@ export class GrokProcessManager {
       .sort((a, b) => a[1].lastTouched - b[1].lastTouched);
     while (this.sessions.size > 8 && candidates.length) {
       const [id, session] = candidates.shift()!;
+      try { await this.stopOwnedBackgroundWork(id, session); }
+      catch (error) {
+        await this.log.log(`session ${id} cap eviction skipped because background teardown failed: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       await this.finalizeSession(id, session, "cap");
       await session.dispose();
       this.sessions.delete(id);
@@ -659,6 +700,11 @@ export class GrokProcessManager {
     const cutoff = Date.now() - 60 * 60_000;
     const victims = Array.from(this.sessions.entries()).filter(([id, session]) => id !== this.focusedId && !session.working && !session.needsUser && session.lastTouched < cutoff);
     for (const [id, session] of victims) {
+      try { await this.stopOwnedBackgroundWork(id, session); }
+      catch (error) {
+        await this.log.log(`session ${id} idle reap skipped because background teardown failed: ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       await this.finalizeSession(id, session, "reap");
       await session.dispose();
       this.sessions.delete(id);
@@ -669,6 +715,46 @@ export class GrokProcessManager {
     if (!this.beforeSessionClose || session.working || session.needsUser) return;
     try { await this.beforeSessionClose(sessionId, session, reason); }
     catch (error) { await this.log.log(`session finalization failed: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  private async stopOwnedBackgroundWork(sessionId: string, session: GrokAcpAdapter): Promise<void> {
+    const failures: string[] = [];
+    try {
+      const payload = await session.taskList();
+      const rows = Array.isArray(payload.tasks) ? payload.tasks : [];
+      for (const item of rows) {
+        const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+        const id = String(row.taskId ?? row.task_id ?? row.id ?? "").trim();
+        const completed = row.completed === true
+          || row.endTime !== undefined
+          || row.end_time !== undefined
+          || /^(?:completed|failed|cancelled|killed|exited)$/i.test(String(row.status ?? row.state ?? ""));
+        if (!id || completed) continue;
+        await session.taskKill(id, "teardown").catch((error) => failures.push(`后台任务 ${id}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    } catch (error) {
+      if (!/method not found|not supported|unsupported/i.test(error instanceof Error ? error.message : String(error))) {
+        failures.push(`查询后台任务: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    try {
+      const payload = await session.subagentListRunning();
+      const rows = Array.isArray(payload.subagents) ? payload.subagents : [];
+      for (const item of rows) {
+        const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+        const id = String(row.subagentId ?? row.subagent_id ?? row.id ?? "").trim();
+        if (!id) continue;
+        await session.subagentCancel(id).catch((error) => failures.push(`子 Agent ${id}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    } catch (error) {
+      if (!/method not found|not supported|unsupported/i.test(error instanceof Error ? error.message : String(error))) {
+        failures.push(`查询子 Agent: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (failures.length) {
+      await this.log.log(`session ${sessionId} background cleanup was incomplete: ${failures.join("; ")}`);
+      throw new Error(`仍有属于该会话的后台工作未能停止：${failures.join("；")}`);
+    }
   }
 }
 

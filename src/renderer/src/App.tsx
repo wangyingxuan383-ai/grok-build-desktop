@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
-import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, ClaudeSessionDetail, ClaudeSessionSummary, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, CustomProviderProfile, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution, NavigationIntent, NewTaskDraft, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
+import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, ClaudeSessionDetail, ClaudeSessionSummary, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, CustomProviderProfile, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution, ModelInfo, NavigationIntent, NewTaskDraft, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
 import { resolveComputerMention } from "../../shared/computer-mentions";
 import { buildComposerCommand, normalizeSkillCommand } from "../../shared/composer-capability";
 import { LazyMarkdownView } from "./components/LazyMarkdownView";
@@ -78,7 +78,10 @@ export default function App(): React.JSX.Element {
     workspaces: state.workspaces,
   })));
   const view = useAppStore((state) => state.views[state.activeSessionId]);
-  const draftModels = useAppStore(useShallow((state) => Array.from(new Map(Object.values(state.views).flatMap((candidate) => candidate.models).map((model) => [model.modelId, model])).values())));
+  const liveDraftModels = useAppStore(useShallow((state) => Array.from(new Map(Object.values(state.views).flatMap((candidate) => candidate.models).map((model) => [model.modelId, model])).values())));
+  const [catalogModels, setCatalogModels] = useState<ModelInfo[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const draftModels = useMemo(() => Array.from(new Map([...catalogModels, ...liveDraftModels].map((model) => [model.modelId, model])).values()), [catalogModels, liveDraftModels]);
   const activeWorkbenchView = useWorkbenchStore((state) => state.activeView);
   const setWorkbenchView = useWorkbenchStore((state) => state.setActiveView);
   const [panel, setPanel] = useState<Panel>(null);
@@ -135,6 +138,21 @@ export default function App(): React.JSX.Element {
     sendingSessionIdsRef.current = next;
     setSendingSessionIds(next);
   }, []);
+
+  const refreshModelCatalog = useCallback(async (): Promise<void> => {
+    setCatalogLoading(true);
+    try {
+      const models = await window.grokDesktop.listModelCatalog();
+      if (models.length) setCatalogModels(models);
+    } catch (error) { store.setError(errorMessage(error)); }
+    finally { setCatalogLoading(false); }
+  }, [store.setError]);
+
+  const handleDraftPersistenceError = useCallback((error: unknown): void => {
+    store.setError(`保存草稿失败：${errorMessage(error)}`);
+  }, [store.setError]);
+
+  useEffect(() => { void refreshModelCatalog(); }, [refreshModelCatalog, store.settings?.activeWorkspace]);
 
   const focusComposer = useCallback(() => {
     if (useWorkbenchStore.getState().activeView !== "chat") return;
@@ -199,6 +217,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     let queued: ChatEvent[] = [];
     let frame = 0;
+    let automaticUpdateTimer: number | undefined;
     const flush = (): void => {
       frame = 0;
       const events = queued;
@@ -259,13 +278,21 @@ export default function App(): React.JSX.Element {
         void window.grokDesktop.listCodexSessions(data.settings.activeWorkspace, data.settings.showArchivedCodex).then((values) => useAppStore.getState().setCodexSessions(values)).catch(() => undefined);
         void window.grokDesktop.listClaudeSessions(data.settings.activeWorkspace).then((values) => useAppStore.getState().setClaudeSessions(values)).catch(() => undefined);
       }
-      window.setTimeout(() => void window.grokDesktop.checkUpdatesAutomatically().then((result) => {
+      const checkUpdates = (): void => { void window.grokDesktop.checkUpdatesAutomatically().then((result) => {
         if (result.cli) useAppStore.getState().setCli(result.cli);
         if (result.app) useAppStore.getState().setAppRelease(result.app);
-      }).catch(() => undefined), 500);
+      }).catch(() => undefined); };
+      automaticUpdateTimer = window.setTimeout(() => {
+        checkUpdates();
+        // The main process remains the source of truth for the 24-hour gate.
+        // A six-hour wakeup means an app left open for days eventually observes
+        // a new stable CLI/App release without issuing frequent network calls.
+        automaticUpdateTimer = window.setInterval(checkUpdates, 6 * 60 * 60_000);
+      }, 500);
     }).catch((error) => useAppStore.getState().setError(error instanceof Error ? error.message : String(error)));
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
+      if (automaticUpdateTimer !== undefined) window.clearInterval(automaticUpdateTimer);
       flush();
       removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeComputer(); removeAutomation();
     };
@@ -291,7 +318,7 @@ export default function App(): React.JSX.Element {
   }, []);
   const activeWorkspaceSummary = store.workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, store.settings?.activeWorkspace || ""));
   const newDraftKey = activeWorkspaceSummary ? `new:${activeWorkspaceSummary.projectId}` : store.settings?.activeWorkspace ? `new:${normalizedWorkspacePath(store.settings.activeWorkspace)}` : "";
-  const { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask } = useSessionDraft({
+  const { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask, discardCurrentDraft } = useSessionDraft({
     activeSessionId: store.activeSessionId,
     workspace: store.settings?.activeWorkspace || "",
     newDraftKey,
@@ -301,6 +328,7 @@ export default function App(): React.JSX.Element {
     clearAttachments: store.clearAttachments,
     addAttachments: store.addAttachments,
     onSessionChange: resetSessionTransients,
+    onError: handleDraftPersistenceError,
   });
 
   useEffect(() => {
@@ -500,6 +528,7 @@ export default function App(): React.JSX.Element {
     setActiveCodexId(""); setCodexDetail(null);
     setActiveClaudeId(""); setClaudeDetail(null);
     store.setActiveSession("");
+    void refreshModelCatalog();
     const workspaces = await window.grokDesktop.discoverWorkspaces(true).catch(() => useAppStore.getState().workspaces);
     store.setWorkspaces(workspaces);
     const project = workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, cwd));
@@ -896,7 +925,14 @@ export default function App(): React.JSX.Element {
           if (first) await openConversationTarget({ cwd: receipt.targetCwd, sessionId: first.sessionId });
           if (receipt.failures.length) store.setError(`已迁移 ${receipt.completed.length} 个会话，${receipt.failures.length} 个失败：${receipt.failures.map((item) => item.message).join("；")}`);
         })().catch((error) => store.setError(errorMessage(error))); }}
-        onDeleteDraft={() => { void (async () => { if (!newDraftKey) return; if (!await askConfirm("删除这个尚未发送的本地草稿？不会影响任何 Grok 会话。", { title: "删除草稿", confirmLabel: "删除", danger: true })) return; await window.grokDesktop.clearDraft(newDraftKey); if (!store.activeSessionId) { setComposer(""); setCapability(undefined); setNewTask(undefined); store.clearAttachments(); } store.setWorkspaces(await window.grokDesktop.discoverWorkspaces(true)); })().catch((error) => store.setError(errorMessage(error))); }}
+        onDeleteDraft={() => { void (async () => {
+          if (!newDraftKey) return;
+          if (!await askConfirm("删除这个尚未发送的本地草稿？不会影响任何 Grok 会话。", { title: "删除草稿", confirmLabel: "删除", danger: true })) return;
+          if (!store.activeSessionId && draftKey === newDraftKey) await discardCurrentDraft();
+          else await window.grokDesktop.clearDraft(newDraftKey);
+          setComposerNotice("草稿已删除。");
+          void window.grokDesktop.discoverWorkspaces(true).then(store.setWorkspaces).catch((error) => store.setError(`草稿已删除，但项目列表刷新失败：${errorMessage(error)}`));
+        })().catch((error) => store.setError(`删除草稿失败：${errorMessage(error)}`)); }}
         onClear={async () => {
           const cwd = store.settings?.activeWorkspace;
           if (cwd && await askConfirm("永久清空当前工作区的全部 Grok 会话？", { title: "清空会话", confirmLabel: "永久清空", danger: true })) {
@@ -976,6 +1012,8 @@ export default function App(): React.JSX.Element {
           view={view}
           draft={store.activeSessionId ? undefined : newTask}
           draftModels={draftModels}
+          draftModelsLoading={catalogLoading}
+          onRefreshDraftModels={() => void refreshModelCatalog()}
           onDraftChange={(patch) => setNewTask((current) => current ? { ...current, ...patch } : current)}
           onSend={() => void send(view?.status === "working" ? "queue" : "normal")}
           onInterject={() => void send("interject")}

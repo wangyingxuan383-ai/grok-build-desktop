@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$SkipVerification,
-    [switch]$ReleaseArtifactsOnly
+    [switch]$ReleaseArtifactsOnly,
+    [switch]$AllowUnavailableTaskScheduler
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,6 +33,15 @@ function Wait-ReleaseFile([string]$Path, [int]$TimeoutSeconds = 600) {
         Start-Sleep -Seconds 1
     }
     throw "等待发布文件超时：$Path"
+}
+
+function Invoke-TaskSchedulerProbe([string]$Executable) {
+    try {
+        & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $Executable
+    } catch {
+        if (-not $AllowUnavailableTaskScheduler) { throw }
+        Write-Warning "Windows Task Scheduler 验收不可用，构建产物仍会完成；安装后的持久任务功能可能受本机策略限制：$($_.Exception.Message)"
+    }
 }
 
 if (-not $SkipVerification) { & (Join-Path $PSScriptRoot 'check-public-safety.ps1') }
@@ -104,7 +114,7 @@ if ($ReleaseArtifactsOnly) {
     # Hosted Windows can leave Electron desktop resources unavailable after a
     # Renderer exits even though the process tree is gone. The fresh download
     # job independently launches the extracted Portable build.
-    & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
+    Invoke-TaskSchedulerProbe $ExpectedExecutable
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip -StructureOnly
 } else {
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable
@@ -115,7 +125,7 @@ if ($ReleaseArtifactsOnly) {
         & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ProbeScript 'probe-overlay-entry.mjs' -ProbeArgument $OverlayEntry
     }
     & (Join-Path $PSScriptRoot 'smoke-app.ps1') -Executable $ExpectedExecutable -ApplicationArguments '--open-task-center' -ProbeArgument '.task-center'
-    & (Join-Path $PSScriptRoot 'probe-task-scheduler.ps1') -Executable $ExpectedExecutable
+    Invoke-TaskSchedulerProbe $ExpectedExecutable
     & (Join-Path $PSScriptRoot 'smoke-portable.ps1') -Archive $PortableZip
 }
 & (Join-Path $PSScriptRoot 'check-public-safety.ps1') -ArtifactPath (Join-Path $Root 'release')

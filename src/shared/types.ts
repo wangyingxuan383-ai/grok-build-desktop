@@ -918,10 +918,35 @@ export interface QuotaWindow {
   periodEnd?: string;
   resetAt?: string;
   products?: Array<{ label: string; usedPercent?: number }>;
-  source?: "billing-api" | "cli-error";
+  source?: "billing-api" | "cli-extension" | "legacy-billing-api" | "cli-error";
   observedAt?: string;
   modelId?: string;
   expired?: boolean;
+}
+
+export type BillingPeriodType = "weekly" | "monthly" | "unknown";
+
+/** The single allowance period returned by the current Grok credits service. */
+export interface BillingAllowance extends QuotaWindow {
+  periodType: BillingPeriodType;
+  unifiedBilling?: boolean;
+}
+
+export interface BillingCapabilityEvidence {
+  source: "cli-extension" | "credits-api" | "legacy-billing-api" | "cli-error";
+  observedAt: string;
+  periodType?: BillingPeriodType;
+  fields: string[];
+  stale?: boolean;
+}
+
+export interface AutoTopupRuleSnapshot {
+  enabled: boolean;
+  minBeforeLimit?: number;
+  topupAmount?: number;
+  monthlyCap?: number;
+  source: "cli-extension";
+  observedAt: string;
 }
 
 export interface GrokQuotaSnapshot {
@@ -931,8 +956,17 @@ export interface GrokQuotaSnapshot {
   stale: boolean;
   partial: boolean;
   rolling24h?: QuotaWindow;
+  currentAllowance?: BillingAllowance;
+  payAsYouGo?: QuotaWindow;
+  payAsYouGoEnabled?: boolean;
+  autoTopupRule?: AutoTopupRuleSnapshot;
+  subscriptionTier?: string;
+  evidence?: BillingCapabilityEvidence[];
+  /** @deprecated Compatibility projection for pre-0.9 renderers. */
   weekly?: QuotaWindow;
+  /** @deprecated Compatibility projection for pre-0.9 renderers. */
   monthly?: QuotaWindow;
+  /** @deprecated Use payAsYouGo. */
   onDemand?: QuotaWindow;
   prepaidBalance?: number;
   diagnostics: string[];
@@ -1254,8 +1288,13 @@ export interface ComputerCapability {
 export interface ModelInfo {
   modelId: string;
   name: string;
+  /** Desktop-managed Provider identity. Official ACP models omit this. */
+  providerId?: string;
   description?: string;
   totalContextTokens?: number;
+  /** Runtime-declared image input support. Omitted means unknown, not false. */
+  acceptsImages?: boolean;
+  inputModalities?: string[];
   supportsReasoningEffort?: boolean;
   reasoningEfforts?: Array<{
     value: Exclude<ReasoningEffort, "">;
@@ -1274,15 +1313,16 @@ export interface CommandInfo {
 export type MediaCreationKind = "image" | "video";
 export type MediaRouteKind = "auto" | "cli" | "provider";
 export type MediaAspectRatio = "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:4";
-export type MediaVideoDuration = 6 | 10;
+export type MediaVideoDuration = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
 export type MediaVideoResolution = "480p" | "720p";
 
 export interface MediaCapabilities {
   image: boolean;
   video: boolean;
   commands: string[];
-  imageCommand?: "imagine";
-  videoCommand?: "imagine" | "imagine-video";
+  tools?: string[];
+  imageCommand?: string;
+  videoCommand?: string;
   diagnostic?: string;
 }
 
@@ -1292,6 +1332,7 @@ export interface MediaCreationRequest {
   aspectRatio: MediaAspectRatio;
   duration?: MediaVideoDuration;
   resolution?: MediaVideoResolution;
+  voice?: string;
   sessionId?: string;
   route?: MediaRouteKind;
   providerId?: string;
@@ -1407,6 +1448,8 @@ export interface ToolCallState {
   toolCallId: string;
   title: string;
   kind?: string;
+  /** CLI-declared property; undefined means the CLI did not provide evidence. */
+  readOnly?: boolean;
   status: "pending" | "in_progress" | "completed" | "failed";
   rawInput?: unknown;
   content?: unknown[];
@@ -1595,7 +1638,7 @@ export interface CliRuntimeHandshake {
   sessionCapabilities?: Record<string, boolean>;
   mcpCapabilities?: Record<string, boolean>;
   currentModelId?: string;
-  models: Array<{ modelId: string; name?: string; reasoningEfforts?: ReasoningEffort[] }>;
+  models: Array<{ modelId: string; name?: string; reasoningEfforts?: ReasoningEffort[]; acceptsImages?: boolean; inputModalities?: string[] }>;
   commands: string[];
   extensions: string[];
   features: {
@@ -1678,7 +1721,13 @@ export interface CliCompatibilityCheck {
 
 export interface CliMajorCompatibilityProfile {
   major: number;
+  /** @deprecated Use stableTargetVersion. */
   targetVersion: string;
+  minSupportedVersion: string;
+  maxVerifiedVersion: string;
+  stableTargetVersion: string;
+  fixtureVersions: string[];
+  liveVerifiedVersion?: string;
   label: string;
   requiredChecks: string[];
   changelogUrl: string;
@@ -1899,6 +1948,7 @@ export interface GrokDesktopApi {
   getCliCapabilities(force?: boolean): Promise<import("./workbench-types").CliCapabilitySnapshot>;
   previewSupportBundle(): Promise<SupportBundlePreview>;
   exportSupportBundle(): Promise<string | null>;
+  exportSessionTrace(sessionId: string): Promise<string | null>;
   checkAppUpdate(force?: boolean): Promise<AppReleaseStatus>;
   openAppRelease(url?: string): Promise<void>;
   chooseWorkspace(): Promise<string | null>;
@@ -2097,7 +2147,7 @@ export interface GrokDesktopApi {
   forkSession(sessionId: string, rewindPointId?: string, launch?: import("./workbench-types").ExecutionProfileLaunchInput): Promise<SessionForkResult>;
   rebindWorkspaceSessions(sourceCwd: string, targetCwd: string): Promise<WorkspaceRebindReceipt>;
   listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
-  rewindSession(sessionId: string, pointId: string, mode: "conversation" | "conversation-and-files" | "files"): Promise<void>;
+  rewindSession(sessionId: string, pointId: string): Promise<void>;
   archiveSession(sessionId: string, archived: boolean): Promise<void>;
   listBackgroundTasks(): Promise<BackgroundTaskSummary[]>;
   killBackgroundTask(id: string): Promise<void>;

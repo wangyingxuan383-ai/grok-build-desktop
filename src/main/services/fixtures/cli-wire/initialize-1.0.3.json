@@ -1,0 +1,76 @@
+{
+  "protocolVersion": 1,
+  "agentCapabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "embeddedContext": true
+    },
+    "mcpCapabilities": {
+      "http": true,
+      "sse": true
+    },
+    "sessionCapabilities": {
+      "close": {},
+      "list": {},
+      "resume": {}
+    },
+    "_meta": {
+      "x.ai/fs_notify": true
+    }
+  },
+  "_meta": {
+    "agentVersion": "1.0.3",
+    "x.ai/pluginDirs": true,
+    "modelState": {
+      "currentModelId": "grok-4.6",
+      "availableModels": [
+        {
+          "modelId": "grok-4.6",
+          "name": "Grok 4.6",
+          "_meta": {
+            "supportsReasoningEffort": true,
+            "reasoningEfforts": [
+              {
+                "value": "minimal"
+              },
+              {
+                "value": "low"
+              },
+              {
+                "value": "medium"
+              },
+              {
+                "value": "high"
+              },
+              {
+                "value": "xhigh"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "availableCommands": [
+      {
+        "name": "compact"
+      },
+      {
+        "name": "context"
+      },
+      {
+        "name": "usage"
+      },
+      {
+        "name": "session-info"
+      },
+      {
+        "name": "feedback"
+      },
+      {
+        "name": "btw"
+      }
+    ],
+    "sessionRecap": true,
+    "cancelRewind": true
+  }
+}

@@ -17,6 +17,10 @@ describe.skipIf(!runLive)("Grok Plan mode live acceptance", () => {
       cwd,
       env: process.env,
       effort: "low",
+      // The live CLI gate validates the official Plan lifecycle. Do not let a
+      // user's current managed-provider default turn this into a CPA/upstream
+      // availability test; provider transport has its own isolated live gate.
+      modelId: process.env.GROK_PLAN_LIVE_MODEL_ID || "grok-4.6",
       mode: "plan",
       log: new LogService(logPath),
     });
@@ -33,7 +37,7 @@ describe.skipIf(!runLive)("Grok Plan mode live acceptance", () => {
     try {
       await adapter.start();
       await Promise.race([
-        adapter.prompt("使用只读工具列出当前目录，然后给出一句话计划；不要创建、修改或删除任何文件。"),
+        adapter.prompt("使用只读工具列出当前目录，形成一句话计划，然后调用 exit_plan_mode 提交该计划等待用户确认；不要创建、修改或删除任何文件。"),
         new Promise((_, reject) => setTimeout(() => reject(new Error("live Plan turn timed out")), 240_000)),
       ]);
       await planDecision;

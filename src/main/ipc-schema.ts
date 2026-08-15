@@ -26,6 +26,7 @@ const RULES: Record<string, Rule> = {
   "diagnostics:cli-capabilities": (args) => optionalBooleanArg(args, 0),
   "diagnostics:support-preview": noArgs,
   "diagnostics:support-export": noArgs,
+  "diagnostics:trace-export": (args) => idArg(args, 0),
   "app-update:check": (args) => optionalBooleanArg(args, 0),
   "app-update:open": (args) => optionalHttpUrlArg(args, 0),
   "workspace:choose": noArgs,
@@ -203,7 +204,7 @@ const RULES: Record<string, Rule> = {
   "session:queue:interject": (args) => { idArg(args, 0); idArg(args, 1); if (args[2] !== undefined) stringArg(args, 2, 2 * 1024 * 1024); },
   "session:fork": (args) => { idArg(args, 0); optionalIdArg(args, 1); optionalObjectArg(args, 2); },
   "session:rewind-points": (args) => idArg(args, 0),
-  "session:rewind": (args) => { idArg(args, 0); idArg(args, 1); enumArg(args, 2, ["conversation", "conversation-and-files", "files"]); },
+  "session:rewind": (args) => { idArg(args, 0); idArg(args, 1); },
   "session:archive": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "tasks:list": noArgs,
   "tasks:kill": (args) => idArg(args, 0),
@@ -807,12 +808,13 @@ function automationPolicyArg(args: unknown[], index: number): void {
   optionalRecordBoolean(value, "notifyOnFailure");
 }
 function mediaCreationArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["kind", "prompt", "aspectRatio", "duration", "resolution", "sessionId", "route", "providerId", "modelId", "referencePaths"]);
+  const value = strictRecordArg(args, index, ["kind", "prompt", "aspectRatio", "duration", "resolution", "voice", "sessionId", "route", "providerId", "modelId", "referencePaths"]);
   requiredRecordEnum(value, "kind", ["image", "video"]);
   requiredRecordString(value, "prompt", 2 * 1024 * 1024);
   requiredRecordEnum(value, "aspectRatio", ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"]);
-  optionalRecordEnum(value, "duration", [6, 10]);
+  optionalRecordEnum(value, "duration", Array.from({ length: 15 }, (_, index) => index + 1));
   optionalRecordEnum(value, "resolution", ["480p", "720p"]);
+  optionalRecordString(value, "voice", 256);
   requiredRecordString(value, "sessionId", 512);
   optionalRecordEnum(value, "route", ["auto", "cli", "provider"]);
   optionalRecordString(value, "providerId", 512);
