@@ -33,6 +33,15 @@ describe("ProviderProfileRecoveryStore", () => {
     await expect(new ProviderProfileRecoveryStore(userData).recoverIfEligible([])).resolves.toBeUndefined();
   });
 
+  it("does not revive last-known-good when a readable empty primary still exists beside an old corrupt bak", async () => {
+    const userData = await root();
+    const service = new ProviderProfileRecoveryStore(userData);
+    await service.save([profile]);
+    await writeFile(join(userData, "providers.json"), `${JSON.stringify({ providers: [] }, null, 2)}\n`, "utf8");
+    await writeFile(join(userData, "providers.json.corrupt-3-00000000-0000-0000-0000-000000000000.bak"), "broken");
+    await expect(service.recoverIfEligible([])).resolves.toBeUndefined();
+  });
+
   it("never duplicates credentials embedded in a legacy endpoint into the recovery files", async () => {
     const userData = await root();
     const service = new ProviderProfileRecoveryStore(userData);

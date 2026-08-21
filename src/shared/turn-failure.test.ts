@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TurnFailure } from "./types";
-import { classifyTurnFailure, summarizeTurnFailure, turnFailureActions, turnFailureLabel } from "./turn-failure";
+import { classifyProviderFailureStage, classifyTurnFailure, summarizeTurnFailure, turnFailureActions, turnFailureLabel } from "./turn-failure";
 
 describe("turn failure classification", () => {
   it("classifies the real Gemini empty-enum rejection as a schema problem, not an outage", () => {
@@ -32,6 +32,17 @@ describe("turn failure classification", () => {
   it("stays unknown rather than forcing an unmatched failure into a bucket", () => {
     expect(classifyTurnFailure({ message: "unexpected condition in adapter" })).toBe("unknown");
     expect(turnFailureActions("cancelled")).toEqual([]);
+  });
+
+  it("maps gateway evidence to a secret-free provider failure stage", () => {
+    expect(classifyProviderFailureStage({})).toBe("route");
+    expect(classifyProviderFailureStage({ observed: { status: 401, phase: "upstream" } })).toBe("authentication");
+    expect(classifyProviderFailureStage({ observed: { status: 403, phase: "response" } })).toBe("authentication");
+    expect(classifyProviderFailureStage({ observed: { reason: "request-validation", phase: "upstream" } })).toBe("translation");
+    expect(classifyProviderFailureStage({ observed: { phase: "upstream" }, classification: "schema-rejected" })).toBe("translation");
+    expect(classifyProviderFailureStage({ observed: { phase: "pre-send" } })).toBe("route");
+    expect(classifyProviderFailureStage({ observed: { phase: "upstream", status: 500 } })).toBe("upstream");
+    expect(classifyProviderFailureStage({ observed: { phase: "response", status: 502 } })).toBe("downstream");
   });
 
   it("summarizes only the fields that are present", () => {

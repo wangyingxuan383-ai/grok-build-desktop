@@ -99,12 +99,15 @@ rl.on("line", (line) => {
       expect(adapter.needsUser).toBe(false);
       expect((adapter as any).pending.size).toBe(0);
       expect(events).toEqual(expect.arrayContaining([
-        expect.objectContaining({ type: "user-message", text: "queued follow-up", delivery: "sent" }),
+        expect.objectContaining({ type: "user-message", text: "queued follow-up", delivery: "sending" }),
+        expect.objectContaining({ type: "user-message-status", delivery: "sent" }),
         expect.objectContaining({ type: "message-chunk", text: "queued final answer" }),
         expect.objectContaining({ type: "turn-completed", presentation: expect.objectContaining({ outcome: "completed" }) }),
         expect.objectContaining({ type: "status", status: "idle", text: "已完成" }),
       ]));
       expect(events.filter((event) => event.type === "turn-completed")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "meta")).toHaveLength(1);
+      expect(events.filter((event) => event.type === "status" && event.status === "idle" && event.text === "已完成")).toHaveLength(1);
     } finally {
       await adapter.dispose(500);
       await log.flush();

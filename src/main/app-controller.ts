@@ -152,7 +152,7 @@ import type {
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
 import { REASONING_EFFORTS } from "../shared/types";
-import { classifyTurnFailure, turnFailureActions } from "../shared/turn-failure";
+import { classifyProviderFailureStage, classifyTurnFailure, turnFailureActions } from "../shared/turn-failure";
 import { AccountVault } from "./services/account-vault";
 import { AuthService } from "./services/auth-service";
 import { buildCliEnv, locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
@@ -2241,19 +2241,34 @@ export class AppController {
     clientMessageId ??= crypto.randomUUID();
     const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "queued");
-    return this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
+    try {
+      return await this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
+    } catch (error) {
+      // The queue row was never created, so its attachment ledger must not
+      // resurrect an unsent user bubble when the conversation is reopened.
+      await this.attachmentCache.removeRecord(sessionId, clientMessageId).catch((cleanupError) => this.log.log(`排队失败后的附件账本清理失败：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`));
+      throw error;
+    }
   }
   async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
     clientMessageId ??= crypto.randomUUID();
     const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
     try {
       const receipt = await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
+      if (receipt.state === "send-now") {
+        // Older CLIs fall back to stop-then-send. Use the same bounded Stop
+        // recovery as the visible stop button; adapter.cancel() alone could
+        // leave the local row waiting forever if the CLI never acknowledges
+        // cancellation. Do not delay the operation receipt while the 8-second
+        // recovery boundary runs in the background.
+        void this.processes.cancelSession(sessionId).catch((cancelError) => this.log.log(`插话降级后的会话停止恢复失败：${cancelError instanceof Error ? cancelError.message : String(cancelError)}`));
+      }
       await this.attachmentCache.record(
         sessionId,
         clientMessageId,
         text,
         prepared.previews,
-        receipt.state === "send-now" ? "queued" : "sent",
+        receipt.state === "send-now" || receipt.state === "queued" ? "queued" : "sent",
         receipt.state === "interjected" ? "interjection" : "user-message",
         receipt.entryId,
       );
@@ -2263,14 +2278,46 @@ export class AppController {
       throw error;
     }
   }
-  editQueuedPrompt(sessionId: string, id: string, text: string) { return this.processes.get(sessionId).editQueuedPrompt(id, text); }
-  removeQueuedPrompt(sessionId: string, id: string) { return this.processes.get(sessionId).removeQueuedPrompt(id); }
-  reorderQueuedPrompt(sessionId: string, id: string, position: number) { return this.processes.get(sessionId).reorderQueuedPrompt(id, position); }
-  clearPromptQueue(sessionId: string) {
-    if (this.offlineUiSessionResponder?.owns(sessionId)) return this.offlineUiSessionResponder.clearPromptQueue(sessionId);
-    return this.processes.get(sessionId).clearPromptQueue();
+  async editQueuedPrompt(sessionId: string, id: string, text: string) {
+    const adapter = this.processes.get(sessionId);
+    const entry = adapter.queuedPrompts().find((value) => value.id === id);
+    const receipt = await adapter.editQueuedPrompt(id, text);
+    if (entry?.clientMessageId) await this.attachmentCache.updateRecord(sessionId, entry.clientMessageId, { text: text.trim() })
+      .catch((error) => this.log.log(`队列附件账本更新失败（队列编辑已生效）：${error instanceof Error ? error.message : String(error)}`));
+    return receipt;
   }
-  interjectQueuedPrompt(sessionId: string, id: string, text?: string) { return this.processes.get(sessionId).interjectQueuedPrompt(id, text); }
+  async removeQueuedPrompt(sessionId: string, id: string) {
+    const adapter = this.processes.get(sessionId);
+    const entry = adapter.queuedPrompts().find((value) => value.id === id);
+    const receipt = await adapter.removeQueuedPrompt(id);
+    if (entry?.clientMessageId) await this.attachmentCache.removeRecord(sessionId, entry.clientMessageId)
+      .catch((error) => this.log.log(`队列附件账本清理失败（队列撤回已生效）：${error instanceof Error ? error.message : String(error)}`));
+    return receipt;
+  }
+  reorderQueuedPrompt(sessionId: string, id: string, position: number) { return this.processes.get(sessionId).reorderQueuedPrompt(id, position); }
+  async clearPromptQueue(sessionId: string) {
+    if (this.offlineUiSessionResponder?.owns(sessionId)) return this.offlineUiSessionResponder.clearPromptQueue(sessionId);
+    const adapter = this.processes.get(sessionId);
+    const entries = adapter.queuedPrompts().filter((entry) => entry.state === "queued");
+    const receipt = await adapter.clearPromptQueue();
+    await Promise.all(entries.flatMap((entry) => entry.clientMessageId
+      ? [this.attachmentCache.removeRecord(sessionId, entry.clientMessageId).catch((error) => this.log.log(`队列附件账本清理失败（批量撤回已生效）：${error instanceof Error ? error.message : String(error)}`))]
+      : []));
+    return receipt;
+  }
+  async interjectQueuedPrompt(sessionId: string, id: string, text?: string) {
+    const adapter = this.processes.get(sessionId);
+    const entry = adapter.queuedPrompts().find((value) => value.id === id);
+    const nextText = text?.trim() || entry?.text;
+    const receipt = await adapter.interjectQueuedPrompt(id, text);
+    if (entry?.clientMessageId && nextText) {
+      await this.attachmentCache.updateRecord(sessionId, entry.clientMessageId, receipt.state === "interjected"
+        ? { text: nextText, delivery: "sent", presentation: "interjection", eventId: id }
+        : { text: nextText })
+        .catch((error) => this.log.log(`插话附件账本更新失败（插话结果已生效）：${error instanceof Error ? error.message : String(error)}`));
+    }
+    return receipt;
+  }
   async forkSession(sessionId: string, rewindPointId?: string, launch?: ExecutionProfileLaunchInput): Promise<SessionForkResult> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
     const parentRuntime = await this.sessionRuntime.get(sessionId);
@@ -2820,7 +2867,7 @@ export class AppController {
           `本回合没有观察到「${provider.name}」兼容网关请求；应用将重新应用自定义模型路由后再发送`,
           ...turnFailureActions(failure.classification),
         ];
-        failure.providerFailureStage = "route";
+        failure.providerFailureStage = classifyProviderFailureStage({});
         return;
       }
       failure.providerId = provider.id;
@@ -2840,13 +2887,7 @@ export class AppController {
         processExitCode: failure.processExitCode,
         cancelled: failure.cancelled,
       });
-      failure.providerFailureStage = observed.status === 401 || observed.status === 403
-        ? "authentication"
-        : observed.reason === "request-validation" || failure.classification === "schema-rejected"
-          ? "translation"
-          : observed.phase === "pre-send"
-            ? "route"
-            : observed.phase === "upstream" ? "upstream" : "downstream";
+      failure.providerFailureStage = classifyProviderFailureStage({ observed, classification: failure.classification });
       // A Gemini-family upstream on the pass-through profile is the single most
       // actionable case: the remedy is one setting, not a retry.
       if (failure.classification === "schema-rejected" && (provider.schemaProfile ?? "standard") === "standard") {

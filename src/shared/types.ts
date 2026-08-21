@@ -721,11 +721,11 @@ export interface QueueOperationReceipt {
   message: string;
   fallback?: boolean;
   /**
-   * Queue edit/remove/reorder commands are private one-way CLI extensions.
-   * `transport` means the JSON-RPC notification was written successfully;
-   * `cli` is reserved for an authoritative x.ai/queue/changed acknowledgement.
+   * `desktop` means the operation was committed to the Desktop-owned durable
+   * queue. `transport`/`cli` are retained for compatibility with receipts from
+   * older builds and genuine CLI-owned operations.
    */
-  acknowledgement?: "transport" | "cli";
+  acknowledgement?: "desktop" | "transport" | "cli";
 }
 
 export interface PlanDecisionReceipt {

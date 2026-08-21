@@ -81,6 +81,24 @@ describe("ConversationProjectionService", { timeout: 60_000 }, () => {
     ]));
     expect(queueInterrupts).toBe(1);
     await restarted.restore("host-exit");
+    expect(queueInterrupts).toBe(2);
+  });
+
+  it("still interrupts submitted queue ownership when the last turn already completed", async () => {
+    const root = await tempRoot();
+    const first = new ConversationProjectionService(root, { isSessionActive: () => true });
+    await first.record({ type: "user-message", sessionId: "done-turn", clientMessageId: "client", text: "work", delivery: "sent" });
+    await first.record({ type: "turn-started", sessionId: "done-turn", presentation: { turnId: "turn", clientMessageId: "client", ordinal: 0, startedAt: "2026-08-20T00:00:00.000Z" } });
+    await first.record({ type: "turn-completed", sessionId: "done-turn", presentation: { turnId: "turn", ordinal: 0, startedAt: "2026-08-20T00:00:00.000Z", completedAt: "2026-08-20T00:00:01.000Z", outcome: "completed" } });
+    await first.dispose();
+
+    let queueInterrupts = 0;
+    const restarted = new ConversationProjectionService(root, {
+      isSessionActive: () => false,
+      interruptQueue: async () => { queueInterrupts += 1; },
+    });
+    const projection = await restarted.restore("done-turn");
+    expect(projection?.events.some((event) => event.type === "turn-completed" && (event.presentation as { outcome?: string } | undefined)?.outcome === "interrupted")).toBe(false);
     expect(queueInterrupts).toBe(1);
   });
 

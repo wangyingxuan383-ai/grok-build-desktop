@@ -25,7 +25,13 @@ if (-not $SkipPackagedUiProbe) {
 }
 
 $Sbom = Join-Path $Release "Grok-Build-Desktop-$Version-SBOM.cdx.json"
-$SbomText = (& npm sbom --omit=dev --sbom-format cyclonedx 2>&1) -join "`n"
+# Release builds may run from an isolated source copy whose node_modules is a
+# read-only junction to the verified workspace dependency tree.  npm's default
+# SBOM walker treats that junction as an extraneous installation even though
+# package-lock.json is authoritative.  Generate the distributable inventory
+# from the lockfile so isolated packaging and the normal workspace produce the
+# same deterministic production dependency graph.
+$SbomText = (& npm sbom --omit=dev --sbom-format cyclonedx --package-lock-only 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw "SBOM 生成失败：$SbomText" }
 [IO.File]::WriteAllText($Sbom, $SbomText + "`n", [Text.UTF8Encoding]::new($false))
 

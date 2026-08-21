@@ -68,6 +68,19 @@ describe("attachment cache", () => {
     ]);
   });
 
+  it("updates or removes a queued attachment ledger entry without resurrecting stale text", async () => {
+    const userData = await root();
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("queue-session", [pasted()]);
+    await service.record("queue-session", "queued-client", "old text", prepared.previews, "queued");
+    await service.updateRecord("queue-session", "queued-client", { text: "edited text" });
+    expect(await service.restore("queue-session")).toEqual([
+      expect.objectContaining({ clientMessageId: "queued-client", text: "edited text", delivery: "queued" }),
+    ]);
+    await service.removeRecord("queue-session", "queued-client");
+    expect(await service.restore("queue-session")).toEqual([]);
+  });
+
   it("recognizes PNG, JPEG and WebP magic bytes and rejects invalid MIME declarations", async () => {
     expect(detectImageMime(PNG)).toBe("image/png");
     expect(detectImageMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");
