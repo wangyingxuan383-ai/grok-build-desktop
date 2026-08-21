@@ -32,7 +32,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@monaco-editor/react": "4.7.0",
     "@noble/hashes": "2.2.0",
     "fflate": "0.8.3",
