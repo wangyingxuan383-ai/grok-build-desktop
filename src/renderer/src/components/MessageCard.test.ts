@@ -2,7 +2,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
-import { isResolvedInteraction, MessageCard, navigateToolLocation, protectedActionScript, redactErrorText, summarizeError, toolLocationCandidates } from "./MessageCard";
+import { isResolvedInteraction, MessageCard, navigateToolLocation, protectedActionScript, redactErrorText, summarizeError, toThumbnailUrl, toolLocationCandidates } from "./MessageCard";
+
+describe("media thumbnail routing", () => {
+  it("requests a cached thumbnail without changing the opaque original handle", () => {
+    const original = "grok-media://access/12345678-1234-1234-1234-123456789abc";
+    expect(toThumbnailUrl(original)).toBe(`${original}?variant=thumbnail`);
+    expect(toThumbnailUrl("data:image/png;base64,AA==")).toBe("data:image/png;base64,AA==");
+  });
+});
 
 describe("tool card editor locations", () => {
   it("normalizes ACP locations and file-tool raw inputs without duplicating targets", () => {
@@ -84,5 +92,16 @@ describe("resolved interaction cards", () => {
       showThinking: true,
       expandTools: false,
     }))).toContain("需要批准");
+  });
+
+  it("offers a free-text answer when none of the suggested question options fit", () => {
+    const markup = renderToStaticMarkup(createElement(MessageCard, {
+      message: { id: "question-other", kind: "question", requestId: 9, questions: [{ question: "选择实现方式", options: [{ label: "方案 A" }, { label: "方案 B" }] }] } as never,
+      sessionId: "session",
+      showThinking: true,
+      expandTools: false,
+    }));
+    expect(markup).toContain("其他（自行输入）");
+    expect(markup).toContain("可以选择建议项");
   });
 });

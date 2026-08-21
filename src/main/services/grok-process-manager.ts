@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, ModelInfo, OfficialFeedbackCapability, OfficialFeedbackReceipt, ProviderLaunchContext, ReasoningEffort, SessionCompactReceipt, SessionMode } from "../../shared/types";
-import { buildCliEnv, detectEffortFlag, locateGrokCli } from "./cli-locator";
+import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
 import type { LogService } from "./log-service";
 import type { SessionRuntimeStateService } from "./session-runtime-state-service";
@@ -26,6 +26,13 @@ export interface ModelSwitchIdentity {
 
 export class GrokProcessManager {
   private readonly sessions = new Map<string, GrokAcpAdapter>();
+  /**
+   * A session has one ACP attach owner.  Renderer navigation, a deep link and
+   * the background hydration path can all ask to open the same cold session
+   * before the first spawn finishes; joining that promise prevents duplicate
+   * CLI processes and makes every waiter observe the owner's failure.
+   */
+  private readonly sessionOpenFlights = new Map<string, Promise<{ sessionId: string }>>();
   private focusedId = "";
   private readonly reaper: NodeJS.Timeout;
 
@@ -302,34 +309,36 @@ export class GrokProcessManager {
       this.focusedId = sessionId;
       return { sessionId };
     }
-    // A task execution profile is allowed to stay fixed for scheduled runs.
-    // Opening an ordinary assigned conversation is different: the choices the
-    // user made inside that conversation must win over both the old profile and
-    // today's global defaults. Keep the distinction explicit so automation does
-    // not accidentally inherit interactive state.
-    const saved = restoreRuntimePreferences ? await this.runtimeState?.get(sessionId) : undefined;
-    const adapter = await this.spawn(
-      cwd,
-      saved?.effort ?? effort,
-      saved?.mode ?? mode,
-      saved?.modelId ?? modelId,
-      permissionDecider,
-      environmentOverride,
-      processOptions,
-      sessionId,
-    );
-    try {
-      await adapter.start(sessionId);
-      await this.rememberSession(sessionId, adapter);
-      this.sessions.set(sessionId, adapter);
-      this.onSessionStarted?.(adapter.extensionLeaseId, sessionId);
-      this.focusedId = sessionId;
-      await this.enforceCap();
-      return { sessionId };
-    } catch (error) {
-      await this.disposeFailedAdapter(adapter, `configured session open ${sessionId}`);
-      throw error;
-    }
+    return this.joinSessionOpen(sessionId, async () => {
+      // A task execution profile is allowed to stay fixed for scheduled runs.
+      // Opening an ordinary assigned conversation is different: the choices the
+      // user made inside that conversation must win over both the old profile and
+      // today's global defaults. Keep the distinction explicit so automation does
+      // not accidentally inherit interactive state.
+      const saved = restoreRuntimePreferences ? await this.runtimeState?.get(sessionId) : undefined;
+      const adapter = await this.spawn(
+        cwd,
+        saved?.effort ?? effort,
+        saved?.mode ?? mode,
+        saved?.modelId ?? modelId,
+        permissionDecider,
+        environmentOverride,
+        processOptions,
+        sessionId,
+      );
+      try {
+        await adapter.start(sessionId);
+        await this.rememberSession(sessionId, adapter);
+        this.sessions.set(sessionId, adapter);
+        this.onSessionStarted?.(adapter.extensionLeaseId, sessionId);
+        this.focusedId = sessionId;
+        await this.enforceCap();
+        return { sessionId };
+      } catch (error) {
+        await this.disposeFailedAdapter(adapter, `configured session open ${sessionId}`);
+        throw error;
+      }
+    });
   }
 
   async open(cwd: string, sessionId: string): Promise<{ sessionId: string }> {
@@ -340,22 +349,24 @@ export class GrokProcessManager {
       this.onEvent({ type: "session-ready", sessionId, models: existing.models, currentModelId: existing.currentModelId, effort: existing.effort });
       return { sessionId };
     }
-    const saved = await this.runtimeState?.get(sessionId);
-    // Existing conversations must not inherit the latest global model from an
-    // unrelated task. Without a Desktop record, let the CLI-reported model win.
-    const adapter = await this.spawn(cwd, saved?.effort ?? "", saved?.mode ?? "agent", saved?.modelId, undefined, undefined, undefined, sessionId);
-    try {
-      await adapter.start(sessionId);
-      await this.rememberSession(sessionId, adapter);
-    } catch (error) {
-      await this.disposeFailedAdapter(adapter, `session open ${sessionId}`);
-      throw error;
-    }
-    this.sessions.set(sessionId, adapter);
-    this.onSessionStarted?.(adapter.extensionLeaseId, sessionId);
-    this.focusedId = sessionId;
-    await this.enforceCap();
-    return { sessionId };
+    return this.joinSessionOpen(sessionId, async () => {
+      const saved = await this.runtimeState?.get(sessionId);
+      // Existing conversations must not inherit the latest global model from an
+      // unrelated task. Without a Desktop record, let the CLI-reported model win.
+      const adapter = await this.spawn(cwd, saved?.effort ?? "", saved?.mode ?? "agent", saved?.modelId, undefined, undefined, undefined, sessionId);
+      try {
+        await adapter.start(sessionId);
+        await this.rememberSession(sessionId, adapter);
+      } catch (error) {
+        await this.disposeFailedAdapter(adapter, `session open ${sessionId}`);
+        throw error;
+      }
+      this.sessions.set(sessionId, adapter);
+      this.onSessionStarted?.(adapter.extensionLeaseId, sessionId);
+      this.focusedId = sessionId;
+      await this.enforceCap();
+      return { sessionId };
+    });
   }
 
   focus(sessionId: string): void {
@@ -613,7 +624,7 @@ export class GrokProcessManager {
     const localModelId = launchIdentity
       ? launchIdentity.localModelId ?? modelId
       : savedRuntime?.modelId ?? modelId;
-    const providerEnvironment = await this.getProviderEnvironment({ scopeId: providerScopeId, sessionId: resumeSessionId, cwd, modelId, localModelId, providerId });
+    const providerEnvironment = await this.getProviderEnvironment({ scopeId: providerScopeId, sessionId: resumeSessionId, cwd, modelId, localModelId, providerId, effort });
     const initialPromptQueue = resumeSessionId ? await this.runtimeState?.getQueue(resumeSessionId) : undefined;
     const extensions = await this.getSessionExtensions?.();
     const effectivePermissionDecider = permissionDecider ?? processOptions?.permissionDecider;
@@ -622,8 +633,13 @@ export class GrokProcessManager {
       ? { GROK_AUTO_COMPACT_THRESHOLD_PERCENT: String(savedRuntime.compaction.thresholdPercent) }
       : {};
     const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, compactionEnvironment, effectiveEnvironmentOverride), workspaceEnvironment);
+    const cliVersion = await readCliVersion(cliPath, env).catch(async (error) => {
+      await this.log.log(`读取 Grok CLI 版本失败；保留兼容的文本文件委托：${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    });
     const adapter = new GrokAcpAdapter({
       cliPath,
+      cliVersion,
       cwd,
       env,
       effort,
@@ -655,6 +671,16 @@ export class GrokProcessManager {
       this.onSessionClosed?.(adapter.extensionLeaseId);
     });
     return adapter;
+  }
+
+  private joinSessionOpen(sessionId: string, owner: () => Promise<{ sessionId: string }>): Promise<{ sessionId: string }> {
+    const pending = this.sessionOpenFlights.get(sessionId);
+    if (pending) return pending;
+    const flight = owner().finally(() => {
+      if (this.sessionOpenFlights.get(sessionId) === flight) this.sessionOpenFlights.delete(sessionId);
+    });
+    this.sessionOpenFlights.set(sessionId, flight);
+    return flight;
   }
 
   private async rememberSession(sessionId: string, adapter: GrokAcpAdapter, identity?: ManagedModelIdentity): Promise<void> {

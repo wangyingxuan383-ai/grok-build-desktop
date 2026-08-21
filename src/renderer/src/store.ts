@@ -36,6 +36,7 @@ import type {
 
 export type UiMessage =
   | { id: string; kind: "user"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
+  | { id: string; kind: "interjection"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; source: "local" | "remote" | "queued" }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thought"; text: string }
   | { id: string; kind: "retry"; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
@@ -266,6 +267,13 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       }
       break;
     }
+    case "interjection": {
+      const index = next.messages.findIndex((message) => message.kind === "interjection" && message.id === event.id);
+      const value: UiMessage = { id: event.id, kind: "interjection", text: event.text, clientMessageId: event.clientMessageId, attachments: event.attachments, source: event.source };
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
+      break;
+    }
     case "user-message-status": {
       const index = next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === event.clientMessageId || message.id === event.clientMessageId));
       if (index >= 0) next.messages[index] = { ...(next.messages[index] as Extract<UiMessage, { kind: "user" }>), delivery: event.delivery };
@@ -273,6 +281,17 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
     }
     case "user-attachments-restore": {
       for (const entry of event.entries) {
+        if (entry.presentation === "interjection") {
+          const id = entry.eventId || entry.clientMessageId;
+          const index = next.messages.findIndex((message) => message.kind === "interjection" && (message.id === id || message.clientMessageId === entry.clientMessageId));
+          if (index >= 0) {
+            const current = next.messages[index] as Extract<UiMessage, { kind: "interjection" }>;
+            next.messages[index] = { ...current, attachments: mergeAttachmentPreviews(current.attachments, entry.attachments) };
+          } else {
+            next.messages.push({ id, kind: "interjection", clientMessageId: entry.clientMessageId, text: entry.text, attachments: entry.attachments, source: "local" });
+          }
+          continue;
+        }
         let index = next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === entry.clientMessageId || message.id === entry.clientMessageId));
         if (index < 0) {
           for (let candidate = next.messages.length - 1; candidate >= 0; candidate--) {
@@ -381,7 +400,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       next.mode = event.mode === "plan" || event.mode === "auto" ? event.mode : "agent";
       break;
     case "meta":
-      next.meta = { ...next.meta, ...event.meta };
+      next.meta = mergePromptMeta(next.meta, event.meta);
       break;
     case "status":
       next.status = event.status;
@@ -559,7 +578,7 @@ function actionRequestId(message: Extract<UiMessage, { kind: "permission" | "que
 }
 
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
-  if (message.kind === "thought" || message.kind === "retry" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
+  if (message.kind === "thought" || message.kind === "retry" || message.kind === "interjection" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
   if (message.kind !== "tool") return "other";
   const value = `${message.tool.kind || ""} ${message.tool.title}`.toLowerCase();
   if (/sub.?agent/.test(value)) return "subagents";
@@ -595,6 +614,19 @@ function mergeAttachmentPreviews(current: UserMessageAttachmentPreview[] | undef
     else merged.push(attachment);
   }
   return merged;
+}
+
+export function mergePromptMeta(current: PromptMeta, incoming: PromptMeta): PromptMeta {
+  const tokenKeys = ["totalTokens", "inputTokens", "outputTokens", "cachedReadTokens", "reasoningTokens"] as const;
+  const onlyZeroPlaceholder = tokenKeys.some((key) => incoming[key] === 0)
+    && tokenKeys.every((key) => incoming[key] === undefined || incoming[key] === 0);
+  if (!onlyZeroPlaceholder) return { ...current, ...incoming };
+  const next = { ...current, ...incoming };
+  // Preserve a known positive snapshot when a Compact/session-info replay
+  // publishes an all-zero placeholder. With no prior evidence, exact zero is
+  // retained rather than converted to unknown.
+  for (const key of tokenKeys) if ((current[key] ?? 0) > 0 && incoming[key] === 0) next[key] = current[key];
+  return next;
 }
 
 function mergeTurnPresentation(current: TurnPresentation[], incoming: TurnPresentation): TurnPresentation[] {

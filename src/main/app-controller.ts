@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { appendFile, copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { extname, isAbsolute, join, relative, resolve } from "node:path";
+import { stableRuntimeTaskIdentifier } from "./services/runtime-task-identity";
+import { runSessionRebindTransaction, SessionRebindTransactionError } from "./services/session-rebind-transaction";
 import type {
   AppSettings,
   Attachment,
@@ -164,6 +166,7 @@ import { JsonStore } from "./services/json-store";
 import { AgentChangeService } from "./services/agent-change-service";
 import { TurnFileChangeJournal } from "./services/turn-file-change-journal";
 import { MediaAccessService } from "./services/media-access-service";
+import { MediaThumbnailService } from "./services/media-thumbnail-service";
 import { TokenActivityService } from "./services/token-activity-service";
 import { ConversationProjectionService } from "./services/conversation-projection-service";
 import { conversationProjectionMatches } from "./services/conversation-search";
@@ -293,6 +296,7 @@ export class AppController {
   private readonly agentChanges = new AgentChangeService();
   private readonly turnFileChanges = new TurnFileChangeJournal();
   private readonly mediaAccess: MediaAccessService;
+  private readonly mediaThumbnails: MediaThumbnailService;
   private readonly tokenActivity: TokenActivityService;
   private readonly runningSessions = new Set<string>();
   private readonly projectionReplaying = new Set<string>();
@@ -300,6 +304,7 @@ export class AppController {
   private readonly projectionReplayBuffers = new Map<string, ChatEvent[]>();
   private readonly projectionReplayTimers = new Map<string, NodeJS.Timeout>();
   private readonly sessionHydrationGenerations = new Map<string, number>();
+  private readonly sessionOpenFlights = new Map<string, Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }>>();
   private nextHydrationGeneration = 0;
   private readonly mediaJobs = new Map<string, MediaGenerationJob>();
   private readonly mediaJobControls = new Map<string, { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string } }>();
@@ -319,6 +324,15 @@ export class AppController {
     this.catalog = new SessionCatalog(userDataPath);
     this.attachmentCache = new AttachmentCacheService(userDataPath);
     this.mediaAccess = new MediaAccessService(userDataPath);
+    this.mediaThumbnails = new MediaThumbnailService(userDataPath, ({ sourcePath, maxEdge, quality }) => {
+      const source = nativeImage.createFromPath(sourcePath);
+      if (source.isEmpty()) throw new Error("无法读取缩略图源图片");
+      const size = source.getSize();
+      const resized = Math.max(size.width, size.height) > maxEdge
+        ? source.resize(size.width >= size.height ? { width: maxEdge, quality: "good" } : { height: maxEdge, quality: "good" })
+        : source;
+      return resized.toJPEG(quality);
+    });
     this.turnPresentations = new TurnPresentationService(userDataPath);
     this.sessionRuntime = new SessionRuntimeStateService(userDataPath);
     this.conversationProjections = new ConversationProjectionService(userDataPath, {
@@ -330,6 +344,8 @@ export class AppController {
         entries: await this.sessionRuntime.getQueue(sessionId),
         terminalEntries: await this.sessionRuntime.getTerminalQueue(sessionId),
       }),
+      isSessionActive: (sessionId) => Boolean(this.processes?.snapshot(sessionId)),
+      interruptQueue: (sessionId) => this.sessionRuntime.interruptInflightQueue(sessionId).then(() => undefined),
     });
     this.codex = new CodexSessionCatalog(userDataPath, this.log);
     this.claude = new ClaudeSessionCatalog(userDataPath, this.log);
@@ -559,6 +575,11 @@ export class AppController {
     if (!info.isFile()) throw new Error("媒体文件不存在");
     const mimeType = localMediaMimeType(path);
     if (!mimeType) throw new Error("媒体文件类型不受支持");
+    if (new URL(source).searchParams.get("variant") === "thumbnail") {
+      if (!mimeType.startsWith("image/")) throw new Error("只有图片支持缩略图");
+      const record = await this.mediaAccess.resolve(source, this.focusedSessionId || undefined);
+      return this.mediaThumbnails.get(record.sessionId, path);
+    }
     return { path, mimeType, size: info.size };
   }
 
@@ -617,6 +638,7 @@ export class AppController {
     await this.attachmentCache.sweep(existingSessionIds).catch(() => this.log.log("附件缓存清理失败"));
     await sweepSessionMediaCache(join(this.userDataPath, "session-media"), existingSessionIds)
       .catch(() => this.log.log("媒体缓存清理失败"));
+    await this.mediaThumbnails.sweep(existingSessionIds).catch(() => this.log.log("媒体缩略图缓存清理失败"));
     await this.mediaAccess.sweep(existingSessionIds).catch(() => this.log.log("媒体访问句柄清理失败"));
     await this.uiState.sweepDraftAttachments().catch(() => this.log.log("输入框文本草稿缓存清理失败"));
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1") await this.auth.importCurrentIfNeeded().catch((error) => this.log.log(error));
@@ -1095,6 +1117,16 @@ export class AppController {
   }
 
   async openSession(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
+    const pending = this.sessionOpenFlights.get(sessionId);
+    if (pending) return pending;
+    const flight = this.openSessionOwned(cwd, sessionId).finally(() => {
+      if (this.sessionOpenFlights.get(sessionId) === flight) this.sessionOpenFlights.delete(sessionId);
+    });
+    this.sessionOpenFlights.set(sessionId, flight);
+    return flight;
+  }
+
+  private async openSessionOwned(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
     const generation = ++this.nextHydrationGeneration;
     this.sessionHydrationGenerations.set(sessionId, generation);
     const emitHydration = (state: import("../shared/types").SessionHydrationState, message?: string): void => {
@@ -1219,6 +1251,7 @@ export class AppController {
     this.agentChanges.clear(sessionId);
     this.turnFileChanges.clearSession(sessionId);
     await this.mediaAccess.removeSession(sessionId).catch((error) => this.log.log(`媒体访问句柄清理失败：${error instanceof Error ? error.message : String(error)}`));
+    await this.mediaThumbnails.removeSession(sessionId).catch((error) => this.log.log(`媒体缩略图缓存清理失败：${error instanceof Error ? error.message : String(error)}`));
     await this.dashboard.clear(`session:${sessionId}`);
     await this.attachmentCache.cleanupSession(sessionId);
     await rm(join(this.userDataPath, "session-media", createHashForPath(sessionId)), { recursive: true, force: true })
@@ -2213,13 +2246,20 @@ export class AppController {
   async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
     clientMessageId ??= crypto.randomUUID();
     const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
-    await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
     try {
       const receipt = await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
-      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent");
+      await this.attachmentCache.record(
+        sessionId,
+        clientMessageId,
+        text,
+        prepared.previews,
+        receipt.state === "send-now" ? "queued" : "sent",
+        receipt.state === "interjected" ? "interjection" : "user-message",
+        receipt.entryId,
+      );
       return receipt;
     } catch (error) {
-      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed");
+      await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "failed");
       throw error;
     }
   }
@@ -2307,12 +2347,17 @@ export class AppController {
   private async rebindSession(source: SessionSummary, targetCwd: string): Promise<SessionRebindReceipt> {
     const parentRuntime = await this.sessionRuntime.get(source.id);
     const parentAssignment = await this.profiles.assignment(source.id);
+    const originalLive = this.processes.snapshot(source.id);
+    const liveStatus = this.processes.liveStatuses().get(source.id);
+    if (liveStatus === "working" || liveStatus === "needs-user") {
+      throw new Error("会话正在运行或等待操作，完成或停止后再重新绑定项目路径");
+    }
     const transactionId = randomUUID();
     let targetMaterialized = false;
     let committed = false;
     await this.appendRebindJournal({ transactionId, status: "started", sessionId: source.id, sourceCwd: source.cwd, targetCwd, at: new Date().toISOString() });
     try {
-      if (this.processes.snapshot(source.id)) await this.processes.close(source.id, false);
+      if (originalLive) await this.processes.close(source.id, false);
       await this.catalog.materializeAtWorkspace(source.cwd, targetCwd, source.id);
       targetMaterialized = true;
       try {
@@ -2320,14 +2365,13 @@ export class AppController {
       } catch (error) {
         await this.processes.close(source.id, false).catch(() => undefined);
         await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
+        if (parentRuntime) await this.sessionRuntime.save(parentRuntime).catch(() => undefined);
+        else await this.sessionRuntime.deletePreferences(source.id).catch(() => undefined);
+        if (originalLive) await this.processes.open(source.cwd, source.id).catch(() => undefined);
         throw new Error(`复制后的会话无法由当前 CLI 重新打开：${error instanceof Error ? error.message : String(error)}`);
       }
-      // From here the target copy is independently usable. Never discard it
-      // merely because a secondary Desktop metadata update fails.
-      committed = true;
-      if (parentAssignment) await this.profiles.assign({ ...structuredClone(parentAssignment), sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined, createdAt: new Date().toISOString() });
       const settings = await this.settingsStore.get();
-      await this.sessionRuntime.save(buildForkRuntimePreferences(parentRuntime, {
+      const targetRuntime = buildForkRuntimePreferences(parentRuntime, {
         sessionId: source.id, cwd: targetCwd,
         modelId: parentRuntime?.modelId ?? settings.defaultModel,
         providerId: parentRuntime?.providerId,
@@ -2335,9 +2379,40 @@ export class AppController {
         mode: parentRuntime?.mode ?? settings.defaultMode,
         profileId: parentRuntime?.profileId,
         compaction: parentRuntime?.compaction,
-      }));
-      await this.conversationProjections.rebindRuntime(source.id, targetCwd);
-      await this.tokenActivity.rebindSession(source.id, source.id, targetCwd);
+      });
+      const restoreRuntime = async (): Promise<void> => {
+        if (parentRuntime) await this.sessionRuntime.save(parentRuntime);
+        else await this.sessionRuntime.deletePreferences(source.id);
+      };
+      try {
+        await runSessionRebindTransaction([
+          ...(parentAssignment ? [{
+            name: "执行档案绑定",
+            apply: () => this.profiles.assign({ ...structuredClone(parentAssignment), sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined, createdAt: new Date().toISOString() }),
+            rollback: () => this.profiles.assign(parentAssignment),
+          }] : []),
+          {
+            name: "会话运行配置",
+            apply: () => this.sessionRuntime.save(targetRuntime).then(() => undefined),
+            // Runtime was already changed by ProcessManager.open; the initial
+            // rollback below owns restoration and avoids duplicate writes.
+            rollback: () => undefined,
+          },
+          { name: "会话投影根目录", apply: () => this.conversationProjections.rebindRuntime(source.id, targetCwd), rollback: () => this.conversationProjections.rebindRuntime(source.id, source.cwd) },
+          { name: "Token 工作区归属", apply: () => this.tokenActivity.rebindSession(source.id, source.id, targetCwd), rollback: () => this.tokenActivity.rebindSession(source.id, source.id, source.cwd) },
+        ], [{ name: "ACP 打开写入的运行配置", rollback: restoreRuntime }]);
+      } catch (error) {
+        await this.processes.close(source.id, false).catch(() => undefined);
+        const rollbackIncomplete = error instanceof SessionRebindTransactionError && error.rollbackErrors.length > 0;
+        if (!rollbackIncomplete) {
+          await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
+          if (originalLive) await this.processes.open(source.cwd, source.id).catch((restoreError) => {
+            throw new Error(`元数据已回滚，但原会话重新加载失败：${restoreError instanceof Error ? restoreError.message : String(restoreError)}`, { cause: error });
+          });
+        }
+        throw error;
+      }
+      committed = true;
       const receipt: SessionRebindReceipt = {
         sessionId: source.id, parentSessionId: source.id, cwd: targetCwd,
         profileId: parentRuntime?.profileId ?? parentAssignment?.profileId,
@@ -2349,9 +2424,8 @@ export class AppController {
       await this.catalog.removeWorkspaceCopy(source.cwd, source.id).catch((error) => this.log.log(`旧路径会话副本清理失败（新路径副本已验证）：${error instanceof Error ? error.message : String(error)}`));
       return receipt;
     } catch (error) {
-      if (targetMaterialized && !committed) {
+      if (targetMaterialized && !committed && this.processes.snapshot(source.id)?.cwd === targetCwd) {
         await this.processes.close(source.id, false).catch(() => undefined);
-        await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
       }
       const message = error instanceof Error ? error.message : String(error);
       await this.appendRebindJournal({ transactionId, status: "failed", sessionId: source.id, sourceCwd: source.cwd, targetCwd, message, at: new Date().toISOString() }).catch(() => undefined);
@@ -2375,14 +2449,14 @@ export class AppController {
   async listBackgroundTasks(): Promise<BackgroundTaskSummary[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const output: BackgroundTaskSummary[] = [];
-    for (const { sessionId, entries } of this.processes.promptQueues()) for (const entry of entries) output.push({ id: `queue:${sessionId}:${entry.id}`, sessionId, kind: "queue", title: entry.text || "等待消息", status: entry.state === "sending" || entry.state === "interjected" ? "running" : "queued", updatedAt: entry.createdAt, detail: `队列第 ${entry.position + 1} 项` });
+    for (const { sessionId, entries } of this.processes.promptQueues()) for (const entry of entries) output.push({ id: `queue:${sessionId}:${entry.id}`, sessionId, kind: "queue", title: entry.text || "等待消息", status: entry.state === "queued" ? "queued" : "running", updatedAt: entry.createdAt, detail: `队列第 ${entry.position + 1} 项` });
     for (const { sessionId, result, subagents } of await this.processes.backgroundTaskResults()) {
       const values = Array.isArray(result.tasks) ? result.tasks : Array.isArray(result.items) ? result.items : [];
-      for (const value of values) { const row = value && typeof value === "object" ? value as Record<string, unknown> : {}; const completed = row.completed === true; const exitCode = typeof row.exit_code === "number" ? row.exit_code : typeof row.exitCode === "number" ? row.exitCode : undefined; const status = completed ? exitCode && exitCode !== 0 ? "failed" : "completed" : normalizeBackgroundStatus(row.status); const rawKind = String(row.kind ?? row.task_type ?? "command").toLowerCase(); output.push({ id: `${sessionId}:${String(row.id ?? row.taskId ?? row.task_id ?? crypto.randomUUID())}`, sessionId, kind: rawKind.includes("subagent") ? "subagent" : rawKind.includes("loop") || rawKind.includes("schedule") ? "loop" : rawKind.includes("monitor") ? "monitor" : "command", title: String(row.title ?? row.name ?? row.display_command ?? row.command ?? "后台任务"), status, updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : typeof row.updated_at === "string" ? row.updated_at : new Date().toISOString(), detail: typeof row.detail === "string" ? row.detail : completed ? `退出代码 ${exitCode ?? "未知"}` : undefined }); }
+      for (const [ordinal, value] of values.entries()) { const row = value && typeof value === "object" ? value as Record<string, unknown> : {}; const completed = row.completed === true; const exitCode = typeof row.exit_code === "number" ? row.exit_code : typeof row.exitCode === "number" ? row.exitCode : undefined; const status = completed ? exitCode && exitCode !== 0 ? "failed" : "completed" : normalizeBackgroundStatus(row.status); const rawKind = String(row.kind ?? row.task_type ?? "command").toLowerCase(); output.push({ id: `${sessionId}:${stableRuntimeTaskIdentifier(row, ordinal)}`, sessionId, kind: rawKind.includes("subagent") ? "subagent" : rawKind.includes("loop") || rawKind.includes("schedule") ? "loop" : rawKind.includes("monitor") ? "monitor" : "command", title: String(row.title ?? row.name ?? row.display_command ?? row.command ?? "后台任务"), status, updatedAt: typeof row.updatedAt === "string" ? row.updatedAt : typeof row.updated_at === "string" ? row.updated_at : new Date().toISOString(), detail: typeof row.detail === "string" ? row.detail : completed ? `退出代码 ${exitCode ?? "未知"}` : undefined }); }
       const running = Array.isArray(subagents?.subagents) ? subagents.subagents : [];
-      for (const value of running) {
+      for (const [ordinal, value] of running.entries()) {
         const row = value && typeof value === "object" ? value as Record<string, unknown> : {};
-        output.push({ id: `${sessionId}:subagent:${String(row.subagentId ?? row.subagent_id ?? crypto.randomUUID())}`, sessionId, kind: "subagent", title: String(row.description ?? row.subagentType ?? row.subagent_type ?? "子 Agent"), status: "running", updatedAt: new Date().toISOString(), detail: `${Number(row.turnCount ?? row.turn_count ?? 0)} 回合 · ${Number(row.toolCallCount ?? row.tool_call_count ?? 0)} 次工具` });
+        output.push({ id: `${sessionId}:subagent:${stableRuntimeTaskIdentifier(row, ordinal)}`, sessionId, kind: "subagent", title: String(row.description ?? row.subagentType ?? row.subagent_type ?? "子 Agent"), status: "running", updatedAt: new Date().toISOString(), detail: `${Number(row.turnCount ?? row.turn_count ?? 0)} 回合 · ${Number(row.toolCallCount ?? row.tool_call_count ?? 0)} 次工具` });
       }
     }
     for (const task of await this.automations.list()) output.push({ id: `automation:${task.id}`, kind: "automation", title: task.name, status: task.enabled ? "queued" : "cancelled", updatedAt: task.updatedAt, detail: task.registrationStatus });
@@ -2717,8 +2791,15 @@ export class AppController {
     delete failure.gatewayScopeId;
     try {
       failure.message = redactSecrets(failure.message).slice(0, 8_000);
-      const provider = await this.providers?.providerForModel(failure.modelId);
+      const routeReceipt = this.providers?.routeReceipt(gatewayScopeId);
+      const provider = routeReceipt
+        ? await this.providers?.managedProviderById(routeReceipt.providerId)
+        : await this.providers?.providerForModel(failure.modelId);
       if (!provider) { failure.nextActions = turnFailureActions(failure.classification); return; }
+      if (routeReceipt) {
+        failure.providerRoute = routeReceipt;
+        failure.providerId = routeReceipt.providerId;
+      }
       // Match only a recent observation: an older one describes a different turn.
       const observedFailure = this.providers?.gatewayFailures(provider.id, gatewayScopeId)
         .find((record) => {
@@ -2739,6 +2820,7 @@ export class AppController {
           `本回合没有观察到「${provider.name}」兼容网关请求；应用将重新应用自定义模型路由后再发送`,
           ...turnFailureActions(failure.classification),
         ];
+        failure.providerFailureStage = "route";
         return;
       }
       failure.providerId = provider.id;
@@ -2758,6 +2840,13 @@ export class AppController {
         processExitCode: failure.processExitCode,
         cancelled: failure.cancelled,
       });
+      failure.providerFailureStage = observed.status === 401 || observed.status === 403
+        ? "authentication"
+        : observed.reason === "request-validation" || failure.classification === "schema-rejected"
+          ? "translation"
+          : observed.phase === "pre-send"
+            ? "route"
+            : observed.phase === "upstream" ? "upstream" : "downstream";
       // A Gemini-family upstream on the pass-through profile is the single most
       // actionable case: the remedy is one setting, not a retry.
       if (failure.classification === "schema-rejected" && (provider.schemaProfile ?? "standard") === "standard") {
@@ -2830,6 +2919,7 @@ export class AppController {
       if (managed && !environment[managedBaseUrlEnvironmentName(managed.id)]) {
         throw new Error(`提供商“${managed.name}”的网关路由未建立`);
       }
+      if (managed && managedModel) this.providers.captureRouteReceipt(context, managed, managedModel);
       return environment;
     }
     catch (error) {

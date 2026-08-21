@@ -26,7 +26,7 @@ import { ActionDialog, ComputerPermissionDialog, ComputerRiskDialog, type Dialog
 import { ControlPanel, OfficialFeedbackDialog, SessionHistoryPanel } from "./components/AppAuxiliaryPanels";
 import { RightDock } from "./components/RightDock";
 import { useSessionDraft } from "./hooks/use-session-draft";
-import { ConversationViewport } from "./components/ConversationViewport";
+import { ConversationViewport, shouldFollowConversation } from "./components/ConversationViewport";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationDerivedState } from "./hooks/use-conversation-derived-state";
 import { useNavigationController } from "./hooks/use-navigation-controller";
@@ -318,7 +318,21 @@ export default function App(): React.JSX.Element {
   }, []);
   const activeWorkspaceSummary = store.workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, store.settings?.activeWorkspace || ""));
   const newDraftKey = activeWorkspaceSummary ? `new:${activeWorkspaceSummary.projectId}` : store.settings?.activeWorkspace ? `new:${normalizedWorkspacePath(store.settings.activeWorkspace)}` : "";
-  const { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask, discardCurrentDraft } = useSessionDraft({
+  const {
+    draftKey,
+    activeSending,
+    composer,
+    setComposer,
+    capability,
+    setCapability,
+    newTask,
+    setNewTask,
+    beginDraftSubmission,
+    clearClaimedDraft,
+    shouldRestoreClaimedDraft,
+    endDraftSubmission,
+    discardCurrentDraft,
+  } = useSessionDraft({
     activeSessionId: store.activeSessionId,
     workspace: store.settings?.activeWorkspace || "",
     newDraftKey,
@@ -649,6 +663,7 @@ export default function App(): React.JSX.Element {
       || view?.status === "needs-user"
       || (delivery === "normal" && view?.status === "working")) return;
     const attachments = [...store.attachments];
+    const draftClaimId = beginDraftSubmission();
     const trackedSubmissionKeys = new Set(sessionSubmissionKeys(store.activeSessionId, sourceDraftKey));
     updateSendingSessions(trackedSubmissionKeys, true);
     let sessionId = store.activeSessionId;
@@ -668,14 +683,12 @@ export default function App(): React.JSX.Element {
         const staleComment = await findStaleReviewComment(reviewComments, async (scope) => (await window.grokDesktop.getGitReview(executionRoot, scope)).id);
         if (staleComment) { store.setError(`审核批注 ${staleComment.path}:L${staleComment.line} 所依据的变更已更新，请在 Review 中重新定位。`); return; }
       }
-      setComposer("");
-      setCapability(undefined);
+      clearClaimedDraft(draftClaimId);
       if (cwd && text) {
         void window.grokDesktop.appendPromptHistory(cwd, text);
         setPromptHistory((values) => [text, ...values.filter((value) => value !== text)].slice(0, 50));
         setHistoryIndex(-1);
       }
-      store.clearAttachments();
       setReviewComments([]);
       if (sourceDraftKey) await window.grokDesktop.clearDraft(sourceDraftKey);
       if (sessionId !== sourceDraftKey) await window.grokDesktop.clearDraft(sessionId);
@@ -708,18 +721,28 @@ export default function App(): React.JSX.Element {
       if (delivery !== "normal") window.setTimeout(() => setComposerNotice(""), 4_000);
     }
     catch (error) {
-      await window.grokDesktop.setDraft(sessionId || sourceDraftKey, text, submittedCapability, attachments, sessionId ? undefined : newTask).catch(() => undefined);
       const current = useAppStore.getState();
       const currentWorkspace = current.workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, current.settings?.activeWorkspace || ""));
       const currentDraftKey = current.activeSessionId || (currentWorkspace ? `new:${currentWorkspace.projectId}` : current.settings?.activeWorkspace ? `new:${normalizedWorkspacePath(current.settings.activeWorkspace)}` : "");
-      if (currentDraftKey === sessionId || currentDraftKey === sourceDraftKey) {
+      const ownsCurrentComposer = currentDraftKey === sessionId || currentDraftKey === sourceDraftKey;
+      const mayRestore = ownsCurrentComposer && shouldRestoreClaimedDraft(draftClaimId);
+      // Never let a late transport failure overwrite a follow-up the user has
+      // already typed. If the user navigated away, the failed prompt is still
+      // preserved under the session/draft it actually belonged to.
+      if (!ownsCurrentComposer || mayRestore) {
+        await window.grokDesktop.setDraft(sessionId || sourceDraftKey, text, submittedCapability, attachments, sessionId ? undefined : newTask).catch(() => undefined);
+      }
+      if (mayRestore) {
         setComposer(text);
         setCapability(submittedCapability);
         current.addAttachments(attachments);
         store.setError(errorMessage(error));
+      } else if (ownsCurrentComposer) {
+        store.setError(`${errorMessage(error)}（已保留你随后输入的内容）`);
       }
     }
     finally {
+      endDraftSubmission(draftClaimId);
       updateSendingSessions(trackedSubmissionKeys, false);
       if (delivery === "normal" && followTurnRef.current) settleConversationBottom(sessionId);
       if (useAppStore.getState().activeSessionId === sessionId) focusComposer();
@@ -981,7 +1004,7 @@ export default function App(): React.JSX.Element {
             matchIndex={conversationMatches[conversationMatch]}
             atBottom={atBottom}
             virtuosoRef={virtuosoRef}
-            shouldFollow={(isAtBottom) => isAtBottom || forceFollowRef.current}
+            shouldFollow={(isAtBottom) => shouldFollowConversation(isAtBottom, forceFollowRef.current)}
             onAtBottom={(value) => { atBottomRef.current = value; if (value && !followTurnRef.current) forceFollowRef.current = false; setAtBottom(value); }}
             onWheelUp={() => { followTurnRef.current = false; forceFollowRef.current = false; }}
             onScrollBottom={() => { followTurnRef.current = false; forceFollowRef.current = true; atBottomRef.current = true; setAtBottom(true); scrollConversationNow("smooth"); }}

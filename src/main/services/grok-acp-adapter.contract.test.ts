@@ -83,7 +83,7 @@ rl.on("line", async (line) => {
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "call-image", title: "image_gen", status: "in_progress" } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "call-image", title: "image_gen", status: "completed", content: [{ type: "content", content: { type: "image", data: "aGVsbG8=", mimeType: "image/png" } }, { type: "content", content: { type: "text", text: JSON.stringify({ path: generatedImage }) } }] } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "call-image", title: "image_gen", status: "completed", content: [{ type: "content", content: { type: "image", data: "aGVsbG8=", mimeType: "image/png" } }, { type: "content", content: { type: "text", text: JSON.stringify({ path: generatedImage }) } }], structuredContent: { exactId: "9223372036854775807", result: { ok: true } } } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "task_backgrounded", tool_call_id: "call-bg", task_id: "task-1", command: "echo hello", description: "Background echo" } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "task_completed", task_snapshot: { task_id: "task-1", command: "echo hello", completed: true, exit_code: 0, output: "hello", truncated: true } } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "turn_completed", usage: { totalTokens: 41 } } } });
@@ -155,8 +155,8 @@ rl.on("line", async (line) => {
       expect(JSON.parse(await readFile(queueInterjectMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/interject", params: { sessionId: "fake-session", id: queued._meta.promptId, expectedVersion: 2 } });
       const interjectReceipt = await adapter.interjectPrompt("same turn");
       expect(interjectReceipt).toMatchObject({ state: "interjected" });
-      expect(interjectReceipt.message).toContain("同一会话的下一回合");
-      expect(interjectReceipt.message).toContain("不能撤回");
+      expect(interjectReceipt.message).toContain("当前正在运行的回合");
+      expect(interjectReceipt.message).toContain("不是队列中的下一回合");
       await waitForFile(interjectMarker);
       expect(JSON.parse(await readFile(interjectMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", text: "same turn", interjectionId: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
       expect(await adapter.fork("3")).toMatchObject({ newSessionId: "forked-session" });
@@ -215,9 +215,11 @@ rl.on("line", async (line) => {
         expect.objectContaining({ type: "thought-chunk", sessionId: "fake-session", text: "thinking" }),
         expect.objectContaining({ type: "user-message", sessionId: "fake-session", clientMessageId: "client-replayed", attachments: [expect.objectContaining({ name: "notes.md", kind: "file" })] }),
         expect.objectContaining({ type: "message-chunk", sessionId: "fake-session", text: "hello" }),
+        expect.objectContaining({ type: "interjection", sessionId: "fake-session", text: "same turn", source: "local" }),
         expect.objectContaining({ type: "commands", sessionId: "fake-session", commands: [expect.objectContaining({ name: "bundled:imagine" })] }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: "aGVsbG8=", isData: true }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: join(root, "images", "generated.jpg") }),
+        expect.objectContaining({ type: "tool-call", sessionId: "fake-session", tool: expect.objectContaining({ toolCallId: "call-image", structuredContent: { exactId: "9223372036854775807", result: { ok: true } } }) }),
         // turn_completed is the authoritative terminal payload. A later/absent
         // prompt response must not keep the adapter working or replace its usage.
         expect.objectContaining({ type: "meta", sessionId: "fake-session", meta: expect.objectContaining({ totalTokens: 41 }) }),

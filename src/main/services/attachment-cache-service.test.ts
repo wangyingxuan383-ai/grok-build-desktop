@@ -53,6 +53,21 @@ describe("attachment cache", () => {
     await expect(stat(dirname(preview.source!))).rejects.toThrow();
   });
 
+  it("preserves current-turn interjection identity instead of restoring it as a new user turn", async () => {
+    const userData = await root();
+    const service = new AttachmentCacheService(userData);
+    const prepared = await service.prepare("interjection-session", [pasted()]);
+    await service.record("interjection-session", "client-interjection", "补充当前回合", prepared.previews, "sent", "interjection", "interjection-1");
+    expect(await new AttachmentCacheService(userData).restore("interjection-session")).toEqual([
+      expect.objectContaining({
+        clientMessageId: "client-interjection",
+        presentation: "interjection",
+        eventId: "interjection-1",
+        text: "补充当前回合",
+      }),
+    ]);
+  });
+
   it("recognizes PNG, JPEG and WebP magic bytes and rejects invalid MIME declarations", async () => {
     expect(detectImageMime(PNG)).toBe("image/png");
     expect(detectImageMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))).toBe("image/jpeg");

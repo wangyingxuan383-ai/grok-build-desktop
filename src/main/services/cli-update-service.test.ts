@@ -99,10 +99,10 @@ describe("CliUpdateService", () => {
     expect(result.snapshot).toMatchObject({ closeOutcomeSupported: true, gitStatusUsesExplicitOptions: true });
   });
 
-  it("keeps sanitized fixtures for every verified 1.0 patch and records the live 1.0.3 baseline", async () => {
+  it("keeps sanitized fixtures through the source-audited stable 1.0.5 target and records the live 1.0.3 baseline", async () => {
     expect(CLI_V1_COMPATIBILITY_PROFILE).toMatchObject({
-      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.3", stableTargetVersion: "1.0.3", liveVerifiedVersion: "1.0.3",
-      fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3"],
+      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.5", stableTargetVersion: "1.0.5", liveVerifiedVersion: "1.0.3",
+      fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"],
     });
     for (const version of CLI_V1_COMPATIBILITY_PROFILE.fixtureVersions) {
       const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", `initialize-${version}.json`), "utf8"));
@@ -113,7 +113,7 @@ describe("CliUpdateService", () => {
   });
 
   it("fails closed for an unknown future 1.x patch instead of enabling it from the major number", () => {
-    expect(offlineCompatibilityGate("1.0.4")).toMatchObject({
+    expect(offlineCompatibilityGate("1.0.6")).toMatchObject({
       status: "failed", major: 1, checks: [expect.objectContaining({ id: "unverified-minor" })],
     });
   });

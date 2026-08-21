@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildGrokAgentArgs, buildPromptText, buildSessionAttachMeta, demuxProviderThinkingText, extractAcpToolDiff, FIRST_EVENT_DIAGNOSTIC_MS, FIRST_EVENT_WAIT_MS, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, normalizeRuntimeEventEnvelope, normalizeRuntimeHandshake, normalizeSessionCloseReceipt, normalizeToolReadOnly, resolveModelId, resolveSessionPlanFile } from "./grok-acp-adapter";
+import { buildAcpClientCapabilities, buildGrokAgentArgs, buildPromptText, buildSessionAttachMeta, demuxProviderThinkingText, extractAcpToolDiff, FIRST_EVENT_DIAGNOSTIC_MS, FIRST_EVENT_WAIT_MS, GrokAcpAdapter, INTERACTIVE_PROMPT_TIMEOUT_MS, isSessionOwnedRuntimeMethod, normalizeCliSessionInfo, normalizeCliSessionList, normalizeCliSessionUsage, normalizePromptQueue, normalizeRuntimeEventEnvelope, normalizeRuntimeHandshake, normalizeSessionCloseReceipt, normalizeToolReadOnly, resolveModelId, resolveSessionPlanFile, runtimeNotificationSessionId } from "./grok-acp-adapter";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
@@ -12,11 +12,20 @@ describe("Grok ACP process arguments", () => {
     expect(normalizeToolReadOnly({ title: "read_file" })).toBeUndefined();
   });
   it("sends the interactive Desktop attach policy on every session attach", () => {
-    expect(buildSessionAttachMeta({ owner: "desktop" }, ["C:\\plugins\\one"])).toEqual({
+    expect(buildSessionAttachMeta({ owner: "desktop", reasoningEffort: "low" }, ["C:\\plugins\\one"], undefined, "high")).toEqual({
       owner: "desktop",
       pluginDirs: ["C:\\plugins\\one"],
+      reasoningEffort: "high",
       startupHints: { nonInteractive: false, deliveryTools: [] },
     });
+  });
+
+  it("lets source-verified 1.0.4-1.0.5 own image-aware reads without weakening unknown versions", () => {
+    expect(buildAcpClientCapabilities("grok 1.0.3 (old)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.4 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.5 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.6 (future)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities()).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
   });
 
   it("reads initialize model capabilities without creating a session", async () => {
@@ -50,6 +59,17 @@ describe("Grok ACP process arguments", () => {
     });
   });
 
+  it("extracts an explicit child owner and isolates session-local notifications", () => {
+    expect(runtimeNotificationSessionId({ sessionId: "child-direct" })).toBe("child-direct");
+    expect(runtimeNotificationSessionId({ update: { session_id: "child-nested" } })).toBe("child-nested");
+    expect(runtimeNotificationSessionId({ payload: { sessionId: "child-wrapped" } })).toBe("child-wrapped");
+    expect(runtimeNotificationSessionId({ update: { sessionUpdate: "available_commands_update" } })).toBeUndefined();
+    expect(isSessionOwnedRuntimeMethod("session/update")).toBe(true);
+    expect(isSessionOwnedRuntimeMethod("x.ai/queue/changed")).toBe(true);
+    expect(isSessionOwnedRuntimeMethod("x.ai/session/interjection")).toBe(true);
+    expect(isSessionOwnedRuntimeMethod("x.ai/mcp/init_progress")).toBe(false);
+  });
+
   it("parses Grok Build 1.0 close outcomes without collapsing unknown results", () => {
     expect(normalizeSessionCloseReceipt("s1", { _meta: { "x.ai/closeOutcome": "closed" } })).toMatchObject({
       sessionId: "s1", outcome: "closed", completed: true, rawOutcome: "closed",
@@ -67,6 +87,36 @@ describe("Grok ACP process arguments", () => {
     });
     expect(normalizeCliSessionInfo("s1", { sessionId: "s1", mode_id: "plan", reasoning_effort: "high", title: "计划", model: "grok-build", resolvedModelId: "grok-4.5", context: { used: 75, total: 100, freeTokens: 25, usagePct: 75, compactionCount: 2, autoCompactThresholdPercent: 85 } })).toMatchObject({ supported: true, sessionId: "s1", title: "计划", mode: "plan", effort: "high", modelId: "grok-build", resolvedModelId: "grok-4.5", contextUsedTokens: 75, contextWindowTokens: 100, contextFreeTokens: 25, contextUsagePercent: 75, compactionCount: 2, autoCompactThresholdPercent: 85, source: "acp" });
     expect(normalizeCliSessionUsage("s1", { usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14, cachedReadTokens: 8, costUsdTicks: 25_000_000, usageIsIncomplete: false, modelUsage: { "grok-build": { inputTokens: 10, outputTokens: 4 } } } })).toMatchObject({ supported: true, sessionId: "s1", inputTokens: 10, outputTokens: 4, totalTokens: 14, cachedReadTokens: 8, costUsdTicks: 25_000_000, costUsd: 0.0025, usageIsIncomplete: false, source: "acp" });
+  });
+
+  it("keeps exact zero and partial cost fields without treating context occupancy as billing", () => {
+    expect(normalizeCliSessionUsage("s1", { usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, costIsPartial: true } })).toMatchObject({
+      inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, costIsPartial: true,
+    });
+    const context = normalizeCliSessionInfo("s1", { context: { used: 500, total: 1_000 } });
+    expect(context).toMatchObject({ contextUsedTokens: 500, contextWindowTokens: 1_000 });
+    expect(context).not.toHaveProperty("costUsd");
+  });
+
+  it("uses context occupancy rather than cumulative usage for manual Compact before/after values", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "compact-session",
+      working: false,
+      needsUser: false,
+      sessionInfo: vi.fn()
+        .mockResolvedValueOnce({ supported: true, contextUsedTokens: 900 })
+        .mockResolvedValueOnce({ supported: true, contextUsedTokens: 300 }),
+      sessionUsage: vi.fn().mockResolvedValue({ supported: true, totalTokens: 9_999 }),
+      runtimeSupportsExtension: vi.fn(() => true),
+      extension: vi.fn().mockResolvedValue({}),
+      emitEvent: vi.fn((event: unknown) => events.push(event)),
+    });
+
+    await expect(adapter.compact()).resolves.toMatchObject({ beforeTokens: 900, afterTokens: 300, accepted: true });
+    expect(adapter.sessionUsage).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({ type: "compact-status", status: "completed", beforeTokens: 900, afterTokens: 300 }));
   });
 
   it("does not infer unsupported official session features", async () => {
@@ -490,6 +540,42 @@ describe("Plan permission handling", () => {
     expect(events.some((event) => event.type === "mode")).toBe(false);
   });
 
+  it("settles every pending interaction before sending session/cancel", () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const writes: any[] = [];
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "stop-session",
+      cancelRequested: false,
+      pendingPermissionRequests: new Set(["permission-key"]),
+      pendingQuestionRequests: new Set(["question-key"]),
+      pendingInteractionRequestIds: new Map([["permission-key", 11], ["question-key", 12]]),
+      pendingPlanRequest: 13,
+      needsUser: true,
+      write: vi.fn((value: unknown) => { writes.push(value); return true; }),
+      emitEvent: vi.fn((event: unknown) => events.push(event)),
+      emitStatus: vi.fn(),
+    });
+
+    adapter.cancel();
+
+    expect(writes).toEqual([
+      { jsonrpc: "2.0", id: 11, result: { outcome: { outcome: "cancelled" } } },
+      { jsonrpc: "2.0", id: 12, result: { outcome: "cancelled" } },
+      { jsonrpc: "2.0", id: 13, result: { outcome: "abandoned" } },
+      { jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "stop-session" } },
+    ]);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "interaction-resolved", interaction: "permission", requestId: 11 }),
+      expect.objectContaining({ type: "interaction-resolved", interaction: "question", requestId: 12 }),
+      expect.objectContaining({ type: "interaction-resolved", interaction: "plan", requestId: 13 }),
+    ]));
+    expect(adapter.pendingPermissionRequests.size).toBe(0);
+    expect(adapter.pendingQuestionRequests.size).toBe(0);
+    expect(adapter.pendingPlanRequest).toBeUndefined();
+    expect(adapter.needsUser).toBe(false);
+  });
+
   it("synchronizes the adapter mode from replayed current_mode_update", () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     const events: any[] = [];
@@ -744,13 +830,16 @@ describe("Grok internal queue isolation", () => {
         promptQueue: [entry],
         queueRevision: 0,
         pendingQueueOperations: new Map(),
+        pendingInterjections: new Map(),
+        emittedInterjectionIds: new Set(),
+        ownedQueuedPromptIds: new Set([entry.id]),
         emitEvent: vi.fn((event: unknown) => events.push(event)),
         buildFailure: vi.fn(() => ({ failureId: "queue-timeout", classification: "unknown", summary: "timeout", stage: "queue" })),
         write: vi.fn(() => true),
       });
 
       await adapter.interjectQueuedPrompt(entry.id, "edited");
-      expect(adapter.promptQueue[0]).toMatchObject({ state: "interjected", text: "edited" });
+      expect(adapter.promptQueue[0]).toMatchObject({ state: "interjecting", text: "edited" });
       await vi.advanceTimersByTimeAsync(5_001);
 
       expect(adapter.promptQueue[0]).toMatchObject({ state: "queued", text: "original" });
@@ -759,6 +848,78 @@ describe("Grok internal queue isolation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps direct interjections out of the next-turn queue and deduplicates the origin broadcast", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "queue-session",
+      promptQueue: [],
+      pendingInterjections: new Map(),
+      emittedInterjectionIds: new Set(),
+      extension: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        await adapter.onLine(JSON.stringify({ jsonrpc: "2.0", method: "x.ai/session/interjection", params: { sessionId: "queue-session", id: params.interjectionId, text: params.text } }));
+        return {};
+      }),
+      emitEvent: vi.fn((event: unknown) => events.push(event)),
+      emitRuntimeUpdate: vi.fn(),
+      respondOk: vi.fn(),
+    });
+
+    const receipt = await adapter.interjectPrompt("补充当前回合", [], { clientMessageId: "client-interject" });
+
+    expect(receipt).toMatchObject({ state: "interjected", message: expect.stringContaining("当前正在运行的回合") });
+    expect(adapter.promptQueue).toEqual([]);
+    expect(events.filter((event) => event.type === "interjection")).toEqual([
+      expect.objectContaining({ id: receipt.entryId, text: "补充当前回合", clientMessageId: "client-interject", source: "local" }),
+    ]);
+  });
+
+  it("falls back to the official send-now prompt path when the CLI has no current-turn interjection method", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const queuePrompt = vi.fn(async () => ({
+      operationId: "fallback-op",
+      entryId: "fallback-entry",
+      state: "send-now",
+      fallback: true,
+      message: "fallback",
+    }));
+    Object.assign(adapter, {
+      sessionId: "queue-session",
+      pendingInterjections: new Map(),
+      emittedInterjectionIds: new Set(),
+      extension: vi.fn(async () => { throw new Error("Method not found (-32601)"); }),
+      queuePrompt,
+      emitEvent: vi.fn(),
+    });
+
+    await expect(adapter.interjectPrompt("旧版回退", [], { clientMessageId: "client-fallback" })).resolves.toMatchObject({
+      state: "send-now",
+      fallback: true,
+    });
+    expect(queuePrompt).toHaveBeenCalledWith("旧版回退", [], true, expect.objectContaining({ clientMessageId: "client-fallback" }));
+    expect(adapter.pendingInterjections.size).toBe(0);
+    expect(adapter.emitEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "interjection" }));
+  });
+
+  it("presents another client's interjection inside the active turn instead of inventing a queue row", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "queue-session",
+      promptQueue: [],
+      pendingInterjections: new Map(),
+      emittedInterjectionIds: new Set(),
+      emitEvent: vi.fn((event: unknown) => events.push(event)),
+      emitRuntimeUpdate: vi.fn(),
+      respondOk: vi.fn(),
+    });
+
+    await adapter.onLine(JSON.stringify({ jsonrpc: "2.0", method: "x.ai/session/interjection", params: { sessionId: "queue-session", id: "foreign-1", text: "来自另一客户端" } }));
+
+    expect(adapter.promptQueue).toEqual([]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "interjection", id: "foreign-1", text: "来自另一客户端", source: "remote" }));
   });
 
   it("keeps queue ownership until the CLI confirms a one-way removal", async () => {
@@ -901,6 +1062,41 @@ describe("Grok internal queue isolation", () => {
     expect(adapter.queuedPrompts()).toEqual([expect.objectContaining({ id: entry.id, state: "accepted" })]);
     expect(events.filter((event) => event.type === "user-message")).toEqual([]);
     expect(persist).toHaveBeenCalledWith("queue-session", [expect.objectContaining({ id: entry.id, state: "accepted" })]);
+    await adapter.dispose(10);
+  });
+
+  it("keeps a server-promoted queued interjection visible until the current turn hands off", async () => {
+    const entry = {
+      id: "promoted-1",
+      sessionId: "queue-session",
+      clientMessageId: "message-promoted",
+      text: "下一步继续",
+      position: 0,
+      createdAt: "2026-08-04T00:00:00.000Z",
+      state: "queued" as const,
+    };
+    const adapter = new GrokAcpAdapter({
+      cliPath: "grok",
+      cwd: "C:\\repo",
+      env: process.env,
+      effort: "high",
+      modelId: "grok-test",
+      mode: "agent",
+      log: { log: vi.fn().mockResolvedValue(undefined) } as any,
+      initialPromptQueue: [entry],
+    });
+    adapter.sessionId = "queue-session";
+    (adapter as any).activeTurn = { turnId: "current-turn", ordinal: 0, startedAt: new Date().toISOString(), monotonicStartedAt: 1 };
+    (adapter as any).promptQueue = [{ ...entry, state: "interjecting" }];
+    (adapter as any).write = vi.fn(() => true);
+
+    await (adapter as any).handleServerRequest("_x.ai/queue/changed", "promoted-running", {
+      runningPromptId: entry.id,
+      queue: [],
+    });
+
+    expect((adapter as any).pendingQueuedTurn).toMatchObject({ id: entry.id });
+    expect(adapter.queuedPrompts()).toEqual([expect.objectContaining({ id: entry.id, state: "accepted" })]);
     await adapter.dispose(10);
   });
 
@@ -1074,12 +1270,44 @@ describe("forward lifecycle compatibility", () => {
   it("preserves outer ACP metadata for 1.x SessionInfoUpdate title ownership", async () => {
     const { adapter, events } = lifecycleAdapter();
     const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "session-rename-upstream-main.json"), "utf8"));
-    await adapter.onLine(JSON.stringify(fixture.standardManualNotification));
-    await adapter.onLine(JSON.stringify(fixture.standardResetNotification));
+    await adapter.onLine(JSON.stringify({ ...fixture.standardManualNotification, params: { ...fixture.standardManualNotification.params, sessionId: "session-1" } }));
+    await adapter.onLine(JSON.stringify({ ...fixture.standardResetNotification, params: { ...fixture.standardResetNotification.params, sessionId: "session-1" } }));
     expect(events).toEqual(expect.arrayContaining([
       { type: "session-title", sessionId: "session-1", title: "Pinned title", manual: true },
       { type: "session-title", sessionId: "session-1", title: "", manual: false },
     ]));
+  });
+
+  it("does not let an explicitly foreign session update mutate the parent adapter", async () => {
+    const { adapter, events, logs } = lifecycleAdapter();
+    await adapter.onLine(JSON.stringify({
+      method: "session/update",
+      params: {
+        sessionId: "child-session",
+        update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "child-only" }] },
+      },
+    }));
+    expect(events).toEqual([]);
+    expect(adapter.commands ?? []).toEqual([]);
+    expect(logs.join("\n")).toContain("ACP isolated notification");
+    expect(logs.join("\n")).not.toContain("child-only");
+  });
+
+  it("keeps interleaved parent controls and child MCP status under their declared owners", async () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.commands = [];
+    adapter.registeredTools = [];
+    adapter.runtimeHandshake = { extensions: [], commands: [], models: [] };
+    const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "session-ownership-interleaved.json"), "utf8"));
+    for (const message of fixture) await adapter.onLine(JSON.stringify(message));
+    expect(adapter.commands.map((command: { name: string }) => command.name)).toEqual(["parent-command"]);
+    expect(events).toContainEqual(expect.objectContaining({ type: "commands", sessionId: "session-1", commands: [expect.objectContaining({ name: "parent-command" })] }));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "commands", sessionId: "session-1", commands: [expect.objectContaining({ name: "child-command" })] }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "runtime-update",
+      sessionId: "child-1",
+      update: expect.objectContaining({ kind: "mcp", name: "mcp/server_status" }),
+    }));
   });
 
   it("buffers recaps until the session becomes idle", () => {

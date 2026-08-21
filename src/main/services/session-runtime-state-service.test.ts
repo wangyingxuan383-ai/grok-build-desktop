@@ -52,6 +52,29 @@ describe("SessionRuntimeStateService", () => {
     expect(await second.getTerminalQueue("s1")).toEqual([expect.objectContaining({ id: "q1", state: "completed" })]);
   });
 
+  it("settles only in-flight queue ownership after a Desktop host restart", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-runtime-")); roots.push(root);
+    const service = new SessionRuntimeStateService(root);
+    const createdAt = new Date().toISOString();
+    await service.saveQueue("s1", [
+      { id: "queued", sessionId: "s1", text: "keep queued", position: 0, createdAt, state: "queued" },
+      { id: "accepted", sessionId: "s1", text: "do not replay", position: 1, createdAt, state: "accepted" },
+      { id: "interjecting", sessionId: "s1", text: "ack was pending at exit", position: 2, createdAt, state: "interjecting" },
+      { id: "interjected", sessionId: "s1", text: "legacy state must not replay either", position: 3, createdAt, state: "interjected" },
+    ]);
+    await expect(service.interruptInflightQueue("s1")).resolves.toEqual([
+      expect.objectContaining({ id: "accepted", state: "failed" }),
+      expect.objectContaining({ id: "interjecting", state: "failed" }),
+      expect.objectContaining({ id: "interjected", state: "failed" }),
+    ]);
+    expect(await service.getQueue("s1")).toEqual([expect.objectContaining({ id: "queued", position: 0 })]);
+    expect(await service.getTerminalQueue("s1")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "accepted", state: "failed" }),
+      expect.objectContaining({ id: "interjecting", state: "failed" }),
+      expect.objectContaining({ id: "interjected", state: "failed" }),
+    ]));
+  });
+
   it("preserves the exact Provider and local model identity when session-ready reports an upstream alias", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-runtime-")); roots.push(root);
     const service = new SessionRuntimeStateService(root);

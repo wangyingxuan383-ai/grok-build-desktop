@@ -25,6 +25,30 @@ export function shouldApplyDraftHydration(input: {
     && input.baselineAttachmentRevision === input.currentAttachmentRevision;
 }
 
+export function shouldSuspendDraftHydrationForSubmission(phase: "claiming" | "sent" | undefined): boolean {
+  return phase === "claiming";
+}
+
+export function shouldPauseDraftAutosaveForSubmission(phase: "claiming" | "sent" | undefined): boolean {
+  // Once the submitted snapshot has been consumed, the composer belongs to a
+  // possible follow-up even if the original prompt RPC remains open for a long
+  // turn. Only the short claim/migration window blocks autosave.
+  return phase === "claiming";
+}
+
+export function canRestoreClaimedDraft(input: {
+  claimId: number;
+  activeClaimId?: number;
+  claimedUserRevision: number;
+  currentUserRevision: number;
+  claimedAttachmentRevision: number;
+  currentAttachmentRevision: number;
+}): boolean {
+  return input.activeClaimId === input.claimId
+    && input.claimedUserRevision === input.currentUserRevision
+    && input.claimedAttachmentRevision === input.currentAttachmentRevision;
+}
+
 export function preferredOpenLocation(input: {
   claudeCwd?: string;
   codexCwd?: string;
