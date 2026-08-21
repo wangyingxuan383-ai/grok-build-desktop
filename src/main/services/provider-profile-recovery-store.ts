@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { CustomProviderProfile } from "../../shared/types";
 import { JsonStore } from "./json-store";
@@ -52,8 +52,10 @@ export class ProviderProfileRecoveryStore {
   }
 
   async recoverIfEligible(current: CustomProviderProfile[]): Promise<CustomProviderProfile[] | undefined> {
-    // Recovery is never allowed to overwrite a readable primary index.
+    // Recovery is never allowed to overwrite a readable primary index,
+    // including an intentional empty `{ providers: [] }` sitting beside an old bak.
     if (current.length) return undefined;
+    if (await this.primaryIndexIsReadable()) return undefined;
     if (!(await this.hasCorruptPrimaryEvidence())) return undefined;
     const [backup, anchors] = await Promise.all([this.backup.get(), this.anchors.get()]);
     if (!backup.providers.length || !backup.payloadHash || backup.payloadHash !== anchors.payloadHash) return undefined;
@@ -62,6 +64,15 @@ export class ProviderProfileRecoveryStore {
     const actual = backup.providers.map(identityAnchor).sort((left, right) => left.id.localeCompare(right.id));
     if (JSON.stringify(expected) !== JSON.stringify(actual)) return undefined;
     return structuredClone(backup.providers);
+  }
+
+  private async primaryIndexIsReadable(): Promise<boolean> {
+    try {
+      JSON.parse(await readFile(join(this.userDataPath, "providers.json"), "utf8"));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async hasCorruptPrimaryEvidence(): Promise<boolean> {

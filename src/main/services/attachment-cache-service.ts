@@ -63,6 +63,31 @@ export class AttachmentCacheService {
     });
   }
 
+  async updateRecord(
+    sessionId: string,
+    clientMessageId: string,
+    patch: Partial<Pick<UserMessageAttachmentRestore, "text" | "delivery" | "presentation" | "eventId">>,
+  ): Promise<void> {
+    await this.ledger.mutate((ledger) => {
+      const entry = ledger.sessions[sessionId]?.find((value) => value.clientMessageId === clientMessageId);
+      if (!entry) return;
+      if (typeof patch.text === "string") entry.text = patch.text;
+      if (patch.delivery) entry.delivery = patch.delivery;
+      if (patch.presentation) entry.presentation = patch.presentation;
+      if (patch.eventId !== undefined) entry.eventId = patch.eventId;
+    });
+  }
+
+  async removeRecord(sessionId: string, clientMessageId: string): Promise<void> {
+    await this.ledger.mutate((ledger) => {
+      const entries = ledger.sessions[sessionId];
+      if (!entries) return;
+      const remaining = entries.filter((value) => value.clientMessageId !== clientMessageId);
+      if (remaining.length) ledger.sessions[sessionId] = remaining;
+      else delete ledger.sessions[sessionId];
+    });
+  }
+
   async restore(sessionId: string): Promise<UserMessageAttachmentRestore[]> {
     const ledger = await this.ledger.get();
     const entries = ledger.sessions[sessionId] ?? [];

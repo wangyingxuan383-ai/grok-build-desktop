@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.3 - 2026-08-21 — 插话、持久队列与子 Agent 可靠性热修（本地已安装）
+
+### Fixed
+
+- 纠正 0.9.2 对 CLI 能力的错误判断：本机 CLI 1.0.3 的 `_x.ai/queue/edit`、`remove`、`reorder`、`interject` 均真实返回 `Method not found`，不能仅通过补齐 Wire 下划线恢复。未交给 CLI 的后续消息现在由 Desktop 的会话级持久队列管理，编辑、排序、叉号撤回和“撤回全部”不再调用不存在的方法。
+- 队列只在所属会话空闲后按顺序提交一条；提交前保持可编辑、可撤回，进入 `sending` 后才锁定。应用重启只续送从未提交的 `queued` 意图，`sending/accepted` 不会重放，避免消息重复执行。
+- 当前回合插话改为调用真实 `_x.ai/interject` 请求，并以 15 秒确认边界结算；不支持该方法时才停止当前回合并把消息置顶为下一回合。点击与回合结束、Plan、权限或问题等待发生竞态时保留本地消息，不会丢失，也不会变成删不掉的假“已提交”状态。
+- 队列文本和附件账本随编辑、撤回、批量清空和插话结果同步更新；发送失败或队列创建失败不会在重开会话时复活为一条幽灵用户消息。
+- 修复 CLI 权威 `turn_completed` 已结算 Prompt RPC 后又追加第二份 Meta/状态的问题；同一排队回合的终态和持久队列终态只提交一次。
+- 修复子 Agent 只有 `child_session_id` 或仅回放 progress 时完全不可见的问题。标准/私有 Session Update 均识别 spawn/progress/finished，按 child Session 合并为同一张卡；Dashboard 仅依据明确终态完成，`cancelled` 显示为已停止。
+- 修复 Session Info / Session Usage 的私有扩展传输名。逻辑名继续使用 `x.ai/...`，传输边界统一写为 `_x.ai/...`；本机 CLI 1.0.3 的无推理探针已确认 Plugins、MCP、Commands、Session Info、Session Usage 可用。
+- Session Info 不再把会话累计 `totalTokens` 当作当前 Context 占用；Provider 恢复不会用旧备份覆盖一个可读的空主索引；Provider 错误阶段和 Host-exit 队列结算补齐独立回归。
+
+### Verification
+
+- 完整离线套件：119 个测试文件中 113 通过、6 个 live 文件按设计跳过；844 项通过、9 项 live 跳过。TypeScript、生产构建、Renderer 分块预算和 `npm audit`（0 漏洞）通过。
+- 173 项队列、插话、终态、附件、投影、子 Agent/Dashboard 聚焦回归通过；包含回合结束竞态、用户交互门、Method not found 回退、进程恢复和重复终态。
+- C 盘隔离正式打包、Native Host/Fuses、当前版本 UI、覆盖层、任务中心、Task Scheduler、Portable 中文/空格路径、产物公开扫描和安装版冷启动通过。per-user 安装版 File/Product 为 `0.9.3`/`0.9.3.0`，安装 ASAR 与候选一致，桌面和开始菜单快捷方式均指向安装目录。
+- Setup SHA-256：`dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411`；Portable：`7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`；SBOM：`683cd142f90d9d707340af2d44f7f11f04f81c756cbb33d3433f6ca5f53349d6`；许可证报告：`02b5b721687c6861bb1d7c7a8119d7aae4c202698cfe4c27836ba96c449ea74b`。
+- 隔离源码通过 junction 复用已验证依赖时，npm 默认 SBOM walker 会把依赖误判为 extraneous；发布脚本现以 `package-lock.json` 为权威生成确定性生产依赖 SBOM。当前仍未升级 CLI、发送模型提示词、推送或创建 Release。0.9.2 的“CLI 权威队列可编辑/撤回”说明由本节明确取代。
+
+## 0.9.2 - 2026-08-21 — ACP 私有扩展与子 Agent 热修（本地候选）
+
+> **已被 0.9.3 取代：** 0.9.2 正确修复了通用私有扩展的 Wire 前导下划线，但错误地把这一结论扩大到并不存在的队列 mutation 方法。其队列编辑/撤回相关声明和本地安装验收不再作为有效功能证据。
+
+### Fixed
+
+- 修复 Desktop 将 `x.ai/...` 逻辑扩展名原样写入 ACP JSON-RPC 的传输错误；Wire 现在统一转换为官方要求的 `_x.ai/...`。该修复对 Session Info、Session Usage、Compact、Rewind 等真实请求有效，但不能证明一个方法本身存在。
+- 当时尝试把队列叉号等操作接到私有 mutation 名；后续真实探针证明 CLI 1.0.3 没有这些方法，相关实现已在 0.9.3 删除并改为 Desktop 本地持久队列。
+- 修复官方 `subagent_progress` 只携带 `child_session_id` 时 Renderer 丢弃整个子 Agent 的问题；spawn/progress/finished 现在按稳定 child Session 聚合为一张卡，并显示回合、工具、Token、上下文和耗时等 CLI 实际字段。
+- 修复 Agent Dashboard 将任何带 `duration_ms` 的进度事件误判为已完成，以及忽略 `child_session_id` 的问题。
+- `scripts/probe-grok.mjs --require-extensions` 同步使用真实 Wire 名，并把 `session/info`、`session/usage` 加入无推理能力门禁。
+
+### Verification
+
+- 5 个聚焦测试文件、142 项通过；最终完整门禁为 113 个测试文件通过、6 个 live 文件按设计跳过（834/843 项通过），TypeScript、生产构建、分块/公开扫描、Native Host、打包 UI、Portable 中文路径及产物报告通过。
+- 本机 CLI 1.0.3 无推理 ACP 探针真实确认 Plugins、MCP、Commands、Session Info、Session Usage 五类私有方法全部可用；未发送提示词、未升级 CLI、未推送或发布。
+- 0.9.2 Setup/Portable 已生成并完成 per-user 覆盖安装；File/Product、ASAR/Fuses、桌面和开始菜单快捷方式及安装版冷启动通过。Setup/Portable SHA-256 分别为 `f25ba7ae8882bb38795eea153d2410696394a623a13f3e89ccf19ea5c8b0a038` / `1bd2d01f8895cedaa1ea7fedcaa7e13304dbfc6c4cd75bc8c93e2a8f86fcd1a9`。
+
 ## 0.9.1 - 2026-08-21 — CLI 1.0.5 foundation（本地验收候选）
 
 ### Visual
@@ -26,7 +65,7 @@
 - 对源码审计确认的 CLI 1.0.4–1.0.5，ACP 握手不再声明文本 `readTextFile`，避免 CLI 的图片感知读取被宿主文本读取代理截获；写入仍由主进程受控。旧版及未知版本保持保守兼容行为。
 - “关于”中的 CLI 更新检查增加运行中、成功和失败反馈，并防止重复点击；发现 stable 1.0.5 后仍只允许用户显式执行固定目标的“更新并验证”。本轮未升级本机 CLI。
 - 同一会话的重叠历史打开现在在 App Controller 和 ACP Process Manager 两层合并为单一 owner；后续调用共享同一结果或失败，不会生成第二个 CLI 进程或重复回放。
-- Composer 明确区分三种行为：Enter 加入权威队列、Ctrl+Enter/“插入当前回合”调用 `x.ai/interject`、不支持该方法时才使用官方 `sendNow` 路径停止当前回合并作为下一回合发送。已提交或插入中的消息不再显示可撤回假按钮。
+- Composer 当时区分 Enter 队列、Ctrl+Enter 当前回合插话和 Send Now；后续 0.9.3 证明 CLI 不开放队列 mutation，Enter 现改为 Desktop 本地持久队列，提交前保持真实可撤回。
 - Compact 前后值只读取 Context used tokens；Prompt Usage 只消费明确 Token/费用字段。`0` 是有效精确值，Compact/session-info 的全零占位不会擦掉已经持久化的真实 Usage。
 - 项目重新绑定改为显式元数据事务：Assignment、Session Runtime、Conversation Projection 和 Token 工作区要么全部迁移，要么按反序恢复；恢复不完整时保留唯一可用副本并报告具体阶段。
 - Provider Service 将 Route Receipt 和安全恢复存储拆为独立组件，保持现有 IPC、Provider ID、扫描与网关协议不变。
@@ -45,6 +84,10 @@
 - 修复源码预览隔离名称启用后，离线 UI 冒烟仍只等待安装版窗口标题而误报“15 秒内没有窗口”；开发 Electron 现在等待独立的 `Grok Build Desktop Source`，安装版契约不变。
 - 修复源码预览强制覆盖 Electron `--user-data-dir`，导致离线 UI 夹具写入的设置/文件不可见并污染共享 Source AppData；显式测试目录现在保持独立，普通源码预览仍与安装版隔离。
 - 离线 UI 冒烟清理对 Electron 子进程短暂占用的临时 profile 增加有界重试，避免成功验收后留下 `Grok-Build-Desktop-smoke-*` 目录或产生误导警告。
+- 非活动会话恢复现在无论上一回合是否已经完成，都会中断 sending/accepted/send-now/interjecting 队列所有权，避免「回合已结束、已提交项仍在」时被当成下一回合重放。
+- Context 占用不再把 session-info 的 `totalTokens` 当成 `contextUsedTokens`。
+- Provider 自动恢复要求当前 `providers.json` 不可读或缺失；可读的空主索引即使旁边留着旧 corrupt bak 也不会把 last-known-good 请回来。
+- Provider 失败阶段（路由/认证/翻译/上游/下游）抽成可测函数并补齐单测；插话展示仍是一条 interjection，而不是第二条用户消息。旧 queue/interject 路径已由 0.9.3 删除。
 
 ### Verification
 
@@ -52,6 +95,7 @@
 - 阶段 B/插话聚焦回归最近一次为 7 个测试文件、185 项测试通过；另外结构化结果、终态归属和搜索测试在阶段 B 聚焦门禁中通过。TypeScript、生产构建和 406 文件公开扫描通过。随后阶段 D 建立独立身份锚点后才启用受限恢复，不会覆盖健康主配置。
 - 阶段 C/D 的媒体缩略图、300 回合投影、Host-exit lease、重绑定事务、Provider 恢复/Route Receipt 和配置来源诊断均有聚焦自动化证据。最终源码门禁发现 119 个测试文件：113 通过、6 个 live 跳过；825 项通过、9 项 live 跳过。TypeScript、生产构建、Renderer 分块、Native Host/资源、当前离线 UI、上游快照、`npm audit`（0 漏洞）、414 文件候选公开扫描和 diff check 通过。
 - 0.9.1 精确候选再次通过 119 文件/834 项测试（825 通过、9 个 live 跳过）、TypeScript、生产构建、Renderer 分块、Fuses、当前打包 UI、覆盖层、任务中心、Task Scheduler、Portable 中文/空格路径和两次产物公开扫描。Setup、Portable、SBOM、许可证与 SHA-256 已生成并完成 per-user 覆盖安装；安装版 File `0.9.1` / Product `0.9.1.0`、ASAR、Fuses、桌面/开始菜单快捷方式和冷启动通过。本机 CLI 未升级，仍保持 live 1.0.3。
+- Grok 独立审核见 `docs/V091_FINAL_AUDIT.md`：复跑离线套件与 TypeScript，核对本机安装版版本。无 P0。Host-exit 已提交队列不重放并非无条件；未改代码、未回退安装。
 
 ## 0.9.0 - 2026-08-14
 
@@ -881,7 +925,7 @@
 
 - Added safe custom model providers for OpenAI Chat Completions, OpenAI Responses and Anthropic Messages, including editable presets, model discovery, connection tests, desktop/CLI defaults and external read-only Grok model discovery.
 - Added current-user Windows Task Scheduler automations for one-time, daily, weekly and one-minute-or-longer intervals. Prompts and pending confirmations use Windows DPAPI; workers run without a BrowserWindow and preserve recoverable Grok sessions and run history.
-- Added server-authoritative prompt queues, same-turn interjection, queue editing/reordering/removal, session forks, three rewind modes, app-only session archive metadata and a unified task/inbox center.
+- Added the original prompt-queue UI, same-turn interjection, session forks, rewind modes, app-only session archive metadata and a unified task/inbox center. The early server-authoritative queue-mutation assumption was later invalidated and replaced in 0.9.3.
 - Added deterministic Task Scheduler headless probing and a two-stage tagged Release workflow that keeps assets in Draft until downloaded hashes, attestations, installer lifecycle, portable UI and scheduled-worker checks pass.
 
 ### Changed

@@ -120,8 +120,8 @@ export class ConversationProjectionService {
       let loaded = await this.restoreRecordsWithoutLock(sessionId);
       if (!(await this.options.isSessionActive?.(sessionId))) {
         const reconciled = reconcileHostExitLease(sessionId, loaded.records, this.options.now?.() ?? new Date());
+        await this.options.interruptQueue?.(sessionId);
         if (reconciled.changed) {
-          await this.options.interruptQueue?.(sessionId);
           const compacted = await this.compactWithoutLock(sessionId, reconciled.records, loaded.truncatedEventCount);
           loaded = { ...loaded, records: compacted.records, truncatedEventCount: compacted.truncatedEventCount, journalBytes: 0, needsMigration: false };
         }

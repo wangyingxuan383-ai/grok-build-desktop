@@ -49,6 +49,40 @@ describe("session event reducer", () => {
     expect(state.views.session.messages).toEqual([]);
   });
 
+  it("shows an official progress-only subagent keyed by child_session_id", () => {
+    const state = apply(baseState(), { type: "subagent", sessionId: "session", update: {
+      sessionUpdate: "subagent_progress",
+      child_session_id: "child-progress",
+      turn_count: 2,
+      tool_call_count: 5,
+      tokens_used: 1_234,
+      context_usage_pct: 17,
+    } });
+    expect(state.views.session.messages).toHaveLength(1);
+    expect(state.views.session.messages[0].tool).toMatchObject({
+      toolCallId: "subagent-child-progress",
+      kind: "subagent",
+      status: "in_progress",
+    });
+    expect(state.views.session.messages[0].tool.output).toContain("2 回合 · 5 工具 · 1,234 Token · 上下文 17%");
+  });
+
+  it("merges spawn, progress and finish into one visible subagent card", () => {
+    let state = apply(baseState(), { type: "subagent", sessionId: "session", update: {
+      sessionUpdate: "subagent_spawned", subagent_id: "child", child_session_id: "child-session", description: "审核实现", model: "grok-4.6",
+    } });
+    state = apply(state, { type: "subagent", sessionId: "session", update: {
+      sessionUpdate: "subagent_progress", subagent_id: "child", child_session_id: "child-session", turn_count: 1, tool_call_count: 3,
+    } });
+    state = apply(state, { type: "subagent", sessionId: "session", update: {
+      sessionUpdate: "subagent_finished", subagent_id: "child", child_session_id: "child-session", status: "completed", output: "审核完成", duration_ms: 2_500,
+    } });
+    expect(state.views.session.messages).toHaveLength(1);
+    expect(state.views.session.messages[0].tool).toMatchObject({ title: "审核实现", kind: "subagent", status: "completed" });
+    expect(state.views.session.messages[0].tool.output).toContain("审核完成");
+    expect(buildChatTurns(state.views.session.messages).at(0)?.summary.subagents).toBe(1);
+  });
+
   it("treats the server queue broadcast as the complete authoritative queue", () => {
     let state = apply(baseState(), { type: "prompt-queue", sessionId: "session", entries: [{ id: "one", sessionId: "session", text: "first", position: 0, createdAt: "2026-01-01T00:00:00Z", state: "queued" }] });
     expect(state.views.session.queue.map((entry: { id: string }) => entry.id)).toEqual(["one"]);
@@ -69,6 +103,15 @@ describe("session event reducer", () => {
     state = apply(state, { type: "user-attachments-restore", sessionId: "session", entries: [{ clientMessageId: "client-2", text: "retry me", delivery: "failed", attachments: [{ id: "image-2", name: "missing.webp", kind: "image", mimeType: "image/webp", source: "C:\\gone.webp", availability: "missing" }] }] });
     expect(state.views.session.messages).toHaveLength(1);
     expect(state.views.session.messages[0]).toMatchObject({ clientMessageId: "client-2", delivery: "failed", attachments: [expect.objectContaining({ availability: "missing" })] });
+  });
+
+  it("does not restore an unsent queued attachment as a user message", () => {
+    const state = apply(baseState(), {
+      type: "user-attachments-restore",
+      sessionId: "session",
+      entries: [{ clientMessageId: "queued-client", text: "not sent", delivery: "queued", attachments: [{ id: "image-q", name: "q.png", kind: "image", mimeType: "image/png", source: "C:\\cache\\q.png", availability: "ready" }] }],
+    });
+    expect(state.views.session.messages).toEqual([]);
   });
 
   it("restores interjection attachments into the active turn without inventing a user message", () => {

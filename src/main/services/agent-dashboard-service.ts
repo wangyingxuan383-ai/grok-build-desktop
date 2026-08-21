@@ -139,26 +139,29 @@ export class AgentDashboardService {
 }
 
 function updateSubagent(records: Record<string, DashboardRecord>, root: DashboardRecord, update: Record<string, unknown>, now: string): void {
-  const subagentId = String(update.subagent_id ?? update.subagentId ?? update.id ?? "").trim();
+  const subagentId = String(update.child_session_id ?? update.childSessionId ?? update.subagent_id ?? update.subagentId ?? update.id ?? "").trim();
   if (!subagentId) return;
   const id = subagentNodeId(root.sessionId, subagentId);
   const current = records[id] ?? createRecord(id, root.sessionId, String(update.description ?? update.subagent_type ?? update.agent ?? "子 Agent"), now);
   current.parentId = root.id;
+  current.title = textValue(update.description ?? update.subagent_type ?? update.role) || current.title;
   current.agentId = textValue(update.agent_id ?? update.agent ?? update.subagent_type);
   current.personaId = textValue(update.persona_id ?? update.persona);
   current.modelId = textValue(update.model_id ?? update.model);
   current.effort = normalizeEffort(update.effort);
   const eventName = String(update.sessionUpdate ?? update.type ?? "").toLowerCase();
-  const failed = eventName.includes("fail") || update.success === false;
-  const finished = eventName.includes("finish") || eventName.includes("complete") || typeof update.duration_ms === "number";
-  current.status = failed ? "failed" : finished ? "completed" : eventName.includes("wait") ? "waiting" : "running";
+  const terminalStatus = String(update.status ?? "").toLowerCase();
+  const stopped = ["cancelled", "canceled", "stopped", "aborted"].includes(terminalStatus);
+  const failed = !stopped && (eventName.includes("fail") || update.success === false || ["failed", "error"].includes(terminalStatus));
+  const finished = eventName.includes("finish") || eventName.includes("complete") || ["completed", "success", "succeeded"].includes(terminalStatus);
+  current.status = stopped ? "stopped" : failed ? "failed" : finished ? "completed" : eventName.includes("wait") ? "waiting" : "running";
   if (!current.startedAt) current.startedAt = now;
-  if (finished || failed) current.completedAt = now;
+  if (finished || failed || stopped) current.completedAt = now;
   current.durationMs = numberValue(update.duration_ms) ?? duration(current.startedAt, current.completedAt);
-  current.toolCount = numberValue(update.tool_call_count ?? update.toolCallCount) ?? current.toolCount;
+  current.toolCount = numberValue(update.tool_call_count ?? update.toolCallCount ?? update.tool_calls) ?? current.toolCount;
   current.contextUsed = numberValue(update.context_used ?? update.contextTokensUsed) ?? current.contextUsed;
-  current.contextLimit = numberValue(update.context_limit ?? update.contextWindow) ?? current.contextLimit;
-  current.latestAction = textValue(update.latest_action ?? update.action) || (finished ? "子 Agent 已完成" : "子 Agent 运行中");
+  current.contextLimit = numberValue(update.context_limit ?? update.contextWindow ?? update.context_window_tokens) ?? current.contextLimit;
+  current.latestAction = textValue(update.latest_action ?? update.action) || (stopped ? "子 Agent 已停止" : finished ? "子 Agent 已完成" : "子 Agent 运行中");
   current.waitingReason = textValue(update.waiting_reason);
   current.failureReason = failed ? textValue(update.error ?? update.output) || "子 Agent 失败" : undefined;
   current.summary = finished && !failed ? textValue(update.output ?? update.summary) : current.summary;

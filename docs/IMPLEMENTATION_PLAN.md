@@ -1,5 +1,31 @@
 # Grok Build Desktop 实施计划
 
+## 0.9.3 插话、持久队列、Session Info 与子 Agent 全面热修（2026-08-21，本地已安装）
+
+- [x] 用本机 CLI 1.0.3 做无提示词能力探针，区分逻辑扩展名、Wire 扩展名与方法是否真实存在。Session Info/Usage、Plugins、MCP、Commands 通过；queue edit/remove/reorder/interject 明确为 Method not found。
+- [x] 删除队列编辑、删除、排序、队列插话对不存在 CLI 方法的依赖。未提交 follow-up 由 Desktop 会话级持久队列管理，跨到 `session/prompt` 前始终可编辑、可撤回。
+- [x] 队列只在所属会话空闲且没有 Plan/权限/问题门时提交一条；写入前持久化为 `sending`，进程恢复不重放 sending/accepted，只续送从未提交的 queued 意图。
+- [x] 直接和队列内“插话”使用真实 `x.ai/interject`，增加 15 秒确认、Method not found 回退、回合结束竞态和用户交互门竞态；失败时原队列项恢复并保持可删除。
+- [x] 编辑、撤回、批量撤回和插话同步维护附件账本；Renderer 不把 queued 附件恢复为已发送用户气泡。
+- [x] 权威 `turn_completed` 可结束悬挂 Prompt RPC，但不会重复写 Meta、状态或队列终态；后续队列回合使用稳定 promptId 对应终态。
+- [x] 子 Agent 接入标准和私有更新中的 spawn/progress/finished；`child_session_id` 为首选稳定身份，progress-only 也可见。Dashboard 只按明确终态结算，cancelled 为 stopped。
+- [x] Session Info/Usage 统一通过 `_x.ai/...` Wire 传输；Context 不再回退累计 totalTokens。
+- [x] 额外审查并收口 Provider 可读空索引恢复、Provider 失败阶段、Host-exit 队列中断及打包旧报告清理。
+- [x] 聚焦 8 文件/173 项与完整 119 文件/853 项离线套件通过（844 通过、9 项 live 跳过）；TypeScript、生产构建、分块预算和 `npm audit` 通过。
+- [x] 最终 C 盘隔离公开扫描、正式打包、per-user 安装及冷启动验证通过；File/Product `0.9.3`/`0.9.3.0`，安装 ASAR 与候选一致，Fuses 和快捷方式通过。Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。本轮未升级 CLI、未推送、未创建 Release。
+
+## 0.9.2 ACP 私有扩展与子 Agent 热修（2026-08-21，本地候选）
+
+> 0.9.2 的通用 Wire 转换有效，但其“队列 mutation 可调用”结论已经被本机探针推翻；队列相关实现和证据以 0.9.3 为准。
+
+- [x] 从安装版日志复现并定位：Desktop 发出的 `x.ai/...` 缺少 ACP Wire 前导下划线，CLI 因而对队列、插话、Session Info/Usage 等统一返回 `Method not found`。
+- [x] 在唯一传输边界增加逻辑名到 `_x.ai/...` Wire 名转换；请求/响应扩展共用该转换，能力证据仍保留逻辑名称。该项不再被解释为所有猜测方法均存在。
+- [x] 用本机 CLI 1.0.3 运行无推理 ACP 探针，真实确认 `session/info`、`session/usage`、Plugins、MCP 和 Commands 可用；探针脚本纳入相同 Wire 契约。
+- [x] Renderer 兼容官方 progress 事件的 `child_session_id`，即使缺少 spawn 也建立可见子 Agent；spawn/progress/finished 合并为单卡并展示真实进度字段。
+- [x] Agent Dashboard 使用相同 child Session 身份，且不再因 progress 携带 `duration_ms` 就提前结算。
+- [x] 5 个直接相关测试文件、142 项测试通过；TypeScript 与生产构建通过。
+- [x] 在排除用户 `_tmp_*` 文件的 C 盘隔离副本中生成并安装 0.9.2 本地候选；113 个测试文件通过、6 个 live 文件按设计跳过（834/843 项通过），TypeScript、生产构建、分块门禁、公开扫描、Native Host、打包 UI、Portable 中文路径、ASAR/Fuses、File/Product、桌面/开始菜单快捷方式与安装版冷启动均通过。Setup/Portable SHA-256 为 `f25ba7ae8882bb38795eea153d2410696394a623a13f3e89ccf19ea5c8b0a038` / `1bd2d01f8895cedaa1ea7fedcaa7e13304dbfc6c4cd75bc8c93e2a8f86fcd1a9`；未推送、未创建 Release。
+
 ## 0.9.1 多项目深度学习第二轮（2026-08-19，研究完成、实现待排期）
 
 - [x] 以 GitHub Stars 粗筛并深审 14 个候选；不再只停留在仓库简介，检查了近期 Release/Changelog、提交、架构文档和与会话/Provider/媒体/Usage 直接相关的实现或测试。
@@ -32,8 +58,8 @@
 - [x] 后台任务/子 Agent 无官方 ID 时改用确定性回退身份，避免刷新后任务身份漂移。
 - [x] 回归验证 set_mode 失败不更新模式徽章；Stop 会先取消未决权限、问题和 Plan，再发送 session/cancel。
 - [x] 复核 Usage 映射：费用只来自 CLI 明确的 `costUsd`/`costUsdTicks`，Context occupancy 不参与花费计算。
-- [x] 按官方语义重建插话与队列：`x.ai/interject` 只注入当前回合，普通忙碌 `session/prompt` 才进入队列，`sendNow` 是“停止当前回合后立即发送下一回合”；`x.ai/queue/changed` 继续作为队列权威。
-- [x] 队列插话增加确认中/Send Now/Accepted 状态、权威确认与超时回滚；CLI 已接收的消息不可再显示可撤回假操作，重启时恢复条目不会重复提交当前回合插话。
+- [x] 当时完成插话/队列语义拆分；后续 0.9.3 实机探针证明 queue mutation 不可调用，现已进一步改成 Desktop 本地 follow-up 队列 + 真实 `x.ai/interject`。
+- [x] 已提交项不可撤回和重启不重放的边界保留；旧的 queue/changed 权威确认实现已被 0.9.3 删除。
 - [x] 插话正文和附件进入 Conversation Projection/附件账本，重开后保持在原回合过程区，本地回执与会话广播按稳定 ID 去重。
 
 ### 证据与后续边界
@@ -57,6 +83,7 @@
 - [x] TypeScript、生产构建、Renderer 分块预算、Native Host 自检/资源清单、当前离线 UI 夹具、上游快照校验、`npm audit`（0 漏洞）和 `git diff --check` 通过。
 - [x] 候选公开扫描覆盖 414 个文本文件并通过。仓库根目录三份用户 `_tmp_*` 草稿按用户要求保持原样；标准扫描会主动阻止其中的本机路径，因此不得把整个物理目录误称为公开安全通过。
 - [x] 源码/lockfile/安装版统一提升为 0.9.1；隔离 C 盘构建副本不包含用户 `_tmp_*` 草稿，完整正式门禁通过后生成 Setup、Portable、SBOM、许可证和 SHA-256，并完成 per-user 覆盖安装、ASAR/Fuses、File/Product、快捷方式和冷启动验证。未推送、未创建 Release、未升级 CLI。
+- [x] Grok 独立审核 0.9.1：`docs/V091_FINAL_AUDIT.md`。本地候选成立；无 P0。审核指出的三处 P1 已在源码收口（非活动恢复始终中断已提交队列、占用不读 `totalTokens`、可读空 Provider 主索引不因旧 bak 恢复）；未重新打包安装版。
 
 ## 0.9.0 CLI 1.0.3、额度与全项目收口（2026-08-14）
 
@@ -886,7 +913,7 @@
 - 持久任务支持一次、每日、每周和最短一分钟固定间隔；默认 Grok 4.5、CLI 默认强度、自动批准普通动作、Computer Use 关闭。
 - 任务固定创建时的账号/提供商/模型；引用缺失时进入“需要配置”，不静默回退。高影响动作继续逐次确认。
 - `/loop` 作为会话级临时任务显示；应用关闭后执行由当前用户、最低权限的 Windows Task Scheduler 提供。
-- 活动回合中 Enter 排队、Ctrl+Enter 插话、Shift+Enter 换行；队列以 `x.ai/queue/changed` 为权威。
+- 活动回合中 Enter 加入 Desktop 本地持久 follow-up 队列、Ctrl+Enter 调用真实当前回合插话、Shift+Enter 换行；CLI queue broadcast 仅作观察，不是本地编辑/撤回的确认源。
 - 本版不加入完整 Git/工作树、内置编辑器/终端/浏览器/SSH、Memory 管理和媒体库。
 
 ## 完成状态（2026-07-15）

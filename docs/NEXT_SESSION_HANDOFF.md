@@ -1,4 +1,41 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-21，0.9.1 本地候选已安装）
+# Grok Build Desktop 下一会话完整交接（2026-08-21，0.9.3 本地已安装）
+
+## 2026-08-21 0.9.3 插话/队列/子 Agent/Session Info 最终收口
+
+- 用户安装的 0.9.2 仍复现：队列叉号报 `Method not found`、插话不可用、子 Agent 不显示、Session Info/Usage 误报不支持。根因是 0.9.2 只证明了 `_x.ai/...` Wire 前导下划线，却把“传输名正确”错误扩大成“猜测的队列方法存在”。
+- 本机 CLI 1.0.3 无提示词探针真实结果：Plugins、MCP、Commands、`_x.ai/session/info`、`_x.ai/session/usage` 支持；`_x.ai/queue/edit`、`remove`、`reorder`、`interject` 均 Method not found。不要恢复 0.9.2 的队列 mutation 实现或相关文档。
+- 当前实现采用单一真实边界：尚未提交的 follow-up 是 Desktop 会话级持久队列，可编辑/排序/撤回；会话空闲后一次只用标准 `session/prompt` 提交一条。进入 `sending` 才锁定，重启不重放 sending/accepted。
+- 当前回合插话调用真实 `_x.ai/interject`，等待最多 15 秒。缺方法时停止当前回合并将文本置顶为下一回合；回合已结束或正在等 Plan/权限/问题时不调用扩展，消息仍留在可撤回本地队列。
+- 队列编辑/撤回/清空/插话同步更新附件账本；queued restore 不生成伪已发送用户消息。权威终态只结算 Prompt/队列一次。
+- 子 Agent 的 private/standard spawn、progress、finished 都进入 Renderer；`child_session_id` 优先，缺 spawn 的 progress 也会创建同一张卡。Dashboard 不用 `duration_ms` 猜完成，cancelled 为 stopped。
+- Session Info/Usage 使用传输边界转换后，本机 1.0.3 已无推理确认可用。Context 不再读累计 `totalTokens`。
+- 当前证据：聚焦 8 文件/173 项通过；完整 119 文件中 113 通过、6 个 opt-in live 跳过，844/853 项通过；TypeScript、生产构建、分块预算、high 级依赖审计通过。
+- 源码/lockfile、Setup/Portable 和 per-user 安装版已统一为 0.9.3。C 盘隔离公开扫描、Native Host/资源、完整离线套件、正式打包、Fuses、ASAR 一致性、桌面/开始菜单快捷方式及安装版冷启动均通过。Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。三份用户 `_tmp_*` 未触碰；未使用 E 盘、未升级 CLI、未推送、未建 Release。
+
+## 2026-08-21 0.9.2 ACP 私有扩展/队列/子 Agent 热修
+
+> **历史记录，队列部分已失效。** 0.9.2 的 Session Info/Usage Wire 修复仍正确；队列编辑/撤回相关结论已由上面的 0.9.3 探针与实现取代。
+
+- 用户安装版中插话、队列叉号、官方 Session Info/Usage 同时失败。安装日志明确显示这些调用被 CLI 以 `Method not found` 拒绝。
+- 通用根因之一是 ACP SDK 对外使用 `x.ai/...` 逻辑名，JSON-RPC Wire 必须发送 `_x.ai/...`；这恢复了真实存在的 Session Info/Usage 等方法，但不能创造队列 mutation。
+- `GrokAcpAdapter` 传输边界统一转换继续保留；队列撤回/编辑/排序已在 0.9.3 改为 Desktop 本地操作。
+- `scripts/probe-grok.mjs --require-extensions` 已修正并在本机 CLI 1.0.3 上无推理通过：Plugins、MCP、Commands、Session Info、Session Usage 均为 supported；未发送 Prompt，未升级 CLI。
+- 子 Agent 的官方 progress 事件可能只有 `child_session_id`。Renderer 和 Agent Dashboard 现在以 child Session 为稳定身份，支持 progress-only 恢复，合并 spawn/progress/finished；Dashboard 不再把带耗时的进度误判为完成。
+- 当前源码、lockfile、打包资产和 per-user 安装版已统一到 0.9.2。完整候选门禁为 113 个测试文件通过、6 个 live 文件按设计跳过（834/843 项通过）；TypeScript、生产构建、分块/公开扫描、Native Host、打包 UI、Portable 中文路径、ASAR/Fuses、File/Product、快捷方式与安装版冷启动通过。
+- Setup SHA-256 为 `f25ba7ae8882bb38795eea153d2410696394a623a13f3e89ccf19ea5c8b0a038`；Portable 为 `1bd2d01f8895cedaa1ea7fedcaa7e13304dbfc6c4cd75bc8c93e2a8f86fcd1a9`。三份用户 `_tmp_*` 文件仍原样保留；候选从排除这些文件的 C 盘隔离副本生成。未推送、未创建 Release、未升级 CLI。
+
+## 2026-08-21 审核后 P1 收口（源码，未重新打包）
+
+- 非活动恢复始终 `interruptInflightQueue`，不要求存在未完成回合。
+- `contextUsedTokens` 不再回退 `totalTokens`。
+- Provider 恢复要求 `providers.json` 缺失或不可读；可读空主索引 + 旧 bak 不恢复。
+- 聚焦 5 文件 / 158 项通过。随后补上失败阶段单测和「队列插话被消费进当前回合」回归。安装版 0.9.1 二进制尚未包含这些源码收口；未打包、未推送、未升 CLI。标准 `check:public` 仍会被仓库根 `_tmp_*` 挡住，正式候选需隔离副本构建。
+
+## 2026-08-21 Grok 对 0.9.1 的审核
+
+- 对照源码、复跑离线套件和本机安装版完成审核，全文：`docs/V091_FINAL_AUDIT.md`。
+- 结论：本地候选成立，不是公开 Latest。无 P0。Host-exit「已提交队列绝不重放」、`contextUsedTokens` 回退 `totalTokens`、以及遗留 Provider corrupt bak + 空索引，属于文档过满或边角 P1，不构成回退安装。
+- 复跑：119 文件 / 834 项（825 通过、9 live 跳过）、`tsc`、high 级 `npm audit` 0 漏洞。安装版 File `0.9.1` / Product `0.9.1.0`。live CLI 仍 1.0.3。皮肤仍为 0.9.0 青蓝石板。
 
 ## 2026-08-21 0.9.1 本地交付
 
@@ -9,9 +46,9 @@
 
 ## 2026-08-21 Codex 阶段 A–D 与插话/队列修复（实现与自审完成，未发布）
 
-- 已按官方源码语义拆开四条路径：`x.ai/interject` 是当前回合插入；忙碌 `session/prompt` 是后续队列；`x.ai/queue/interject` 消费或提升已有队列项；`sendNow` 是停止当前回合后立即运行下一回合。旧实现把这些混成“interjected”，会造成假队列、叉号只删本地、消息消失和回合错乱。
+- 当时按四条路径建模，但后续本机探针证明 `x.ai/queue/interject` 并不存在；该历史实现已由 0.9.3 的 Desktop 本地 follow-up 队列 + 真实 `x.ai/interject` 取代。
 - 当前回合插话现在生成单一 `interjection` 可见块，不创建第二个用户回合；本地回执和 `x.ai/session/interjection` 广播按 ID 去重。插话附件带 presentation/event ID 落入附件账本，重开后不会恢复成重复用户消息。
-- 队列插话进入 `interjecting` 等待 CLI 权威确认；超时且没有新 revision 才回滚。CLI 把它提升为 `runningPromptId` 时保留为 accepted，直到真实下一回合边界；已提交项不可编辑或本地撤回。旧 `interjected` 持久数据按兼容 Send Now 状态恢复。
+- 旧版曾让队列插话等待 CLI 队列确认；这一设计已撤销。0.9.3 在提交前保留本地可撤回项，当前回合插话只调用真实 `x.ai/interject`。
 - 阶段 B 已实现：MCP `content`/`structuredContent` 分别有界且字符串保真；Context/Usage/Compact 处理精确零值、部分费用与前后 Context Token；Provider Route Receipt 不含凭据并区分路由/认证/翻译/上游/下游失败。
 - Provider 恢复已在建立独立身份锚点后受限启用：只有主索引被 `JsonStore` 识别为损坏并移走、当前索引为空、last-known-good 的内容哈希和规范 endpoint/protocol/schema 身份全部匹配时才恢复；可读主配置不覆盖，URL 内嵌凭据既拒绝新保存也不能进入恢复档案。
 - 阶段 C 已增加主进程会话级 JPEG 缩略图缓存；对话列表使用缩略图，Lightbox/复制/另存/打开仍使用原始不透明句柄，缩略图失败回退原图。当前版本 300 回合投影夹具覆盖第二/第三次重开、媒体重挂载、滚动跟随和空过程组。

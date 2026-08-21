@@ -59,11 +59,15 @@ describe("SessionRuntimeStateService", () => {
     await service.saveQueue("s1", [
       { id: "queued", sessionId: "s1", text: "keep queued", position: 0, createdAt, state: "queued" },
       { id: "accepted", sessionId: "s1", text: "do not replay", position: 1, createdAt, state: "accepted" },
-      { id: "interjecting", sessionId: "s1", text: "ack was pending at exit", position: 2, createdAt, state: "interjecting" },
-      { id: "interjected", sessionId: "s1", text: "legacy state must not replay either", position: 3, createdAt, state: "interjected" },
+      { id: "sending", sessionId: "s1", text: "in flight at exit", position: 2, createdAt, state: "sending" },
+      { id: "send-now", sessionId: "s1", text: "stop-then-send at exit", position: 3, createdAt, state: "send-now" },
+      { id: "interjecting", sessionId: "s1", text: "ack was pending at exit", position: 4, createdAt, state: "interjecting" },
+      { id: "interjected", sessionId: "s1", text: "legacy state must not replay either", position: 5, createdAt, state: "interjected" },
     ]);
     await expect(service.interruptInflightQueue("s1")).resolves.toEqual([
       expect.objectContaining({ id: "accepted", state: "failed" }),
+      expect.objectContaining({ id: "sending", state: "failed" }),
+      expect.objectContaining({ id: "send-now", state: "failed" }),
       expect.objectContaining({ id: "interjecting", state: "failed" }),
       expect.objectContaining({ id: "interjected", state: "failed" }),
     ]);
