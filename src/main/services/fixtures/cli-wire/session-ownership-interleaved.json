@@ -1,0 +1,30 @@
+[
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "session-1",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [{ "name": "parent-command", "description": "parent only" }]
+      }
+    }
+  },
+  {
+    "method": "session/update",
+    "params": {
+      "sessionId": "child-1",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [{ "name": "child-command", "description": "must not replace parent" }]
+      }
+    }
+  },
+  {
+    "method": "_x.ai/mcp/server_status",
+    "params": {
+      "sessionId": "child-1",
+      "server": "child-mcp",
+      "status": "ready"
+    }
+  }
+]

@@ -24,6 +24,8 @@ import type {
   ProviderProtocol,
   ProviderProtocolCapability,
   ProviderProxyMode,
+  ProviderLaunchContext,
+  ProviderRouteReceipt,
   ProviderScanJob,
   ProviderScanProgress,
   ProviderScanScope,
@@ -39,6 +41,8 @@ import { compatibilityReasoningTransport, inferCompatibilityFlavor, PROVIDER_PRO
 import { JsonStore } from "./json-store";
 import type { LogService } from "./log-service";
 import { ProviderGatewayService } from "./provider-gateway-service";
+import { ProviderRouteReceiptStore } from "./provider-route-receipt-store";
+import { ProviderProfileRecoveryStore } from "./provider-profile-recovery-store";
 
 const START = "# >>> Grok Build Desktop managed models >>>";
 const END = "# <<< Grok Build Desktop managed models <<<";
@@ -81,12 +85,17 @@ export class ProviderService {
   private readonly scanControllers = new Map<string, { controller: AbortController; jobId?: string; generation: number }>();
   private readonly scanGenerations = new Map<string, number>();
   private readonly scanJobs = new Map<string, ProviderScanJob>();
+  /** Bounded, body-free launch evidence keyed by the opaque gateway scope. */
+  private readonly routeReceipts = new ProviderRouteReceiptStore();
+  private readonly profileRecovery: ProviderProfileRecoveryStore;
+  private recoveryChecked = false;
   private providerMutationTail: Promise<void> = Promise.resolve();
 
   constructor(userDataPath: string, private readonly log: LogService, private readonly options: ProviderServiceOptions = {}) {
     this.configPath = join(options.grokHome ?? join(homedir(), ".grok"), "config.toml");
     this.store = new JsonStore(join(userDataPath, "providers.json"), { providers: [] });
     this.capabilityStore = new JsonStore(join(userDataPath, "provider-capabilities.json"), { snapshots: [] });
+    this.profileRecovery = new ProviderProfileRecoveryStore(userDataPath);
     this.fetcher = options.fetcher ?? fetch;
     this.environment = options.environment ?? new WindowsUserEnvironment();
     this.gateway = new ProviderGatewayService({
@@ -98,7 +107,21 @@ export class ProviderService {
   }
 
   async list(): Promise<CustomProviderProfile[]> {
-    const managed = (await this.store.get()).providers;
+    let managed = (await this.store.get()).providers;
+    if (!this.recoveryChecked) {
+      this.recoveryChecked = true;
+      const recovered = await this.profileRecovery.recoverIfEligible(managed).catch(async (error) => {
+        await this.log.log(`提供商索引安全恢复检查失败：${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      });
+      if (recovered) {
+        await this.store.set({ providers: recovered });
+        managed = recovered;
+        await this.log.log(`已从独立身份锚点验证的备份恢复 ${recovered.length} 个提供商配置（不含凭据值）`);
+      } else if (managed.length) {
+        await this.profileRecovery.save(managed).catch((error) => this.log.log(`提供商安全备份初始化失败：${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
     const snapshots = (await this.capabilityStore.get()).snapshots;
     const managedModels = new Set(managed.flatMap((provider) => provider.models.map((model) => model.id)));
     const external = await this.readExternalProviders(managedModels);
@@ -177,6 +200,7 @@ export class ProviderService {
       await this.options.validateConfig?.();
       await this.store.set({ providers: nextProviders });
       storeChanged = true;
+      await this.profileRecovery.save(nextProviders);
       await this.markCapabilitiesExpired(profile);
       await this.rotateBackups();
       await this.options.reloadModels?.();
@@ -184,6 +208,7 @@ export class ProviderService {
     } catch (error) {
       await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.store.set(data).catch((rollbackError) => this.log.log(`提供商索引回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      if (storeChanged) await this.profileRecovery.save(data.providers).catch((rollbackError) => this.log.log(`提供商安全备份回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (environmentChanged && envName) await this.environment.write(envName, previousSecret).catch((rollbackError) => this.log.log(`提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (previousEnvironmentCleared && existingEnvName) await this.environment.write(existingEnvName, previousExistingSecret).catch((rollbackError) => this.log.log(`旧提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (previousBaseUrl !== profile.baseUrl) await this.environment.write(baseUrlEnv, previousBaseUrl).catch((rollbackError) => this.log.log(`提供商地址环境变量回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
@@ -215,6 +240,7 @@ export class ProviderService {
       await this.options.validateConfig?.();
       await this.store.set({ providers: nextProviders });
       storeChanged = true;
+      await this.profileRecovery.save(nextProviders);
       await this.capabilityStore.mutate((capabilities) => {
         capabilities.snapshots = capabilities.snapshots.filter((value) => value.providerId !== id);
       });
@@ -229,6 +255,7 @@ export class ProviderService {
     } catch (error) {
       await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.store.set(data).catch((rollbackError) => this.log.log(`提供商索引回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      if (storeChanged) await this.profileRecovery.save(data.providers).catch((rollbackError) => this.log.log(`提供商安全备份回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (environmentChanged && target.credentialEnv) await this.environment.write(target.credentialEnv, previousSecret).catch((rollbackError) => this.log.log(`提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       await this.environment.write(baseUrlEnv, previousBaseUrl).catch((rollbackError) => this.log.log(`提供商地址环境变量回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       throw error;
@@ -321,6 +348,18 @@ export class ProviderService {
   async managedProviderById(providerId: string | undefined): Promise<CustomProviderProfile | undefined> {
     if (!providerId) return undefined;
     return (await this.store.get()).providers.find((provider) => provider.id === providerId);
+  }
+
+  /**
+   * Freezes the selected route after its loopback gateway has been established.
+   * Credential values and environment-variable names are deliberately absent.
+   */
+  captureRouteReceipt(context: ProviderLaunchContext, provider: CustomProviderProfile, model: ProviderModelDefinition): ProviderRouteReceipt {
+    return this.routeReceipts.capture(context, provider, model, protocolUpstreamDefault);
+  }
+
+  routeReceipt(scopeId: string | undefined): ProviderRouteReceipt | undefined {
+    return this.routeReceipts.get(scopeId);
   }
 
   /** Most recent gateway-observed failures, newest first. */
@@ -1312,10 +1351,12 @@ function validateConnection(input: Pick<CustomProviderInput, "id" | "name" | "ba
   if (input.proxyMode !== undefined && input.proxyMode !== "inherit" && input.proxyMode !== "direct") throw new Error("提供商网络路由无效");
   const url = new URL(input.baseUrl);
   if (!/^https?:$/.test(url.protocol)) throw new Error("提供商地址只支持 HTTP 或 HTTPS");
+  if (url.username || url.password) throw new Error("提供商地址不能内嵌凭据，请使用受管凭据或环境变量");
   if (isInsecureRemote(input.baseUrl) && !input.allowInsecureHttp) throw new Error("非本机 HTTP 地址需要明确确认不安全连接");
   if (input.modelListUrl?.trim()) {
     const modelUrl = new URL(input.modelListUrl);
     if (!/^https?:$/.test(modelUrl.protocol)) throw new Error("模型列表地址只支持 HTTP 或 HTTPS");
+    if (modelUrl.username || modelUrl.password) throw new Error("模型列表地址不能内嵌凭据，请使用结构化请求头环境变量");
     if (isInsecureRemote(input.modelListUrl) && !input.allowInsecureHttp) throw new Error("非本机 HTTP 模型列表地址需要明确确认不安全连接");
   }
   if (input.credentialMode === "existing") normalizeEnvironmentName(input.credentialEnv || "");

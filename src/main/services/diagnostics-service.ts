@@ -9,7 +9,7 @@ import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sd
 import { strToU8, zipSync } from "fflate";
 import type { AppSettings, AutomationTask, BuildInfo, ComputerCapability, CustomProviderProfile, FailureDiagnosisReport, GrokDoctorFixCandidate, GrokDoctorFixPreview, GrokDoctorFixReceipt, GrokQuotaSnapshot, SupportBundlePreview, SystemCompatibilityReport, SystemDiagnosticItem, TurnFailure } from "../../shared/types";
 import { turnFailureActions, turnFailureLabel } from "../../shared/turn-failure";
-import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
+import { buildCliEnv, describeGrokConfigSource, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
 import { redactLogText, redactSecrets, type LogService } from "./log-service";
 
 const execFileAsync = promisify(execFile);
@@ -147,6 +147,14 @@ export class DiagnosticsService {
     items.push(await writableStatus(this.userDataPath));
 
     const settings = await this.getSettings();
+    const configSource = describeGrokConfigSource(process.env);
+    items.push({
+      id: "cli-config-source",
+      label: "CLI 配置来源",
+      status: configSource.kind === "multiple" ? "warning" : "info",
+      summary: configSource.summary,
+      details: configSource.details,
+    });
     const cliPath = this.mockCliPath || await locateGrokCli(settings.cliPath);
     let cliVersion: string | undefined;
     let effortFlag: "--effort" | "--reasoning-effort" | undefined;

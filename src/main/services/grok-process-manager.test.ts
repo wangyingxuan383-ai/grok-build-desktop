@@ -140,6 +140,59 @@ describe("extension mutation scheduling", () => {
 });
 
 describe("configured session restoration", () => {
+  it("joins overlapping opens for the same cold session and spawns one ACP owner", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    let finishStart!: (value: { sessionId: string }) => void;
+    const start = vi.fn(() => new Promise<{ sessionId: string }>((resolve) => { finishStart = resolve; }));
+    const adapter = {
+      sessionId: "joined-session", cwd: "C:\\repo", currentModelId: "grok-test", effort: "high", mode: "agent",
+      start, dispose: vi.fn().mockResolvedValue(undefined), extensionLeaseId: undefined,
+    };
+    const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValue(adapter);
+    try {
+      const first = manager.open("C:\\repo", "joined-session");
+      const second = manager.open("C:\\repo", "joined-session");
+      await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+      expect(spawn).toHaveBeenCalledTimes(1);
+      finishStart({ sessionId: "joined-session" });
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { sessionId: "joined-session" },
+        { sessionId: "joined-session" },
+      ]);
+      expect(manager.get("joined-session")).toBe(adapter);
+    } finally { await manager.dispose(); }
+  });
+
+  it("propagates an open owner's failure to every waiter and allows a clean retry", async () => {
+    const log = { log: vi.fn().mockResolvedValue(undefined) };
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());
+    let rejectStart!: (reason: Error) => void;
+    const failed = {
+      start: vi.fn(() => new Promise<{ sessionId: string }>((_resolve, reject) => { rejectStart = reject; })),
+      dispose: vi.fn().mockResolvedValue(undefined), extensionLeaseId: undefined,
+    };
+    const recovered = {
+      sessionId: "retry-session", cwd: "C:\\repo", currentModelId: "grok-test", effort: "high", mode: "agent",
+      start: vi.fn().mockResolvedValue({ sessionId: "retry-session" }),
+      dispose: vi.fn().mockResolvedValue(undefined), extensionLeaseId: undefined,
+    };
+    const spawn = vi.spyOn(manager as any, "spawn").mockResolvedValueOnce(failed).mockResolvedValueOnce(recovered);
+    try {
+      const first = manager.open("C:\\repo", "retry-session");
+      const second = manager.open("C:\\repo", "retry-session");
+      await vi.waitFor(() => expect(failed.start).toHaveBeenCalledTimes(1));
+      rejectStart(new Error("attach failed"));
+      const settled = await Promise.allSettled([first, second]);
+      expect(settled).toEqual([
+        expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ message: "attach failed" }) }),
+        expect.objectContaining({ status: "rejected", reason: expect.objectContaining({ message: "attach failed" }) }),
+      ]);
+      await expect(manager.open("C:\\repo", "retry-session")).resolves.toEqual({ sessionId: "retry-session" });
+      expect(spawn).toHaveBeenCalledTimes(2);
+    } finally { await manager.dispose(); }
+  });
+
   it("probes an unloaded moved session against the new cwd without forking", async () => {
     const log = { log: vi.fn().mockResolvedValue(undefined) };
     const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());

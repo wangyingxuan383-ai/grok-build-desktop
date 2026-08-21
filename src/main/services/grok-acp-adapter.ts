@@ -40,6 +40,7 @@ import {
 } from "../../shared/types";
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import { classifyTurnFailure } from "../../shared/turn-failure";
+import { normalizeBoundedToolPayload } from "./bounded-tool-payload";
 import { isCurrentSessionPlanFile, shouldBlockCommand } from "./plan-gate";
 import { resolveModeAfterResume, selectAllowPermissionOption, shouldAutoApproveToolPermissions } from "./permission-policy";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
@@ -53,6 +54,7 @@ type JsonRpcId = string | number;
 export const INTERACTIVE_PROMPT_TIMEOUT_MS: null = null;
 export const FIRST_EVENT_WAIT_MS = 20_000;
 export const FIRST_EVENT_DIAGNOSTIC_MS = 60_000;
+const INTERJECTION_ACK_TIMEOUT_MS = 15_000;
 
 interface PendingRequest {
   method: string;
@@ -78,18 +80,6 @@ interface BackgroundTask {
   toolCallId: string;
   title: string;
   command?: string;
-}
-
-interface PendingQueueOperation {
-  operationId: string;
-  description: string;
-  confirms(entries: PromptQueueEntry[], runningPromptId?: string): boolean;
-  onConfirmed?(): void;
-  /** Restore only the optimistic fields owned by this operation. */
-  onTimeout?(): void;
-  /** Authoritative queue notifications supersede any local rollback. */
-  queueRevision: number;
-  timer: NodeJS.Timeout;
 }
 
 export interface AcpToolDiff {
@@ -234,6 +224,9 @@ export interface SessionProcessOptions {
 
 interface AdapterOptions extends SessionProcessOptions {
   cliPath: string;
+  /** Live `grok --version` output. Omitted/unparseable values keep the
+   * conservative client-delegated filesystem handshake. */
+  cliVersion?: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   effort: ReasoningEffort;
@@ -257,6 +250,10 @@ interface AdapterOptions extends SessionProcessOptions {
 export interface UserPromptPresentation {
   clientMessageId?: string;
   attachments?: UserMessageAttachmentPreview[];
+  /** Stable identity for a Desktop-owned queue row once it is submitted. */
+  promptId?: string;
+  /** Explicit queue hand-off metadata; current local draining always uses false. */
+  sendNow?: boolean;
 }
 
 export const DEFAULT_SESSION_ATTACH_POLICY: SessionAttachPolicy = {
@@ -268,14 +265,41 @@ export function buildSessionAttachMeta(
   sessionMeta: Record<string, unknown> | undefined,
   pluginDirs: string[] | undefined,
   policy: SessionAttachPolicy = DEFAULT_SESSION_ATTACH_POLICY,
+  reasoningEffort?: ReasoningEffort,
 ): Record<string, unknown> {
   return {
     ...(sessionMeta ?? {}),
     ...(pluginDirs?.length ? { pluginDirs: [...pluginDirs] } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     startupHints: {
       nonInteractive: policy.nonInteractive,
       deliveryTools: [...policy.deliveryTools],
     },
+  };
+}
+
+export interface AcpClientCapabilities {
+  fs: { readTextFile?: true; writeTextFile: true };
+  terminal: true;
+}
+
+/**
+ * Grok Build 1.0.4 introduced an image-aware in-process `read_file`. When an
+ * ACP host advertises `readTextFile`, the CLI delegates every read to that
+ * text-only callback and an image can be decoded as UTF-8 before the model
+ * sees it. For the source-audited 1.0.4–1.0.5 range we therefore retain write
+ * interception but let the CLI own reads. Unknown/unverified versions keep the
+ * older handshake instead of silently dropping a capability.
+ */
+export function buildAcpClientCapabilities(cliVersion?: string): AcpClientCapabilities {
+  const parsed = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(cliVersion ?? "");
+  const imageAware = parsed?.[1] === "1"
+    && Number(parsed[2]) === 0
+    && Number(parsed[3]) >= 4
+    && Number(parsed[3]) <= 5;
+  return {
+    fs: imageAware ? { writeTextFile: true } : { readTextFile: true, writeTextFile: true },
+    terminal: true,
   };
 }
 
@@ -341,15 +365,15 @@ export class GrokAcpAdapter extends EventEmitter {
   private readonly recapHashes = new Set<string>();
   private readonly pendingRecaps = new Map<string, { turnId?: string; text: string; contentHash: string }>();
   private readonly ownedQueuedPromptIds = new Set<string>();
+  /** Direct x.ai/interject input belongs to the active turn, not the prompt queue. */
+  private readonly pendingInterjections = new Map<string, { text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; source: "local" | "queued" }>();
+  private readonly emittedInterjectionIds = new Set<string>();
   private promptQueue: PromptQueueEntry[] = [];
   private activeQueuedPromptId?: string;
   private activeQueuedPrompt?: PromptQueueEntry;
-  private pendingQueuedTurn?: PromptQueueEntry;
+  private queueDrainScheduled = false;
+  private queueDrainInProgress = false;
   private restoredQueueTimer?: NodeJS.Timeout;
-  private readonly restoredQueueIds = new Set<string>();
-  private readonly restoredQueueSeenIds = new Set<string>();
-  private readonly pendingQueueOperations = new Map<string, PendingQueueOperation>();
-  private queueRevision = 0;
   private pendingEffortChange?: PendingEffortChange;
   private pendingPlanRequest?: JsonRpcId;
   private readonly pendingPermissionRequests = new Set<string>();
@@ -444,20 +468,28 @@ export class GrokAcpAdapter extends EventEmitter {
     this.promptQueue = (options.initialPromptQueue ?? [])
       .filter((entry) => !["completed", "failed", "cancelled"].includes(entry.state))
       .slice(0, 128)
-      .map((entry, position) => ({ ...entry, position }));
+      // An interjection request is only transport-confirmed until the CLI
+      // publishes queue/interjection state. After a host restart, recover it
+      // as an editable queued intent rather than claiming it was injected or
+      // blindly replaying it with sendNow semantics.
+      .map((entry, position) => ({ ...entry, position, state: entry.state === "interjecting" ? "queued" as const : entry.state }));
     for (const entry of this.promptQueue) {
       this.ownedQueuedPromptIds.add(entry.id);
-      this.restoredQueueIds.add(entry.id);
     }
   }
 
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
+    // Bind a resumed adapter before initialize.  Grok may publish MCP/session
+    // notifications while session/resume is still in flight; leaving the id
+    // empty made those events ambiguous and, in multi-session runs, allowed a
+    // child or background notification to mutate the focused conversation.
+    if (resumeSessionId) this.sessionId = resumeSessionId;
     await this.launchAndInitialize();
     const sessionParams = {
       ...(resumeSessionId ? { sessionId: resumeSessionId } : {}),
       cwd: this.options.cwd,
       mcpServers: this.options.sessionMcpServers ?? [],
-      _meta: buildSessionAttachMeta(this.options.sessionMeta, this.options.pluginDirs, this.options.sessionAttachPolicy),
+      _meta: buildSessionAttachMeta(this.options.sessionMeta, this.options.pluginDirs, this.options.sessionAttachPolicy, this.currentEffort),
     };
     let response: SessionResponse;
     if (!resumeSessionId) {
@@ -484,7 +516,6 @@ export class GrokAcpAdapter extends EventEmitter {
     } else {
       response = await this.request(acpMethods.agent.session.load, sessionParams, 120_000) as SessionResponse;
     }
-    if (resumeSessionId) this.sessionId = resumeSessionId;
     this.sessionId = response.sessionId || resumeSessionId || "";
     await this.completeSessionAttach(response, resumeSessionId);
     return { sessionId: this.sessionId };
@@ -525,7 +556,7 @@ export class GrokAcpAdapter extends EventEmitter {
       sessionId: sourceSessionId,
       cwd: newCwd,
       mcpServers: this.options.sessionMcpServers ?? [],
-      _meta: buildSessionAttachMeta(this.options.sessionMeta, this.options.pluginDirs, this.options.sessionAttachPolicy),
+      _meta: buildSessionAttachMeta(this.options.sessionMeta, this.options.pluginDirs, this.options.sessionAttachPolicy, this.currentEffort),
     }, 120_000) as Record<string, unknown>;
     return result;
   }
@@ -551,7 +582,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.process.on("error", (error) => this.failAll(error));
     this.process.on("exit", (code) => {
       const activeTurnId = this.activeTurn?.turnId;
-      const terminalOutcome: TurnOutcome = this.cancelRequested ? "cancelled" : "failed";
+      const terminalOutcome: TurnOutcome = this.cancelRequested ? "cancelled" : "interrupted";
       this.working = false;
       this.needsUser = false;
       this.finishTurn(terminalOutcome);
@@ -567,7 +598,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
     const initializeResult = await this.request(acpMethods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+      clientCapabilities: buildAcpClientCapabilities(this.options.cliVersion),
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
     this.emit("runtime-handshake", this.runtimeHandshake);
@@ -648,11 +679,9 @@ export class GrokAcpAdapter extends EventEmitter {
     if (this.promptQueue.length) {
       this.promptQueue = this.promptQueue.map((entry, position) => ({ ...entry, sessionId: this.sessionId, position }));
       this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      // A resumed Grok session may replay its private queue during
-      // session/load. Give that authoritative notification a short head start;
-      // any Desktop-owned IDs it does not replay are re-submitted with the
-      // original promptId. This restores queued work without inventing a new
-      // user message or changing its ordering.
+      // Entries in state `queued` have never been submitted to the CLI. Resume
+      // the Desktop-owned durable queue only after the session is attached and
+      // idle; never bulk re-submit previously accepted work.
       this.restoredQueueTimer = setTimeout(() => void this.reconcileRestoredQueue(), 500);
     }
     // Some CLIs publish available commands while session/new is still in
@@ -666,9 +695,9 @@ export class GrokAcpAdapter extends EventEmitter {
     this.emitStatus("idle", "已连接");
   }
 
-  async extension(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  async extension(method: string, params: Record<string, unknown> = {}, timeoutMs = 120_000): Promise<Record<string, unknown>> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
-    const result = await this.request(method, { sessionId: this.sessionId, ...params }) as Record<string, unknown>;
+    const result = await this.request(wireExtensionMethod(method), { sessionId: this.sessionId, ...params }, timeoutMs) as Record<string, unknown>;
     this.observeRuntimeExtension(method);
     return result;
   }
@@ -785,8 +814,10 @@ export class GrokAcpAdapter extends EventEmitter {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     if (this.working || this.needsUser) throw new Error("当前会话正在运行或等待操作，请先停止或处理当前请求");
     const startedAt = new Date().toISOString();
-    const before = await this.sessionUsage().catch(() => undefined);
-    const beforeTokens = before?.supported ? before.totalTokens : undefined;
+    // Compaction changes context occupancy, not cumulative billed usage. The
+    // latter must never be shown as a before/after compact delta.
+    const before = await this.sessionInfo().catch(() => undefined);
+    const beforeTokens = before?.supported ? before.contextUsedTokens : undefined;
     this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "started", trigger: "manual", beforeTokens });
     try {
       let source: SessionCompactReceipt["source"];
@@ -800,8 +831,8 @@ export class GrokAcpAdapter extends EventEmitter {
         this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "failed", trigger: "manual", beforeTokens, message: "当前 CLI 未声明 /compact" });
         return { sessionId: this.sessionId, accepted: false, source: "unsupported", startedAt, beforeTokens, message: "当前 Grok CLI 未声明手动压缩能力" };
       }
-      const after = await this.sessionUsage().catch(() => undefined);
-      const afterTokens = after?.supported ? after.totalTokens : undefined;
+      const after = await this.sessionInfo().catch(() => undefined);
+      const afterTokens = after?.supported ? after.contextUsedTokens : undefined;
       const completedAt = new Date().toISOString();
       this.emitEvent({ type: "compact-status", sessionId: this.sessionId, status: "completed", trigger: "manual", beforeTokens, afterTokens });
       return { sessionId: this.sessionId, accepted: true, source, startedAt, completedAt, beforeTokens, afterTokens, message: "会话压缩已完成" };
@@ -858,22 +889,39 @@ export class GrokAcpAdapter extends EventEmitter {
           // Grok Build explicitly consumes _meta.mode and reconciles its Plan
           // state from it, which prevents a resumed session or late mode
           // replay from silently executing the turn as Agent mode.
-          _meta: { mode: this.mode === "plan" ? "plan" : "agent", clientIdentifier: "grok-build-desktop" },
+          _meta: {
+            mode: this.mode === "plan" ? "plan" : "agent",
+            clientIdentifier: "grok-build-desktop",
+            ...(presentation.promptId ? { promptId: presentation.promptId, sendNow: presentation.sendNow === true } : {}),
+          },
         },
         timeoutMs,
         () => this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "sent" }),
         startedTurn.turnId,
+        presentation.promptId,
       ) as { _meta?: Record<string, unknown> } & Partial<PromptTerminalResult>;
       // Cancellation is a notification and older CLIs may resolve the
       // original prompt RPC before publishing their authoritative terminal
       // update.  Never let that race turn an acknowledged Stop into a
       // completed turn.  A terminal result synthesized from turn_completed
       // still wins when it is present.
-      const terminalOutcome = result._grokDesktopTerminalOutcome ?? (this.cancelRequested ? "cancelled" : undefined);
+      const authoritativeTerminal = result._grokDesktopTerminalOutcome;
+      const terminalOutcome = authoritativeTerminal ?? (this.cancelRequested ? "cancelled" : undefined);
+      if (authoritativeTerminal) {
+        // turn_completed already emitted usage, the presentation, queue
+        // terminal and final status before resolving this otherwise-pending
+        // Prompt RPC. Do not append a second meta/status pair here.
+        this.working = Boolean(this.activeTurn);
+        this.needsUser = false;
+        return;
+      }
       const meta = extractPromptMeta(result);
       this.emitEvent({ type: "meta", sessionId: this.sessionId, meta });
       const completed = this.finishTurn(terminalOutcome ?? "completed", hasUsage(meta) ? { ...meta, modelId: meta.modelId ?? this.currentModelId, source: terminalOutcome ? "acp-turn" : "prompt-result", exact: true } : undefined, startedTurn.turnId);
       if (completed && !terminalOutcome) this.turnsAwaitingAuthoritativeTerminal.add(completed.turnId);
+      if (this.activeQueuedPrompt?.clientMessageId === clientMessageId) {
+        this.persistActiveQueueTerminal(terminalOutcome ?? "completed");
+      }
       this.activatePendingQueuedTurn();
       this.working = Boolean(this.activeTurn);
       this.needsUser = false;
@@ -887,8 +935,12 @@ export class GrokAcpAdapter extends EventEmitter {
       this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
       const failureMessage = error instanceof Error ? error.message : String(error);
       this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
-      const failed = this.finishTurn(this.cancelRequested ? "cancelled" : "failed", undefined, startedTurn.turnId);
+      const failureOutcome: TurnOutcome = this.cancelRequested ? "cancelled" : "failed";
+      const failed = this.finishTurn(failureOutcome, undefined, startedTurn.turnId);
       if (failed) this.turnsAwaitingAuthoritativeTerminal.add(failed.turnId);
+      if (this.activeQueuedPrompt?.clientMessageId === clientMessageId) {
+        this.persistActiveQueueTerminal(failureOutcome);
+      }
       this.activatePendingQueuedTurn();
       // The structured error event above owns the visible card. A text-bearing
       // status event would append a second unstructured "Internal error" card.
@@ -903,63 +955,53 @@ export class GrokAcpAdapter extends EventEmitter {
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
     const clientMessageId = presentation.clientMessageId || id;
-    const prompt = await buildPromptBlocks(text, attachments);
-    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, clientMessageId, attachmentPreviews: presentation.attachments, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: sendNow ? "interjected" : "queued" };
+    // `sendNow` is only a requested ordering/cancellation behavior until the
+    // local row is actually handed to session/prompt. Keep the row `queued`
+    // so it remains truthfully editable/removable and can safely survive a
+    // Desktop restart. The transition to `sending` below is the durable point
+    // after which it must no longer be replayed or withdrawn.
+    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, clientMessageId, attachmentPreviews: presentation.attachments, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: "queued" };
     this.ownedQueuedPromptIds.add(id);
     this.promptQueue = sendNow ? [entry, ...this.promptQueue] : [...this.promptQueue, entry];
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    // A queued ACP prompt request is intentionally answered only after that
-    // prompt eventually runs. Do not keep the Renderer composer blocked while
-    // it waits; x.ai/queue/changed remains the authoritative visible state.
-    void this.submitQueuedRequest(entry, prompt, sendNow).catch((error) => {
-      // Process replacement is a recovery boundary, not a queue failure. The
-      // durable entry will be reconciled by the replacement adapter.
-      if (this.disposed) return;
-      this.ownedQueuedPromptIds.delete(id);
-      this.promptQueue = this.promptQueue.filter((value) => value.id !== id);
-      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "failed" });
-      this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
-      const failureMessage = error instanceof Error ? error.message : String(error);
-      this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
-    });
+    // Grok Build 1.0.3 exposes queue state notifications, but not callable
+    // queue/edit, queue/remove, queue/reorder or queue/interject methods. Keep
+    // unsent work in the Desktop-owned durable queue so the visible edit and
+    // remove controls are truthful. Exactly one prompt is submitted after the
+    // owning session becomes idle.
+    if (sendNow && (this.activeTurn || this.working || this.needsUser)) this.cancel();
+    this.scheduleLocalQueueDrain();
     return {
       operationId: crypto.randomUUID(),
       entryId: id,
-      state: sendNow ? "interjected" : "queued",
-      message: sendNow ? "插话已置顶并提交" : "消息已加入队列",
+      state: sendNow ? "send-now" : "queued",
+      message: sendNow ? "当前 CLI 不支持回合内插话；已请求停止当前回合，并将此消息置顶为下一回合" : "消息已加入本地持久队列，可在提交前编辑或撤回",
       fallback: sendNow,
+      acknowledgement: "desktop",
     };
   }
 
   async interjectPrompt(text: string, attachments: Attachment[] = [], presentation: UserPromptPresentation = {}): Promise<QueueOperationReceipt> {
     if (!this.sessionId) throw new Error("会话尚未就绪");
+    // The turn can finish between the Renderer click and this main-process
+    // handler. Calling x.ai/interject after that boundary lets the CLI choose
+    // an opaque queue behavior and makes the Desktop label dishonest. Keep it
+    // as an ordinary, removable next-turn intent instead.
+    if (!this.activeTurn && !this.working && !this.needsUser) {
+      const receipt = await this.queuePrompt(text, attachments, false, presentation);
+      return { ...receipt, message: "当前回合已经结束；消息已加入下一回合队列，可在提交前编辑或撤回" };
+    }
     const id = crypto.randomUUID();
     const clientMessageId = presentation.clientMessageId || id;
     const content = await buildPromptBlocks(text, attachments);
-    const entry: PromptQueueEntry = {
-      id,
-      sessionId: this.sessionId,
-      clientMessageId,
-      attachmentPreviews: presentation.attachments,
-      text,
-      position: 0,
-      createdAt: new Date().toISOString(),
-      state: "interjected",
-    };
-    this.ownedQueuedPromptIds.add(id);
-    // Keep the submitted interjection visible until the CLI reports it as the
-    // running prompt. It is already accepted at this point and must never be
-    // presented with a misleading removable "x" action.
-    this.promptQueue = [entry, ...this.promptQueue].map((value, position) => ({ ...value, position }));
-    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    this.pendingInterjections.set(id, { text, clientMessageId, attachments: presentation.attachments, source: "local" });
     try {
-      unwrapExtResult(await this.extension("x.ai/interject", { text, interjectionId: id, content }));
-      return { operationId: crypto.randomUUID(), entryId: id, state: "interjected", message: "插话已提交；它会在当前步骤收束后作为同一会话的下一回合执行，已提交后不能撤回" };
+      unwrapExtResult(await this.extension("x.ai/interject", { text, interjectionId: id, content }, INTERJECTION_ACK_TIMEOUT_MS));
+      this.emitInterjection(id, text, clientMessageId, presentation.attachments, "local");
+      this.pendingInterjections.delete(id);
+      return { operationId: crypto.randomUUID(), entryId: id, state: "interjected", message: "插话已注入当前正在运行的回合；它不是队列中的下一回合" };
     } catch (error) {
-      this.ownedQueuedPromptIds.delete(id);
-      this.promptQueue = this.promptQueue.filter((value) => value.id !== id).map((value, position) => ({ ...value, position }));
-      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      this.pendingInterjections.delete(id);
       // Older CLIs do not expose x.ai/interject. Their closest compatible
       // behavior is the official sendNow prompt metadata path.
       if (!isMethodNotFound(error)) {
@@ -974,49 +1016,21 @@ export class GrokAcpAdapter extends EventEmitter {
   async editQueuedPrompt(id: string, text: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
     if (!entry || entry.state !== "queued") throw new Error("仅等待中的队列消息可以编辑");
+    const normalized = text.trim();
+    if (!normalized) throw new Error("排队消息不能为空");
     const operationId = crypto.randomUUID();
-    const previousText = entry.text;
-    this.awaitQueueConfirmation(
-      operationId,
-      "编辑队列消息",
-      (entries) => entries.some((value) => value.id === id && value.text === text),
-      undefined,
-      () => {
-        this.promptQueue = this.promptQueue.map((value) => value.id === id && value.state === "queued" && value.text === text
-          ? { ...value, text: previousText }
-          : value);
-        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      },
-    );
-    try { this.queueNotification("x.ai/queue/edit", { id, newText: text }); }
-    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
-    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, text } : value);
+    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, text: normalized } : value);
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId, entryId: id, state: "updated", message: "编辑已写入 CLI，等待队列刷新确认", acknowledgement: "transport" };
+    return { operationId, entryId: id, state: "updated", message: "排队消息已在本地持久队列中更新", acknowledgement: "desktop" };
   }
   async removeQueuedPrompt(id: string): Promise<QueueOperationReceipt> {
     const entry = this.promptQueue.find((value) => value.id === id);
     if (!entry || entry.state !== "queued") throw new Error("仅等待中的队列消息可以删除");
     const operationId = crypto.randomUUID();
-    const previousPosition = this.promptQueue.findIndex((value) => value.id === id);
-    this.awaitQueueConfirmation(
-      operationId,
-      "撤回队列消息",
-      (entries) => !entries.some((value) => value.id === id),
-      () => this.ownedQueuedPromptIds.delete(id),
-      () => {
-        if (this.promptQueue.some((value) => value.id === id)) return;
-        const restored = [...this.promptQueue];
-        restored.splice(Math.max(0, Math.min(previousPosition, restored.length)), 0, entry);
-        this.promptQueue = restored.map((value, position) => ({ ...value, position }));
-        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      },
-    );
-    try { this.queueNotification("x.ai/queue/remove", { id, expectedVersion: entry?.version ?? 0 }); }
-    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
+    this.ownedQueuedPromptIds.delete(id);
     this.promptQueue = this.promptQueue.filter((value) => value.id !== id).map((value, position) => ({ ...value, position }));
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId, entryId: id, state: "removed", message: "撤回请求已写入 CLI，等待队列刷新确认", acknowledgement: "transport" };
+    return { operationId, entryId: id, state: "removed", message: "等待消息已从本地持久队列撤回，不会发送给 CLI", acknowledgement: "desktop" };
   }
   async reorderQueuedPrompt(id: string, position: number): Promise<QueueOperationReceipt> {
     const ordered = [...this.promptQueue].sort((a, b) => a.position - b.position);
@@ -1026,58 +1040,21 @@ export class GrokAcpAdapter extends EventEmitter {
     const [moved] = ordered.splice(current, 1);
     ordered.splice(Math.max(0, Math.min(position, ordered.length)), 0, moved!);
     const operationId = crypto.randomUUID();
-    const orderedIds = ordered.map((value) => value.id);
-    const previousIds = this.promptQueue.slice().sort((a, b) => a.position - b.position).map((value) => value.id);
-    this.awaitQueueConfirmation(
-      operationId,
-      "调整队列顺序",
-      (entries) => entries.map((value) => value.id).join("\0") === orderedIds.join("\0"),
-      undefined,
-      () => {
-        const positions = new Map(previousIds.map((value, index) => [value, index]));
-        this.promptQueue = this.promptQueue.slice()
-          .sort((a, b) => (positions.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(b.id) ?? Number.MAX_SAFE_INTEGER))
-          .map((value, nextPosition) => ({ ...value, position: nextPosition }));
-        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      },
-    );
-    try { this.queueNotification("x.ai/queue/reorder", { orderedIds }); }
-    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
     this.promptQueue = ordered.map((value, nextPosition) => ({ ...value, position: nextPosition }));
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId, entryId: id, state: "reordered", message: "顺序调整已写入 CLI，等待队列刷新确认", acknowledgement: "transport" };
+    return { operationId, entryId: id, state: "reordered", message: "本地持久队列顺序已更新", acknowledgement: "desktop" };
   }
   async clearPromptQueue(): Promise<QueueOperationReceipt> {
     const removable = this.promptQueue.filter((entry) => entry.state === "queued");
     const operationId = crypto.randomUUID();
-    const removableIds = new Set(removable.map((entry) => entry.id));
-    if (removable.length) this.awaitQueueConfirmation(
-      operationId,
-      "撤回全部等待消息",
-      (entries) => entries.every((entry) => !removableIds.has(entry.id)),
-      () => { for (const id of removableIds) this.ownedQueuedPromptIds.delete(id); },
-      () => {
-        const byId = new Map(this.promptQueue.map((entry) => [entry.id, entry]));
-        for (const entry of removable) if (!byId.has(entry.id)) byId.set(entry.id, entry);
-        this.promptQueue = [...byId.values()].sort((a, b) => a.position - b.position).map((value, position) => ({ ...value, position }));
-        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      },
-    );
-    try {
-      for (const entry of removable) {
-        this.queueNotification("x.ai/queue/remove", { id: entry.id, expectedVersion: entry.version ?? 0 });
-      }
-    } catch (error) {
-      this.cancelQueueConfirmation(operationId);
-      throw error;
-    }
+    for (const entry of removable) this.ownedQueuedPromptIds.delete(entry.id);
     this.promptQueue = this.promptQueue.filter((entry) => entry.state !== "queued").map((value, position) => ({ ...value, position }));
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
     return {
       operationId,
       state: "cleared",
-      message: removable.length ? `已向 CLI 提交撤回 ${removable.length} 条等待消息，正在确认` : "没有可撤回的等待消息；已提交的插话不能撤回",
-      acknowledgement: removable.length ? "transport" : "cli",
+      message: removable.length ? `已从本地持久队列撤回 ${removable.length} 条未提交消息` : "没有可撤回的等待消息",
+      acknowledgement: "desktop",
     };
   }
   async interjectQueuedPrompt(id: string, text?: string): Promise<QueueOperationReceipt> {
@@ -1085,23 +1062,60 @@ export class GrokAcpAdapter extends EventEmitter {
     if (!entry || entry.state !== "queued") throw new Error("该消息已不在等待队列中");
     const operationId = crypto.randomUUID();
     const nextText = text?.trim() || entry.text;
-    this.awaitQueueConfirmation(
-      operationId,
-      "置顶插话",
-      (entries, runningPromptId) => runningPromptId === id || entries.some((value) => value.id === id && value.state !== "queued"),
-      undefined,
-      () => {
-        this.promptQueue = this.promptQueue.map((value) => value.id === id && value.state === "interjected"
-          ? { ...value, state: "queued", text: entry.text }
-          : value);
-        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-      },
-    );
-    try { this.queueNotification("x.ai/queue/interject", { id, expectedVersion: entry?.version ?? 0, ...(text?.trim() ? { newText: nextText } : {}) }); }
-    catch (error) { this.cancelQueueConfirmation(operationId); throw error; }
-    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, state: "interjected", text: nextText } : value);
+    // A queue row can outlive the turn that originally made the Interject
+    // button useful (or the turn may currently be blocked on Plan/permission/
+    // question input).  Never call x.ai/interject across that boundary: the
+    // CLI is then free to reject or reinterpret it, while the user loses the
+    // only removable copy.  Keep the intent local and merely promote it.
+    if (!this.activeTurn || !this.working || this.needsUser) {
+      this.promptQueue = [
+        { ...entry, text: nextText },
+        ...this.promptQueue.filter((value) => value.id !== id),
+      ].map((value, position) => ({ ...value, position }));
+      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      return {
+        operationId,
+        entryId: id,
+        state: "reordered",
+        message: this.needsUser
+          ? "当前回合正在等待计划、权限或问题处理；消息仍可撤回，并已置顶为下一回合"
+          : "当前回合已经结束；消息仍可撤回，并已置顶为下一回合",
+        acknowledgement: "desktop",
+        fallback: true,
+      };
+    }
+    this.pendingInterjections.set(id, { text: nextText, clientMessageId: entry.clientMessageId, attachments: entry.attachmentPreviews, source: "queued" });
+    this.promptQueue = this.promptQueue.map((value) => value.id === id ? { ...value, state: "interjecting", text: nextText } : value);
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    return { operationId, entryId: id, state: "interjected", message: "插话已写入 CLI；确认后会作为同一会话的下一回合执行", acknowledgement: "transport" };
+    try {
+      const content = await buildPromptBlocks(nextText, attachmentsFromQueuePreview(entry.attachmentPreviews));
+      unwrapExtResult(await this.extension("x.ai/interject", { text: nextText, interjectionId: id, content }, INTERJECTION_ACK_TIMEOUT_MS));
+      this.pendingInterjections.delete(id);
+      this.ownedQueuedPromptIds.delete(id);
+      this.promptQueue = this.promptQueue.filter((value) => value.id !== id).map((value, position) => ({ ...value, position }));
+      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      this.emitInterjection(id, nextText, entry.clientMessageId, entry.attachmentPreviews, "queued");
+      return { operationId, entryId: id, state: "interjected", message: "等待消息已从本地队列移除，并注入当前正在运行的回合", acknowledgement: "cli" };
+    } catch (error) {
+      this.pendingInterjections.delete(id);
+      const restored = this.promptQueue.map((value) => value.id === id ? { ...value, state: "queued" as const, text: nextText } : value);
+      if (isMethodNotFound(error)) {
+        const promoted = restored.find((value) => value.id === id);
+        this.promptQueue = [promoted!, ...restored.filter((value) => value.id !== id)].map((value, position) => ({ ...value, position }));
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+        return {
+          operationId,
+          entryId: id,
+          state: "reordered",
+          message: "当前 CLI 不支持回合内插话；消息仍在本地队列中，并已置顶为下一回合",
+          acknowledgement: "desktop",
+          fallback: true,
+        };
+      }
+      this.promptQueue = restored;
+      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      throw error;
+    }
   }
   async fork(targetPromptIndex?: string, newCwd = this.cwd): Promise<Record<string, unknown>> {
     const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
@@ -1393,12 +1407,6 @@ export class GrokAcpAdapter extends EventEmitter {
     this.clearFirstEventWatchdog();
     if (this.restoredQueueTimer) clearTimeout(this.restoredQueueTimer);
     this.restoredQueueTimer = undefined;
-    // Defensive for adapters whose process never reached normal field
-    // initialization (including failed construction/recovery fixtures).
-    if (this.pendingQueueOperations) {
-      for (const pending of this.pendingQueueOperations.values()) clearTimeout(pending.timer);
-      this.pendingQueueOperations.clear();
-    }
     this.finishEffortChange(false);
     await this.terminal.disposeAll();
     const child = this.process;
@@ -1474,6 +1482,19 @@ export class GrokAcpAdapter extends EventEmitter {
     );
     const method = envelope.method;
     const params = envelope.payload as Record<string, any>;
+    const notificationSessionId = runtimeNotificationSessionId(params);
+    if (this.sessionId && notificationSessionId && notificationSessionId !== this.sessionId && isSessionOwnedRuntimeMethod(method)) {
+      // A single ACP process can report child/background activity.  Until the
+      // child has its own Desktop session owner, never apply its model, mode,
+      // command, queue or transcript update to the parent adapter.  Acknowledge
+      // extension notifications so the CLI is not wedged, but retain only
+      // bounded wire metadata in logs (no content/tool output).
+      const sourceFingerprint = createHash("sha256").update(notificationSessionId).digest("hex").slice(0, 12);
+      const ownerFingerprint = createHash("sha256").update(this.sessionId).digest("hex").slice(0, 12);
+      await this.options.log.log(`[ACP isolated notification] method=${method} sourceHash=${sourceFingerprint} ownerHash=${ownerFingerprint} schema=${envelope.schemaVersion} size=${wireSize(params)}`);
+      if (id !== undefined && method.startsWith("x.ai/")) this.respondOk(id);
+      return;
+    }
     if (method.startsWith("x.ai/")) this.observeRuntimeExtension(method);
     if (method === acpMethods.client.session.update) {
       // ACP metadata belongs to the SessionNotification envelope, not the
@@ -1555,8 +1576,18 @@ export class GrokAcpAdapter extends EventEmitter {
         this.emitEvent({ type: "session-title", sessionId: this.sessionId, title, manual: titleIsManual });
         break;
       }
-      default:
+      default: {
+        // Official builds normally deliver private lifecycle events through
+        // `_x.ai/session/update`, but historical/replayed ACP streams can put
+        // the same discriminant in the standard `session/update` envelope.
+        // Delegate only the known child lifecycle family so progress-only
+        // replay still creates the stable child-session card.
+        const normalized = normalizePrivateUpdateName(String(update.sessionUpdate || ""));
+        if (["subagent_spawned", "subagent_progress", "subagent_finished"].includes(normalized)) {
+          this.handlePrivateSessionUpdate({ ...update, sessionUpdate: normalized });
+        }
         break;
+      }
     }
   }
 
@@ -1567,6 +1598,9 @@ export class GrokAcpAdapter extends EventEmitter {
     const locations = Array.isArray(update.locations) && update.locations.length
       ? update.locations
       : diff.path ? [{ path: diff.path }] : update.locations;
+    const boundedContent = update.content === undefined ? undefined : normalizeBoundedToolPayload(update.content, { maxBytes: 2 * 1_024 * 1_024 });
+    const rawStructuredContent = update.structuredContent ?? update.structured_content;
+    const boundedStructuredContent = rawStructuredContent === undefined ? undefined : normalizeBoundedToolPayload(rawStructuredContent, { maxBytes: 256 * 1_024 });
     const tool: ToolCallState = {
       toolCallId,
       title: update.title || update.rawInput?.name || "工具调用",
@@ -1574,17 +1608,19 @@ export class GrokAcpAdapter extends EventEmitter {
       ...(normalizeToolReadOnly(update) !== undefined ? { readOnly: normalizeToolReadOnly(update) } : {}),
       status,
       ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
-      ...(update.content !== undefined ? { content: update.content } : {}),
+      ...(boundedContent !== undefined ? { content: Array.isArray(boundedContent.value) ? boundedContent.value : [boundedContent.value], contentTruncated: boundedContent.truncated } : {}),
+      ...(boundedStructuredContent !== undefined ? { structuredContent: boundedStructuredContent.value, structuredContentTruncated: boundedStructuredContent.truncated } : {}),
       ...(locations !== undefined ? { locations } : {}),
       ...(diff.oldText !== undefined ? { oldText: diff.oldText } : {}),
       ...(diff.newText !== undefined ? { newText: diff.newText } : {}),
       ...(diff.additions !== undefined ? { additions: diff.additions } : {}),
       ...(diff.deletions !== undefined ? { deletions: diff.deletions } : {}),
       ...((update.error?.message || update.error) ? { error: update.error?.message || update.error } : {}),
+      ...((update.truncated === true || boundedContent?.truncated || boundedStructuredContent?.truncated) ? { truncated: true } : {}),
     };
     if (isMediaTool(update)) this.mediaToolIds.add(toolCallId);
     if (this.mediaToolIds.has(toolCallId)) this.emitGeneratedMedia(update);
-    for (const item of update.content ?? []) this.emitMediaFromContent(item?.type === "content" ? item.content : item);
+    for (const item of Array.isArray(update.content) ? update.content : []) this.emitMediaFromContent(item?.type === "content" ? item.content : item);
     this.emitEvent({ type: "tool-call", sessionId: this.sessionId, tool });
   }
 
@@ -1626,7 +1662,15 @@ export class GrokAcpAdapter extends EventEmitter {
       case "subagent_spawned":
       case "subagent_progress":
       case "subagent_finished":
-        this.emitEvent({ type: "subagent", sessionId: this.sessionId, update });
+        // Preserve the official payload while pinning the normalized wire tag.
+        // Some historical/future fixtures arrive with camel-case or dotted
+        // discriminants; the renderer must still merge them into the same
+        // stable child-session card instead of silently dropping the event.
+        this.emitEvent({
+          type: "subagent",
+          sessionId: this.sessionId,
+          update: { ...update, sessionUpdate: updateType },
+        });
         this.emitRuntimeUpdate("subagent", updateType, firstNonEmptyString(update.description, update.message, update.status));
         return;
       case "turn_completed":
@@ -2062,33 +2106,11 @@ export class GrokAcpAdapter extends EventEmitter {
         }
         case "x.ai/queue/changed":
         case "_x.ai/queue/changed": {
-          const previous = this.promptQueue;
-          const runningPromptId = typeof params.runningPromptId === "string" ? params.runningPromptId : typeof params.running_prompt_id === "string" ? params.running_prompt_id : undefined;
-          const rawQueue = params.queue ?? params.entries ?? params.update?.queue ?? [];
-          if (runningPromptId && this.restoredQueueIds.has(runningPromptId)) this.restoredQueueSeenIds.add(runningPromptId);
-          if (Array.isArray(rawQueue)) for (const raw of rawQueue) {
-            const queueId = raw && typeof raw === "object" && typeof raw.id === "string" ? raw.id : undefined;
-            if (queueId && this.restoredQueueIds.has(queueId)) this.restoredQueueSeenIds.add(queueId);
-          }
-          if (runningPromptId && this.ownedQueuedPromptIds.has(runningPromptId) && runningPromptId !== this.activeQueuedPromptId && runningPromptId !== this.pendingQueuedTurn?.id) {
-            const starting = previous.find((entry) => entry.id === runningPromptId);
-            if (starting) {
-              if (this.activeTurn) this.pendingQueuedTurn = starting;
-              else this.startQueuedTurn(starting);
-            }
-          }
-          // Grok Build also reports its internal queue entry for an ordinary
-          // direct session/prompt. It has a server-generated id and is not a
-          // user-queued follow-up. Treating it as ours starts a phantom second
-          // turn after the real turn completes and leaves the Stop button on.
-          this.promptQueue = normalizePromptQueue(rawQueue, this.sessionId, previous)
-            .filter((entry) => this.ownedQueuedPromptIds.has(entry.id));
-          if (this.activeQueuedPrompt && !this.promptQueue.some((entry) => entry.id === this.activeQueuedPrompt!.id)) {
-            this.promptQueue = [{ ...this.activeQueuedPrompt, state: "accepted" }, ...this.promptQueue];
-          }
-          this.promptQueue = this.promptQueue.map((entry, position) => ({ ...entry, position }));
-          this.queueRevision += 1;
-          this.confirmQueueOperations(runningPromptId);
+          // 1.0.3 publishes its own internal queue, but does not expose the
+          // mutation methods needed to safely edit/remove those entries. The
+          // Desktop queue therefore remains authoritative only for prompts it
+          // has not submitted. A CLI broadcast must never erase or promote a
+          // local row, nor turn an ordinary prompt into a phantom second turn.
           this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
           this.respondOk(id);
           return;
@@ -2144,11 +2166,26 @@ export class GrokAcpAdapter extends EventEmitter {
           return;
         case "x.ai/sessions/changed":
         case "_x.ai/sessions/changed":
-        case "x.ai/session/interjection":
-        case "_x.ai/session/interjection":
           this.emitRuntimeUpdate("session", method.replace(/^_/, ""), firstNonEmptyString(params.reason, params.message, params.status));
           this.respondOk(id);
           return;
+        case "x.ai/session/interjection":
+        case "_x.ai/session/interjection": {
+          const nested = params.interjection && typeof params.interjection === "object" ? params.interjection as Record<string, unknown> : undefined;
+          const interjectionId = firstNonEmptyString(params.interjectionId, params.interjection_id, params.id, nested?.interjectionId, nested?.id) ?? crypto.randomUUID();
+          const pending = this.pendingInterjections.get(interjectionId);
+          const text = pending?.text ?? firstNonEmptyString(params.text, params.prompt, params.message, nested?.text, nested?.prompt) ?? "";
+          if (pending?.source === "queued") {
+            this.ownedQueuedPromptIds.delete(interjectionId);
+            this.promptQueue = this.promptQueue.filter((entry) => entry.id !== interjectionId).map((entry, position) => ({ ...entry, position }));
+            this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+          }
+          if (text) this.emitInterjection(interjectionId, text, pending?.clientMessageId, pending?.attachments, pending?.source ?? "remote");
+          this.pendingInterjections.delete(interjectionId);
+          this.emitRuntimeUpdate("session", "x.ai/session/interjection", firstNonEmptyString(params.status, params.reason));
+          this.respondOk(id);
+          return;
+        }
         case "x.ai/monitor_event":
         case "_x.ai/monitor_event":
           this.emitRuntimeUpdate("monitor", "monitor_event", firstNonEmptyString(params.title, params.message, params.status));
@@ -2332,43 +2369,63 @@ export class GrokAcpAdapter extends EventEmitter {
     return awaiting ?? this.activeTurn?.turnId;
   }
 
-  private startQueuedTurn(entry: PromptQueueEntry): void {
-    const resumedAcceptedTurn = entry.state === "accepted" || entry.state === "sending";
-    this.pendingQueuedTurn = undefined;
-    this.activeQueuedPromptId = entry.id;
-    this.activeQueuedPrompt = { ...entry, state: "accepted" };
-    this.promptQueue = [
-      this.activeQueuedPrompt,
-      ...this.promptQueue.filter((value) => value.id !== entry.id),
-    ].map((value, position) => ({ ...value, position }));
-    // Persist accepted/running ownership. Without this snapshot a process
-    // crash makes the in-flight queued prompt disappear on restart.
-    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-    this.working = true;
-    this.beginTurn(entry.clientMessageId);
-    // The prompt was already persisted by the CLI when it entered the queue.
-    // Emit it only after its own turn boundary exists so it cannot be grouped
-    // under the previous final answer.
-    if (!resumedAcceptedTurn) {
-      this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: entry.clientMessageId, clientMessageId: entry.clientMessageId, text: entry.text, attachments: entry.attachmentPreviews, delivery: "sent" });
-    }
-    this.emitStatus("working", entry.state === "interjected" ? "正在处理已提交的跟进消息…" : "正在处理队列消息…");
+  private activatePendingQueuedTurn(): void {
+    this.scheduleLocalQueueDrain();
   }
 
-  private activatePendingQueuedTurn(): void {
-    const pending = this.pendingQueuedTurn;
-    if (pending && !this.activeTurn) this.startQueuedTurn(pending);
+  private scheduleLocalQueueDrain(): void {
+    if (this.queueDrainScheduled || this.queueDrainInProgress || this.disposed) return;
+    this.queueDrainScheduled = true;
+    const timer = setTimeout(() => {
+      this.queueDrainScheduled = false;
+      void this.drainLocalPromptQueue();
+    }, 0);
+    timer.unref?.();
+  }
+
+  private async drainLocalPromptQueue(): Promise<void> {
+    if (this.queueDrainInProgress || this.disposed || !this.sessionId) return;
+    if (this.activeTurn || this.working || this.needsUser || this.pendingPlanRequest !== undefined || this.pendingPermissionRequests.size || this.pendingQuestionRequests.size) return;
+    const entry = this.promptQueue
+      .slice()
+      .sort((a, b) => a.position - b.position)
+      .find((value) => value.state === "queued" || value.state === "send-now");
+    if (!entry) return;
+
+    this.queueDrainInProgress = true;
+    this.activeQueuedPromptId = entry.id;
+    this.activeQueuedPrompt = { ...entry, state: "sending" };
+    this.promptQueue = this.promptQueue
+      .map((value) => value.id === entry.id ? this.activeQueuedPrompt! : value)
+      .map((value, position) => ({ ...value, position }));
+    // Persist the hand-off boundary before writing session/prompt. A host crash
+    // after this point is settled as interrupted and is never replayed twice.
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    try {
+      await this.prompt(
+        entry.text,
+        attachmentsFromQueuePreview(entry.attachmentPreviews),
+        INTERACTIVE_PROMPT_TIMEOUT_MS,
+        { clientMessageId: entry.clientMessageId ?? entry.id, attachments: entry.attachmentPreviews, promptId: entry.id, sendNow: false },
+      );
+    } catch {
+      // prompt() already emitted the structured failure and committed the
+      // queue terminal state. Do not create a duplicate global error here.
+    } finally {
+      if (this.activeQueuedPromptId === entry.id) this.persistActiveQueueTerminal("failed");
+      this.queueDrainInProgress = false;
+      this.scheduleLocalQueueDrain();
+    }
   }
 
   private persistActiveQueueTerminal(outcome: TurnOutcome): void {
     const entry = this.activeQueuedPrompt;
     if (!entry) return;
-    const terminal = { ...entry, state: outcome === "completed" ? "completed" : outcome } satisfies PromptQueueEntry;
+    const terminal = { ...entry, state: outcome === "completed" ? "completed" : outcome === "cancelled" ? "cancelled" : "failed" } satisfies PromptQueueEntry;
     this.activeQueuedPrompt = undefined;
     this.activeQueuedPromptId = undefined;
     this.ownedQueuedPromptIds.delete(entry.id);
     this.promptQueue = this.promptQueue.filter((value) => value.id !== entry.id).map((value, position) => ({ ...value, position }));
-    this.queueRevision += 1;
     // `onPromptQueueTerminal` performs the durable remove+terminal append in
     // one JsonStore mutation. Send the visible snapshot without separately
     // persisting it, otherwise saveQueue can race and erase terminal history.
@@ -2382,36 +2439,14 @@ export class GrokAcpAdapter extends EventEmitter {
   private async reconcileRestoredQueue(): Promise<void> {
     this.restoredQueueTimer = undefined;
     if (this.disposed || !this.sessionId) return;
-    const missing = this.promptQueue.filter((entry) => this.restoredQueueIds.has(entry.id) && !this.restoredQueueSeenIds.has(entry.id));
-    for (const entry of missing) {
-      if (this.disposed || !this.promptQueue.some((value) => value.id === entry.id)) return;
-      const attachments = attachmentsFromQueuePreview(entry.attachmentPreviews);
-      const prompt = await buildPromptBlocks(entry.text, attachments);
-      const sendNow = entry.state === "interjected" || entry.state === "sending" || entry.state === "accepted";
-      void this.submitQueuedRequest(entry, prompt, sendNow, true).catch((error) => {
-        if (this.disposed) return;
-        this.ownedQueuedPromptIds.delete(entry.id);
-        this.promptQueue = this.promptQueue.filter((value) => value.id !== entry.id);
-        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
-        const failureMessage = `恢复队列消息失败：${error instanceof Error ? error.message : String(error)}`;
-        this.emitEvent({ type: "error", sessionId: this.sessionId, message: failureMessage, failure: this.buildFailure(failureMessage, { error }) });
-        if (this.options.onPromptQueueTerminal) void Promise.resolve(this.options.onPromptQueueTerminal(this.sessionId, { ...entry, state: "failed" })).catch(() => undefined);
-      });
-    }
-  }
-
-  private submitQueuedRequest(entry: PromptQueueEntry, prompt: unknown[], sendNow: boolean, recovered = false): Promise<unknown> {
-    return this.request(acpMethods.agent.session.prompt, {
-      sessionId: this.sessionId,
-      prompt,
-      _meta: {
-        promptId: entry.id,
-        sendNow,
-        ...(recovered ? { recovered: true } : {}),
-        mode: this.mode === "plan" ? "plan" : "agent",
-        clientIdentifier: "grok-build-desktop",
-      },
-    }, INTERACTIVE_PROMPT_TIMEOUT_MS, undefined, undefined, entry.id);
+    // SessionRuntimeStateService settles accepted/sending entries at the host
+    // recovery boundary. Only never-submitted local intents are eligible for
+    // automatic continuation.
+    this.promptQueue = this.promptQueue
+      .filter((entry) => entry.state === "queued" || entry.state === "send-now")
+      .map((entry, position) => ({ ...entry, position }));
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    this.scheduleLocalQueueDrain();
   }
 
   private emitProviderText(text: string, flush = false): void {
@@ -2470,53 +2505,16 @@ export class GrokAcpAdapter extends EventEmitter {
     }
   }
 
-  private queueNotification(method: string, params: Record<string, unknown>): void {
-    if (!this.sessionId) throw new Error("会话尚未就绪");
-    if (!this.write({
-      jsonrpc: "2.0",
-      method,
-      params: { sessionId: this.sessionId, clientIdentifier: "grok-build-desktop", ...params },
-    })) throw new Error(`Grok 进程不可用：${method}`);
-  }
-
-  private awaitQueueConfirmation(
-    operationId: string,
-    description: string,
-    confirms: PendingQueueOperation["confirms"],
-    onConfirmed?: PendingQueueOperation["onConfirmed"],
-    onTimeout?: PendingQueueOperation["onTimeout"],
-    timeoutMs = 5_000,
+  private emitInterjection(
+    id: string,
+    text: string,
+    clientMessageId: string | undefined,
+    attachments: UserMessageAttachmentPreview[] | undefined,
+    source: "local" | "remote" | "queued",
   ): void {
-    const queueRevision = this.queueRevision;
-    const timer = setTimeout(() => {
-      const pending = this.pendingQueueOperations.get(operationId);
-      if (!pending) return;
-      this.pendingQueueOperations.delete(operationId);
-      const rolledBack = this.queueRevision === pending.queueRevision;
-      if (rolledBack) pending.onTimeout?.();
-      const message = rolledBack
-        ? `${description}已送达 CLI，但 ${Math.ceil(timeoutMs / 1_000)} 秒内未收到队列确认；已恢复操作前状态`
-        : `${description}未收到匹配确认；界面已采用 CLI 最新队列状态`;
-      this.emitEvent({ type: "error", sessionId: this.sessionId, message, failure: this.buildFailure(message) });
-    }, timeoutMs);
-    timer.unref?.();
-    this.pendingQueueOperations.set(operationId, { operationId, description, confirms, onConfirmed, onTimeout, queueRevision, timer });
-  }
-
-  private cancelQueueConfirmation(operationId: string): void {
-    const pending = this.pendingQueueOperations.get(operationId);
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    this.pendingQueueOperations.delete(operationId);
-  }
-
-  private confirmQueueOperations(runningPromptId?: string): void {
-    for (const [operationId, pending] of this.pendingQueueOperations) {
-      if (!pending.confirms(this.promptQueue, runningPromptId)) continue;
-      clearTimeout(pending.timer);
-      this.pendingQueueOperations.delete(operationId);
-      pending.onConfirmed?.();
-    }
+    if (this.emittedInterjectionIds.has(id)) return;
+    this.emittedInterjectionIds.add(id);
+    this.emitEvent({ type: "interjection", sessionId: this.sessionId, id, text, clientMessageId, attachments, source });
   }
 
   private respondOk(id: JsonRpcId | undefined, result: unknown = {}): void {
@@ -2671,13 +2669,15 @@ export function normalizePromptQueue(value: unknown, sessionId: string, previous
       text: String(row.text ?? row.prompt ?? row.content ?? ""),
       position: typeof row.position === "number" ? row.position : index,
       createdAt: typeof row.createdAt === "string" ? row.createdAt : typeof row.created_at === "string" ? row.created_at : prior?.createdAt ?? new Date().toISOString(),
-      state: row.sendNow || row.state === "interjected"
-        ? "interjected"
-        : row.state === "sending"
-          ? "sending"
-          : row.state === "queued"
-            ? "queued"
-            : prior?.state ?? "queued",
+      state: row.sendNow || row.state === "send-now"
+        ? "send-now"
+        : row.state === "interjected" || row.state === "interjecting"
+          ? row.state
+          : row.state === "sending"
+            ? "sending"
+            : row.state === "queued"
+              ? "queued"
+              : prior?.state ?? "queued",
       version: typeof row.version === "number" ? row.version : 0,
       owner: typeof row.owner === "string" ? row.owner : undefined,
       lastEditor: typeof row.lastEditor === "string" ? row.lastEditor : typeof row.last_editor === "string" ? row.last_editor : undefined,
@@ -2742,7 +2742,7 @@ export function normalizeCliSessionInfo(sessionId: string, value: Record<string,
     effort: rawEffort,
     sandbox: firstNonEmptyString(row.sandbox, row.sandboxMode, row.sandbox_mode, data.sandbox, data.sandboxMode, data.sandbox_mode),
     contextWindowTokens: optionalNonNegativeInteger(context.total ?? context.contextWindowTokens ?? context.context_window_tokens ?? row.contextWindowTokens ?? row.context_window_tokens ?? data.contextWindowTokens ?? data.context_window_tokens),
-    contextUsedTokens: optionalNonNegativeInteger(context.used ?? context.contextUsedTokens ?? context.context_used_tokens ?? row.contextUsedTokens ?? row.context_used_tokens ?? data.contextUsedTokens ?? data.context_used_tokens ?? data.totalTokens ?? data.total_tokens),
+    contextUsedTokens: optionalNonNegativeInteger(context.used ?? context.contextUsedTokens ?? context.context_used_tokens ?? row.contextUsedTokens ?? row.context_used_tokens ?? data.contextUsedTokens ?? data.context_used_tokens),
     contextFreeTokens: optionalNonNegativeInteger(context.freeTokens ?? context.free_tokens),
     contextUsagePercent: optionalNonNegativeNumber(context.usagePct ?? context.usage_pct),
     systemPromptTokens: optionalNonNegativeInteger(context.systemPromptTokens ?? context.system_prompt_tokens),
@@ -2822,6 +2822,17 @@ export function normalizeSessionCloseReceipt(sessionId: string, value: unknown):
   };
 }
 
+/**
+ * ACP SDK extension names are exposed to clients as `x.ai/...`, while their
+ * JSON-RPC wire representation is `_x.ai/...`. Keep the rest of Desktop on
+ * the logical name and translate exactly once at the transport boundary.
+ */
+export function wireExtensionMethod(method: string): string {
+  const value = method.trim();
+  if (value.startsWith("_x.ai/")) return value;
+  return value.startsWith("x.ai/") ? `_${value}` : value;
+}
+
 export function normalizeRuntimeEventEnvelope(
   rawMethod: string,
   rawPayload: Record<string, unknown>,
@@ -2847,6 +2858,42 @@ export function normalizeRuntimeEventEnvelope(
     receivedAt: new Date().toISOString(),
     payload,
   };
+}
+
+/** Returns only an explicit wire owner; absence means "use this adapter". */
+export function runtimeNotificationSessionId(payload: Record<string, unknown>): string | undefined {
+  const update = recordValue(payload.update);
+  const event = recordValue(payload.event);
+  const nested = recordValue(payload.payload);
+  return firstNonEmptyString(
+    payload.sessionId,
+    payload.session_id,
+    update?.sessionId,
+    update?.session_id,
+    event?.sessionId,
+    event?.session_id,
+    nested?.sessionId,
+    nested?.session_id,
+  );
+}
+
+/**
+ * These methods mutate session-local adapter state or visible transcript.
+ * MCP initialization without a session id remains process-scoped; an explicit
+ * foreign id, however, is never allowed to borrow the parent's ownership.
+ */
+export function isSessionOwnedRuntimeMethod(method: string): boolean {
+  return method === acpMethods.client.session.update
+    || method === "x.ai/session/update"
+    || method === "x.ai/session_notification"
+    || method === "x.ai/queue/changed"
+    || method === "x.ai/session/interjection"
+    || method === "x.ai/follow_ups"
+    || method === "x.ai/models/update"
+    || method === "x.ai/settings/update"
+    || method === "x.ai/task_backgrounded"
+    || method === "x.ai/task_completed"
+    || method === "x.ai/session/prompt_complete";
 }
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
@@ -2962,7 +3009,7 @@ function extractUsageMeta(usage: Record<string, unknown>): PromptMeta {
 }
 
 function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === "number" && value > 0 ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function optionalPositiveInteger(value: unknown): number | undefined {
@@ -3213,10 +3260,10 @@ async function readPersistedPromptMeta(cwd: string, sessionId: string): Promise<
       contextTokensUsed?: number;
       primaryModelId?: string;
     };
-    return {
-      totalTokens: numberOrUndefined(signals.contextTokensUsed),
-      modelId: typeof signals.primaryModelId === "string" ? signals.primaryModelId : undefined,
-    };
+    // signals.contextTokensUsed is context occupancy, not prompt usage. Keep
+    // model identity recovery, but never inject occupancy into PromptMeta.
+    const modelId = typeof signals.primaryModelId === "string" ? signals.primaryModelId : undefined;
+    return modelId ? { modelId } : undefined;
   } catch {
     return undefined;
   }

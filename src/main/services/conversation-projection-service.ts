@@ -78,6 +78,9 @@ export class ConversationProjectionService {
     maxProjectionEvents?: number;
     maxProjectionBytes?: number;
     maxSnapshotFileBytes?: number;
+    isSessionActive?: (sessionId: string) => boolean | Promise<boolean>;
+    interruptQueue?: (sessionId: string) => void | Promise<void>;
+    now?: () => Date;
   } = {}) {
     this.root = join(userDataPath, "conversation-projections");
     this.sessionsRoot = options.sessionsRoot ?? join(homedir(), ".grok", "sessions");
@@ -115,6 +118,14 @@ export class ConversationProjectionService {
     await this.flush(sessionId);
     return this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
       let loaded = await this.restoreRecordsWithoutLock(sessionId);
+      if (!(await this.options.isSessionActive?.(sessionId))) {
+        const reconciled = reconcileHostExitLease(sessionId, loaded.records, this.options.now?.() ?? new Date());
+        await this.options.interruptQueue?.(sessionId);
+        if (reconciled.changed) {
+          const compacted = await this.compactWithoutLock(sessionId, reconciled.records, loaded.truncatedEventCount);
+          loaded = { ...loaded, records: compacted.records, truncatedEventCount: compacted.truncatedEventCount, journalBytes: 0, needsMigration: false };
+        }
+      }
       const loadedState = await this.loadState(sessionId, loaded.snapshot);
       if (!loaded.records.length && !loaded.truncatedEventCount && !loadedState.runtime && !loadedState.queue) return undefined;
       let updatedAt = loaded.journalBytes ? new Date().toISOString() : loaded.snapshot?.updatedAt ?? new Date().toISOString();
@@ -667,6 +678,7 @@ function mergeReplayBlock(localEvents: ChatEvent[], replayEvents: ChatEvent[]): 
 function replayEventKey(event: ChatEvent): string {
   if (event.type === "user-message") return `user:${event.clientMessageId ?? event.id ?? createHash("sha256").update(event.text).digest("hex")}`;
   if (event.type === "user-message-status") return `user-status:${event.clientMessageId}`;
+  if (event.type === "interjection") return `interjection:${event.id}`;
   if (event.type === "tool-call") return `tool:${event.tool.toolCallId}`;
   if (event.type === "permission") return `permission:${String(event.request.requestId)}`;
   if (event.type === "question" || event.type === "plan" || event.type === "interaction-resolved") return `${event.type}:${String(event.requestId ?? "")}`;
@@ -778,6 +790,12 @@ function stableProjectionRecordId(event: ChatEvent): string | undefined {
   let identity: string | undefined;
   if (event.type === "user-message") identity = event.clientMessageId ?? event.id;
   else if (event.type === "user-message-status") identity = event.clientMessageId;
+  else if (event.type === "interjection") {
+    // A local x.ai/interject receipt and the later session broadcast describe
+    // the same current-turn injection. Keep one durable record even when the
+    // broadcast carries slightly different presentation metadata.
+    return `stable-${createHash("sha256").update(`interjection\0${event.id}`).digest("hex")}`;
+  }
   else if (event.type === "tool-call") identity = event.tool.toolCallId;
   else if (event.type === "permission") identity = String(event.request.requestId);
   else if (event.type === "question" || event.type === "plan" || event.type === "interaction-resolved") identity = String(event.requestId ?? "");
@@ -822,6 +840,54 @@ function visibleProjectionEvents(sessionId: string, records: ProjectionRecord[],
     status: "unavailable",
     message: `较早的 ${truncatedEventCount} 条本地可见记录已达到投影容量上限并被截断。`,
   }, ...events];
+}
+
+function reconcileHostExitLease(sessionId: string, records: ProjectionRecord[], now: Date): { records: ProjectionRecord[]; changed: boolean } {
+  const completed = new Set(records.flatMap((record) => record.event.type === "turn-completed" && record.event.presentation?.turnId
+    ? [record.event.presentation.turnId]
+    : []));
+  let startIndex = -1;
+  let started: Extract<ChatEvent, { type: "turn-started" }> | undefined;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const event = records[index]!.event;
+    if (event.type === "turn-started" && event.presentation?.turnId && !completed.has(event.presentation.turnId)) {
+      startIndex = index;
+      started = event;
+      break;
+    }
+  }
+  if (!started || startIndex < 0) return { records, changed: false };
+
+  const additions: ProjectionRecord[] = [];
+  const resolved = new Set(records.slice(startIndex + 1).flatMap((record) => record.event.type === "interaction-resolved"
+    ? [`${record.event.interaction}:${String(record.event.requestId)}`]
+    : []));
+  for (const record of records.slice(startIndex + 1)) {
+    const event = record.event;
+    const interaction = event.type === "permission" ? { kind: "permission" as const, id: event.request.requestId }
+      : event.type === "question" ? { kind: "question" as const, id: event.requestId }
+        : event.type === "plan" && event.requestId !== undefined ? { kind: "plan" as const, id: event.requestId }
+          : undefined;
+    if (!interaction || resolved.has(`${interaction.kind}:${String(interaction.id)}`)) continue;
+    resolved.add(`${interaction.kind}:${String(interaction.id)}`);
+    additions.push(projectionRecord({ type: "interaction-resolved", sessionId, interaction: interaction.kind, requestId: interaction.id, outcome: "host-interrupted" }));
+  }
+
+  const completedAt = now.toISOString();
+  const startedAtMs = Date.parse(started.presentation.startedAt);
+  const durationMs = Number.isFinite(startedAtMs) ? Math.max(0, now.getTime() - startedAtMs) : undefined;
+  additions.push(projectionRecord({
+    type: "turn-completed",
+    sessionId,
+    presentation: {
+      ...started.presentation,
+      completedAt,
+      ...(durationMs !== undefined ? { durationMs } : {}),
+      outcome: "interrupted",
+    },
+  }));
+  additions.push(projectionRecord({ type: "error", sessionId, message: "上次运行在 Desktop 主进程退出时中断；旧交互已结束，可重新发送或继续。" }));
+  return { records: dedupeProjectionRecords([...records, ...additions]), changed: true };
 }
 
 function bound(value: string | undefined, limit: number): string | undefined {

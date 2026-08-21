@@ -45,6 +45,42 @@ describe("ProviderService", () => {
     expect(values.find((value) => value.id === "sample")?.hasCredential).toBe(true);
   });
 
+  it("freezes a secret-free route receipt for the exact provider launch scope", async () => {
+    const { service } = await fixture();
+    await service.upsert(input({
+      upstreamProtocol: "openai_responses",
+      schemaProfile: "strict",
+      models: [{ id: "sample-model", model: "upstream/model", name: "示例模型", protocol: "responses" }],
+    }));
+    const provider = await service.managedProviderById("sample");
+    const receipt = service.captureRouteReceipt({
+      scopeId: "scope-1",
+      sessionId: "session-1",
+      cwd: "C:\\workspace",
+      providerId: "sample",
+      localModelId: "sample-model",
+      modelId: "sample-model",
+      effort: "high",
+    }, provider!, provider!.models[0]!);
+
+    expect(receipt).toMatchObject({
+      scopeId: "scope-1",
+      sessionId: "session-1",
+      providerId: "sample",
+      upstreamOrigin: "https://api.example.test",
+      credentialSource: "managed-environment",
+      localModelId: "sample-model",
+      upstreamModelId: "upstream/model",
+      clientProtocol: "responses",
+      upstreamProtocol: "openai_responses",
+      schemaProfile: "strict",
+      effort: "high",
+    });
+    expect(JSON.stringify(receipt)).not.toContain("test-secret-value");
+    expect(JSON.stringify(receipt)).not.toContain("GROK_DESKTOP_PROVIDER_SAMPLE_KEY");
+    expect(service.routeReceipt("scope-1")).toEqual(receipt);
+  });
+
   it("serializes concurrent provider index and TOML mutations", async () => {
     const { service } = await fixture();
     try {
@@ -55,6 +91,23 @@ describe("ProviderService", () => {
       const values = await service.list();
       expect(values.filter((value) => value.owned).map((value) => value.id).sort()).toEqual(["alpha", "beta"]);
     } finally { await service.dispose(); }
+  });
+
+  it("recovers a corrupt provider index only from the separately anchored last-known-good profile", async () => {
+    const { root, grokHome, environment, service } = await fixture();
+    await service.upsert(input({ credentialMode: "none", credentialValue: undefined }));
+    await service.dispose();
+    await writeFile(join(root, "data", "providers.json"), "{broken", "utf8");
+    const recovered = new ProviderService(join(root, "data"), new LogService(join(root, "logs", "recovered.log")), { grokHome, environment });
+    try {
+      const values = await recovered.list();
+      expect(values.find((value) => value.id === "sample")).toMatchObject({
+        baseUrl: "https://api.example.test/v1",
+        protocol: "responses",
+      });
+    } finally {
+      await recovered.dispose();
+    }
   });
 
   it("migrates markerless Desktop-owned model tables without duplicating TOML definitions", async () => {
@@ -546,6 +599,12 @@ describe("ProviderService", () => {
   });
 
   it("blocks non-loopback plaintext HTTP unless explicitly acknowledged", async () => { const { service } = await fixture(); await expect(service.upsert(input({ baseUrl: "http://lan.example.test/v1", credentialMode: "none", credentialValue: undefined }))).rejects.toThrow("明确确认"); });
+
+  it("rejects credentials embedded in provider and model-list URLs", async () => {
+    const { service } = await fixture();
+    await expect(service.upsert(input({ baseUrl: "https://u:p@localhost/v1" }))).rejects.toThrow("不能内嵌凭据");
+    await expect(service.upsert(input({ modelListUrl: "https://u:p@localhost/models" }))).rejects.toThrow("不能内嵌凭据");
+  });
 
   it("pulls models from a local fake endpoint for all three protocols and applies auth headers without exposing the key", async () => {
     const seen: Array<Record<string, string | string[] | undefined>> = [];

@@ -641,7 +641,7 @@ export interface PromptQueueEntry {
   text: string;
   position: number;
   createdAt: string;
-  state: "queued" | "interjected" | "sending" | "accepted" | "completed" | "failed" | "cancelled";
+  state: "queued" | "interjecting" | "send-now" | "interjected" | "sending" | "accepted" | "completed" | "failed" | "cancelled";
   /** Server-owned optimistic-concurrency version from x.ai/queue/changed. */
   version?: number;
   owner?: string;
@@ -690,20 +690,42 @@ export interface ProviderLaunchContext {
   /** Model id passed to the CLI. For managed models this is normally the same local config id. */
   modelId?: string;
   providerId?: string;
+  /** Frozen per-launch effort; it must not be read back from mutable settings. */
+  effort?: ReasoningEffort;
+}
+
+/**
+ * Body- and secret-free evidence for the exact managed Provider route selected
+ * before one CLI process starts. It is safe to attach to structured errors.
+ */
+export interface ProviderRouteReceipt {
+  scopeId: string;
+  sessionId?: string;
+  providerId: string;
+  providerName: string;
+  upstreamOrigin: string;
+  credentialSource: "managed-environment" | "existing-environment" | "none";
+  localModelId: string;
+  upstreamModelId: string;
+  clientProtocol: ProviderProtocol;
+  upstreamProtocol: ProviderUpstreamProtocol;
+  schemaProfile: ProviderSchemaProfile;
+  effort?: ReasoningEffort;
+  createdAt: string;
 }
 
 export interface QueueOperationReceipt {
   operationId: string;
   entryId?: string;
-  state: "queued" | "interjected" | "updated" | "removed" | "reordered" | "cleared";
+  state: "queued" | "interjected" | "send-now" | "updated" | "removed" | "reordered" | "cleared";
   message: string;
   fallback?: boolean;
   /**
-   * Queue edit/remove/reorder commands are private one-way CLI extensions.
-   * `transport` means the JSON-RPC notification was written successfully;
-   * `cli` is reserved for an authoritative x.ai/queue/changed acknowledgement.
+   * `desktop` means the operation was committed to the Desktop-owned durable
+   * queue. `transport`/`cli` are retained for compatibility with receipts from
+   * older builds and genuine CLI-owned operations.
    */
-  acknowledgement?: "transport" | "cli";
+  acknowledgement?: "desktop" | "transport" | "cli";
 }
 
 export interface PlanDecisionReceipt {
@@ -1439,6 +1461,9 @@ export interface UserMessageAttachmentPreview {
 
 export interface UserMessageAttachmentRestore {
   clientMessageId: string;
+  /** Interjections belong to the active turn and must not restore as a new user turn. */
+  presentation?: "user-message" | "interjection";
+  eventId?: string;
   text: string;
   attachments: UserMessageAttachmentPreview[];
   delivery: UserMessageDeliveryState;
@@ -1453,6 +1478,10 @@ export interface ToolCallState {
   status: "pending" | "in_progress" | "completed" | "failed";
   rawInput?: unknown;
   content?: unknown[];
+  /** MCP structured result, preserved separately from human-readable content. */
+  structuredContent?: unknown;
+  contentTruncated?: boolean;
+  structuredContentTruncated?: boolean;
   locations?: Array<{ path?: string; line?: number }>;
   command?: string;
   output?: string;
@@ -1465,7 +1494,7 @@ export interface ToolCallState {
   error?: string;
 }
 
-export type TurnOutcome = "completed" | "failed" | "cancelled";
+export type TurnOutcome = "completed" | "failed" | "cancelled" | "interrupted";
 
 export interface TurnPresentation {
   turnId: string;
@@ -1515,6 +1544,9 @@ export interface TurnFailure {
   turnId?: string;
   modelId?: string;
   providerId?: string;
+  /** Frozen route identity from process launch; never contains a credential. */
+  providerRoute?: ProviderRouteReceipt;
+  providerFailureStage?: "route" | "authentication" | "translation" | "upstream" | "downstream";
   jsonRpcCode?: number;
   httpStatus?: number;
   traceId?: string;
@@ -1571,6 +1603,7 @@ export type ChatEvent =
   | { type: "history-recovery"; sessionId: string; status: "recovered" | "unavailable"; message: string }
   | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[] }
   | { type: "user-message"; sessionId: string; text: string; id?: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
+  | { type: "interjection"; sessionId: string; id: string; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; source: "local" | "remote" | "queued" }
   | { type: "user-message-status"; sessionId: string; clientMessageId: string; delivery: UserMessageDeliveryState }
   | { type: "user-attachments-restore"; sessionId: string; entries: UserMessageAttachmentRestore[] }
   | { type: "message-chunk"; sessionId: string; text: string }

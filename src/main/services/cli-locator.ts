@@ -11,7 +11,39 @@ export const CLI_CHANGELOG_URL = "https://x.ai/build/changelog";
 // Highest public release observed in the official changelog when this build
 // was cut. It is display-only: it does not prove wire compatibility, and the
 // CLI stable feed remains the sole authority for an installable target.
-export const KNOWN_PUBLIC_CLI_VERSION = "1.0.3";
+export const KNOWN_PUBLIC_CLI_VERSION = "1.0.5";
+
+export interface GrokConfigSourceDiagnostic {
+  kind: "default" | "path" | "inline" | "multiple";
+  variables: Array<"GROK_CONFIG" | "GROK_CONFIG_PATH">;
+  summary: string;
+  /** Safe details only: no inline TOML and no absolute path. */
+  details: string[];
+}
+
+export function describeGrokConfigSource(env: NodeJS.ProcessEnv = process.env): GrokConfigSourceDiagnostic {
+  const inline = env.GROK_CONFIG;
+  const configuredPath = env.GROK_CONFIG_PATH?.trim();
+  if (inline !== undefined && configuredPath) return {
+    kind: "multiple",
+    variables: ["GROK_CONFIG", "GROK_CONFIG_PATH"],
+    summary: "检测到两个 Grok CLI 配置覆盖来源",
+    details: [`GROK_CONFIG：已设置（${Buffer.byteLength(inline, "utf8")} 字节，内容不显示）`, `GROK_CONFIG_PATH：${basename(configuredPath)}（绝对路径不显示）`, "Desktop 不会在运行中修改这些全局覆盖；实际优先级由当前 CLI 决定。"],
+  };
+  if (inline !== undefined) return {
+    kind: "inline",
+    variables: ["GROK_CONFIG"],
+    summary: "Grok CLI 使用内联配置覆盖",
+    details: [`GROK_CONFIG 已设置（${Buffer.byteLength(inline, "utf8")} 字节，内容不显示）`, "Desktop 不会读取到 Renderer、日志或支持包。"],
+  };
+  if (configuredPath) return {
+    kind: "path",
+    variables: ["GROK_CONFIG_PATH"],
+    summary: "Grok CLI 使用指定配置文件",
+    details: [`文件名：${basename(configuredPath)}（绝对路径不显示）`, "Desktop 不会在运行中修改该全局覆盖。"],
+  };
+  return { kind: "default", variables: [], summary: "Grok CLI 使用默认配置来源", details: ["未设置 GROK_CONFIG 或 GROK_CONFIG_PATH。"] };
+}
 
 async function exists(path: string): Promise<boolean> {
   return access(path).then(() => true).catch(() => false);
