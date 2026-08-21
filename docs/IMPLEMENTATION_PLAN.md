@@ -1,6 +1,6 @@
 # Grok Build Desktop 实施计划
 
-## 0.9.3 插话、持久队列、Session Info 与子 Agent 全面热修（2026-08-21，本地已安装）
+## 0.9.3 插话、持久队列、Session Info 与子 Agent 全面热修（2026-08-21，正式发布）
 
 - [x] 用本机 CLI 1.0.3 做无提示词能力探针，区分逻辑扩展名、Wire 扩展名与方法是否真实存在。Session Info/Usage、Plugins、MCP、Commands 通过；queue edit/remove/reorder/interject 明确为 Method not found。
 - [x] 删除队列编辑、删除、排序、队列插话对不存在 CLI 方法的依赖。未提交 follow-up 由 Desktop 会话级持久队列管理，跨到 `session/prompt` 前始终可编辑、可撤回。
@@ -12,7 +12,8 @@
 - [x] Session Info/Usage 统一通过 `_x.ai/...` Wire 传输；Context 不再回退累计 totalTokens。
 - [x] 额外审查并收口 Provider 可读空索引恢复、Provider 失败阶段、Host-exit 队列中断及打包旧报告清理。
 - [x] 聚焦 8 文件/173 项与完整 119 文件/853 项离线套件通过（844 通过、9 项 live 跳过）；TypeScript、生产构建、分块预算和 `npm audit` 通过。
-- [x] 最终 C 盘隔离公开扫描、正式打包、per-user 安装及冷启动验证通过；File/Product `0.9.3`/`0.9.3.0`，安装 ASAR 与候选一致，Fuses 和快捷方式通过。Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。本轮未升级 CLI、未推送、未创建 Release。
+- [x] 最终 C 盘隔离公开扫描、正式打包、per-user 安装及冷启动验证通过；File/Product `0.9.3`/`0.9.3.0`，安装 ASAR 与候选一致，Fuses 和快捷方式通过。本地 Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。
+- [x] PR #45 合并至 `main`，`v0.9.3` 正式工作流 `32496006287` 完成云端重建、Attestation、草稿回下载校验并发布为 Latest。远端 Setup/Portable SHA-256 为 `eba6523ad33f281eb0889caca481df99de7b7f04a90afe1c9d2197a25c1c2e27` / `f2f07e7713d046b26704e9ed7d3a1aca005287ceb355bdfc70a7af079dbd3718`；本轮未升级 CLI。
 
 ## 0.9.2 ACP 私有扩展与子 Agent 热修（2026-08-21，本地候选）
 
