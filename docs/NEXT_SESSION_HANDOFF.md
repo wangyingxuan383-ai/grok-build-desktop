@@ -1,4 +1,77 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-15，0.9.0 CLI 1.0.3/草稿与模型收口）
+# Grok Build Desktop 下一会话完整交接（2026-08-21，0.9.1 本地候选已安装）
+
+## 2026-08-21 0.9.1 本地交付
+
+- 源码、lockfile、打包版和 per-user 安装版已统一为 0.9.1。完整候选门禁为 119 个测试文件，113 通过、6 个 live 跳过；834 项中 825 通过、9 个 live 跳过。TypeScript、生产构建、Renderer 分块、Native Host、Fuses、打包 UI、覆盖层、任务中心、Task Scheduler、Portable 中文/空格路径和产物公开扫描通过。
+- 为避免触碰仓库根目录三份用户 `_tmp_*` 草稿，正式候选从 C 盘隔离源码副本构建；同一份 `win-unpacked` 生成 Setup/Portable。安装版 ASAR 与候选一致，File `0.9.1` / Product `0.9.1.0`，桌面与开始菜单快捷方式均指向 `%LOCALAPPDATA%\Programs\Grok Build Desktop\Grok Build Desktop.exe`，冷启动通过。
+- 资产：Setup SHA-256 `ab10cbcf039c72d8f51446c1909ff10a7f7d795fc02d186f16467a4016161522`；Portable `fc3f21b1d240e87124ff69c23849a140344a09cceecd542ef1a7c80a58e87292`；SBOM `3972dcad0fd1eb272e51b732485d420835892adf8cb89b3d2feeb016909bf650`；许可证 `f3989851fa2f026f95aa4d1bfb3e3ad27e64a622c48ce5e2fb9a075d464c13c3`。
+- 本轮没有推送、创建 Release、执行付费请求或升级 Grok CLI。live 验证仍为 1.0.3；1.0.4–1.0.5 只有离线源码/Fixture 证据，用户后续显式授权固定目标升级后才能更新 liveVerifiedVersion。
+
+## 2026-08-21 Codex 阶段 A–D 与插话/队列修复（实现与自审完成，未发布）
+
+- 已按官方源码语义拆开四条路径：`x.ai/interject` 是当前回合插入；忙碌 `session/prompt` 是后续队列；`x.ai/queue/interject` 消费或提升已有队列项；`sendNow` 是停止当前回合后立即运行下一回合。旧实现把这些混成“interjected”，会造成假队列、叉号只删本地、消息消失和回合错乱。
+- 当前回合插话现在生成单一 `interjection` 可见块，不创建第二个用户回合；本地回执和 `x.ai/session/interjection` 广播按 ID 去重。插话附件带 presentation/event ID 落入附件账本，重开后不会恢复成重复用户消息。
+- 队列插话进入 `interjecting` 等待 CLI 权威确认；超时且没有新 revision 才回滚。CLI 把它提升为 `runningPromptId` 时保留为 accepted，直到真实下一回合边界；已提交项不可编辑或本地撤回。旧 `interjected` 持久数据按兼容 Send Now 状态恢复。
+- 阶段 B 已实现：MCP `content`/`structuredContent` 分别有界且字符串保真；Context/Usage/Compact 处理精确零值、部分费用与前后 Context Token；Provider Route Receipt 不含凭据并区分路由/认证/翻译/上游/下游失败。
+- Provider 恢复已在建立独立身份锚点后受限启用：只有主索引被 `JsonStore` 识别为损坏并移走、当前索引为空、last-known-good 的内容哈希和规范 endpoint/protocol/schema 身份全部匹配时才恢复；可读主配置不覆盖，URL 内嵌凭据既拒绝新保存也不能进入恢复档案。
+- 阶段 C 已增加主进程会话级 JPEG 缩略图缓存；对话列表使用缩略图，Lightbox/复制/另存/打开仍使用原始不透明句柄，缩略图失败回退原图。当前版本 300 回合投影夹具覆盖第二/第三次重开、媒体重挂载、滚动跟随和空过程组。
+- 阶段 D 已增加 Host-exit turn lease：恢复非活动会话时，未完成回合、Plan/权限/问题只结算一次，保留部分正文；已提交的 sending/accepted/send-now/interjecting 状态进入失败终态而不是重放。项目重绑定的 Assignment/Runtime/Projection/Token 元数据成为可逆事务。
+- Provider Service 第一轮拆分已把 Route Receipt 和 Provider 恢复存储移出大型服务；诊断中心新增 `GROK_CONFIG`/`GROK_CONFIG_PATH` 来源说明，只显示变量名、字节数和 basename。
+- 自审发现 Grok 留下的源码预览隔离会改变窗口标题并覆盖测试传入的 `--user-data-dir`，使 UI 探针先误报无窗口、后读不到夹具。现已让开发冒烟等待 Source 标题、显式测试 profile 保持原路径，并对 Electron 子进程短暂文件占用做有界清理重试；当前 UI 夹具复跑通过且未再留下清理警告。
+- 最终源码门禁：119 个测试文件中 113 通过、6 个 live 跳过；825 项通过、9 项 live 跳过。TypeScript、生产构建、Renderer 分块、Native Host 自检/资源清单、当前离线 UI（Plan/权限/Stop/多会话/导航/右栏/Provider/多缩放）、上游快照校验、`npm audit`（0 漏洞）、diff check 和排除三份用户草稿后的 414 文件候选公开扫描通过。标准 `check:public` 会按设计扫描未跟踪文件，并被 `_tmp_codex_config.toml` 的本机路径阻止；这三份 `_tmp_*` 是用户文件，未删除、未修改，也不会纳入候选源码。
+- 本轮未升级 CLI、打包、安装、推送、创建 Release 或发送付费请求。唯一需要用户另行授权的底层门禁是本机 1.0.5 固定目标升级/live ACP；唯一单独留出的产品工作是 Grok UI 视觉轮，不能恢复已经被否决的 `reading.css`/Minimal Calm，也不能用协议补丁冒充 UI 改版。
+
+## 2026-08-20 Grok UI：Minimal Calm 照抄被否决，已撤回
+
+- 用户：抄都不会抄，别干了，改回去。
+- 已撤回 `calm.css`、石色/鼠尾草经典色和阅读层。界面回到 0.9.0 青蓝石板皮肤。Codex 阶段 A 未动。
+- 未打包运行仍用 `Grok Build Desktop Source` 独立 AppData，避免 `electron .` 抢安装版会话锁。在用户另开前不要继续视觉改版。
+- 给 Codex 的完整交接（含可粘贴提示词）：`docs/GROK_TO_CODEX_HANDOFF.md`。旧文件 `docs/CODEX_CONTINUE_HANDOFF.md` 已过期。
+
+## 2026-08-19 Codex 阶段 A：会话归属与恢复（已完成，未发布）
+
+- 同一 Session 的 `openSession`/ACP attach 增加双层 single-flight；重复入口只运行一个 owner，joiner 共享成功或失败，失败清理后可正常重试。Renderer 原有 open request generation 继续保证快速切换时只有最新会话执行最终滚动 settle。
+- Resume 在 initialize 前绑定预期 Session ID。ACP envelope 会先读取显式 session owner；外来 commands/mode/model/queue/transcript 事件在改变父适配器前隔离，子会话 MCP 状态保留自身 Session ID。新增 `session-ownership-interleaved.json` 脱敏 Fixture，隔离日志只保存 ID 哈希、方法、schema 和大小。
+- 新任务首次发送增加草稿 claim/send generation。草稿 key 从 `new:<project>` 迁移到真实 Session 时不再触发迟到 hydration 清空或复活正文；失败回调只有在用户未继续输入/换附件时恢复旧提交，否则保留新输入。发送消费时同时清除新任务配置，避免成功后又保存空的 Session 草稿；原回合长时间运行时，用户后续输入仍会自动保存。
+- 验证：阶段 A 相关 7 文件/165 项测试、TypeScript、生产构建和 397 文件公开扫描通过；其中新增/直接相关 3 文件现为 106 项。没有升级本机 CLI、发送付费请求、打包、安装、推送或创建 Release。
+- 下一底层阶段是 B：有界 MCP `structuredContent`、Context/Usage/Compact 语义回归、Provider Route Receipt 和 Provider 恢复对抗测试。UI 视觉改版仍留给 Grok 独立轮次。
+
+## 2026-08-19 Codex 多项目深度学习第二轮（只读研究）
+
+- 用户指出上一轮学习范围和深度不足。本轮扩大到 14 个项目，并对 `RongleCat/grok-app`、Cherry Studio、CC Switch、CLIProxyAPI、phuryn、Grox 等检查近期 Release/Changelog、提交、架构文档和相关实现/测试，而不是只看 README。
+- 完整结论、许可证边界、逐项目细节、跨项目矩阵和 A–E 阶段实施计划见 `docs/CODEX_MULTI_PROJECT_RESEARCH_2026-08-19.md`。
+- 下一次底层实现优先级已调整为：父/子/后台事件归属 → per-session history load single-flight → draft claim/send generation → MCP `structuredContent` → Context/Usage/Compact 语义 → Provider route receipt → 媒体缩略图。
+- 本轮新增研究没有修改产品代码，没有运行 CLI 更新、付费请求、媒体、打包、安装、推送或 Release。现有 0.9.1 未提交实现成果不得重置。
+- UI 美化仍单独留给 Grok：视觉层级、正文阅读、卡片、右栏、设置、密度和高缩放；不能把本轮底层计划算作 UI 成果。
+
+## 2026-08-19 Codex 底层/新功能轮（未发布）
+
+- 当前分支 `codex/v0.9.1-cli-1.0.5-foundation`。本轮没有升级本机 CLI、打包、安装、推送或创建 Release；本机/live 证据仍是 `1.0.3`。
+- 只读 stable 检查显示 CLI `1.0.5` 可用。官方源码快照为仓库 `d92c5b0...`、`SOURCE_REV 9dccd1f...`；离线兼容档案和 Wire Fixture 已覆盖 `1.0.0–1.0.5`，`1.0.6+` 继续失败关闭。
+- session new/load/resume/fork 现在附加当前 `reasoningEffort`，适配 1.0.5 的恢复行为。对精确审计的 1.0.4–1.0.5，ACP 不声明文本 `readTextFile`，避免截获 CLI 的图片感知读取；写入仍留在主进程。
+- 问题卡的有选项问题增加“其他（自行输入）”，用户可提交任意非空回答，并解析同一个 ACP request，不会生成第二条用户消息。
+- “关于”里的 CLI 检查现在显示检查中、最新、可更新或错误；更新仍只能由用户显式执行固定目标的“更新并验证”。
+- 后台任务/子 Agent 优先使用 CLI 官方 ID，缺失 ID 的旧回放使用确定性展示 ID，不再每次刷新生成随机 UUID。
+- 回归证据确认：set_mode 失败不改模式徽章；Stop 先取消权限/问题/Plan 再发 session/cancel；费用只读 CLI 明确 cost 字段，不把 context occupancy 当作花费。
+- 验证：4 个聚焦测试文件/99 项、TypeScript 与生产构建通过。上游与 GitHub 学习详情见 `docs/CODEX_BACKEND_RESEARCH_2026-08-19.md`。
+- 下一步若用户授权：执行固定目标 1.0.5 升级与 live ACP 门禁，通过后才更新 `liveVerifiedVersion`。不要直接运行裸 `grok update`。
+- **留给 Grok 的 UI 轮**：视觉层级、对话阅读、密度、布局、主题、空状态、侧栏/右栏/弹层/Composer 一致性及高缩放验收。本轮没有把协议或状态修补冒充 UI 改版，也未实现 `LEARNING_BACKLOG` 的 G1–G6。
+
+## 2026-08-17 用户纠正：Grok 学习方向不对，Codex 先做底层/新功能
+
+- 用户原意：0.9.0 之后分两条线循环。**Grok = UI 和真实使用好不好用**；**Codex = 底层代码和增添新功能**。GitHub 广撒网（grok build desktop 等，先看 star），粗筛再深学，不要学几个就停。Grok 先学/先做，做不完的交接给 Codex。
+- Grok 第 1 轮交了 `docs/LEARNING_BACKLOG.md`。用户不满意：要的是 **UI（好看、布局、阅读、密度）**，实际写成了协议/状态/队列修补，价值不高、方向不对。
+- **因此改由 Codex 先干。** 完整说明和可复制提示词：`docs/CODEX_SESSION_HANDOFF.md`。
+- Codex 本轮 **不要做视觉改版，也不要实现 LEARNING_BACKLOG 的 G1–G6**。做底层 + 新功能；G1–G6 也不能冒充「UI 轮」。Grok 之后必须另开真正的 UI 学习。
+- 产品边界未变：官方 grok CLI 的 Windows Electron 壳；近 2～3 轮不做多 Agent 工作台、不做手机遥控。未改 `src/`、未提交、未打包。
+
+## 2026-08-17 第 1 轮学习（只文档，未改功能；方向已被用户否定为 UI 产出）
+
+- 产品边界已拍板：继续做官方 Grok CLI 的 Windows 桌面壳；近 2～3 轮不做多 Agent 工作台、不做手机遥控。
+- 浅层筛了 GitHub `grok-build` / `grok-desktop` 等 180+ 仓库。值得深学的是 `phuryn/grok-build-vscode` 和 `joeynyc/Grok-UI`。高 star 里大量是网页套壳、API 网关、SEO。
+- 对照本仓库：状态点、排队/插话、Token 环、决策卡、Review 已经有。不要按宣传页重做那些能力。
+- `docs/LEARNING_BACKLOG.md` 仍可作 Codex 的底层/bug 输入（C1–C8）。其中 G1–G6 **不是**用户要的 UI 方向。
+- phuryn 为 FSL-1.1-MIT：只学交互，不拷代码。他们已跟到 CLI 1.0.4（图片 read）；我们仍钉 1.0.3 门禁，1.0.4 交给 Codex 评估。
 
 ## 2026-08-15 Issue #39 与清理错误优先级修复
 

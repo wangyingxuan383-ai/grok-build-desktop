@@ -19,11 +19,11 @@ export interface CliUpdateServiceRuntime {
 
 export const CLI_V1_COMPATIBILITY_PROFILE: CliMajorCompatibilityProfile = {
   major: 1,
-  targetVersion: "1.0.3",
+  targetVersion: "1.0.5",
   minSupportedVersion: "1.0.0",
-  maxVerifiedVersion: "1.0.3",
-  stableTargetVersion: "1.0.3",
-  fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3"],
+  maxVerifiedVersion: "1.0.5",
+  stableTargetVersion: "1.0.5",
+  fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"],
   liveVerifiedVersion: "1.0.3",
   label: "Grok Build CLI 1.x",
   requiredChecks: [
@@ -76,7 +76,7 @@ export function offlineCompatibilityGate(targetVersion: string): CliCompatibilit
     checks: CLI_V1_COMPATIBILITY_PROFILE.requiredChecks.map((id) => ({
       id,
       label: ({
-        "v1-wire-fixture": "1.0.0–1.0.3 initialize/事件 Wire Fixture",
+        "v1-wire-fixture": "1.0.0–1.0.5 initialize/事件 Wire Fixture",
         "desktop-attach-policy": "交互式 Session 附加策略",
         "session-close-outcome": "session/close 结构化结果解析",
         "mcp-slash-events": "MCP 1.0 斜杠事件规范化",

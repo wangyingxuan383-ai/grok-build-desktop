@@ -1,5 +1,63 @@
 # Grok Build Desktop 实施计划
 
+## 0.9.1 多项目深度学习第二轮（2026-08-19，研究完成、实现待排期）
+
+- [x] 以 GitHub Stars 粗筛并深审 14 个候选；不再只停留在仓库简介，检查了近期 Release/Changelog、提交、架构文档和与会话/Provider/媒体/Usage 直接相关的实现或测试。
+- [x] 深入审计 `RongleCat/grok-app` 的会话所有权、草稿认领、send epoch、重叠 load、项目迁移、长工具 heartbeat、虚拟列表、媒体缩略图和 Provider route auth。
+- [x] 深入审计 Cherry Studio 的推理控制/Registry/Stream Manager/Usage 事实模型，CC Switch 的 Grok 配置/用量去重/多账号切换，以及 CLIProxyAPI 的协议翻译/SSE/错误/别名/冷却路由。
+- [x] 复核 Grox、phuryn、rimusz、Rushour、vscode-acp、agent-shell 和 gallifre 的近期更新与边缘处理；按许可证仅学习行为，不复制代码。
+- [x] 形成完整筛选表、逐项目结论、跨项目矩阵、当前仓库差距和 A–E 阶段计划：`docs/CODEX_MULTI_PROJECT_RESEARCH_2026-08-19.md`。
+- [x] 阶段 A：实现父/子/后台通知归属、per-session load single-flight、draft claim/send generation 和恢复期输入所有权。父控制/子 MCP 交错 Wire Fixture、owner 失败 join/重试及迟到草稿恢复均有聚焦自动化证据；回放滚动继续由现有 navigation request generation 只在当前打开请求完成后 settle。
+- [x] 阶段 B1：实现有界 MCP `content`/`structuredContent`、字符串/64 位 ID 保真，以及 ToolCard 最小结构化结果入口。
+- [x] 阶段 B2：补齐 Context/Usage/Compact 的零值、部分费用、占用/花费分离和 Compact 前后 Context Token 回归。
+- [x] 阶段 B3：实现不含凭据的 Provider Route Receipt，并在错误详情区分路由、认证、翻译、上游和下游阶段。
+- [x] 阶段 B4：建立独立的 Provider 身份锚点与 last-known-good 档案。只有主索引已由 `JsonStore` 确认损坏并移走、当前可读索引为空、档案哈希和规范 endpoint/protocol/schema 身份全部匹配时才恢复；可读主配置永不被覆盖，内嵌 URL 凭据不得进入恢复档案。
+- [x] 阶段 C：实现主进程会话级媒体缩略图缓存，列表仅加载有界 JPEG，Lightbox/复制/另存仍使用原始不透明句柄；缩略图失败会回退原图。新增 300 回合当前版本夹具，覆盖重复重开、媒体重挂载、滚动跟随和空过程组回归。
+- [x] 阶段 D：补齐 Host-exit turn lease、项目重绑定元数据事务与 Provider Service 渐进拆分。主进程异常退出后的未完成回合/交互只结算一次，已提交队列不会自动重放；重绑定失败按反序恢复 Assignment/Runtime/Projection/Token；Route Receipt 和 Provider 恢复存储已从大型服务中独立。
+- **另行排期（非本轮未完成代码）**：阶段 E 由 Grok 独立做真正的 UI 学习与视觉轮。自编阅读层和 Minimal Calm 照抄均已被用户否决并撤回，界面回到 0.9.0 皮肤。在用户另开前不要继续视觉改版。不得用底层协议工作冒充 UI 改版。
+
+## 0.9.1 CLI 1.0.5 底层与新功能基础（2026-08-21，本地候选已安装）
+
+### 官方 CLI 与兼容边界
+
+- [x] 只读确认本机 CLI 为 `1.0.3`、stable 为 `1.0.5`；未执行升级，live 证据仍明确停在 1.0.3。
+- [x] 审计官方 1.0.4/1.0.5 源码、Changelog、仓库提交和 `SOURCE_REV`，将离线 Fixture/门禁扩展至 1.0.5；1.0.6+ 继续失败关闭。
+- [x] new/load/resume/fork 附加当前推理档位，适配 1.0.5 ACP 打开/恢复会话的 `reasoningEffort`。
+- [x] 1.0.4–1.0.5 让 CLI 自身处理图片感知读取，不再以宿主文本 `readTextFile` 截获图片；仅对已经源码审计的精确版本生效。
+- [x] “关于”页 CLI 检查提供可见的检查中、最新、可更新和错误结果，保留固定目标、显式确认、验证及回滚流程。
+
+### 会话交互与可靠性
+
+- [x] 问题卡的建议选项增加“其他（自行输入）”，可提交任意非空文字，并继续原回合。
+- [x] 后台任务/子 Agent 无官方 ID 时改用确定性回退身份，避免刷新后任务身份漂移。
+- [x] 回归验证 set_mode 失败不更新模式徽章；Stop 会先取消未决权限、问题和 Plan，再发送 session/cancel。
+- [x] 复核 Usage 映射：费用只来自 CLI 明确的 `costUsd`/`costUsdTicks`，Context occupancy 不参与花费计算。
+- [x] 按官方语义重建插话与队列：`x.ai/interject` 只注入当前回合，普通忙碌 `session/prompt` 才进入队列，`sendNow` 是“停止当前回合后立即发送下一回合”；`x.ai/queue/changed` 继续作为队列权威。
+- [x] 队列插话增加确认中/Send Now/Accepted 状态、权威确认与超时回滚；CLI 已接收的消息不可再显示可撤回假操作，重启时恢复条目不会重复提交当前回合插话。
+- [x] 插话正文和附件进入 Conversation Projection/附件账本，重开后保持在原回合过程区，本地回执与会话广播按稳定 ID 去重。
+
+### 证据与后续边界
+
+- [x] 聚焦 4 文件/99 项测试、TypeScript 与生产构建通过；没有运行付费模型、CLI 更新、安装或打包。
+- [x] 完成 GitHub 广撒网粗筛与官方深审，记录在 `docs/CODEX_BACKEND_RESEARCH_2026-08-19.md`；第三方仅学习行为和契约，不复制代码。
+- **待用户显式授权的实机门禁（非源码缺漏）**：本机 1.0.5 固定目标升级与 live ACP 验证；授权并通过前 `liveVerifiedVersion` 保持 1.0.3。
+- **边界已落实**：Grok UI 轮的 Minimal Calm 映射已被用户否决并撤回；本轮未以协议/状态补丁冒充 UI 改版。新的视觉轮需由用户另行启动。
+
+### 下一轮底层候选（阶段 A/B 已实施，剩余按风险推进）
+
+- [x] 验证 child `available_commands_update` 等跨会话事件的归属，阻止子 Agent 状态污染父会话命令、模式和 Composer。
+- [x] 补大会话重叠 load、失败 join、迟到 replay、快速切换及滚动锚点回归；继续复用 Projection V2/generation。
+- [x] 实现 MCP `structuredContent` 有界保真规范化和 ToolCard 最小入口；真实 1.0.5 Wire 仍需在用户显式升级并授权采样后补证据。
+- [x] 增加 `GROK_CONFIG`/`GROK_CONFIG_PATH` 来源诊断；只显示变量名、内联字节数和路径文件名，不暴露内联内容或绝对路径，也不在运行中修改全局配置。
+- [x] 完成 Provider Service 第一轮渐进拆分：Route Receipt 与带身份锚点的恢复存储成为独立服务，现有 IPC、Provider ID、模型目录、扫描和网关行为保持不变。后续扫描/网关继续按风险拆分，不以一次大搬迁制造回归。
+
+### 本轮最终自审
+
+- [x] 完整离线套件发现 119 个测试文件：113 通过、6 个 live 跳过；825 项通过、9 项 live 跳过。
+- [x] TypeScript、生产构建、Renderer 分块预算、Native Host 自检/资源清单、当前离线 UI 夹具、上游快照校验、`npm audit`（0 漏洞）和 `git diff --check` 通过。
+- [x] 候选公开扫描覆盖 414 个文本文件并通过。仓库根目录三份用户 `_tmp_*` 草稿按用户要求保持原样；标准扫描会主动阻止其中的本机路径，因此不得把整个物理目录误称为公开安全通过。
+- [x] 源码/lockfile/安装版统一提升为 0.9.1；隔离 C 盘构建副本不包含用户 `_tmp_*` 草稿，完整正式门禁通过后生成 Setup、Portable、SBOM、许可证和 SHA-256，并完成 per-user 覆盖安装、ASAR/Fuses、File/Product、快捷方式和冷启动验证。未推送、未创建 Release、未升级 CLI。
+
 ## 0.9.0 CLI 1.0.3、额度与全项目收口（2026-08-14）
 
 ### CLI 与官方接口

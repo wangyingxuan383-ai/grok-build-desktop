@@ -1,5 +1,23 @@
 # Grok CLI Compatibility
 
+## Desktop 0.9.1 / Grok Build 1.0.4–1.0.5 (2026-08-21, local candidate installed)
+
+- A read-only stable-channel check reports installed `1.0.3` and available `1.0.5`. No CLI upgrade was executed. Offline fixtures and the exact-target compatibility profile now cover `1.0.0–1.0.5`, while live verification remains `1.0.3`; `1.0.6+` fails closed.
+- Official source snapshot: repository `d92c5b0b8582fda358de1f97446aa74af44a464f`, `SOURCE_REV 9dccd1f00ec13332134a37750b64c047b14dc120`, declared/stable `1.0.5`.
+- CLI 1.0.5 reads `_meta.reasoningEffort` while opening or resuming ACP sessions. Desktop now attaches the current session effort to new/load/resume/fork rather than depending only on process flags or a later set-model call.
+- CLI 1.0.4 introduced image-aware internal reads. For the exact source-audited `1.0.4–1.0.5` range, Desktop withholds the text-only ACP `readTextFile` capability so image reads stay in the CLI, while retaining host-controlled writes. Older and unknown versions keep the prior conservative handshake.
+- `ask_user_question` remains an ACP request: Desktop now allows either a declared choice or non-empty custom text and responds to the same request ID. It does not synthesize a second user prompt.
+- About/Update Center uses the existing fixed-target updater. Check results are visible, updates require user confirmation, and rollback/live-gate behavior is unchanged. Managed CLI processes continue to receive `--no-auto-update`.
+- Background tasks and subagents preserve runtime-provided IDs. For legacy id-less rows only, Desktop derives a stable display identity; it does not invent a control ID for CLI write operations.
+- Usage cost remains sourced only from explicit `costUsd`, `costUsdTicks`, or their documented aliases. Context used/window/percentage fields belong exclusively to the Context view.
+- Official interaction semantics are kept distinct: `x.ai/interject` inserts text into the active turn, busy `session/prompt` owns queued follow-ups, `x.ai/queue/interject` asks the CLI to consume/promote an existing queued item, and `_meta.sendNow=true` cancels the current turn before running the next prompt. Desktop no longer models these four paths as the same “interjected” queue state.
+- `x.ai/queue/changed` remains authoritative. `runningPromptId` may remove a prompt from the returned waiting list before its next turn is visible, so Desktop retains that owned item as accepted until the turn boundary rather than making it disappear.
+- MCP results preserve bounded `structuredContent` separately from presentation `content`; no JSON reparse is performed on strings. Compact reports context-used token deltas only, while prompt token/cost usage keeps its own exact source.
+- Provider gateway failures may include a body/secret-free Desktop Route Receipt. It is local diagnostic evidence, not a new CLI capability. Provider recovery is a separate Desktop store and only activates after `JsonStore` has moved a corrupt primary aside and a separately persisted identity anchor matches; it never overwrites a readable nonempty primary.
+- Diagnostics report whether the child may inherit `GROK_CONFIG`, `GROK_CONFIG_PATH`, both or neither. Only variable names, inline byte length and path basename are exposed; the Desktop does not decide undocumented precedence or mutate either override at runtime.
+- An unexpected Desktop/ACP host exit is distinct from a CLI/model failure. On the next inactive-session restore, an unmatched turn and interaction gates are marked `interrupted`; prompts already accepted by the old child are not replayed automatically.
+- Official references: [Grok Build source](https://github.com/xai-org/grok-build) and [Grok Build Changelog](https://x.ai/build/changelog).
+
 ## Desktop 0.9.0 / Grok Build 1.0.3 (2026-08-14)
 
 - The installed stable CLI is **`1.0.3 (1a29d5bc12)`**. Desktop's fixed-target updater and compatibility profile now cover `1.0.0` through `1.0.3`; sanitized initialize/event fixtures exist for every 1.0 patch. Unknown future versions fail closed until a fixture or live gate extends `maxVerifiedVersion`.

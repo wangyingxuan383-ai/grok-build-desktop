@@ -123,6 +123,32 @@ export class SessionRuntimeStateService {
     });
   }
 
+  /**
+   * A Desktop host restart cannot safely replay a prompt that was already
+   * accepted by the previous ACP child: doing so can execute the same user
+   * request twice. Keep unsent queued entries, but settle in-flight ownership
+   * as failed so the user can explicitly restore it to the composer.
+   */
+  async interruptInflightQueue(sessionId: string): Promise<PromptQueueEntry[]> {
+    let interrupted: PromptQueueEntry[] = [];
+    await this.store.mutate((current) => {
+      const previous = current.queues[sessionId];
+      if (!previous) return;
+      interrupted = previous.entries
+        .filter((entry) => ["sending", "accepted", "send-now", "interjecting", "interjected"].includes(entry.state))
+        .map((entry) => ({ ...entry, state: "failed" as const }));
+      if (!interrupted.length) return;
+      const ids = new Set(interrupted.map((entry) => entry.id));
+      const entries = previous.entries.filter((entry) => !ids.has(entry.id)).map((entry, position) => ({ ...entry, position }));
+      const terminalEntries = [
+        ...(previous.terminalEntries ?? []).filter((entry) => !ids.has(entry.id)),
+        ...interrupted,
+      ].slice(-256);
+      current.queues[sessionId] = { ...previous, updatedAt: new Date().toISOString(), entries, terminalEntries };
+    });
+    return structuredClone(interrupted);
+  }
+
   async delete(sessionId: string): Promise<void> {
     await this.store.mutate((current) => {
       delete current.sessions[sessionId];

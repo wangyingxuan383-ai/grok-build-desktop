@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatEvent } from "../../shared/types";
-import { buildChatTurns, emptyView, reduceEvent, type UiMessage } from "./store";
+import { buildChatTurns, emptyView, mergePromptMeta, reduceEvent, type UiMessage } from "./store";
 
 function baseState() {
   return {
@@ -23,6 +23,10 @@ function apply(state: any, event: ChatEvent): any {
 }
 
 describe("session event reducer", () => {
+  it("does not let an all-zero Compact placeholder erase known prompt usage", () => {
+    expect(mergePromptMeta({ totalTokens: 120, inputTokens: 100, outputTokens: 20 }, { totalTokens: 0 })).toEqual({ totalTokens: 120, inputTokens: 100, outputTokens: 20 });
+    expect(mergePromptMeta({}, { totalTokens: 0 })).toEqual({ totalTokens: 0 });
+  });
   it("ignores stale hydration updates after a newer open generation", () => {
     let state = apply(baseState(), { type: "session-hydration", sessionId: "session", state: "connecting", generation: 4 });
     state = apply(state, { type: "session-hydration", sessionId: "session", state: "ready", generation: 5 });
@@ -65,6 +69,20 @@ describe("session event reducer", () => {
     state = apply(state, { type: "user-attachments-restore", sessionId: "session", entries: [{ clientMessageId: "client-2", text: "retry me", delivery: "failed", attachments: [{ id: "image-2", name: "missing.webp", kind: "image", mimeType: "image/webp", source: "C:\\gone.webp", availability: "missing" }] }] });
     expect(state.views.session.messages).toHaveLength(1);
     expect(state.views.session.messages[0]).toMatchObject({ clientMessageId: "client-2", delivery: "failed", attachments: [expect.objectContaining({ availability: "missing" })] });
+  });
+
+  it("restores interjection attachments into the active turn without inventing a user message", () => {
+    const attachment = { id: "image-interjection", name: "extra.png", kind: "image" as const, mimeType: "image/png", source: "C:\\cache\\extra.png", availability: "ready" as const };
+    let state = apply(baseState(), { type: "interjection", sessionId: "session", id: "interjection-1", clientMessageId: "client-interjection", text: "补充当前回合", source: "local" });
+    state = apply(state, {
+      type: "user-attachments-restore",
+      sessionId: "session",
+      entries: [{ clientMessageId: "client-interjection", presentation: "interjection", eventId: "interjection-1", text: "补充当前回合", delivery: "sent", attachments: [attachment] }],
+    });
+    expect(state.views.session.messages).toEqual([
+      expect.objectContaining({ kind: "interjection", id: "interjection-1", attachments: [attachment] }),
+    ]);
+    expect(state.views.session.messages.some((message: { kind: string }) => message.kind === "user")).toBe(false);
   });
 
   it("merges an ACP image block into the current pure-image user turn without adding a blank duplicate", () => {

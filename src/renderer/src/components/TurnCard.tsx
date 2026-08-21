@@ -59,10 +59,10 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
     {!turn.final && turn.presentation && <div className={`turn-without-answer ${turn.running ? turn.pending.length ? "waiting" : "running" : turn.presentation.outcome ?? "unknown"}`}>
       <strong>{turn.running
         ? turn.pending.length ? "等待你的操作" : "正在生成回答"
-        : turn.presentation.outcome === "cancelled" ? "回答已取消" : turn.presentation.outcome === "failed" ? "回答未完成" : "此回合没有可见回答正文"}</strong>
+        : turn.presentation.outcome === "cancelled" ? "回答已取消" : turn.presentation.outcome === "interrupted" ? "运行被主进程中断" : turn.presentation.outcome === "failed" ? "回答未完成" : "此回合没有可见回答正文"}</strong>
       <span>{turn.running
         ? turn.pending.length ? "处理当前计划、权限或问题后，此回合会继续。" : "回答尚未结束；正文将在模型返回可见内容时显示。"
-        : turn.presentation.outcome === "failed" || turn.presentation.outcome === "cancelled"
+        : turn.presentation.outcome === "failed" || turn.presentation.outcome === "cancelled" || turn.presentation.outcome === "interrupted"
           ? "已保留能恢复的过程、错误与用量；若历史正文缺失，应用不会伪造内容。"
           : "正在尝试从本地投影或历史更新流恢复；无法可靠关联的内容会明确标记。"}</span>
       {turn.running ? <footer className="turn-live-status"><span className="process-dot running" />处理进行中 · Token 将在回合结算后更新</footer> : <TurnMetrics presentation={turn.presentation}/>}
@@ -96,7 +96,7 @@ function FileLineStats({ additions, deletions }: { additions: number; deletions:
 
 /** Only non-completed outcomes are labelled; a normal turn needs no badge. */
 function outcomeLabel(outcome?: TurnOutcome): string {
-  return outcome === "failed" ? "已失败" : outcome === "cancelled" ? "已取消" : "";
+  return outcome === "failed" ? "已失败" : outcome === "cancelled" ? "已取消" : outcome === "interrupted" ? "已中断" : "";
 }
 
 function collapseHiddenThoughts(items: UiMessage[]): UiMessage[] {

@@ -67,6 +67,7 @@ if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.
     }
 }
 $Process = $null
+$ExpectedWindowTitle = if (-not [string]::IsNullOrWhiteSpace($ApplicationArguments) -and [IO.Path]::GetFileName($Executable) -ieq 'electron.exe') { 'Grok Build Desktop Source' } else { 'Grok Build Desktop' }
 $PreviousExpectedAppVersion = $env:GROK_EXPECTED_APP_VERSION
 try {
     $Process = [System.Diagnostics.Process]::Start($Info)
@@ -76,7 +77,7 @@ try {
         Start-Sleep -Milliseconds 500
         $Process.Refresh()
         if ($Process.HasExited) { throw "Application exited before opening a window (code $($Process.ExitCode))." }
-        if ($Process.MainWindowHandle -ne 0 -and $Process.MainWindowTitle -eq 'Grok Build Desktop') { $Ready = $true; break }
+        if ($Process.MainWindowHandle -ne 0 -and $Process.MainWindowTitle -eq $ExpectedWindowTitle) { $Ready = $true; break }
     }
     if (-not $Ready) { throw 'Application did not expose a visible Grok Build Desktop window within 15 seconds.' }
     # Legacy probes may compare against the current package dynamically. The
@@ -102,7 +103,18 @@ try {
             $ResolvedProfile = (Resolve-Path -LiteralPath $ProfileRoot).Path
             $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
             if ($ResolvedProfile.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $ResolvedProfile) -like 'Grok-Build-Desktop-smoke-*') {
-                Remove-Item -LiteralPath $ResolvedProfile -Recurse -Force
+                $CleanupError = $null
+                for ($Attempt = 0; $Attempt -lt 8; $Attempt++) {
+                    try {
+                        Remove-Item -LiteralPath $ResolvedProfile -Recurse -Force -ErrorAction Stop
+                        $CleanupError = $null
+                        break
+                    } catch {
+                        $CleanupError = $_
+                        Start-Sleep -Milliseconds (150 * ($Attempt + 1))
+                    }
+                }
+                if ($CleanupError) { throw $CleanupError }
             }
         }
     } catch { Write-Warning "应用冒烟临时目录清理失败：$($_.Exception.Message)" }

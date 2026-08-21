@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.9.1 - 2026-08-21 — CLI 1.0.5 foundation（本地验收候选）
+
+### Visual
+
+- 撤回 Minimal Calm 映射和自编阅读层。经典深/浅恢复 0.9.0 青蓝石板色。未改发送钮、权限卡半径、图标集或 Codex 行为。未打包运行仍用独立 AppData，避免和安装版抢锁。
+
+### Added
+
+- Plan/Agent 回合中的多选问题现在始终提供“其他（自行输入）”，用户不接受 CLI 建议选项时可直接提交文字要求，并继续原回合而不是另发一条提示词。
+- 增加 Grok Build CLI `1.0.4`、`1.0.5` 的脱敏 initialize/事件 Wire Fixture；兼容门禁覆盖 `1.0.0–1.0.5`，`1.0.6+` 仍失败关闭。
+- 后台任务和子 Agent 在 CLI 未返回 ID 时使用确定性回退标识，刷新侧边任务不会再生成一批新的随机身份。
+- 增加父会话控制事件与子会话 MCP 事件交错的脱敏 Wire Fixture；显式属于其他会话的命令、模式、模型、队列和正文通知会被隔离，不能修改当前会话适配器。
+- MCP 工具结果同时保存有界 `content` 与 `structuredContent`；字符串保持原样，64 位 ID 不再因二次 JSON 解析丢失精度，大对象在主进程按深度、条目和字节预算截断。
+- Provider 会话建立后生成不含凭据的 Route Receipt，固定记录 Provider、上游 Origin、凭据来源类别、本地/上游模型、客户端/上游协议、Schema 档和本回合思考档位；错误卡可据此区分路由、认证、翻译、上游和下游阶段。
+- 当前回合插话成为独立的可见 `interjection` 事件，并随 Conversation Projection 与附件账本恢复；它不再伪装为一个新的用户回合或队列条目。
+- 增加主进程会话级媒体缩略图服务。对话网格只读取有界 JPEG 缩略图，预览、复制、另存和打开仍使用原始不透明媒体句柄。
+- 增加 Provider last-known-good 与独立身份锚点；只有主索引确认损坏且备份的哈希、Provider ID、规范 endpoint、protocol/schema 全部匹配时才允许恢复。
+- 增加 Host-exit turn lease 修复：异常退出遗留的回合、Plan/权限/问题和已提交队列所有权在下次恢复时只结算一次，不会自动重放用户请求。
+- 诊断中心增加 `GROK_CONFIG` / `GROK_CONFIG_PATH` 来源说明，只显示变量名、内联字节数和路径文件名。
+
+### Changed
+
+- Session new/load/resume/fork 的附加元数据显式携带当前 `reasoningEffort`，使 CLI 1.0.5 能恢复会话实际推理档位。
+- 对源码审计确认的 CLI 1.0.4–1.0.5，ACP 握手不再声明文本 `readTextFile`，避免 CLI 的图片感知读取被宿主文本读取代理截获；写入仍由主进程受控。旧版及未知版本保持保守兼容行为。
+- “关于”中的 CLI 更新检查增加运行中、成功和失败反馈，并防止重复点击；发现 stable 1.0.5 后仍只允许用户显式执行固定目标的“更新并验证”。本轮未升级本机 CLI。
+- 同一会话的重叠历史打开现在在 App Controller 和 ACP Process Manager 两层合并为单一 owner；后续调用共享同一结果或失败，不会生成第二个 CLI 进程或重复回放。
+- Composer 明确区分三种行为：Enter 加入权威队列、Ctrl+Enter/“插入当前回合”调用 `x.ai/interject`、不支持该方法时才使用官方 `sendNow` 路径停止当前回合并作为下一回合发送。已提交或插入中的消息不再显示可撤回假按钮。
+- Compact 前后值只读取 Context used tokens；Prompt Usage 只消费明确 Token/费用字段。`0` 是有效精确值，Compact/session-info 的全零占位不会擦掉已经持久化的真实 Usage。
+- 项目重新绑定改为显式元数据事务：Assignment、Session Runtime、Conversation Projection 和 Token 工作区要么全部迁移，要么按反序恢复；恢复不完整时保留唯一可用副本并报告具体阶段。
+- Provider Service 将 Route Receipt 和安全恢复存储拆为独立组件，保持现有 IPC、Provider ID、扫描与网关协议不变。
+
+### Fixed
+
+- 为模式切换失败增加回归证据：`session/set_mode` 失败时不会提前改变当前模式徽章。
+- Stop 现在有专门回归测试，确保未决权限、问题和 Plan 请求先收到取消结果并从本地集合移除，再发送 `session/cancel`；上下文占用仍只属于 Context，不会映射为费用。
+- 首次发送增加 Renderer 草稿 claim/generation：`new:<project>` 迁移为真实 Session ID 时不会被迟到 hydration 复活；发送失败只有在用户没有继续输入或更改附件时才恢复原提交，避免覆盖后续草稿。原回合长时间运行时，新输入会继续自动保存，不再等 Prompt RPC 结束。
+- 修复插话被当成第二个 Agent/用户回合、队列叉号只能删除本地表现而不能撤回 CLI 已接收请求、插话附件重开后重复生成用户消息，以及本地回执与 `x.ai/session/interjection` 广播重复显示的问题。
+- 修复队列“插话”被 CLI 提升为 `runningPromptId` 后从界面消失的问题：它会以不可编辑的 accepted 条目保持可见，直到真实后续回合建立并由权威终态结算；确认超时则只在没有新队列修订时回滚为可编辑 queued。
+- 修复直接插话与 `sendNow` 降级共用模糊的 `interjected` 持久状态；新状态区分 `interjecting`、`send-now` 和 accepted，旧持久数据仍可恢复。
+- 修复缩略图生成/读取失败时把仍可用的原图误报为“图片文件不可用”；Renderer 会先回退原始句柄，只有原图也失败才显示不可用。
+- 修复 Desktop 异常退出时 `interjecting`、accepted、send-now 等已提交项可能在重启后恢复成可发送队列并造成重复执行。
+- Provider 地址和模型列表地址现在拒绝内嵌用户名/密码，避免凭据被复制到 Provider 元数据、恢复档案或诊断身份中。
+- 修复源码预览隔离名称启用后，离线 UI 冒烟仍只等待安装版窗口标题而误报“15 秒内没有窗口”；开发 Electron 现在等待独立的 `Grok Build Desktop Source`，安装版契约不变。
+- 修复源码预览强制覆盖 Electron `--user-data-dir`，导致离线 UI 夹具写入的设置/文件不可见并污染共享 Source AppData；显式测试目录现在保持独立，普通源码预览仍与安装版隔离。
+- 离线 UI 冒烟清理对 Electron 子进程短暂占用的临时 profile 增加有界重试，避免成功验收后留下 `Grok-Build-Desktop-smoke-*` 目录或产生误导警告。
+
+### Verification
+
+- 阶段 A 聚焦回归为 7 个测试文件、165 项测试通过；新增的会话归属、single-flight owner 失败/重试和草稿 generation 单测合计所在 3 个文件为 106 项。TypeScript、生产构建和 397 文件公开扫描通过。本机仍未执行 `grok update`、付费请求、打包、安装、推送或发布。
+- 阶段 B/插话聚焦回归最近一次为 7 个测试文件、185 项测试通过；另外结构化结果、终态归属和搜索测试在阶段 B 聚焦门禁中通过。TypeScript、生产构建和 406 文件公开扫描通过。随后阶段 D 建立独立身份锚点后才启用受限恢复，不会覆盖健康主配置。
+- 阶段 C/D 的媒体缩略图、300 回合投影、Host-exit lease、重绑定事务、Provider 恢复/Route Receipt 和配置来源诊断均有聚焦自动化证据。最终源码门禁发现 119 个测试文件：113 通过、6 个 live 跳过；825 项通过、9 项 live 跳过。TypeScript、生产构建、Renderer 分块、Native Host/资源、当前离线 UI、上游快照、`npm audit`（0 漏洞）、414 文件候选公开扫描和 diff check 通过。
+- 0.9.1 精确候选再次通过 119 文件/834 项测试（825 通过、9 个 live 跳过）、TypeScript、生产构建、Renderer 分块、Fuses、当前打包 UI、覆盖层、任务中心、Task Scheduler、Portable 中文/空格路径和两次产物公开扫描。Setup、Portable、SBOM、许可证与 SHA-256 已生成并完成 per-user 覆盖安装；安装版 File `0.9.1` / Product `0.9.1.0`、ASAR、Fuses、桌面/开始菜单快捷方式和冷启动通过。本机 CLI 未升级，仍保持 live 1.0.3。
+
 ## 0.9.0 - 2026-08-14
 
 ### Added

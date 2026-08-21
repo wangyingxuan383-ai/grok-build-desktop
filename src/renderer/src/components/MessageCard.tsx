@@ -20,6 +20,7 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   if (isResolvedInteraction(message)) return null;
   if (message.kind === "thought" && !showThinking) return <div className="thinking-placeholder"><span /> 思考过程</div>;
   if (message.kind === "user") return <UserMessageCard message={message} onRetry={onRetry} />;
+  if (message.kind === "interjection") return <div className="message-row interjection"><div className="bubble interjection-bubble"><small>插入当前回合</small><LazyMarkdownView text={message.text} /></div></div>;
   if (message.kind === "assistant") return <div className="message-row assistant"><div className="assistant-body"><LazyMarkdownView text={message.text} /></div></div>;
   if (message.kind === "thought") return <div className="thought-card"><LazyMarkdownView text={message.text} /></div>;
   if (message.kind === "retry") {
@@ -60,14 +61,16 @@ export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<Ui
 function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
   const [preview, setPreview] = useState(false);
   const src = message.isData ? `data:${message.mimeType || "image/png"};base64,${message.source}` : toFileUrl(message.source);
+  const thumbnailSrc = message.isData ? src : toThumbnailUrl(src);
+  const [displaySrc, setDisplaySrc] = useState(thumbnailSrc);
   const [unavailable, setUnavailable] = useState(!src);
-  useEffect(() => { setUnavailable(!src); setPreview(false); }, [src]);
+  useEffect(() => { setDisplaySrc(thumbnailSrc); setUnavailable(!src); setPreview(false); }, [src, thumbnailSrc]);
   const pathActions = !message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>;
   return <div className="media-result-item">
     {unavailable
       ? <div className="media-unavailable"><strong>{message.media === "image" ? "图片文件不可用" : "视频文件不可用"}</strong><span>历史缓存可能已被清理或原文件已移动。不会再显示损坏的图片占位。</span></div>
       : message.media === "image"
-        ? <button className="generated-image-button" onClick={() => setPreview(true)}><img src={src} alt="Grok 生成图片" onLoad={() => setUnavailable(false)} onError={() => setUnavailable(true)} /></button>
+        ? <button className="generated-image-button" onClick={() => setPreview(true)}><img src={displaySrc} alt="Grok 生成图片" onLoad={() => setUnavailable(false)} onError={() => displaySrc !== src ? setDisplaySrc(src) : setUnavailable(true)} /></button>
         : <video src={src} controls onError={() => setUnavailable(true)} />}
     <div className="media-inline-actions">
       {!unavailable && message.media === "image" && <><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button></>}
@@ -86,7 +89,7 @@ function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { k
     <div className="bubble user-bubble">
       {images.length > 0 && <div className={`user-attachment-grid count-${Math.min(4, images.length)}`}>{images.map((attachment) => {
         const src = attachment.source ? (attachment.isData ? `data:${attachment.mimeType || "image/png"};base64,${attachment.source}` : toFileUrl(attachment.source)) : "";
-        return <UserImageAttachmentPreview key={attachment.id} attachment={attachment} src={src} onPreview={() => setPreview({ src, name: attachment.name })}/>;
+        return <UserImageAttachmentPreview key={attachment.id} attachment={attachment} src={src} thumbnailSrc={attachment.isData ? src : toThumbnailUrl(src)} onPreview={() => setPreview({ src, name: attachment.name })}/>;
       })}</div>}
       {files.length > 0 && <div className="user-file-previews">{files.map((attachment) => <div className="user-file-preview" key={attachment.id}><span aria-hidden="true">{attachment.kind === "folder" ? "▣" : "▤"}</span><span><strong>{attachment.name}</strong><small>{attachment.availability === "missing" ? "源文件不可用" : formatBytes(attachment.size)}</small></span></div>)}</div>}
       {message.text && <LazyMarkdownView text={message.text} />}
@@ -100,16 +103,21 @@ function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { k
   </div>;
 }
 
-function UserImageAttachmentPreview({ attachment, src, onPreview }: {
+function UserImageAttachmentPreview({ attachment, src, thumbnailSrc, onPreview }: {
   attachment: NonNullable<Extract<UiMessage, { kind: "user" }>["attachments"]>[number];
   src: string;
+  thumbnailSrc: string;
   onPreview(): void;
 }): React.JSX.Element {
+  const [displaySrc, setDisplaySrc] = useState(thumbnailSrc);
   const [unavailable, setUnavailable] = useState(attachment.availability === "missing" || !src);
-  useEffect(() => setUnavailable(attachment.availability === "missing" || !src), [attachment.availability, src]);
+  useEffect(() => {
+    setDisplaySrc(thumbnailSrc);
+    setUnavailable(attachment.availability === "missing" || !src);
+  }, [attachment.availability, src, thumbnailSrc]);
   return <div className="image-action-surface">
     <button type="button" className={`user-image-preview ${unavailable ? "missing" : ""}`} disabled={unavailable} title={attachment.name} onClick={onPreview}>
-      {unavailable ? <span><strong>{attachment.name}</strong><small>源文件不可用</small></span> : <img src={src} alt={attachment.name} onLoad={() => setUnavailable(false)} onError={() => setUnavailable(true)} />}
+      {unavailable ? <span><strong>{attachment.name}</strong><small>源文件不可用</small></span> : <img src={displaySrc} alt={attachment.name} onLoad={() => setUnavailable(false)} onError={() => displaySrc !== src ? setDisplaySrc(src) : setUnavailable(true)} />}
     </button>
     {!unavailable && <div className="media-inline-actions compact"><button onClick={() => void window.grokDesktop.copyImage(src)}>复制</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存</button></div>}
   </div>;
@@ -152,6 +160,7 @@ function ToolCard({ message, open, sessionId, navigationRoot, onNavigate }: { me
       {tool.command && <pre className="command">{tool.command}</pre>}{tool.output && <pre className="output">{tool.output}</pre>}{tool.error && <div className="error-text">{tool.error}</div>}
       {images.map((image, index) => <img className="computer-screenshot" key={index} src={`data:${image.mimeType};base64,${image.data}`} alt="Computer Use 窗口截图" />)}
       {tool.truncated && <div className="output-truncated">输出过长，界面中已截断。</div>}
+      {tool.structuredContent !== undefined && <details className="tool-structured-result"><summary>结构化结果{tool.structuredContentTruncated ? "（已截断）" : ""}</summary><pre>{typeof tool.structuredContent === "string" ? tool.structuredContent : JSON.stringify(tool.structuredContent, null, 2)}</pre></details>}
       {hasDiff && <Suspense fallback={<div className="diff-loading">正在加载 Diff…</div>}><DiffEditor height="300px" original={tool.oldText} modified={tool.newText} theme={light ? "vs" : "vs-dark"} options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true }} /></Suspense>}
       {!hasDiff && tool.rawInput != null && <pre>{JSON.stringify(tool.rawInput, null, 2)}</pre>}
     </div>}
@@ -197,9 +206,15 @@ function PermissionCard({ message, sessionId, onResolved }: { message: Extract<U
 
 function QuestionCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "question" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [customQuestions, setCustomQuestions] = useState<Record<string, boolean>>({});
   const [state, setState] = useState<{ value: "idle" | "submitting" | "failed"; message?: string }>({ value: "idle" });
   const submit = async (): Promise<void> => {
     if (state.value === "submitting") return;
+    const unanswered = message.questions.find((question) => !answers[question.question]?.trim());
+    if (unanswered) {
+      setState({ value: "failed", message: `请先回答：${unanswered.question}` });
+      return;
+    }
     setState({ value: "submitting", message: "正在提交回答…" });
     try { await window.grokDesktop.respondQuestion(sessionId, message.requestId, answers); onResolved?.(message.id); }
     catch (error) {
@@ -208,7 +223,12 @@ function QuestionCard({ message, sessionId, onResolved }: { message: Extract<UiM
       setState({ value: "failed", message: detail });
     }
   };
-  return <section className="action-card decision-card"><header><span className="decision-icon" aria-hidden="true">?</span><div><strong>Grok 需要你的回答</strong><p>回答后原回合会继续，不会额外发送一条用户消息。</p></div></header>{message.questions.map((question) => <label key={question.question}><span>{question.question}</span>{question.options?.length ? <select disabled={state.value === "submitting"} value={answers[question.question] || ""} onChange={(event) => setAnswers({ ...answers, [question.question]: event.target.value })}><option value="">请选择</option>{question.options.map((option) => <option key={option.label}>{option.label}</option>)}</select> : <input disabled={state.value === "submitting"} value={answers[question.question] || ""} onChange={(event) => setAnswers({ ...answers, [question.question]: event.target.value })} />}</label>)}{state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}<button disabled={state.value === "submitting"} onClick={() => void submit()}>{state.value === "submitting" ? "提交中…" : "提交回答"}</button></section>;
+  return <section className="action-card decision-card"><header><span className="decision-icon" aria-hidden="true">?</span><div><strong>Grok 需要你的回答</strong><p>可以选择建议项，也可以选择“其他”直接说明你的要求；回答后原回合继续。</p></div></header>{message.questions.map((question) => <label key={question.question}><span>{question.header || question.question}</span>{question.header && <small>{question.question}</small>}{question.options?.length ? <><select disabled={state.value === "submitting"} value={customQuestions[question.question] ? "__custom__" : answers[question.question] || ""} onChange={(event) => {
+        const custom = event.target.value === "__custom__";
+        setCustomQuestions({ ...customQuestions, [question.question]: custom });
+        setAnswers({ ...answers, [question.question]: custom ? "" : event.target.value });
+        setState({ value: "idle" });
+      }}><option value="">请选择</option>{question.options.map((option) => <option key={option.label} value={option.label}>{option.label}</option>)}<option value="__custom__">其他（自行输入）</option></select>{customQuestions[question.question] && <textarea autoFocus disabled={state.value === "submitting"} rows={3} placeholder="输入你的回答或补充要求" value={answers[question.question] || ""} onChange={(event) => { setAnswers({ ...answers, [question.question]: event.target.value }); setState({ value: "idle" }); }} />}</> : <textarea disabled={state.value === "submitting"} rows={3} placeholder="输入你的回答" value={answers[question.question] || ""} onChange={(event) => { setAnswers({ ...answers, [question.question]: event.target.value }); setState({ value: "idle" }); }} />}</label>)}{state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}<button disabled={state.value === "submitting"} onClick={() => void submit()}>{state.value === "submitting" ? "提交中…" : "提交回答"}</button></section>;
 }
 
 function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "plan" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
@@ -252,6 +272,11 @@ function ErrorCard({ text, failure, onDiagnose }: { text: string; failure?: Turn
   const facts: Array<[string, string]> = failure ? ([
     ["状态", failure.httpStatus === undefined ? "" : String(failure.httpStatus)],
     ["Provider", failure.providerId ?? ""],
+    ["失败阶段", failure.providerFailureStage ?? ""],
+    ["上游来源", failure.providerRoute?.upstreamOrigin ?? ""],
+    ["模型路由", failure.providerRoute ? `${failure.providerRoute.localModelId} → ${failure.providerRoute.upstreamModelId}` : ""],
+    ["协议路由", failure.providerRoute ? `${failure.providerRoute.clientProtocol} → ${failure.providerRoute.upstreamProtocol}` : ""],
+    ["凭据来源", failure.providerRoute?.credentialSource ?? ""],
     ["模型", failure.modelId ?? ""],
     ["Trace", failure.traceId ?? ""],
     ["重试于", failure.retryAfter ?? ""],
@@ -335,6 +360,12 @@ function toFileUrl(path: string): string {
   // normalization; render it as unavailable instead of minting a path URL in
   // the sandboxed Renderer.
   return path.startsWith("grok-media://access/") ? path : "";
+}
+export function toThumbnailUrl(source: string): string {
+  if (!source.startsWith("grok-media://access/")) return source;
+  const url = new URL(source);
+  url.searchParams.set("variant", "thumbnail");
+  return url.toString();
 }
 function formatBytes(size?: number): string { return typeof size !== "number" ? "附件" : size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} KiB` : `${(size / 1024 / 1024).toFixed(1)} MiB`; }
 

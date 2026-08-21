@@ -37,9 +37,17 @@ export class AttachmentCacheService {
     return { attachments: prepared, previews: await Promise.all(prepared.map((attachment) => this.preview(attachment))) };
   }
 
-  async record(sessionId: string, clientMessageId: string, text: string, previews: UserMessageAttachmentPreview[], delivery: UserMessageDeliveryState): Promise<void> {
+  async record(
+    sessionId: string,
+    clientMessageId: string,
+    text: string,
+    previews: UserMessageAttachmentPreview[],
+    delivery: UserMessageDeliveryState,
+    presentation: "user-message" | "interjection" = "user-message",
+    eventId?: string,
+  ): Promise<void> {
     if (!previews.length) return;
-    const value: AttachmentLedgerEntry = { clientMessageId, text, attachments: previews, delivery, createdAt: new Date().toISOString() };
+    const value: AttachmentLedgerEntry = { clientMessageId, presentation, eventId, text, attachments: previews, delivery, createdAt: new Date().toISOString() };
     await this.ledger.mutate((ledger) => {
       const entries = ledger.sessions[sessionId] ?? [];
       const index = entries.findIndex((entry) => entry.clientMessageId === clientMessageId);
@@ -60,6 +68,8 @@ export class AttachmentCacheService {
     const entries = ledger.sessions[sessionId] ?? [];
     return Promise.all(entries.map(async (entry) => ({
       clientMessageId: entry.clientMessageId,
+      presentation: entry.presentation ?? "user-message",
+      eventId: entry.eventId,
       text: entry.text,
       delivery: entry.delivery === "sending" ? "sent" : entry.delivery,
       attachments: await Promise.all(entry.attachments.map(async (preview) => ({ ...preview, availability: preview.source && !preview.isData && !(await exists(preview.source)) ? "missing" as const : "ready" as const }))),
@@ -91,7 +101,7 @@ export class AttachmentCacheService {
         }
         prepared.push({ ...preview, availability: "missing" });
       }
-      await this.record(targetSessionId, entry.clientMessageId, entry.text, prepared, entry.delivery);
+      await this.record(targetSessionId, entry.clientMessageId, entry.text, prepared, entry.delivery, entry.presentation, entry.eventId);
     }
   }
 

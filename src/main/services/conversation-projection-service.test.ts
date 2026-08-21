@@ -57,6 +57,63 @@ describe("ConversationProjectionService", { timeout: 60_000 }, () => {
     ]);
   });
 
+  it("settles an orphaned host turn and its interaction once on the next restore", async () => {
+    const root = await tempRoot();
+    const first = new ConversationProjectionService(root, { isSessionActive: () => true });
+    await first.record({ type: "user-message", sessionId: "host-exit", clientMessageId: "client", text: "work", delivery: "sent" });
+    await first.record({ type: "turn-started", sessionId: "host-exit", presentation: { turnId: "turn", clientMessageId: "client", ordinal: 0, startedAt: "2026-08-20T00:00:00.000Z" } });
+    await first.record({ type: "message-chunk", sessionId: "host-exit", text: "partial body" });
+    await first.record({ type: "permission", sessionId: "host-exit", request: { requestId: 7, sessionId: "host-exit", toolCall: {}, options: [] } });
+    await first.dispose();
+
+    let queueInterrupts = 0;
+    const restarted = new ConversationProjectionService(root, {
+      isSessionActive: () => false,
+      interruptQueue: async () => { queueInterrupts += 1; },
+      now: () => new Date("2026-08-20T00:01:00.000Z"),
+    });
+    const projection = await restarted.restore("host-exit");
+    expect(projection?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "message-chunk", text: "partial body" }),
+      expect.objectContaining({ type: "interaction-resolved", interaction: "permission", requestId: 7, outcome: "host-interrupted" }),
+      expect.objectContaining({ type: "turn-completed", presentation: expect.objectContaining({ turnId: "turn", outcome: "interrupted", durationMs: 60_000 }) }),
+      expect.objectContaining({ type: "error", message: expect.stringContaining("主进程退出时中断") }),
+    ]));
+    expect(queueInterrupts).toBe(1);
+    await restarted.restore("host-exit");
+    expect(queueInterrupts).toBe(1);
+  });
+
+  it("does not settle a turn while its session is still active in this host", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root, { isSessionActive: () => true });
+    await service.record({ type: "turn-started", sessionId: "active", presentation: { turnId: "turn", ordinal: 0, startedAt: "2026-08-20T00:00:00.000Z" } });
+    const projection = await service.restore("active");
+    expect(projection?.events.some((event) => event.type === "turn-completed")).toBe(false);
+  });
+
+  it("reopens a current 300-turn projection repeatedly without losing media or answer blocks", async () => {
+    const root = await tempRoot();
+    const sessionId = "large-current";
+    const replay = Array.from({ length: 300 }, (_, index) => [
+      { type: "user-message" as const, sessionId, id: `user-${index}`, clientMessageId: `client-${index}`, text: `请求 ${index}`, delivery: "sent" as const },
+      { type: "turn-started" as const, sessionId, presentation: { turnId: `turn-${index}`, clientMessageId: `client-${index}`, ordinal: index, startedAt: "2026-08-20T00:00:00.000Z" } },
+      { type: "thought-chunk" as const, sessionId, text: `思考 ${index}` },
+      { type: "message-chunk" as const, sessionId, text: `回答 ${index}` },
+      ...(index % 10 === 0 ? [{ type: "media" as const, sessionId, media: "image" as const, source: `grok-media://access/00000000-0000-0000-0000-${String(index).padStart(12, "0")}` }] : []),
+      { type: "turn-completed" as const, sessionId, presentation: { turnId: `turn-${index}`, clientMessageId: `client-${index}`, ordinal: index, startedAt: "2026-08-20T00:00:00.000Z", completedAt: "2026-08-20T00:00:01.000Z", durationMs: 1_000, outcome: "completed" as const } },
+    ]).flat();
+    const first = new ConversationProjectionService(root);
+    const created = await first.mergeReplay(sessionId, replay);
+    expect(created?.events.filter((event) => event.type === "media")).toHaveLength(30);
+    await first.dispose();
+    const second = await new ConversationProjectionService(root).restore(sessionId);
+    const third = await new ConversationProjectionService(root).restore(sessionId);
+    expect(second?.events).toEqual(third?.events);
+    expect(second?.events.filter((event) => event.type === "message-chunk")).toHaveLength(300);
+    expect(second?.events.filter((event) => event.type === "media")).toHaveLength(30);
+  });
+
   it("writes a V2 snapshot with runtime, queue, status and terminal usage", async () => {
     const root = await tempRoot();
     const service = new ConversationProjectionService(root);
@@ -299,6 +356,28 @@ describe("ConversationProjectionService", { timeout: 60_000 }, () => {
     await service.record(structuredClone(event));
     const projection = await service.restore("stable-event");
     expect(projection?.events.filter((value) => value.type === "user-message")).toHaveLength(1);
+  });
+
+  it("persists one current-turn interjection when local receipt and CLI broadcast share an id", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({
+      type: "interjection",
+      sessionId: "interjection-session",
+      id: "interjection-1",
+      text: "补充当前回合",
+      clientMessageId: "client-1",
+      source: "local",
+    });
+    await service.record({
+      type: "interjection",
+      sessionId: "interjection-session",
+      id: "interjection-1",
+      text: "补充当前回合",
+      source: "remote",
+    });
+    const projection = await service.restore("interjection-session");
+    expect(projection?.events.filter((value) => value.type === "interjection")).toHaveLength(1);
   });
 
   it("serializes two projection instances without losing concurrent events", async () => {
