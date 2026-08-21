@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canOpenRecentFileDiff, preferredOpenLocation, sessionScopedPaneKey, shouldApplyDraftHydration } from "./session-ui-guards";
+import { canOpenRecentFileDiff, canRestoreClaimedDraft, preferredOpenLocation, sessionScopedPaneKey, shouldApplyDraftHydration, shouldPauseDraftAutosaveForSubmission, shouldSuspendDraftHydrationForSubmission } from "./session-ui-guards";
 
 describe("session UI isolation guards", () => {
   it("changes the dock identity for a session, execution root, or tool change", () => {
@@ -23,6 +23,25 @@ describe("session UI isolation guards", () => {
     expect(shouldApplyDraftHydration({ ...baseline, touchedGeneration: 4 })).toBe(false);
     expect(shouldApplyDraftHydration({ ...baseline, currentAttachmentRevision: 3 })).toBe(false);
     expect(shouldApplyDraftHydration({ ...baseline, cancelled: true })).toBe(false);
+  });
+
+  it("gives a first-send claim ownership of migration without overwriting later input", () => {
+    expect(shouldSuspendDraftHydrationForSubmission("claiming")).toBe(true);
+    expect(shouldSuspendDraftHydrationForSubmission("sent")).toBe(false);
+    expect(shouldPauseDraftAutosaveForSubmission("claiming")).toBe(true);
+    expect(shouldPauseDraftAutosaveForSubmission("sent")).toBe(false);
+    const baseline = {
+      claimId: 7,
+      activeClaimId: 7,
+      claimedUserRevision: 3,
+      currentUserRevision: 3,
+      claimedAttachmentRevision: 2,
+      currentAttachmentRevision: 2,
+    };
+    expect(canRestoreClaimedDraft(baseline)).toBe(true);
+    expect(canRestoreClaimedDraft({ ...baseline, activeClaimId: 8 })).toBe(false);
+    expect(canRestoreClaimedDraft({ ...baseline, currentUserRevision: 4 })).toBe(false);
+    expect(canRestoreClaimedDraft({ ...baseline, currentAttachmentRevision: 3 })).toBe(false);
   });
 
   it("prefers the real execution root over a stale catalog cwd", () => {

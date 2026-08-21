@@ -13,6 +13,7 @@ import { parseByteRange } from "./media-range";
 import { isAllowedThemeBackgroundUrl } from "./services/theme-service";
 import { createRendererTrustPolicy, isAllowedExternalUrl, isTrustedRendererUrl, trustedDevelopmentUrl } from "./security-policy";
 import { WindowStateService } from "./services/window-state-service";
+import { explicitUserDataDirectory, INSTALLED_APP_NAME, INSTALLED_APP_USER_MODEL_ID, sourcePreviewIdentity } from "./source-preview-identity";
 
 let mainWindow: BrowserWindow | undefined;
 let controller: AppController | undefined;
@@ -26,7 +27,10 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
-app.setName("Grok Build Desktop");
+const previewIdentity = sourcePreviewIdentity({ isPackaged: app.isPackaged, appData: app.getPath("appData"), explicitUserData: explicitUserDataDirectory(process.argv) });
+app.setName(previewIdentity?.name ?? INSTALLED_APP_NAME);
+if (previewIdentity) app.setPath("userData", previewIdentity.userData);
+app.setAppUserModelId(previewIdentity?.appUserModelId ?? INSTALLED_APP_USER_MODEL_ID);
 
 const workerIndex = process.argv.indexOf("--scheduler-worker");
 const schedulerProbeIndex = process.argv.indexOf("--scheduler-probe");
@@ -81,7 +85,6 @@ else {
   });
 
   app.whenReady().then(async () => {
-    app.setAppUserModelId("io.github.grokbuilddesktop.community");
     controller = new AppController(app.getPath("userData"));
     windowState = new WindowStateService(app.getPath("userData"));
     const restoredWindow = await windowState.load(screen.getAllDisplays().map((display) => display.workArea));
@@ -135,7 +138,7 @@ else {
       minHeight: 620,
       show: false,
       backgroundColor: startupTheme.mode === "custom" ? startupTheme.colors.background : startupTheme.mode === "light" || (startupTheme.mode === "system" && !nativeTheme.shouldUseDarkColors) ? "#f6f7f9" : "#0f1115",
-      title: "Grok Build Desktop",
+      title: previewIdentity?.name ?? INSTALLED_APP_NAME,
       webPreferences: {
         preload: join(currentDir, "../preload/index.cjs"),
         nodeIntegration: false,
@@ -144,6 +147,12 @@ else {
       },
     });
     if (restoredWindow.maximized) mainWindow.maximize();
+    if (previewIdentity) {
+      mainWindow.on("page-title-updated", (event) => {
+        event.preventDefault();
+        mainWindow?.setTitle(previewIdentity.name);
+      });
+    }
     mainWindow.on("move", () => mainWindow && windowState?.scheduleSave(mainWindow));
     mainWindow.on("resize", () => mainWindow && windowState?.scheduleSave(mainWindow));
     mainWindow.on("maximize", () => mainWindow && windowState?.scheduleSave(mainWindow));

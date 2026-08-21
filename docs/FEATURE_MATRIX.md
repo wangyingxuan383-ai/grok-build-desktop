@@ -1,5 +1,60 @@
 # Feature Matrix
 
+## 0.9.3 queue/interjection/subagent reliability hotfix (2026-08-21, local candidate)
+
+| Capability | Status | Evidence / behavior |
+|---|---|---|
+| Private ACP transport | Focused + live no-prompt verified | Logical `x.ai/...` requests translate once to `_x.ai/...`. Installed CLI 1.0.3 accepts Plugins, MCP, Commands, Session Info and Session Usage. A valid transport name is not treated as proof that every guessed private method exists. |
+| Desktop durable follow-up queue | Focused/contract-tested | Never-submitted follow-ups remain in the session-scoped Desktop store and can be edited, reordered or withdrawn without CLI calls. One row crosses to `sending` only when the owning session is idle; host recovery never replays accepted work. |
+| Queue edit/remove/reorder | Focused-tested | The installed 1.0.3 probe reports method-not-found for `_x.ai/queue/edit`, `remove` and `reorder`. Visible controls therefore mutate only Desktop-owned `queued` intents and disappear/lock at the submission boundary. |
+| Current-turn interjection | Focused/contract-tested | Active-turn input calls real `x.ai/interject` with a 15-second acknowledgement boundary and renders one in-turn block. Missing-method, turn-end and user-gate races retain a removable local next-turn row rather than losing or falsely committing it. |
+| Session Info / Usage | Live no-prompt + focused | Both methods succeed on installed 1.0.3 with the correct wire name. Context occupancy never falls back to cumulative `totalTokens`; unsupported/absent fields remain unknown. |
+| Subagent timeline and dashboard | Focused/contract-tested | Private and replayed standard updates accept `child_session_id`; progress-only streams create one stable card, explicit finish settles it, and cancelled children become stopped rather than failed. |
+| Queue attachment/reopen integrity | Focused-tested | Queue edit/remove/clear/interject updates the attachment ledger. Queued restore rows are owned by the queue bar and cannot reappear as already-sent user bubbles. |
+| Offline gate | Passed | 119 files discovered: 113 pass / 6 opt-in live skip; 844 tests pass / 9 live skip. TypeScript, production build, chunk budget and high-severity dependency audit pass. |
+
+## 0.9.2 ACP private-extension hotfix (superseded)
+
+0.9.2 fixed the general logical-to-wire underscore conversion, but its queue-mutation row below was invalid: live CLI 1.0.3 rejects the guessed mutation methods. 0.9.3 replaces that design with a Desktop-owned never-submitted queue.
+
+| Capability | Status | Evidence / behavior |
+|---|---|---|
+| Private ACP wire transport | Focused + live no-prompt verified | Logical `x.ai/...` names are translated once to official `_x.ai/...` JSON-RPC wire names. Local CLI 1.0.3 accepted Plugins, MCP, Commands, Session Info and Session Usage in one ephemeral, no-prompt probe. |
+| Queue edit/remove/reorder/interject | **Invalidated by live probe** | `_x.ai/queue/edit`, `remove`, `reorder` and `queue/interject` return method-not-found on installed CLI 1.0.3. See the 0.9.3 replacement above. |
+| In-turn interjection | Contract-tested | `x.ai/interject` requests now reach the official private method instead of falling into method-not-found/sendNow behavior. |
+| Subagent timeline | Focused-tested | `child_session_id` is a stable identity for progress-only replay; spawn/progress/finish merge into one visible card with exact progress metadata. |
+| Agent Dashboard child lifecycle | Focused-tested | Progress with duration remains running; only explicit terminal event/status completes it. |
+| Local delivery | Installed + packaged | 113 test files passed and 6 live files remained opt-in (834/843 tests passed). TypeScript, production build, chunk/public/native/UI/portable gates, ASAR/Fuses, File/Product version, shortcuts and installed cold start passed. The per-user desktop is 0.9.2; no push or Release. |
+
+## 0.9.1 CLI 1.0.5 foundation (2026-08-21, local candidate installed)
+
+| Area | Status | Evidence / boundary |
+|---|---|---|
+| CLI 1.0.4–1.0.5 compatibility | Offline contract | Versioned initialize/event fixtures and the exact-target gate cover 1.0.0–1.0.5. The installed/live-verified CLI remains 1.0.3; 1.0.6+ fails closed. |
+| Session attach effort | Focused-tested | new/load/resume/fork attach metadata carries the current reasoning effort instead of relying on a stale session value or process startup alone. |
+| Image-aware CLI reads | Focused-tested | Only source-audited 1.0.4–1.0.5 omit host text-read delegation so the CLI can retain image-aware reads. Writes remain host-mediated; older/unknown versions use the conservative legacy handshake. |
+| Ask-user free text | Focused-tested | Every suggested-choice question includes an explicit custom-answer path; empty submissions are rejected locally and the answer resolves the existing ACP request. |
+| About CLI update feedback | Source + service contract | Check is visibly running/successful/failed and duplicate clicks are disabled. The existing exact-target preview/apply/rollback service remains the only mutation path. No update was executed in this slice. |
+| Mode and Stop regressions | Focused-tested | Failed set_mode leaves the mode unchanged. Stop resolves pending permission/question/Plan requests before session/cancel and clears local interaction ownership. |
+| Runtime task identity | Focused-tested | Official task/subagent IDs are authoritative; old id-less rows receive a deterministic display identity instead of refresh-time UUIDs. |
+| Usage integrity | Source-audited | Session cost is parsed only from explicit CLI cost fields. Context occupancy is displayed separately and is never treated as spend. |
+| Cross-session event ownership | Focused + wire fixture | Parent controls remain on the parent; an explicitly foreign session command/mode/model/queue/transcript update is isolated before it mutates the adapter. Explicit child MCP status retains the child session id. Logs keep hashes/shape only, not event bodies. |
+| Session load single-flight | Focused-tested | App hydration and ACP process attachment each have one owner per session. Concurrent callers join the same promise, share owner failure, and a later retry can create a clean owner; the existing navigation generation still rejects stale cross-session UI work. |
+| Draft send ownership | Focused-tested | First-send migration uses a local claim/generation. Hydration cannot resurrect the submitted row, and a late send failure cannot overwrite text or attachments entered after the claim. Hydration-time user edits reject stale loads, while follow-up text continues autosaving during a long running turn. |
+| Current-turn interjection | Focused-tested | `x.ai/interject` produces one visible in-turn event and never a fake queued/new user turn. Session broadcasts dedupe by stable ID; attachment restore preserves the presentation. Missing-method fallback is explicitly `send-now`, not silently renamed interjection. |
+| Follow-up prompt queue | Superseded by 0.9.3 | CLI broadcasts are observational; Desktop keeps never-submitted follow-ups locally because the CLI exposes no safe mutation methods on the installed verified runtime. |
+| MCP structured result | Focused-tested | Main process bounds `content` and `structuredContent` separately. String payloads are never reparsed, so 64-bit identifiers remain exact; recursive objects are depth/item/key/byte bounded before persistence or rendering. |
+| Context / Usage / Compact | Focused-tested | Context occupancy and per-prompt usage remain separate; exact zero and partial cost are valid. Compact before/after uses context-used tokens. Session-info `totalTokens` is not treated as occupancy. An all-zero status placeholder cannot erase prior exact usage. |
+| Provider route receipt | Focused-tested | A secret-free per-scope receipt freezes provider identity/name, upstream origin, credential source category, local/upstream model, protocol/schema and effort. Failure UI classifies route/auth/translation/upstream/downstream without exposing credentials; the stage mapping is unit-tested. Receipt storage is bounded and separated from the Provider monolith. |
+| Provider profile recovery | Focused + integration-tested | Last-known-good profiles are guarded by a separately persisted hash and canonical identity anchor. Recovery requires the primary file to be missing or unreadable plus a corrupt bak and matching identity; a readable empty `{ providers: [] }` beside an old bak is not restored. URL-embedded credentials are rejected and cannot enter the recovery files. |
+| Media thumbnails | Focused-tested | Chat grids request session-scoped 512px JPEG thumbnails from the main process. The opaque original handle remains the only source for Lightbox/copy/save/open, and thumbnail failure falls back to the original rather than reporting a false missing image. |
+| Current large-conversation regression | Focused-tested | A 300-turn current-schema fixture covers repeated Projection V2 restore, media events, no empty activity groups, bottom-follow policy and stable thumbnail URL generation. |
+| Host-exit turn lease | Focused-tested | Restoring an inactive session settles an orphaned turn and pending permission/question/Plan gates as interrupted, preserves partial assistant text, and always interrupts sending/accepted/send-now/interjecting queue ownership even when the last turn already completed. |
+| Rebind metadata transaction | Focused-tested | Assignment, runtime, projection cwd and Token workspace are committed together and rolled back in reverse order. A failed target open restores the original live session when possible; incomplete rollback is surfaced without deleting the only usable target copy. |
+| CLI config source diagnostics | Focused-tested | Diagnostics distinguish default, `GROK_CONFIG`, `GROK_CONFIG_PATH` and both-set states while exposing only variable names, byte count and basename—never inline TOML or an absolute path. |
+| Final local delivery | Installed and verified | Exact 0.9.1 candidate: 119 test files discovered, 113 passed / 6 live skipped; 825 tests passed / 9 live skipped. TypeScript, production build, chunks, Native Host, Fuses, packaged UI, overlays, task center, Task Scheduler, portable Chinese/space path, artifact scan and hashes pass. Setup/Portable/SBOM/licenses were generated from an isolated C-drive source copy excluding the three user-owned `_tmp_*` files. Per-user install reports File 0.9.1 / Product 0.9.1.0; installed ASAR matches the packaged tree, shortcuts and cold launch pass. No push, release, CLI update or paid request was performed. |
+| Independent 0.9.1 review | Source + re-run gate | Grok re-ran the offline suite (825 pass / 9 live skip), TypeScript and high-level `npm audit`, and checked the installed EXE File 0.9.1 / Product 0.9.1.0. No P0. Host-exit queue non-replay is only guaranteed when an unmatched turn exists; `contextUsedTokens` still falls back to `totalTokens`; leftover Provider corrupt bak plus an empty readable index can restore last-known-good. Full write-up: `docs/V091_FINAL_AUDIT.md`. |
+
 ## 0.9.0 CLI 1.0.3, billing and final convergence (2026-08-14)
 
 | Area | Status | Evidence / boundary |
@@ -460,7 +515,7 @@
 | Overlay root and layering | Implemented, automated | Settings, accounts/quota, extensions, diagnostics, onboarding, media, confirmations, notifications and Computer dialogs render in the dedicated overlay root; whole-window backgrounds no longer alter modal positioning |
 | Custom providers | Implemented, automated | Chat Completions, Responses, Messages, local/remote presets, model discovery/test, user-env credentials, marked TOML block, conflict detection, five backups, validation and rollback |
 | Persistent automations | Implemented, automated | Current-user least-privilege Task Scheduler registration, once/daily/weekly/interval, encrypted prompts, headless worker, locks, two-run global default, notifications, confirmation timeout and registration repair |
-| Prompt queue/interjection | Implemented, contract tested | Server `x.ai/queue/changed` is authoritative; edit/remove/reorder/clear/interject use official identifiers and versions; old CLI interjection has a compatible send-now fallback |
+| Prompt queue/interjection | Superseded by 0.9.3 | Historical server-authoritative mutation assumption was disproved on CLI 1.0.3. Current behavior uses a Desktop-owned never-submitted queue and real `x.ai/interject`; see the top matrix. |
 | Fork, rewind and archive | Implemented, contract tested | Official fork plus conversation/all/files rewind; file-impact confirmation; archive is application metadata only and leaves Grok session files intact |
 | Unified task center | Implemented | Queued prompts, command/monitor jobs, running sub-Agents, loops, persistent automations and confirmation/completion inbox |
 | v0.5 local gate | Passed | 195 offline tests, 24/24 deterministic Computer Use flows, CLI 0.2.106 non-billable capability/provider probes, content/background/task-center smokes, Task Scheduler wakeup, Chinese-space Portable launch, Fuses, public artifact scan and NSIS install/upgrade/uninstall retention all passed; final hashes are recorded in the implementation plan |

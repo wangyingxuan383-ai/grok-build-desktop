@@ -75,6 +75,12 @@ export interface TurnNavigationMarker {
   title: string;
 }
 
+/** Preserve the reader's anchor unless they are already at the tail or have
+ * explicitly requested follow mode (send/current-turn/bottom button). */
+export function shouldFollowConversation(isAtBottom: boolean, forced: boolean): boolean {
+  return isAtBottom || forced;
+}
+
 export function buildTurnNavigationMarkers(turns: UiChatTurn[]): TurnNavigationMarker[] {
   return turns.map((turn, index) => {
     const pendingKinds = turn.pending.map((message) => message.kind);

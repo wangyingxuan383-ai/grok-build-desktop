@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Attachment, ComposerCapabilitySelection, NewTaskDraft } from "../../../shared/types";
 import { hasSessionSubmission } from "../session-submission-state";
-import { shouldApplyDraftHydration } from "../session-ui-guards";
+import { canRestoreClaimedDraft, shouldApplyDraftHydration, shouldPauseDraftAutosaveForSubmission, shouldSuspendDraftHydrationForSubmission } from "../session-ui-guards";
 
 /** Owns the composer state that must never bleed between concurrent sessions. */
 export function useSessionDraft(input: {
@@ -24,6 +24,10 @@ export function useSessionDraft(input: {
   setCapability: React.Dispatch<React.SetStateAction<ComposerCapabilitySelection | undefined>>;
   newTask: NewTaskDraft | undefined;
   setNewTask: React.Dispatch<React.SetStateAction<NewTaskDraft | undefined>>;
+  beginDraftSubmission(): number;
+  clearClaimedDraft(claimId: number): void;
+  shouldRestoreClaimedDraft(claimId: number): boolean;
+  endDraftSubmission(claimId: number): void;
   discardCurrentDraft(): Promise<void>;
 } {
   const [composer, setComposerState] = useState("");
@@ -37,20 +41,73 @@ export function useSessionDraft(input: {
   const previousAttachmentFingerprintRef = useRef(attachmentFingerprint);
   const ignoredAttachmentFingerprintsRef = useRef(new Set<string>());
   const saveTimerRef = useRef<number | undefined>(undefined);
+  const userRevisionRef = useRef(0);
+  const nextSubmissionClaimRef = useRef(0);
+  const submissionClaimRef = useRef<{ id: number; phase: "claiming" | "sent"; userRevision: number; attachmentRevision: number } | undefined>(undefined);
   const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
   const activeSending = hasSessionSubmission(input.sendingSessionIds, input.activeSessionId, draftKey);
 
   const setComposer = useCallback<React.Dispatch<React.SetStateAction<string>>>((value) => {
     if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
+    userRevisionRef.current += 1;
     setComposerState(value);
   }, []);
   const setCapability = useCallback<React.Dispatch<React.SetStateAction<ComposerCapabilitySelection | undefined>>>((value) => {
     if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
+    userRevisionRef.current += 1;
     setCapabilityState(value);
   }, []);
   const setNewTask = useCallback<React.Dispatch<React.SetStateAction<NewTaskDraft | undefined>>>((value) => {
     if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
+    userRevisionRef.current += 1;
     setNewTaskState(value);
+  }, []);
+
+  const beginDraftSubmission = useCallback((): number => {
+    const id = ++nextSubmissionClaimRef.current;
+    submissionClaimRef.current = {
+      id,
+      phase: "claiming",
+      userRevision: userRevisionRef.current,
+      attachmentRevision: attachmentRevisionRef.current,
+    };
+    if (saveTimerRef.current !== undefined) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = undefined;
+    }
+    return id;
+  }, []);
+
+  const clearClaimedDraft = useCallback((claimId: number): void => {
+    const claim = submissionClaimRef.current;
+    if (!claim || claim.id !== claimId) return;
+    // This is the send operation consuming its own snapshot, not a new user
+    // edit. Keep the revision stable so a later transport failure can restore
+    // only when the user has not already typed a follow-up.
+    setComposerState("");
+    setCapabilityState(undefined);
+    setNewTaskState(undefined);
+    ignoredAttachmentFingerprintsRef.current.add("");
+    input.clearAttachments();
+    claim.phase = "sent";
+    claim.userRevision = userRevisionRef.current;
+    claim.attachmentRevision = attachmentRevisionRef.current;
+  }, [input.clearAttachments]);
+
+  const shouldRestoreClaimedDraft = useCallback((claimId: number): boolean => {
+    const claim = submissionClaimRef.current;
+    return Boolean(claim && canRestoreClaimedDraft({
+      claimId,
+      activeClaimId: claim.id,
+      claimedUserRevision: claim.userRevision,
+      currentUserRevision: userRevisionRef.current,
+      claimedAttachmentRevision: claim.attachmentRevision,
+      currentAttachmentRevision: attachmentRevisionRef.current,
+    }));
+  }, []);
+
+  const endDraftSubmission = useCallback((claimId: number): void => {
+    if (submissionClaimRef.current?.id === claimId) submissionClaimRef.current = undefined;
   }, []);
 
   const discardCurrentDraft = useCallback(async (): Promise<void> => {
@@ -90,6 +147,15 @@ export function useSessionDraft(input: {
     touchedGenerationRef.current = 0;
     setLoadedKey("");
     input.onSessionChange();
+    // Creating the real CLI session changes `draftKey` from new:<project> to
+    // the session id. The in-flight send owns that transition; hydrating the
+    // just-moved row here would resurrect the submitted prompt or erase text
+    // typed after it. Mark the target ready without reading or clearing it.
+    if (shouldSuspendDraftHydrationForSubmission(submissionClaimRef.current?.phase)) {
+      touchedGenerationRef.current = generation;
+      setLoadedKey(draftKey);
+      return () => { cancelled = true; };
+    }
     setComposerState("");
     setCapabilityState(undefined);
     setNewTaskState(undefined);
@@ -130,7 +196,7 @@ export function useSessionDraft(input: {
   }, [draftKey, input.foreignSessionOpen, input.onSessionChange, input.clearAttachments, input.addAttachments]);
 
   useEffect(() => {
-    if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || activeSending) return;
+    if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || shouldPauseDraftAutosaveForSubmission(submissionClaimRef.current?.phase)) return;
     const timer = window.setTimeout(() => {
       if (saveTimerRef.current === timer) saveTimerRef.current = undefined;
       void window.grokDesktop.setDraft(draftKey, composer, capability, input.attachments, newTask).catch(input.onError);
@@ -142,7 +208,21 @@ export function useSessionDraft(input: {
     };
   }, [composer, capability, input.attachments, newTask, draftKey, loadedKey, input.foreignSessionOpen, activeSending, input.onError]);
 
-  return { draftKey, activeSending, composer, setComposer, capability, setCapability, newTask, setNewTask, discardCurrentDraft };
+  return {
+    draftKey,
+    activeSending,
+    composer,
+    setComposer,
+    capability,
+    setCapability,
+    newTask,
+    setNewTask,
+    beginDraftSubmission,
+    clearClaimedDraft,
+    shouldRestoreClaimedDraft,
+    endDraftSubmission,
+    discardCurrentDraft,
+  };
 }
 
 function fingerprintAttachments(values: Attachment[]): string {

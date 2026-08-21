@@ -1,5 +1,90 @@
 # Grok Build Desktop 实施计划
 
+## 0.9.3 插话、持久队列、Session Info 与子 Agent 全面热修（2026-08-21，本地已安装）
+
+- [x] 用本机 CLI 1.0.3 做无提示词能力探针，区分逻辑扩展名、Wire 扩展名与方法是否真实存在。Session Info/Usage、Plugins、MCP、Commands 通过；queue edit/remove/reorder/interject 明确为 Method not found。
+- [x] 删除队列编辑、删除、排序、队列插话对不存在 CLI 方法的依赖。未提交 follow-up 由 Desktop 会话级持久队列管理，跨到 `session/prompt` 前始终可编辑、可撤回。
+- [x] 队列只在所属会话空闲且没有 Plan/权限/问题门时提交一条；写入前持久化为 `sending`，进程恢复不重放 sending/accepted，只续送从未提交的 queued 意图。
+- [x] 直接和队列内“插话”使用真实 `x.ai/interject`，增加 15 秒确认、Method not found 回退、回合结束竞态和用户交互门竞态；失败时原队列项恢复并保持可删除。
+- [x] 编辑、撤回、批量撤回和插话同步维护附件账本；Renderer 不把 queued 附件恢复为已发送用户气泡。
+- [x] 权威 `turn_completed` 可结束悬挂 Prompt RPC，但不会重复写 Meta、状态或队列终态；后续队列回合使用稳定 promptId 对应终态。
+- [x] 子 Agent 接入标准和私有更新中的 spawn/progress/finished；`child_session_id` 为首选稳定身份，progress-only 也可见。Dashboard 只按明确终态结算，cancelled 为 stopped。
+- [x] Session Info/Usage 统一通过 `_x.ai/...` Wire 传输；Context 不再回退累计 totalTokens。
+- [x] 额外审查并收口 Provider 可读空索引恢复、Provider 失败阶段、Host-exit 队列中断及打包旧报告清理。
+- [x] 聚焦 8 文件/173 项与完整 119 文件/853 项离线套件通过（844 通过、9 项 live 跳过）；TypeScript、生产构建、分块预算和 `npm audit` 通过。
+- [x] 最终 C 盘隔离公开扫描、正式打包、per-user 安装及冷启动验证通过；File/Product `0.9.3`/`0.9.3.0`，安装 ASAR 与候选一致，Fuses 和快捷方式通过。Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。本轮未升级 CLI、未推送、未创建 Release。
+
+## 0.9.2 ACP 私有扩展与子 Agent 热修（2026-08-21，本地候选）
+
+> 0.9.2 的通用 Wire 转换有效，但其“队列 mutation 可调用”结论已经被本机探针推翻；队列相关实现和证据以 0.9.3 为准。
+
+- [x] 从安装版日志复现并定位：Desktop 发出的 `x.ai/...` 缺少 ACP Wire 前导下划线，CLI 因而对队列、插话、Session Info/Usage 等统一返回 `Method not found`。
+- [x] 在唯一传输边界增加逻辑名到 `_x.ai/...` Wire 名转换；请求/响应扩展共用该转换，能力证据仍保留逻辑名称。该项不再被解释为所有猜测方法均存在。
+- [x] 用本机 CLI 1.0.3 运行无推理 ACP 探针，真实确认 `session/info`、`session/usage`、Plugins、MCP 和 Commands 可用；探针脚本纳入相同 Wire 契约。
+- [x] Renderer 兼容官方 progress 事件的 `child_session_id`，即使缺少 spawn 也建立可见子 Agent；spawn/progress/finished 合并为单卡并展示真实进度字段。
+- [x] Agent Dashboard 使用相同 child Session 身份，且不再因 progress 携带 `duration_ms` 就提前结算。
+- [x] 5 个直接相关测试文件、142 项测试通过；TypeScript 与生产构建通过。
+- [x] 在排除用户 `_tmp_*` 文件的 C 盘隔离副本中生成并安装 0.9.2 本地候选；113 个测试文件通过、6 个 live 文件按设计跳过（834/843 项通过），TypeScript、生产构建、分块门禁、公开扫描、Native Host、打包 UI、Portable 中文路径、ASAR/Fuses、File/Product、桌面/开始菜单快捷方式与安装版冷启动均通过。Setup/Portable SHA-256 为 `f25ba7ae8882bb38795eea153d2410696394a623a13f3e89ccf19ea5c8b0a038` / `1bd2d01f8895cedaa1ea7fedcaa7e13304dbfc6c4cd75bc8c93e2a8f86fcd1a9`；未推送、未创建 Release。
+
+## 0.9.1 多项目深度学习第二轮（2026-08-19，研究完成、实现待排期）
+
+- [x] 以 GitHub Stars 粗筛并深审 14 个候选；不再只停留在仓库简介，检查了近期 Release/Changelog、提交、架构文档和与会话/Provider/媒体/Usage 直接相关的实现或测试。
+- [x] 深入审计 `RongleCat/grok-app` 的会话所有权、草稿认领、send epoch、重叠 load、项目迁移、长工具 heartbeat、虚拟列表、媒体缩略图和 Provider route auth。
+- [x] 深入审计 Cherry Studio 的推理控制/Registry/Stream Manager/Usage 事实模型，CC Switch 的 Grok 配置/用量去重/多账号切换，以及 CLIProxyAPI 的协议翻译/SSE/错误/别名/冷却路由。
+- [x] 复核 Grox、phuryn、rimusz、Rushour、vscode-acp、agent-shell 和 gallifre 的近期更新与边缘处理；按许可证仅学习行为，不复制代码。
+- [x] 形成完整筛选表、逐项目结论、跨项目矩阵、当前仓库差距和 A–E 阶段计划：`docs/CODEX_MULTI_PROJECT_RESEARCH_2026-08-19.md`。
+- [x] 阶段 A：实现父/子/后台通知归属、per-session load single-flight、draft claim/send generation 和恢复期输入所有权。父控制/子 MCP 交错 Wire Fixture、owner 失败 join/重试及迟到草稿恢复均有聚焦自动化证据；回放滚动继续由现有 navigation request generation 只在当前打开请求完成后 settle。
+- [x] 阶段 B1：实现有界 MCP `content`/`structuredContent`、字符串/64 位 ID 保真，以及 ToolCard 最小结构化结果入口。
+- [x] 阶段 B2：补齐 Context/Usage/Compact 的零值、部分费用、占用/花费分离和 Compact 前后 Context Token 回归。
+- [x] 阶段 B3：实现不含凭据的 Provider Route Receipt，并在错误详情区分路由、认证、翻译、上游和下游阶段。
+- [x] 阶段 B4：建立独立的 Provider 身份锚点与 last-known-good 档案。只有主索引已由 `JsonStore` 确认损坏并移走、当前可读索引为空、档案哈希和规范 endpoint/protocol/schema 身份全部匹配时才恢复；可读主配置永不被覆盖，内嵌 URL 凭据不得进入恢复档案。
+- [x] 阶段 C：实现主进程会话级媒体缩略图缓存，列表仅加载有界 JPEG，Lightbox/复制/另存仍使用原始不透明句柄；缩略图失败会回退原图。新增 300 回合当前版本夹具，覆盖重复重开、媒体重挂载、滚动跟随和空过程组回归。
+- [x] 阶段 D：补齐 Host-exit turn lease、项目重绑定元数据事务与 Provider Service 渐进拆分。主进程异常退出后的未完成回合/交互只结算一次，已提交队列不会自动重放；重绑定失败按反序恢复 Assignment/Runtime/Projection/Token；Route Receipt 和 Provider 恢复存储已从大型服务中独立。
+- **另行排期（非本轮未完成代码）**：阶段 E 由 Grok 独立做真正的 UI 学习与视觉轮。自编阅读层和 Minimal Calm 照抄均已被用户否决并撤回，界面回到 0.9.0 皮肤。在用户另开前不要继续视觉改版。不得用底层协议工作冒充 UI 改版。
+
+## 0.9.1 CLI 1.0.5 底层与新功能基础（2026-08-21，本地候选已安装）
+
+### 官方 CLI 与兼容边界
+
+- [x] 只读确认本机 CLI 为 `1.0.3`、stable 为 `1.0.5`；未执行升级，live 证据仍明确停在 1.0.3。
+- [x] 审计官方 1.0.4/1.0.5 源码、Changelog、仓库提交和 `SOURCE_REV`，将离线 Fixture/门禁扩展至 1.0.5；1.0.6+ 继续失败关闭。
+- [x] new/load/resume/fork 附加当前推理档位，适配 1.0.5 ACP 打开/恢复会话的 `reasoningEffort`。
+- [x] 1.0.4–1.0.5 让 CLI 自身处理图片感知读取，不再以宿主文本 `readTextFile` 截获图片；仅对已经源码审计的精确版本生效。
+- [x] “关于”页 CLI 检查提供可见的检查中、最新、可更新和错误结果，保留固定目标、显式确认、验证及回滚流程。
+
+### 会话交互与可靠性
+
+- [x] 问题卡的建议选项增加“其他（自行输入）”，可提交任意非空文字，并继续原回合。
+- [x] 后台任务/子 Agent 无官方 ID 时改用确定性回退身份，避免刷新后任务身份漂移。
+- [x] 回归验证 set_mode 失败不更新模式徽章；Stop 会先取消未决权限、问题和 Plan，再发送 session/cancel。
+- [x] 复核 Usage 映射：费用只来自 CLI 明确的 `costUsd`/`costUsdTicks`，Context occupancy 不参与花费计算。
+- [x] 当时完成插话/队列语义拆分；后续 0.9.3 实机探针证明 queue mutation 不可调用，现已进一步改成 Desktop 本地 follow-up 队列 + 真实 `x.ai/interject`。
+- [x] 已提交项不可撤回和重启不重放的边界保留；旧的 queue/changed 权威确认实现已被 0.9.3 删除。
+- [x] 插话正文和附件进入 Conversation Projection/附件账本，重开后保持在原回合过程区，本地回执与会话广播按稳定 ID 去重。
+
+### 证据与后续边界
+
+- [x] 聚焦 4 文件/99 项测试、TypeScript 与生产构建通过；没有运行付费模型、CLI 更新、安装或打包。
+- [x] 完成 GitHub 广撒网粗筛与官方深审，记录在 `docs/CODEX_BACKEND_RESEARCH_2026-08-19.md`；第三方仅学习行为和契约，不复制代码。
+- **待用户显式授权的实机门禁（非源码缺漏）**：本机 1.0.5 固定目标升级与 live ACP 验证；授权并通过前 `liveVerifiedVersion` 保持 1.0.3。
+- **边界已落实**：Grok UI 轮的 Minimal Calm 映射已被用户否决并撤回；本轮未以协议/状态补丁冒充 UI 改版。新的视觉轮需由用户另行启动。
+
+### 下一轮底层候选（阶段 A/B 已实施，剩余按风险推进）
+
+- [x] 验证 child `available_commands_update` 等跨会话事件的归属，阻止子 Agent 状态污染父会话命令、模式和 Composer。
+- [x] 补大会话重叠 load、失败 join、迟到 replay、快速切换及滚动锚点回归；继续复用 Projection V2/generation。
+- [x] 实现 MCP `structuredContent` 有界保真规范化和 ToolCard 最小入口；真实 1.0.5 Wire 仍需在用户显式升级并授权采样后补证据。
+- [x] 增加 `GROK_CONFIG`/`GROK_CONFIG_PATH` 来源诊断；只显示变量名、内联字节数和路径文件名，不暴露内联内容或绝对路径，也不在运行中修改全局配置。
+- [x] 完成 Provider Service 第一轮渐进拆分：Route Receipt 与带身份锚点的恢复存储成为独立服务，现有 IPC、Provider ID、模型目录、扫描和网关行为保持不变。后续扫描/网关继续按风险拆分，不以一次大搬迁制造回归。
+
+### 本轮最终自审
+
+- [x] 完整离线套件发现 119 个测试文件：113 通过、6 个 live 跳过；825 项通过、9 项 live 跳过。
+- [x] TypeScript、生产构建、Renderer 分块预算、Native Host 自检/资源清单、当前离线 UI 夹具、上游快照校验、`npm audit`（0 漏洞）和 `git diff --check` 通过。
+- [x] 候选公开扫描覆盖 414 个文本文件并通过。仓库根目录三份用户 `_tmp_*` 草稿按用户要求保持原样；标准扫描会主动阻止其中的本机路径，因此不得把整个物理目录误称为公开安全通过。
+- [x] 源码/lockfile/安装版统一提升为 0.9.1；隔离 C 盘构建副本不包含用户 `_tmp_*` 草稿，完整正式门禁通过后生成 Setup、Portable、SBOM、许可证和 SHA-256，并完成 per-user 覆盖安装、ASAR/Fuses、File/Product、快捷方式和冷启动验证。未推送、未创建 Release、未升级 CLI。
+- [x] Grok 独立审核 0.9.1：`docs/V091_FINAL_AUDIT.md`。本地候选成立；无 P0。审核指出的三处 P1 已在源码收口（非活动恢复始终中断已提交队列、占用不读 `totalTokens`、可读空 Provider 主索引不因旧 bak 恢复）；未重新打包安装版。
+
 ## 0.9.0 CLI 1.0.3、额度与全项目收口（2026-08-14）
 
 ### CLI 与官方接口
@@ -828,7 +913,7 @@
 - 持久任务支持一次、每日、每周和最短一分钟固定间隔；默认 Grok 4.5、CLI 默认强度、自动批准普通动作、Computer Use 关闭。
 - 任务固定创建时的账号/提供商/模型；引用缺失时进入“需要配置”，不静默回退。高影响动作继续逐次确认。
 - `/loop` 作为会话级临时任务显示；应用关闭后执行由当前用户、最低权限的 Windows Task Scheduler 提供。
-- 活动回合中 Enter 排队、Ctrl+Enter 插话、Shift+Enter 换行；队列以 `x.ai/queue/changed` 为权威。
+- 活动回合中 Enter 加入 Desktop 本地持久 follow-up 队列、Ctrl+Enter 调用真实当前回合插话、Shift+Enter 换行；CLI queue broadcast 仅作观察，不是本地编辑/撤回的确认源。
 - 本版不加入完整 Git/工作树、内置编辑器/终端/浏览器/SSH、Memory 管理和媒体库。
 
 ## 完成状态（2026-07-15）

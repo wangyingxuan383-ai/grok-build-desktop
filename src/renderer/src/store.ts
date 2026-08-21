@@ -36,6 +36,7 @@ import type {
 
 export type UiMessage =
   | { id: string; kind: "user"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
+  | { id: string; kind: "interjection"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; source: "local" | "remote" | "queued" }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "thought"; text: string }
   | { id: string; kind: "retry"; attempt?: number; maxAttempts?: number; delayMs?: number; reason?: string }
@@ -266,6 +267,13 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       }
       break;
     }
+    case "interjection": {
+      const index = next.messages.findIndex((message) => message.kind === "interjection" && message.id === event.id);
+      const value: UiMessage = { id: event.id, kind: "interjection", text: event.text, clientMessageId: event.clientMessageId, attachments: event.attachments, source: event.source };
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
+      break;
+    }
     case "user-message-status": {
       const index = next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === event.clientMessageId || message.id === event.clientMessageId));
       if (index >= 0) next.messages[index] = { ...(next.messages[index] as Extract<UiMessage, { kind: "user" }>), delivery: event.delivery };
@@ -273,6 +281,21 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
     }
     case "user-attachments-restore": {
       for (const entry of event.entries) {
+        if (entry.presentation === "interjection") {
+          const id = entry.eventId || entry.clientMessageId;
+          const index = next.messages.findIndex((message) => message.kind === "interjection" && (message.id === id || message.clientMessageId === entry.clientMessageId));
+          if (index >= 0) {
+            const current = next.messages[index] as Extract<UiMessage, { kind: "interjection" }>;
+            next.messages[index] = { ...current, attachments: mergeAttachmentPreviews(current.attachments, entry.attachments) };
+          } else {
+            next.messages.push({ id, kind: "interjection", clientMessageId: entry.clientMessageId, text: entry.text, attachments: entry.attachments, source: "local" });
+          }
+          continue;
+        }
+        // A queued attachment already lives in the durable prompt queue and
+        // is rendered by PromptQueueBar. Restoring it as a sent user bubble
+        // would make an unsent (or later withdrawn) message appear in history.
+        if (entry.delivery === "queued") continue;
         let index = next.messages.findIndex((message) => message.kind === "user" && (message.clientMessageId === entry.clientMessageId || message.id === entry.clientMessageId));
         if (index < 0) {
           for (let candidate = next.messages.length - 1; candidate >= 0; candidate--) {
@@ -381,7 +404,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       next.mode = event.mode === "plan" || event.mode === "auto" ? event.mode : "agent";
       break;
     case "meta":
-      next.meta = { ...next.meta, ...event.meta };
+      next.meta = mergePromptMeta(next.meta, event.meta);
       break;
     case "status":
       next.status = event.status;
@@ -420,27 +443,31 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       next.turnPresentations = [...event.presentations].sort((a, b) => a.ordinal - b.ordinal);
       break;
     case "subagent": {
-      if (event.update.sessionUpdate !== "subagent_spawned" && event.update.sessionUpdate !== "subagent_finished") break;
-      const finished = event.update.sessionUpdate === "subagent_finished";
-      let id = event.update.subagent_id ? `subagent-${event.update.subagent_id}` : "";
-      let existing = id ? next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === id) : -1;
-      if (!id && finished) {
-        for (let index = next.messages.length - 1; index >= 0; index--) {
-          const message = next.messages[index];
-          if (!message) continue;
-          if (message.kind === "tool" && message.tool.kind === "subagent" && message.tool.status === "in_progress") {
-            existing = index;
-            id = message.tool.toolCallId;
-            break;
-          }
-        }
-      }
-      // An id-less spawn cannot be paired reliably. Ignoring it is preferable
-      // to creating a permanent "subagent-pending" card.
-      if (!id) break;
-      const output = [event.update.output, typeof event.update.duration_ms === "number" ? `耗时 ${Math.round(event.update.duration_ms)} ms` : ""].filter(Boolean).join("\n\n");
-      const tool: ToolCallState = { toolCallId: id, title: "子 Agent", kind: "subagent", status: finished ? "completed" : "in_progress", output };
-      if (existing >= 0) next.messages[existing] = { id, kind: "tool", tool: { ...(next.messages[existing] as Extract<UiMessage, { kind: "tool" }>).tool, ...tool } };
+      const updateType = String(event.update.sessionUpdate ?? "");
+      if (!["subagent_spawned", "subagent_progress", "subagent_finished"].includes(updateType)) break;
+      const identity = firstSubagentText(event.update.child_session_id, event.update.childSessionId, event.update.subagent_id, event.update.subagentId);
+      // Official progress events use child_session_id and may be replayed
+      // without the original spawn event. A stable child id is therefore
+      // sufficient to create or update the same visible card.
+      if (!identity) break;
+      const id = `subagent-${identity}`;
+      const existing = next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === id);
+      const previous = existing >= 0 ? (next.messages[existing] as Extract<UiMessage, { kind: "tool" }>).tool : undefined;
+      const finished = updateType === "subagent_finished";
+      const failed = finished && !["", "completed", "success", "succeeded"].includes(String(event.update.status ?? "").toLowerCase());
+      const title = firstSubagentText(event.update.description, event.update.subagent_type, event.update.role, previous?.title) ?? "子 Agent";
+      const output = subagentOutput(event.update, previous?.output);
+      const tool: ToolCallState = {
+        ...previous,
+        toolCallId: id,
+        title,
+        kind: "subagent",
+        status: failed ? "failed" : finished ? "completed" : "in_progress",
+        rawInput: { ...(typeof previous?.rawInput === "object" && previous.rawInput ? previous.rawInput as Record<string, unknown> : {}), ...event.update },
+        output,
+        ...(failed ? { error: firstSubagentText(event.update.error, event.update.output, event.update.status) ?? "子 Agent 失败" } : { error: undefined }),
+      };
+      if (existing >= 0) next.messages[existing] = { id, kind: "tool", tool };
       else next.messages.push({ id, kind: "tool", tool });
       break;
     }
@@ -479,6 +506,35 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   }
   const sessions = state.sessions.map((session) => session.id === sessionId && event.type === "status" ? { ...session, status: event.status } : session);
   return { views: { ...state.views, [sessionId]: next }, sessions };
+}
+
+function firstSubagentText(...values: unknown[]): string | undefined {
+  for (const value of values) if (typeof value === "string" && value.trim()) return value.trim();
+  return undefined;
+}
+
+function subagentOutput(update: Record<string, unknown>, previous?: string): string | undefined {
+  const result = firstSubagentText(update.output, update.summary, update.message);
+  const metrics: string[] = [];
+  const model = firstSubagentText(update.model, update.model_id);
+  if (model) metrics.push(model);
+  const turns = finiteSubagentNumber(update.turn_count ?? update.turns);
+  const tools = finiteSubagentNumber(update.tool_call_count ?? update.tool_calls);
+  const tokens = finiteSubagentNumber(update.tokens_used);
+  const context = finiteSubagentNumber(update.context_usage_pct);
+  const durationMs = finiteSubagentNumber(update.duration_ms);
+  if (turns !== undefined) metrics.push(`${turns} 回合`);
+  if (tools !== undefined) metrics.push(`${tools} 工具`);
+  if (tokens !== undefined) metrics.push(`${tokens.toLocaleString()} Token`);
+  if (context !== undefined) metrics.push(`上下文 ${context}%`);
+  if (durationMs !== undefined) metrics.push(`耗时 ${(durationMs / 1_000).toFixed(durationMs < 10_000 ? 1 : 0)} 秒`);
+  const detail = metrics.join(" · ");
+  if (result && detail) return `${result}\n\n${detail}`;
+  return result || detail || previous;
+}
+
+function finiteSubagentNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 export function buildChatTurns(messages: UiMessage[], status = "idle", presentations: TurnPresentation[] = []): UiChatTurn[] {
@@ -559,7 +615,7 @@ function actionRequestId(message: Extract<UiMessage, { kind: "permission" | "que
 }
 
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
-  if (message.kind === "thought" || message.kind === "retry" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
+  if (message.kind === "thought" || message.kind === "retry" || message.kind === "interjection" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
   if (message.kind !== "tool") return "other";
   const value = `${message.tool.kind || ""} ${message.tool.title}`.toLowerCase();
   if (/sub.?agent/.test(value)) return "subagents";
@@ -595,6 +651,19 @@ function mergeAttachmentPreviews(current: UserMessageAttachmentPreview[] | undef
     else merged.push(attachment);
   }
   return merged;
+}
+
+export function mergePromptMeta(current: PromptMeta, incoming: PromptMeta): PromptMeta {
+  const tokenKeys = ["totalTokens", "inputTokens", "outputTokens", "cachedReadTokens", "reasoningTokens"] as const;
+  const onlyZeroPlaceholder = tokenKeys.some((key) => incoming[key] === 0)
+    && tokenKeys.every((key) => incoming[key] === undefined || incoming[key] === 0);
+  if (!onlyZeroPlaceholder) return { ...current, ...incoming };
+  const next = { ...current, ...incoming };
+  // Preserve a known positive snapshot when a Compact/session-info replay
+  // publishes an all-zero placeholder. With no prior evidence, exact zero is
+  // retained rather than converted to unknown.
+  for (const key of tokenKeys) if ((current[key] ?? 0) > 0 && incoming[key] === 0) next[key] = current[key];
+  return next;
 }
 
 function mergeTurnPresentation(current: TurnPresentation[], incoming: TurnPresentation): TurnPresentation[] {

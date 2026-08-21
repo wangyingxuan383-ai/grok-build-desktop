@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppSettings } from "../../shared/types";
-import { buildCliEnv, isLockedBinaryError, isMajorUpgrade, parseVersion, validateGrokCliExecutable } from "./cli-locator";
+import { buildCliEnv, describeGrokConfigSource, isLockedBinaryError, isMajorUpgrade, parseVersion, validateGrokCliExecutable } from "./cli-locator";
 import { DEFAULT_THEME } from "./theme-service";
 
 const settings: AppSettings = {
@@ -39,6 +39,17 @@ async function fixture(name: string): Promise<string> {
 }
 
 describe("CLI locator helpers", () => {
+  it("reports Grok config overrides without exposing inline content or absolute paths", () => {
+    const inline = describeGrokConfigSource({ GROK_CONFIG: "api_key = 'secret-value'" });
+    expect(inline.kind).toBe("inline");
+    expect(JSON.stringify(inline)).not.toContain("secret-value");
+    const path = describeGrokConfigSource({ GROK_CONFIG_PATH: "C:\\Users\\private\\custom.toml" });
+    expect(path.kind).toBe("path");
+    expect(path.details).toContain("文件名：custom.toml（绝对路径不显示）");
+    expect(JSON.stringify(path)).not.toContain("Users");
+    expect(describeGrokConfigSource({ GROK_CONFIG: "", GROK_CONFIG_PATH: "C:\\cfg.toml" }).kind).toBe("multiple");
+    expect(describeGrokConfigSource({}).kind).toBe("default");
+  });
   it("parses semantic versions embedded in CLI output", () => {
     expect(parseVersion("0.1.101 (5bc4b5dfad)")).toEqual([0, 1, 101]);
     expect(parseVersion("grok v11.4.8-alpha.1")).toEqual([11, 4, 8]);

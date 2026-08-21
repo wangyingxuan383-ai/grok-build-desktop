@@ -16,6 +16,7 @@ const mode = valueAfter("--mode");
 const cleanup = !argv.includes("--keep");
 const requireMedia = argv.includes("--require-media");
 const requireExtensions = argv.includes("--require-extensions");
+const probeQueueMethods = argv.includes("--probe-queue-methods");
 const pluginDir = valueAfter("--plugin-dir");
 await mkdir(cwd, { recursive: true });
 
@@ -53,7 +54,8 @@ function request(method, params, timeoutMs = 120_000) {
 }
 
 async function optionalRequest(method, params) {
-  try { return { ok: true, value: await request(method, params) }; }
+  const wireMethod = method.startsWith("x.ai/") ? `_${method}` : method;
+  try { return { ok: true, value: await request(wireMethod, params) }; }
   catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
 }
 
@@ -143,17 +145,32 @@ try {
   }
   let extensionProbe;
   if (requireExtensions) {
-    const [pluginsResult, mcpResult, commandsResult] = await Promise.all([
+    const [pluginsResult, mcpResult, commandsResult, sessionInfoResult, sessionUsageResult] = await Promise.all([
       optionalRequest("x.ai/plugins/list", { sessionId }),
       optionalRequest("x.ai/mcp/list", { sessionId, cache: false }),
       optionalRequest("x.ai/commands/list", { sessionId }),
+      optionalRequest("x.ai/session/info", { sessionId }),
+      optionalRequest("x.ai/session/usage", { sessionId }),
     ]);
     const plugins = pluginsResult.value; const mcp = mcpResult.value; const commands = commandsResult.value;
     const pluginNames = Array.isArray(plugins?.plugins) ? plugins.plugins.map((value) => value.name) : [];
     if (pluginDir && !pluginNames.includes("grok-desktop-computer-use") && !availableCommands.includes("computer")) throw new Error(`session/new _meta.pluginDirs did not expose /computer (${pluginNames.join(", ")}; commands=${availableCommands.join(", ")})`);
-    extensionProbe = { pluginNames, computerCommand: availableCommands.includes("computer"), mcpServers: Array.isArray(mcp?.servers) ? mcp.servers.length : undefined, commands: Array.isArray(commands?.commands) ? commands.commands.length : undefined, privateMethods: { plugins: pluginsResult.ok, mcp: mcpResult.ok, commands: commandsResult.ok }, diagnostics: [pluginsResult.error, mcpResult.error, commandsResult.error].filter(Boolean) };
+    extensionProbe = { pluginNames, computerCommand: availableCommands.includes("computer"), mcpServers: Array.isArray(mcp?.servers) ? mcp.servers.length : undefined, commands: Array.isArray(commands?.commands) ? commands.commands.length : undefined, privateMethods: { plugins: pluginsResult.ok, mcp: mcpResult.ok, commands: commandsResult.ok, sessionInfo: sessionInfoResult.ok, sessionUsage: sessionUsageResult.ok }, diagnostics: [pluginsResult.error, mcpResult.error, commandsResult.error, sessionInfoResult.error, sessionUsageResult.error].filter(Boolean) };
   }
   let effortSwitch;
+  let queueMethodProbe;
+  if (probeQueueMethods) {
+    const missingId = `desktop-probe-missing-${process.pid}`;
+    queueMethodProbe = Object.fromEntries(await Promise.all([
+      ["remove", "x.ai/queue/remove", { sessionId, id: missingId, expectedVersion: 0 }],
+      ["edit", "x.ai/queue/edit", { sessionId, id: missingId, newText: "probe" }],
+      ["reorder", "x.ai/queue/reorder", { sessionId, orderedIds: [missingId] }],
+      ["interject", "x.ai/queue/interject", { sessionId, id: missingId, expectedVersion: 0 }],
+    ].map(async ([name, method, params]) => {
+      const result = await optionalRequest(method, params);
+      return [name, { supported: result.ok, ...(result.error ? { error: result.error } : {}) }];
+    })));
+  }
   if (effort) {
     const modelId = created?.models?.currentModelId;
     if (!modelId) throw new Error("session/new did not return a current model for effort probing");
@@ -164,7 +181,7 @@ try {
       && value.params?.update?.reasoning_effort === effort);
     if (!confirmed) throw new Error(`session/set_model did not confirm reasoning effort ${effort}`);
   }
-  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, renameProbe: { supported: renameProbe.ok, ...(renameProbe.error ? { error: renameProbe.error } : {}) }, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, mediaTools: [...new Set(advertisedTools)], videoStrategy, extensionProbe, notifications: notifications.filter((value) => {
+  process.stdout.write(`${JSON.stringify({ ok: true, cliPath, cwd, sessionId, renameProbe: { supported: renameProbe.ok, ...(renameProbe.error ? { error: renameProbe.error } : {}) }, mode, modeSwitch, effort, effortSwitch, availableCommands, mediaCommands, mediaTools: [...new Set(advertisedTools)], videoStrategy, extensionProbe, queueMethodProbe, notifications: notifications.filter((value) => {
     const update = value.params?.update;
     return value.method === "_x.ai/session_notification" && (update?.sessionUpdate === "model_changed" || update?.sessionUpdate === "current_mode_update");
   }).slice(-5) })}\n`);

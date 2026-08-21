@@ -17,9 +17,6 @@ describe.skipIf(process.platform !== "win32")("Grok ACP contract", () => {
     const modelMarker = join(root, "model-request.json");
     const resumeMarker = join(root, "resume-request.json");
     const closeMarker = join(root, "close-request.json");
-    const queueMarker = join(root, "queue-request.json");
-    const queueEditMarker = join(root, "queue-edit.json");
-    const queueInterjectMarker = join(root, "queue-interject.json");
     const interjectMarker = join(root, "interject.json");
     const forkMarker = join(root, "fork-request.json");
     const rewindMarker = join(root, "rewind-request.json");
@@ -32,9 +29,6 @@ const effortMarker = ${JSON.stringify(effortMarker)};
 const modelMarker = ${JSON.stringify(modelMarker)};
 const resumeMarker = ${JSON.stringify(resumeMarker)};
 const closeMarker = ${JSON.stringify(closeMarker)};
-const queueMarker = ${JSON.stringify(queueMarker)};
-const queueEditMarker = ${JSON.stringify(queueEditMarker)};
-const queueInterjectMarker = ${JSON.stringify(queueInterjectMarker)};
 const interjectMarker = ${JSON.stringify(interjectMarker)};
 const forkMarker = ${JSON.stringify(forkMarker)};
 const rewindMarker = ${JSON.stringify(rewindMarker)};
@@ -44,6 +38,7 @@ const rl = createInterface({ input: process.stdin });
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 rl.on("line", async (line) => {
   const message = JSON.parse(line);
+  const logicalMethod = message.method?.startsWith("_x.ai/") ? message.method.slice(1) : message.method;
   if (message.id === "server-unknown") {
     await writeFile(marker, JSON.stringify(message));
     return;
@@ -74,32 +69,29 @@ rl.on("line", async (line) => {
     return;
   }
   if (message.method === "session/prompt") {
-    if (message.params?._meta?.promptId) {
-      await writeFile(queueMarker, JSON.stringify(message.params));
-      send({ jsonrpc: "2.0", method: "_x.ai/queue/changed", params: { sessionId: "fake-session", entries: [{ id: message.params._meta.promptId, version: 2, owner: "grok-build-desktop", kind: "prompt", text: "queued text", position: 0 }] } });
-      return send({ jsonrpc: "2.0", id: message.id, result: { queued: true } });
-    }
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "user_message_chunk", message_id: "client-replayed", content: { type: "resource_link", uri: ${JSON.stringify(join(root, "notes.md"))}, name: "notes.md" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } } } });
     send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call", toolCallId: "call-image", title: "image_gen", status: "in_progress" } } });
-    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "call-image", title: "image_gen", status: "completed", content: [{ type: "content", content: { type: "image", data: "aGVsbG8=", mimeType: "image/png" } }, { type: "content", content: { type: "text", text: JSON.stringify({ path: generatedImage }) } }] } } });
+    send({ jsonrpc: "2.0", method: "session/update", params: { update: { sessionUpdate: "tool_call_update", toolCallId: "call-image", title: "image_gen", status: "completed", content: [{ type: "content", content: { type: "image", data: "aGVsbG8=", mimeType: "image/png" } }, { type: "content", content: { type: "text", text: JSON.stringify({ path: generatedImage }) } }], structuredContent: { exactId: "9223372036854775807", result: { ok: true } } } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "task_backgrounded", tool_call_id: "call-bg", task_id: "task-1", command: "echo hello", description: "Background echo" } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "task_completed", task_snapshot: { task_id: "task-1", command: "echo hello", completed: true, exit_code: 0, output: "hello", truncated: true } } } });
+    send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { sessionId: "fake-session", update: { sessionUpdate: "subagent_spawned", subagent_id: "child-1", child_session_id: "child-session-1", description: "Review implementation" } } });
+    send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { sessionId: "fake-session", update: { sessionUpdate: "subagent_progress", subagent_id: "child-1", child_session_id: "child-session-1", turn_count: 2, tool_call_count: 3, tokens_used: 500 } } });
+    send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { sessionId: "fake-session", update: { sessionUpdate: "subagent_finished", subagent_id: "child-1", child_session_id: "child-session-1", status: "completed", turns: 2, tool_calls: 3, duration_ms: 1200, tokens_used: 500, output: "done" } } });
     send({ jsonrpc: "2.0", method: "_x.ai/session/update", params: { update: { sessionUpdate: "turn_completed", usage: { totalTokens: 41 } } } });
     return send({ jsonrpc: "2.0", id: message.id, result: { _meta: { totalTokens: 42, modelId: "grok-test" } } });
   }
-  if (message.method === "x.ai/interject") { await writeFile(interjectMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { result: { status: "queued" } } }); }
-  if (message.method?.startsWith("x.ai/queue/")) { await writeFile(message.method === "x.ai/queue/interject" ? queueInterjectMarker : queueEditMarker, JSON.stringify(message)); return; }
-  if (message.method === "x.ai/session/fork") { await writeFile(forkMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { newSessionId: "forked-session", parentSessionId: "fake-session", newCwd: ${JSON.stringify(root)}, chatMessagesCopied: 1, updatesCopied: 1, planStateCopied: false } }); }
-  if (message.method === "x.ai/rewind/points") return process.env.GROK_TEST_REWIND_UNSUPPORTED === "1"
+  if (logicalMethod === "x.ai/interject") { await writeFile(interjectMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { result: { status: "queued" } } }); }
+  if (logicalMethod === "x.ai/session/fork") { await writeFile(forkMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: { newSessionId: "forked-session", parentSessionId: "fake-session", newCwd: ${JSON.stringify(root)}, chatMessagesCopied: 1, updatesCopied: 1, planStateCopied: false } }); }
+  if (logicalMethod === "x.ai/rewind/points") return process.env.GROK_TEST_REWIND_UNSUPPORTED === "1"
     ? send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } })
     : send({ jsonrpc: "2.0", id: message.id, result: { rewind_points: [{ prompt_index: 3, prompt_preview: "before change", num_file_snapshots: 2, created_at: "2026-07-20T00:00:00Z" }] } });
-  if (message.method === "x.ai/rewind/execute") { await writeFile(rewindMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: {} }); }
-  if (message.method === "x.ai/task/list") return send({ jsonrpc: "2.0", id: message.id, result: { result: { tasks: [{ taskId: "task-1", status: "running" }] } } });
-  if (message.method === "x.ai/task/kill") return send({ jsonrpc: "2.0", id: message.id, result: { result: { taskId: message.params.taskId, outcome: "killed" } } });
-  if (message.method === "x.ai/subagent/list_running") return send({ jsonrpc: "2.0", id: message.id, result: { result: { subagents: [{ subagentId: "sub-1", description: "review", status: "running" }] } } });
-  if (message.method === "x.ai/subagent/cancel") return send({ jsonrpc: "2.0", id: message.id, result: { result: { subagentId: message.params.subagentId, cancelled: true, outcome: { kind: "cancelled" } } } });
+  if (logicalMethod === "x.ai/rewind/execute") { await writeFile(rewindMarker, JSON.stringify(message.params)); return send({ jsonrpc: "2.0", id: message.id, result: {} }); }
+  if (logicalMethod === "x.ai/task/list") return send({ jsonrpc: "2.0", id: message.id, result: { result: { tasks: [{ taskId: "task-1", status: "running" }] } } });
+  if (logicalMethod === "x.ai/task/kill") return send({ jsonrpc: "2.0", id: message.id, result: { result: { taskId: message.params.taskId, outcome: "killed" } } });
+  if (logicalMethod === "x.ai/subagent/list_running") return send({ jsonrpc: "2.0", id: message.id, result: { result: { subagents: [{ subagentId: "sub-1", description: "review", status: "running" }] } } });
+  if (logicalMethod === "x.ai/subagent/cancel") return send({ jsonrpc: "2.0", id: message.id, result: { result: { subagentId: message.params.subagentId, cancelled: true, outcome: { kind: "cancelled" } } } });
   if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, result: {} });
 });
 `, "utf8");
@@ -138,27 +130,33 @@ rl.on("line", async (line) => {
         _meta: { reasoningEffort: "low" },
       });
       await adapter.prompt("test");
+      // Queue controls are Desktop-owned until submission. Keep the adapter
+      // busy so this row remains genuinely editable/removable during the
+      // contract assertions instead of draining immediately as the next turn.
+      adapter.working = true;
       const queueReceipt = await adapter.queuePrompt("queued text", []);
-      expect(queueReceipt).toMatchObject({ state: "queued", message: "消息已加入队列" });
+      expect(queueReceipt).toMatchObject({ state: "queued", acknowledgement: "desktop", message: expect.stringContaining("本地持久队列") });
       expect(queueReceipt.operationId).toMatch(/^[0-9a-f-]{36}$/i);
-      await waitForFile(queueMarker);
-      const queued = JSON.parse(await readFile(queueMarker, "utf8"));
-      expect(queued._meta).toMatchObject({ sendNow: false, clientIdentifier: "grok-build-desktop" });
-      expect(queued._meta.promptId).toMatch(/^[0-9a-f-]{36}$/i);
-      const editReceipt = await adapter.editQueuedPrompt(queued._meta.promptId, "edited queue text");
-      expect(editReceipt).toMatchObject({ entryId: queued._meta.promptId, state: "updated" });
-      await waitForFile(queueEditMarker);
-      expect(JSON.parse(await readFile(queueEditMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/edit", params: { sessionId: "fake-session", id: queued._meta.promptId, newText: "edited queue text" } });
-      const interjectQueueReceipt = await adapter.interjectQueuedPrompt(queued._meta.promptId);
-      expect(interjectQueueReceipt).toMatchObject({ entryId: queued._meta.promptId, state: "interjected" });
-      await waitForFile(queueInterjectMarker);
-      expect(JSON.parse(await readFile(queueInterjectMarker, "utf8"))).toMatchObject({ method: "x.ai/queue/interject", params: { sessionId: "fake-session", id: queued._meta.promptId, expectedVersion: 2 } });
+      const queuedId = queueReceipt.entryId!;
+      const editReceipt = await adapter.editQueuedPrompt(queuedId, "edited queue text");
+      expect(editReceipt).toMatchObject({ entryId: queuedId, state: "updated", acknowledgement: "desktop" });
+      // Queue-to-interject is only valid while the model is actively working;
+      // an idle race must keep the row local and removable.
+      (adapter as any).activeTurn = { turnId: "contract-active-turn" };
+      adapter.working = true;
+      const interjectQueueReceipt = await adapter.interjectQueuedPrompt(queuedId);
+      expect(interjectQueueReceipt).toMatchObject({ entryId: queuedId, state: "interjected", acknowledgement: "cli" });
+      expect(adapter.queuedPrompts()).toEqual([]);
+      // x.ai/interject is meaningful only while a turn is still active. The
+      // idle-race path is separately covered as a removable next-turn queue.
       const interjectReceipt = await adapter.interjectPrompt("same turn");
       expect(interjectReceipt).toMatchObject({ state: "interjected" });
-      expect(interjectReceipt.message).toContain("同一会话的下一回合");
-      expect(interjectReceipt.message).toContain("不能撤回");
+      expect(interjectReceipt.message).toContain("当前正在运行的回合");
+      expect(interjectReceipt.message).toContain("不是队列中的下一回合");
       await waitForFile(interjectMarker);
       expect(JSON.parse(await readFile(interjectMarker, "utf8"))).toMatchObject({ sessionId: "fake-session", text: "same turn", interjectionId: expect.stringMatching(/^[0-9a-f-]{36}$/i) });
+      (adapter as any).activeTurn = undefined;
+      adapter.working = false;
       expect(await adapter.fork("3")).toMatchObject({ newSessionId: "forked-session" });
       await waitForFile(forkMarker);
       expect(JSON.parse(await readFile(forkMarker, "utf8"))).toMatchObject({ sourceSessionId: "fake-session", sourceCwd: root, newCwd: root, targetPromptIndex: 3 });
@@ -215,16 +213,22 @@ rl.on("line", async (line) => {
         expect.objectContaining({ type: "thought-chunk", sessionId: "fake-session", text: "thinking" }),
         expect.objectContaining({ type: "user-message", sessionId: "fake-session", clientMessageId: "client-replayed", attachments: [expect.objectContaining({ name: "notes.md", kind: "file" })] }),
         expect.objectContaining({ type: "message-chunk", sessionId: "fake-session", text: "hello" }),
+        expect.objectContaining({ type: "interjection", sessionId: "fake-session", text: "same turn", source: "local" }),
         expect.objectContaining({ type: "commands", sessionId: "fake-session", commands: [expect.objectContaining({ name: "bundled:imagine" })] }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: "aGVsbG8=", isData: true }),
         expect.objectContaining({ type: "media", sessionId: "fake-session", media: "image", source: join(root, "images", "generated.jpg") }),
+        expect.objectContaining({ type: "tool-call", sessionId: "fake-session", tool: expect.objectContaining({ toolCallId: "call-image", structuredContent: { exactId: "9223372036854775807", result: { ok: true } } }) }),
         // turn_completed is the authoritative terminal payload. A later/absent
         // prompt response must not keep the adapter working or replace its usage.
         expect.objectContaining({ type: "meta", sessionId: "fake-session", meta: expect.objectContaining({ totalTokens: 41 }) }),
         expect.objectContaining({ type: "session-ready", sessionId: "fake-session", effort: "low" }),
-        expect.objectContaining({ type: "prompt-queue", sessionId: "fake-session", entries: [expect.objectContaining({ text: "queued text", state: "queued", version: 2 })] }),
+        expect.objectContaining({ type: "prompt-queue", sessionId: "fake-session", entries: [expect.objectContaining({ text: "queued text", state: "queued" })] }),
       ]));
-      expect(events.filter((event) => event.type === "subagent")).toHaveLength(0);
+      expect(events.filter((event) => event.type === "subagent")).toEqual([
+        expect.objectContaining({ update: expect.objectContaining({ sessionUpdate: "subagent_spawned", child_session_id: "child-session-1" }) }),
+        expect.objectContaining({ update: expect.objectContaining({ sessionUpdate: "subagent_progress", child_session_id: "child-session-1", turn_count: 2 }) }),
+        expect.objectContaining({ update: expect.objectContaining({ sessionUpdate: "subagent_finished", child_session_id: "child-session-1", status: "completed" }) }),
+      ]);
       expect(events.filter((event) => event.type === "tool-call" && event.tool.toolCallId === "call-bg")).toEqual([
         expect.objectContaining({ tool: expect.objectContaining({ status: "in_progress", kind: "background-task" }) }),
         expect.objectContaining({ tool: expect.objectContaining({ status: "completed", output: "hello", exitCode: 0, truncated: true }) }),

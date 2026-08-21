@@ -39,6 +39,39 @@ describe("AgentDashboardService", () => {
     expect(after.roots).toHaveLength(1);
     expect(after.roots[0]!.children).toHaveLength(0);
   });
+
+  it("keeps progress-only child_session_id events visible and non-terminal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-dashboard-")); roots.push(root);
+    const service = new AgentDashboardService(root);
+    await service.record({ type: "subagent", sessionId: "s1", update: {
+      sessionUpdate: "subagent_progress",
+      child_session_id: "child-session",
+      description: "代码审查",
+      duration_ms: 1_500,
+      tool_call_count: 4,
+      context_window_tokens: 200_000,
+    } });
+    let snapshot = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [historySession()], liveSessions: [{ sessionId: "s1", cwd: "C:\\repo" }], tasks: [], assignments: [], liveCapability: "supported" });
+    expect(snapshot.roots[0]!.children[0]).toMatchObject({ id: "session:s1:subagent:child-session", title: "代码审查", status: "running", toolCount: 4, contextLimit: 200_000 });
+
+    await service.record({ type: "subagent", sessionId: "s1", update: {
+      sessionUpdate: "subagent_finished", child_session_id: "child-session", status: "completed", duration_ms: 2_000, output: "完成",
+    } });
+    snapshot = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [historySession()], liveSessions: [{ sessionId: "s1", cwd: "C:\\repo" }], tasks: [], assignments: [], liveCapability: "supported" });
+    expect(snapshot.roots[0]!.children).toHaveLength(1);
+    expect(snapshot.roots[0]!.children[0]).toMatchObject({ status: "completed", summary: "完成" });
+  });
+
+  it("classifies an explicitly cancelled child as stopped rather than failed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-dashboard-")); roots.push(root);
+    const service = new AgentDashboardService(root);
+    await service.record({ type: "subagent", sessionId: "s1", update: {
+      sessionUpdate: "subagent_finished", child_session_id: "cancelled-child", status: "cancelled", duration_ms: 500,
+    } });
+    const snapshot = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [historySession()], liveSessions: [{ sessionId: "s1", cwd: "C:\\repo" }], tasks: [], assignments: [], liveCapability: "supported" });
+    expect(snapshot.roots[0]!.children[0]).toMatchObject({ status: "stopped", latestAction: "子 Agent 已停止" });
+    expect(snapshot.roots[0]!.children[0]!.failureReason).toBeUndefined();
+  });
 });
 
 function historySession(): SessionSummary {

@@ -16,6 +16,8 @@ export function searchableEventText(event: ChatEvent): string {
   switch (event.type) {
     case "user-message":
       return [event.text, ...(event.attachments ?? []).map((item) => item.name)].join("\n");
+    case "interjection":
+      return [event.text, ...(event.attachments ?? []).map((item) => item.name)].join("\n");
     case "message-chunk":
     case "thought-chunk":
     case "plan":

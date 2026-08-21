@@ -1,11 +1,26 @@
 import type { TurnFailure, TurnFailureClass } from "./types";
 
+export type ProviderFailureStage = NonNullable<TurnFailure["providerFailureStage"]>;
+
 export interface TurnFailureSignals {
   message: string;
   httpStatus?: number;
   jsonRpcCode?: number;
   processExitCode?: number;
   cancelled?: boolean;
+}
+
+/** Maps gateway observation evidence to a secret-free failure stage. */
+export function classifyProviderFailureStage(input: {
+  observed?: { status?: number; reason?: string; phase?: string } | null;
+  classification?: TurnFailureClass;
+}): ProviderFailureStage {
+  if (!input.observed) return "route";
+  if (input.observed.status === 401 || input.observed.status === 403) return "authentication";
+  if (input.observed.reason === "request-validation" || input.classification === "schema-rejected") return "translation";
+  if (input.observed.phase === "pre-send") return "route";
+  if (input.observed.phase === "upstream") return "upstream";
+  return "downstream";
 }
 
 /**
