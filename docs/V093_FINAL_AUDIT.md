@@ -54,7 +54,7 @@
 - 本机 CLI 仍为 live-verified 1.0.3；1.0.4–1.0.5 只有源码/Fixture 证据。本轮不执行 `grok update`。
 - 未运行付费 Provider、真实媒体生成或真实 Plan 写入。
 - 真实 Computer Use 与 Provider live 文件仍需用户显式环境开关。
-- 0.9.3 已完成本地正式候选打包和 per-user 安装，但尚未推送或创建 GitHub Release，因此只称“本地已安装候选”，不称公开发布版。
+- 0.9.3 已由 PR #45 合并至 `main`；标签工作流 `32496006287` 从合并提交重新构建资产，验证 SHA-256 与 GitHub Attestation 后发布为 Latest。云端 Setup/Portable SHA-256 为 `eba6523ad33f281eb0889caca481df99de7b7f04a90afe1c9d2197a25c1c2e27` / `f2f07e7713d046b26704e9ed7d3a1aca005287ceb355bdfc70a7af079dbd3718`。
 
 ## 6. 留给后续 UI 轮
 

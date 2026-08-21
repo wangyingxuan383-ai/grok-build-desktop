@@ -1,4 +1,4 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-21，0.9.3 本地已安装）
+# Grok Build Desktop 下一会话完整交接（2026-08-21，0.9.3 已正式发布）
 
 ## 2026-08-21 0.9.3 插话/队列/子 Agent/Session Info 最终收口
 
@@ -10,7 +10,8 @@
 - 子 Agent 的 private/standard spawn、progress、finished 都进入 Renderer；`child_session_id` 优先，缺 spawn 的 progress 也会创建同一张卡。Dashboard 不用 `duration_ms` 猜完成，cancelled 为 stopped。
 - Session Info/Usage 使用传输边界转换后，本机 1.0.3 已无推理确认可用。Context 不再读累计 `totalTokens`。
 - 当前证据：聚焦 8 文件/173 项通过；完整 119 文件中 113 通过、6 个 opt-in live 跳过，844/853 项通过；TypeScript、生产构建、分块预算、high 级依赖审计通过。
-- 源码/lockfile、Setup/Portable 和 per-user 安装版已统一为 0.9.3。C 盘隔离公开扫描、Native Host/资源、完整离线套件、正式打包、Fuses、ASAR 一致性、桌面/开始菜单快捷方式及安装版冷启动均通过。Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。三份用户 `_tmp_*` 未触碰；未使用 E 盘、未升级 CLI、未推送、未建 Release。
+- 源码/lockfile、Setup/Portable 和 per-user 安装版已统一为 0.9.3。C 盘隔离公开扫描、Native Host/资源、完整离线套件、正式打包、Fuses、ASAR 一致性、桌面/开始菜单快捷方式及安装版冷启动均通过。本地 Setup/Portable SHA-256 为 `dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411` / `7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`。
+- PR #45 已合并；标签 `v0.9.3` 的正式工作流 `32496006287` 完成云端重建、Attestation、草稿 Release 回下载校验并发布为 Latest。远端 Setup/Portable SHA-256 为 `eba6523ad33f281eb0889caca481df99de7b7f04a90afe1c9d2197a25c1c2e27` / `f2f07e7713d046b26704e9ed7d3a1aca005287ceb355bdfc70a7af079dbd3718`。三份用户 `_tmp_*` 未触碰；未使用 E 盘、未升级 CLI。
 
 ## 2026-08-21 0.9.2 ACP 私有扩展/队列/子 Agent 热修
 

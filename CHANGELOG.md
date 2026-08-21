@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.3 - 2026-08-21 — 插话、持久队列与子 Agent 可靠性热修（本地已安装）
+## 0.9.3 - 2026-08-21 — 插话、持久队列与子 Agent 可靠性热修（正式发布）
 
 ### Fixed
 
@@ -19,7 +19,7 @@
 - 173 项队列、插话、终态、附件、投影、子 Agent/Dashboard 聚焦回归通过；包含回合结束竞态、用户交互门、Method not found 回退、进程恢复和重复终态。
 - C 盘隔离正式打包、Native Host/Fuses、当前版本 UI、覆盖层、任务中心、Task Scheduler、Portable 中文/空格路径、产物公开扫描和安装版冷启动通过。per-user 安装版 File/Product 为 `0.9.3`/`0.9.3.0`，安装 ASAR 与候选一致，桌面和开始菜单快捷方式均指向安装目录。
 - Setup SHA-256：`dd21906928b2e5df4c8a222cb18466c5d4b2d0a6bdc16c5c6153d80cb01aa411`；Portable：`7d310145755323896bcb55d40e1ddf822b5eec40e1f594b6ea32385c49f5f905`；SBOM：`683cd142f90d9d707340af2d44f7f11f04f81c756cbb33d3433f6ca5f53349d6`；许可证报告：`02b5b721687c6861bb1d7c7a8119d7aae4c202698cfe4c27836ba96c449ea74b`。
-- 隔离源码通过 junction 复用已验证依赖时，npm 默认 SBOM walker 会把依赖误判为 extraneous；发布脚本现以 `package-lock.json` 为权威生成确定性生产依赖 SBOM。当前仍未升级 CLI、发送模型提示词、推送或创建 Release。0.9.2 的“CLI 权威队列可编辑/撤回”说明由本节明确取代。
+- 隔离源码通过 junction 复用已验证依赖时，npm 默认 SBOM walker 会把依赖误判为 extraneous；发布脚本现以 `package-lock.json` 为权威生成确定性生产依赖 SBOM。PR #45 已合并，标签 `v0.9.3` 的 GitHub 工作流 `32496006287` 完成云端重建、SHA-256 回下载和 provenance 验证，并发布为 Latest；本轮未升级 CLI 或发送模型提示词。0.9.2 的“CLI 权威队列可编辑/撤回”说明由本节明确取代。
 
 ## 0.9.2 - 2026-08-21 — ACP 私有扩展与子 Agent 热修（本地候选）
 
