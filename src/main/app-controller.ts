@@ -1,3 +1,4 @@
+import type { CliUpdateInput, CliUpdatePolicy, CliUpdateAction } from "../shared/types";
 import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -155,7 +156,7 @@ import { REASONING_EFFORTS } from "../shared/types";
 import { classifyProviderFailureStage, classifyTurnFailure, turnFailureActions } from "../shared/turn-failure";
 import { AccountVault } from "./services/account-vault";
 import { AuthService } from "./services/auth-service";
-import { buildCliEnv, locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
+import { buildCliEnv, locateGrokCli, readCliVersion as readInstalledCliVersion, validateGrokCliExecutable } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
 import { normalizeOfficialGitStatus } from "./services/official-git-status";
 import { setOfficialFeedbackMenuAvailable } from "./app-menu";
@@ -395,6 +396,7 @@ export class AppController {
       (context) => this.providerLaunchEnvironment(context),
       (sessionId, session) => this.finalizeMemorySession(sessionId, session),
       this.sessionRuntime,
+      (version) => this.updater?.isRuntimeVersionAllowed(version) ?? Promise.resolve(false),
     );
     this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
       reload: {
@@ -411,6 +413,10 @@ export class AppController {
       () => this.processes.stopAll(),
       this.log,
       (state) => this.window?.webContents.send("grok:login", state),
+      { assertCliRuntimeAllowed: async (cliPath, env) => {
+        const version = await readInstalledCliVersion(cliPath, env);
+        if (!version || !this.updater || this.updater.isActive() || !await this.updater.isRuntimeVersionAllowed(version)) throw new Error("CLI 尚未通过兼容验证；请先在更新中心重新验证或回滚，再验证登录");
+      } },
     );
     this.cliCapabilities = new CliCapabilityService(() => this.settingsStore.get(), () => this.auth.activeApiKey());
     this.updater = new CliUpdateService(
@@ -418,7 +424,16 @@ export class AppController {
       () => this.settingsStore.get(),
       () => this.auth.activeApiKey(),
       () => this.processes.suspendAll(),
-      (snapshots) => this.processes.restoreAll(snapshots),
+      async (snapshots) => {
+        const restored = await Promise.all(snapshots.map(async (snapshot) => {
+          if (snapshot.processOptions) return snapshot;
+          const assignment = await this.profiles.assignment(snapshot.sessionId);
+          if (!assignment) return snapshot;
+          const compiled = await this.profiles.compileProfile(assignment.profile, await this.definitions.listAgents(assignment.cwd));
+          return { ...snapshot, processOptions: { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, environmentOverride: compiled.environment, alwaysApprove: snapshot.mode === "auto" } };
+        }));
+        return this.processes.restoreAll(restored);
+      },
       this.log,
       {
         pluginDir: join(resourcesRoot, "plugins", `grok-computer-use${resourceSuffix}`),
@@ -1636,15 +1651,20 @@ export class AppController {
     this.window?.webContents.send("grok:media-progress", structuredClone(job));
   }
 
-  async sendPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void> {
+  async sendPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string): Promise<void> {
     clientMessageId ??= crypto.randomUUID();
-    const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
+    const prepared = await this.prepareSubmissionAttachments(sessionId, attachments, draftKey).catch(async (error) => { await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined); throw error; });
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
+    let detachedDraftFiles: string[] = [];
     try {
+      detachedDraftFiles = await this.detachSubmissionDraft(sessionId, draftKey, draftSubmissionId);
       await this.processes.get(sessionId).prompt(text, prepared.attachments, INTERACTIVE_PROMPT_TIMEOUT_MS, { clientMessageId, attachments: prepared.previews });
-      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent");
+      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent").catch((error) => this.log.log(`发送已完成，附件账本更新失败：${String(error)}`).catch(() => undefined));
+      await this.uiState.settleSubmission(draftSubmissionId, true).catch((error) => this.log.log(`提交已接收，恢复快照结算失败：${String(error)}`).catch(() => undefined));
+      await this.discardSubmissionDraftFiles(draftKey, detachedDraftFiles).catch(() => undefined);
     } catch (error) {
-      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed");
+      await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined);
+      await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed").catch(() => undefined);
       await this.handleEvent({ type: "user-message", sessionId, id: clientMessageId, clientMessageId, text, attachments: prepared.previews, delivery: "failed" });
       throw error;
     }
@@ -1844,6 +1864,10 @@ export class AppController {
     return Promise.all(attachments.map(async (attachment) => {
       if (attachment.data) return attachment;
       if (!attachment.path) throw new Error(`${attachment.name || "附件"} 缺少受信任的文件来源`);
+      if (attachment.draftText) {
+        const path = await this.uiState.resolveTextDraftAttachment(sessionId, attachment.path);
+        return { ...attachment, path };
+      }
       const path = await resolveTrustedRendererPath(attachment.path, {
         roots,
         issuedPaths: this.trustedPickedPaths,
@@ -1851,6 +1875,29 @@ export class AppController {
       });
       return { ...attachment, path };
     }));
+  }
+
+  private async prepareSubmissionAttachments(sessionId: string, attachments: Attachment[], draftKey?: string) {
+    const releaseProtection = draftKey
+      ? this.uiState.protectDraftFiles(draftKey, attachments.flatMap((attachment) => attachment.draftText && attachment.path ? [attachment.path] : []))
+      : () => undefined;
+    try {
+      return await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
+    } finally {
+      releaseProtection();
+    }
+  }
+
+  private async detachSubmissionDraft(sessionId: string, draftKey?: string, draftSubmissionId?: string): Promise<string[]> {
+    if (!draftKey) return [];
+    if (draftKey.toLocaleLowerCase() !== sessionId.toLocaleLowerCase()) {
+      throw new Error("提交草稿与目标会话不匹配");
+    }
+    return this.uiState.detachDraftForSubmission(draftKey, draftSubmissionId);
+  }
+
+  private async discardSubmissionDraftFiles(draftKey: string | undefined, paths: readonly string[]): Promise<void> {
+    if (draftKey && paths.length) await this.uiState.discardDetachedDraftFiles(draftKey, paths);
   }
 
   async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
@@ -2237,23 +2284,31 @@ export class AppController {
       }
     });
   }
-  async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
+  async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string) {
     clientMessageId ??= crypto.randomUUID();
-    const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
+    const prepared = await this.prepareSubmissionAttachments(sessionId, attachments, draftKey).catch(async (error) => { await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined); throw error; });
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "queued");
+    let detachedDraftFiles: string[] = [];
     try {
-      return await this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
+      detachedDraftFiles = await this.detachSubmissionDraft(sessionId, draftKey, draftSubmissionId);
+      const receipt = await this.processes.get(sessionId).queuePrompt(text, prepared.attachments, false, { clientMessageId, attachments: prepared.previews });
+      await this.uiState.settleSubmission(draftSubmissionId, true).catch((error) => this.log.log(`提交已接收，恢复快照结算失败：${String(error)}`).catch(() => undefined));
+      await this.discardSubmissionDraftFiles(draftKey, detachedDraftFiles).catch(() => undefined);
+      return receipt;
     } catch (error) {
+      await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined);
       // The queue row was never created, so its attachment ledger must not
       // resurrect an unsent user bubble when the conversation is reopened.
-      await this.attachmentCache.removeRecord(sessionId, clientMessageId).catch((cleanupError) => this.log.log(`排队失败后的附件账本清理失败：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`));
+      await this.attachmentCache.removeRecord(sessionId, clientMessageId).catch((cleanupError) => this.log.log(`排队失败后的附件账本清理失败：${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`).catch(() => undefined));
       throw error;
     }
   }
-  async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string) {
+  async interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string) {
     clientMessageId ??= crypto.randomUUID();
-    const prepared = await this.attachmentCache.prepare(sessionId, await this.validatePromptAttachments(sessionId, attachments));
+    const prepared = await this.prepareSubmissionAttachments(sessionId, attachments, draftKey).catch(async (error) => { await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined); throw error; });
+    let detachedDraftFiles: string[] = [];
     try {
+      detachedDraftFiles = await this.detachSubmissionDraft(sessionId, draftKey, draftSubmissionId);
       const receipt = await this.processes.get(sessionId).interjectPrompt(text, prepared.attachments, { clientMessageId, attachments: prepared.previews });
       if (receipt.state === "send-now") {
         // Older CLIs fall back to stop-then-send. Use the same bounded Stop
@@ -2271,10 +2326,13 @@ export class AppController {
         receipt.state === "send-now" || receipt.state === "queued" ? "queued" : "sent",
         receipt.state === "interjected" ? "interjection" : "user-message",
         receipt.entryId,
-      );
+      ).catch((error) => this.log.log(`插话已接收，附件账本更新失败：${String(error)}`).catch(() => undefined));
+      await this.uiState.settleSubmission(draftSubmissionId, true).catch((error) => this.log.log(`提交已接收，恢复快照结算失败：${String(error)}`).catch(() => undefined));
+      await this.discardSubmissionDraftFiles(draftKey, detachedDraftFiles).catch(() => undefined);
       return receipt;
     } catch (error) {
-      await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "failed");
+      await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined);
+      await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "failed").catch(() => undefined);
       throw error;
     }
   }
@@ -2530,7 +2588,7 @@ export class AppController {
     return draft;
   }
   listDrafts(): Promise<ComposerDraftState[]> { return this.uiState.listDrafts(); }
-  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = [], newTask?: NewTaskDraft): Promise<void> {
+  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = [], newTask?: NewTaskDraft, submissionId?: string): Promise<void> {
     const safeAttachments: Attachment[] = [];
     for (const attachment of attachments) {
       if (!attachment.path) continue;
@@ -2542,7 +2600,7 @@ export class AppController {
       });
       safeAttachments.push({ ...attachment, path });
     }
-    return this.uiState.setDraft(key, text, capability, safeAttachments, newTask);
+    return this.uiState.setDraft(key, text, capability, safeAttachments, newTask, submissionId);
   }
   moveDraft(sourceKey: string, targetKey: string): Promise<ComposerDraftState | null> { return this.uiState.moveDraft(sourceKey, targetKey); }
   clearDraft(key: string): Promise<void> { return this.uiState.clearDraft(key); }
@@ -2621,7 +2679,8 @@ export class AppController {
     return target.filePath;
   }
 
-  hasWorking(): boolean { return this.processes.hasWorking(); }
+  hasWorking(): boolean { return this.processes.hasWorking() || this.updater.isActive(); }
+  hasCliUpdateInProgress(): boolean { return this.updater.isActive(); }
   getSettings(): Promise<AppSettings> { return this.settingsStore.get(); }
   listAccounts() { return this.vault.list(); }
   async loginDevice() { const result = await this.auth.loginDevice(); this.quota.clear(); return result; }
@@ -2644,8 +2703,9 @@ export class AppController {
     await this.settingsStore.patch({ lastAutomaticUpdateCheckAt: checkedAt });
     return { checked: true, checkedAt, nextCheckAt: decision.nextCheckAt, reason: "checked", cli, app: appStatus };
   }
-  previewCliUpdate() { return this.updater.preview(); }
-  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) { return this.updater.apply(input); }
+  previewCliUpdate(policy?: CliUpdatePolicy, action?: CliUpdateAction) { return this.updater.preview(policy, action); }
+  getCliUpdateState() { return this.updater.state(); }
+  applyCliUpdate(input: CliUpdateInput) { return this.updater.apply(input); }
   getCliCompatibilitySnapshot() { return this.updater.compatibility(); }
   getCliUpdateHistory() { return this.updater.history(); }
   async openPath(path: string): Promise<void> {
@@ -2737,9 +2797,12 @@ export class AppController {
     this.processes.get(sessionId).respondPermission(requestId, optionId);
   }
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>) { this.processes.get(sessionId).respondQuestion(requestId, answers); }
-  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment = "") {
-    if (this.offlineUiSessionResponder?.owns(sessionId)) return this.offlineUiSessionResponder.respondPlan(sessionId, requestId, verdict, comment);
-    return this.processes.get(sessionId).respondPlan(requestId, verdict, comment);
+  respondMcpElicitation(sessionId: string, requestId: string | number, outcome: "accept" | "decline" | "cancel", content?: Record<string, string | number | boolean>) {
+    this.processes.get(sessionId).respondMcpElicitation(requestId, outcome, content);
+  }
+  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment = "", executionMode?: "agent" | "auto") {
+    if (this.offlineUiSessionResponder?.owns(sessionId)) return this.offlineUiSessionResponder.respondPlan(sessionId, requestId, verdict, comment, executionMode);
+    return this.processes.get(sessionId).respondPlan(requestId, verdict, comment, executionMode);
   }
 
   private async compileExecutionProfile(workspacePath: string, profileId?: string): Promise<CompiledExecutionProfile> {
@@ -2811,6 +2874,10 @@ export class AppController {
   }
 
   async dispose(): Promise<void> {
+    // The updater may currently be replacing grok.exe and still owes the user a
+    // post-install probe, rollback and session restoration. Never tear down its
+    // controller dependencies halfway through that transaction.
+    await this.updater.waitForActive().catch((error) => this.log.log(`退出前等待 CLI 更新结束失败：${error instanceof Error ? error.message : String(error)}`));
     for (const timer of this.projectionReplayTimers.values()) clearTimeout(timer);
     this.projectionReplayTimers.clear();
     for (const [jobId, control] of this.mediaJobControls) {

@@ -24,6 +24,8 @@ import {
   type SessionCloseReceipt,
   type CommandInfo,
   type ModelInfo,
+  type McpElicitationPrimitive,
+  type McpElicitationRequest,
   type PermissionOption,
   type PlanDecisionReceipt,
   type PromptMeta,
@@ -55,6 +57,7 @@ export const INTERACTIVE_PROMPT_TIMEOUT_MS: null = null;
 export const FIRST_EVENT_WAIT_MS = 20_000;
 export const FIRST_EVENT_DIAGNOSTIC_MS = 60_000;
 const INTERJECTION_ACK_TIMEOUT_MS = 15_000;
+export const DESKTOP_ACP_CLIENT_IDENTIFIER = "grok-build-desktop";
 
 interface PendingRequest {
   method: string;
@@ -80,6 +83,11 @@ interface BackgroundTask {
   toolCallId: string;
   title: string;
   command?: string;
+}
+
+interface PendingMcpElicitation {
+  requestId: JsonRpcId;
+  request: McpElicitationRequest;
 }
 
 export interface AcpToolDiff {
@@ -287,7 +295,7 @@ export interface AcpClientCapabilities {
  * Grok Build 1.0.4 introduced an image-aware in-process `read_file`. When an
  * ACP host advertises `readTextFile`, the CLI delegates every read to that
  * text-only callback and an image can be decoded as UTF-8 before the model
- * sees it. For the source-audited 1.0.4–1.0.5 range we therefore retain write
+ * sees it. For the source-audited 1.0.4–1.0.13 range we therefore retain write
  * interception but let the CLI own reads. Unknown/unverified versions keep the
  * older handshake instead of silently dropping a capability.
  */
@@ -296,7 +304,7 @@ export function buildAcpClientCapabilities(cliVersion?: string): AcpClientCapabi
   const imageAware = parsed?.[1] === "1"
     && Number(parsed[2]) === 0
     && Number(parsed[3]) >= 4
-    && Number(parsed[3]) <= 5;
+    && Number(parsed[3]) <= 13;
   return {
     fs: imageAware ? { writeTextFile: true } : { readTextFile: true, writeTextFile: true },
     terminal: true,
@@ -378,6 +386,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private pendingPlanRequest?: JsonRpcId;
   private readonly pendingPermissionRequests = new Set<string>();
   private readonly pendingQuestionRequests = new Set<string>();
+  private readonly pendingMcpElicitations = new Map<string, PendingMcpElicitation>();
   private readonly pendingInteractionRequestIds = new Map<string, JsonRpcId>();
   private readonly resolvedPlanRequests = new Map<string, PlanDecisionReceipt>();
   private activeTurn?: TurnPresentation & { monotonicStartedAt: number };
@@ -394,6 +403,8 @@ export class GrokAcpAdapter extends EventEmitter {
   private upstreamModelId = "";
   private suspendModelRuntimePersistence = false;
   private planGateReleased = false;
+  /** Desktop Auto is a local approval overlay; ACP only reports plan/default. */
+  private planExecutionMode: "agent" | "auto" = "agent";
   private firstEventTurnId?: string;
   private firstEventWaitTimer?: ReturnType<typeof setTimeout>;
   private firstEventDiagnosticTimer?: ReturnType<typeof setTimeout>;
@@ -464,6 +475,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.mode = options.mode;
     this.planActive = options.mode === "plan";
     this.autoApprove = options.mode === "auto";
+    this.planExecutionMode = options.mode === "auto" ? "auto" : "agent";
     this.extensionLeaseId = options.extensionLeaseId;
     this.promptQueue = (options.initialPromptQueue ?? [])
       .filter((entry) => !["completed", "failed", "cancelled"].includes(entry.state))
@@ -599,6 +611,7 @@ export class GrokAcpAdapter extends EventEmitter {
     const initializeResult = await this.request(acpMethods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: buildAcpClientCapabilities(this.options.cliVersion),
+      _meta: { clientIdentifier: DESKTOP_ACP_CLIENT_IDENTIFIER },
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
     this.emit("runtime-handshake", this.runtimeHandshake);
@@ -891,7 +904,7 @@ export class GrokAcpAdapter extends EventEmitter {
           // replay from silently executing the turn as Agent mode.
           _meta: {
             mode: this.mode === "plan" ? "plan" : "agent",
-            clientIdentifier: "grok-build-desktop",
+            clientIdentifier: DESKTOP_ACP_CLIENT_IDENTIFIER,
             ...(presentation.promptId ? { promptId: presentation.promptId, sendNow: presentation.sendNow === true } : {}),
           },
         },
@@ -1174,6 +1187,11 @@ export class GrokAcpAdapter extends EventEmitter {
       this.write({ jsonrpc: "2.0", id: requestId, result: { outcome: "cancelled" } });
       this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "question", requestId, outcome: "cancelled" });
     }
+    for (const [key, pending] of this.pendingMcpElicitations ?? []) {
+      this.write({ jsonrpc: "2.0", id: pending.requestId, result: { outcome: "cancel" } });
+      this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "mcp-elicitation", requestId: pending.requestId, outcome: "cancel" });
+      this.pendingMcpElicitations?.delete(key);
+    }
     if (this.pendingPlanRequest !== undefined) {
       const requestId = this.pendingPlanRequest;
       this.write({ jsonrpc: "2.0", id: requestId, result: { outcome: "abandoned" } });
@@ -1242,6 +1260,9 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async applyMode(mode: SessionMode, persist = true): Promise<void> {
+    if (mode === "plan" && this.mode !== "plan") {
+      this.planExecutionMode = this.mode === "auto" ? "auto" : "agent";
+    }
     if (this.sessionId) await this.request(acpMethods.agent.session.setMode, { sessionId: this.sessionId, modeId: mode === "plan" ? "plan" : "default" });
     this.mode = mode;
     this.autoApprove = mode === "auto";
@@ -1290,7 +1311,28 @@ export class GrokAcpAdapter extends EventEmitter {
     this.emitStatus(this.needsUser ? "needs-user" : this.working ? "working" : "idle");
   }
 
-  async respondPlan(requestId: JsonRpcId | undefined, verdict: "approved" | "rejected" | "cancelled", comment = ""): Promise<PlanDecisionReceipt> {
+  respondMcpElicitation(
+    requestId: JsonRpcId,
+    outcome: "accept" | "decline" | "cancel",
+    content?: Record<string, McpElicitationPrimitive>,
+  ): void {
+    const key = String(requestId);
+    const pending = this.pendingMcpElicitations.get(key);
+    if (!pending) throw new Error("MCP 请求已经结束或已被回答");
+    let result: { outcome: "accept"; content?: Record<string, McpElicitationPrimitive> } | { outcome: "decline" | "cancel" };
+    if (outcome === "accept") {
+      if (!pending.request.schemaSupported) throw new Error(pending.request.unsupportedReason || "该 MCP 表单结构不受支持");
+      const normalized = validateMcpElicitationContent(pending.request, content ?? {});
+      result = Object.keys(normalized).length ? { outcome, content: normalized } : { outcome };
+    } else result = { outcome };
+    if (!this.write({ jsonrpc: "2.0", id: pending.requestId, result })) throw new Error("Grok 进程不可用，MCP 决定未提交");
+    this.pendingMcpElicitations.delete(key);
+    this.refreshNeedsUser();
+    this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "mcp-elicitation", requestId: pending.requestId, outcome });
+    this.emitStatus(this.needsUser ? "needs-user" : this.working ? "working" : "idle");
+  }
+
+  async respondPlan(requestId: JsonRpcId | undefined, verdict: "approved" | "rejected" | "cancelled", comment = "", executionMode?: "agent" | "auto"): Promise<PlanDecisionReceipt> {
     const requestedId = requestId ?? this.pendingPlanRequest;
     if (requestedId !== undefined) {
       const duplicateKey = `${this.sessionId || "pending"}:${String(requestedId)}`;
@@ -1305,11 +1347,13 @@ export class GrokAcpAdapter extends EventEmitter {
     const duplicate = this.resolvedPlanRequests.get(key);
     if (duplicate) return { ...duplicate, state: "duplicate", message: "该计划决策已经提交，未重复执行" };
     const normalizedComment = comment.trim().slice(0, 8_000);
+    const targetExecutionMode = executionMode ?? this.planExecutionMode ?? "agent";
     const receipt: PlanDecisionReceipt = {
       requestId: key,
       verdict,
       state: "accepted",
-      message: verdict === "approved" ? "计划已批准，原回合将继续执行" : verdict === "rejected" ? "已要求继续规划" : "计划已取消",
+      message: verdict === "approved" ? `计划已批准，将以${targetExecutionMode === "auto" ? "自动批准" : "Agent 询问"}策略继续执行` : verdict === "rejected" ? "已要求继续规划" : "计划已取消",
+      ...(verdict === "approved" ? { executionMode: targetExecutionMode } : {}),
     };
     this.resolvedPlanRequests.set(key, receipt);
     while (this.resolvedPlanRequests.size > 128) {
@@ -1341,13 +1385,13 @@ export class GrokAcpAdapter extends EventEmitter {
       // reconciliation and must not keep rejecting implementation tools.
       this.planGateReleased = true;
       this.planActive = false;
-      this.mode = "agent";
-      this.autoApprove = false;
+      this.mode = targetExecutionMode;
+      this.autoApprove = targetExecutionMode === "auto";
       // Persist the local safety boundary before the optional CLI
       // reconciliation. If the process exits while set_mode is unavailable,
       // reopening the task must not resurrect the already-resolved Plan gate.
-      this.persistRuntimePatch({ mode: "agent" });
-      this.emitEvent({ type: "mode", sessionId: this.sessionId, mode: "agent" });
+      this.persistRuntimePatch({ mode: targetExecutionMode });
+      this.emitEvent({ type: "mode", sessionId: this.sessionId, mode: targetExecutionMode });
     }
     this.refreshNeedsUser();
     this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "plan", requestId: id, outcome: verdict });
@@ -1356,12 +1400,12 @@ export class GrokAcpAdapter extends EventEmitter {
     // is a separate best-effort phase: waiting for session/set_mode here can
     // keep the Renderer IPC pending while Grok resumes the tool loop.
     if (verdict === "approved" || verdict === "cancelled") {
-      void this.applyMode("agent", false).then(() => {
-        this.emitStatus(this.working ? "working" : "idle", "已退出 Plan 模式");
+      void this.applyMode(targetExecutionMode, false).then(() => {
+        this.emitStatus(this.working ? "working" : "idle", `已退出 Plan 模式 · ${targetExecutionMode === "auto" ? "自动批准" : "Agent 询问"}`);
       }).catch((error) => {
         const message = `计划决定已提交，但模式恢复失败：${error instanceof Error ? error.message : String(error)}`;
         const failure = this.buildFailure(message, { error });
-        failure.nextActions = ["计划决定已生效，旧 Plan 权限门控不会重新启用", "可从模式菜单手动切换到 Agent 后继续"];
+        failure.nextActions = ["计划决定已生效，旧 Plan 权限门控不会重新启用", `可从模式菜单手动切换到${targetExecutionMode === "auto" ? "自动批准" : " Agent"}后继续`];
         this.emitEvent({ type: "error", sessionId: this.sessionId, message, failure });
         this.emitStatus(this.working ? "working" : "error", "计划决定已提交；模式恢复失败");
       });
@@ -1408,6 +1452,10 @@ export class GrokAcpAdapter extends EventEmitter {
     if (this.restoredQueueTimer) clearTimeout(this.restoredQueueTimer);
     this.restoredQueueTimer = undefined;
     this.finishEffortChange(false);
+    for (const pending of this.pendingMcpElicitations?.values() ?? []) {
+      this.write({ jsonrpc: "2.0", id: pending.requestId, result: { outcome: "cancel" } });
+    }
+    this.pendingMcpElicitations?.clear();
     await this.terminal.disposeAll();
     const child = this.process;
     if (child && child.exitCode === null && this.sessionId && this.runtimeHandshake?.sessionCapabilities?.close) {
@@ -1504,7 +1552,13 @@ export class GrokAcpAdapter extends EventEmitter {
       this.handleSessionUpdate({ ...(params.update ?? {}), ...(params._meta ? { _meta: params._meta } : {}) });
       return;
     }
-    await this.handleServerRequest(method, id, params);
+    try {
+      await this.handleServerRequest(method, id, params);
+    } catch (error) {
+      const detail = (error instanceof Error ? error.message : String(error)).slice(0, 2_048);
+      await this.options.log.log(`[ACP server request rejected] method=${method || "unknown"} size=${wireSize(params)} error=${detail}`);
+      this.respondError(id, -32602, detail || "请求参数无效");
+    }
   }
 
   private handleSessionUpdate(update: any): void {
@@ -1549,9 +1603,12 @@ export class GrokAcpAdapter extends EventEmitter {
         // A late replay from the just-resolved Plan request is not a new user
         // decision. Keep the local mode/gate released until a genuinely new
         // exit_plan request re-arms it.
-        const mode = reportedMode === "plan" && this.planGateReleased ? "agent" : reportedMode;
+        const mode = reportedMode === "plan" && this.planGateReleased
+          ? (this.autoApprove ? "auto" : "agent")
+          : reportedMode;
         this.mode = mode;
         this.planActive = mode === "plan" && !this.planGateReleased;
+        if (mode !== "plan") this.planExecutionMode = mode === "auto" ? "auto" : "agent";
         this.emitEvent({ type: "mode", sessionId: this.sessionId, mode });
         break;
       }
@@ -2076,7 +2133,7 @@ export class GrokAcpAdapter extends EventEmitter {
           this.planActive = true;
           this.needsUser = true;
           this.emitStatus("needs-user", "等待计划确认");
-          this.emitEvent({ type: "plan", sessionId: this.sessionId, requestId: id, text: params.planContent || params.plan || params.input?.plan || "" });
+          this.emitEvent({ type: "plan", sessionId: this.sessionId, requestId: id, text: params.planContent || params.plan || params.input?.plan || "", executionMode: this.planExecutionMode });
           return;
         case "x.ai/ask_user_question":
         case "_x.ai/ask_user_question":
@@ -2090,6 +2147,33 @@ export class GrokAcpAdapter extends EventEmitter {
           this.emitStatus("needs-user", "等待回答");
           this.emitEvent({ type: "question", sessionId: this.sessionId, requestId: id ?? "", questions: params.questions ?? [] });
           return;
+        case "x.ai/mcp/elicit":
+        case "_x.ai/mcp/elicit": {
+          if (id === undefined) {
+            this.respondError(id, -32602, "MCP elicitation 缺少请求 ID");
+            return;
+          }
+          const request = normalizeMcpElicitationRequest(id, params, this.sessionId);
+          this.pendingMcpElicitations.set(String(id), { requestId: id, request });
+          this.needsUser = true;
+          this.emitStatus("needs-user", request.mode === "url" ? "等待 MCP 网页授权" : "等待 MCP 表单输入");
+          this.emitEvent({ type: "mcp-elicitation", sessionId: this.sessionId, request });
+          return;
+        }
+        case "x.ai/mcp/elicit_complete":
+        case "_x.ai/mcp/elicit_complete": {
+          const elicitationId = firstNonEmptyString(params.elicitationId, params.elicitation_id);
+          const serverName = firstNonEmptyString(params.serverName, params.server_name);
+          for (const [key, pending] of this.pendingMcpElicitations) {
+            if (!elicitationId || pending.request.elicitationId !== elicitationId
+              || (serverName && pending.request.serverName !== serverName)) continue;
+            this.pendingMcpElicitations.delete(key);
+            this.emitEvent({ type: "interaction-resolved", sessionId: this.sessionId, interaction: "mcp-elicitation", requestId: pending.requestId, outcome: "completed" });
+          }
+          this.refreshNeedsUser();
+          this.respondOk(id);
+          return;
+        }
         case "x.ai/session/update":
         case "_x.ai/session/update": {
           this.handlePrivateSessionUpdate(params.update ?? {});
@@ -2558,7 +2642,8 @@ export class GrokAcpAdapter extends EventEmitter {
   private refreshNeedsUser(): boolean {
     this.needsUser = this.pendingPlanRequest !== undefined
       || (this.pendingPermissionRequests?.size ?? 0) > 0
-      || (this.pendingQuestionRequests?.size ?? 0) > 0;
+      || (this.pendingQuestionRequests?.size ?? 0) > 0
+      || (this.pendingMcpElicitations?.size ?? 0) > 0;
     return this.needsUser;
   }
 
@@ -2887,6 +2972,8 @@ export function isSessionOwnedRuntimeMethod(method: string): boolean {
     || method === "x.ai/session/update"
     || method === "x.ai/session_notification"
     || method === "x.ai/queue/changed"
+    || method === "x.ai/mcp/elicit"
+    || method === "x.ai/mcp/elicit_complete"
     || method === "x.ai/session/interjection"
     || method === "x.ai/follow_ups"
     || method === "x.ai/models/update"
@@ -3006,6 +3093,137 @@ function extractUsageMeta(usage: Record<string, unknown>): PromptMeta {
     cachedReadTokens: numberOrUndefined(usage.cachedReadTokens ?? usage.cached_read_tokens),
     reasoningTokens: numberOrUndefined(usage.reasoningTokens ?? usage.reasoning_tokens),
   };
+}
+
+export function normalizeMcpElicitationRequest(
+  requestId: JsonRpcId,
+  params: Record<string, unknown>,
+  ownerSessionId: string,
+): McpElicitationRequest {
+  const sessionId = firstNonEmptyString(params.sessionId, params.session_id) ?? ownerSessionId;
+  if (!ownerSessionId || sessionId !== ownerSessionId) throw new Error("MCP 请求不属于当前会话");
+  const serverName = firstNonEmptyString(params.serverName, params.server_name)?.slice(0, 256) ?? "MCP 服务器";
+  const toolCallId = firstNonEmptyString(params.toolCallId, params.tool_call_id)?.slice(0, 256) ?? "unknown";
+  const message = firstNonEmptyString(params.message, params.prompt)?.slice(0, 16_384) ?? "MCP 服务器需要补充信息";
+  const requestedUrl = firstNonEmptyString(params.url);
+  const mode = params.mode === "url" || requestedUrl ? "url" as const : "form" as const;
+  if (mode === "url") {
+    if (!requestedUrl || requestedUrl.length > 4_096) throw new Error("MCP 授权 URL 缺失或过长");
+    let parsed: URL;
+    try { parsed = new URL(requestedUrl); } catch { throw new Error("MCP 授权 URL 无效"); }
+    const localHttp = parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname.toLowerCase());
+    if (parsed.protocol !== "https:" && !localHttp) throw new Error("MCP 授权 URL 仅允许 HTTPS 或本机 HTTP");
+    return {
+      requestId,
+      sessionId,
+      toolCallId,
+      serverName,
+      message,
+      mode,
+      url: parsed.toString(),
+      elicitationId: firstNonEmptyString(params.elicitationId, params.elicitation_id)?.slice(0, 256),
+      schemaSupported: true,
+    };
+  }
+
+  const source = params.requestedSchema ?? params.requested_schema;
+  const schema = source && typeof source === "object" && !Array.isArray(source) ? source as Record<string, unknown> : undefined;
+  const rawProperties = schema?.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+    ? schema.properties as Record<string, unknown>
+    : undefined;
+  let unsupportedReason: string | undefined;
+  if (!schema || schema.type !== "object" || !rawProperties) unsupportedReason = "CLI 返回的 MCP 表单不是受支持的对象 Schema";
+  if (schema && Object.keys(schema).some((key) => !["type", "properties", "required", "title", "description", "additionalProperties", "$schema"].includes(key))) unsupportedReason ??= "MCP 表单包含不支持的对象约束";
+  if (schema?.additionalProperties && schema.additionalProperties !== true) unsupportedReason ??= "MCP 表单包含复杂附加字段约束";
+  const properties: NonNullable<McpElicitationRequest["requestedSchema"]>["properties"] = {};
+  for (const [name, raw] of Object.entries(rawProperties ?? {}).slice(0, 64)) {
+    if (!name || name.length > 128 || ["__proto__", "prototype", "constructor"].includes(name)) {
+      unsupportedReason ??= "MCP 表单包含无效字段名";
+      continue;
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) { unsupportedReason ??= `字段 ${name} 的 Schema 无效`; continue; }
+    const value = raw as Record<string, unknown>;
+    if (Object.keys(value).some((key) => !["type", "title", "description", "enum", "default", "minimum", "maximum", "minLength", "maxLength"].includes(key))) unsupportedReason ??= `字段 ${name} 包含尚不支持的约束`;
+    const constraints: Record<string, number> = {};
+    for (const key of ["minimum", "maximum", "minLength", "maxLength"]) {
+      if (value[key] === undefined) continue;
+      const n = value[key];
+      if (typeof n !== "number" || !Number.isFinite(n) || (key.endsWith("Length") && (!Number.isInteger(n) || n < 0))) unsupportedReason ??= `字段 ${name} 的 ${key} 无效`;
+      else constraints[key] = n;
+    }
+    const type = value.type;
+    if (type !== "string" && type !== "number" && type !== "integer" && type !== "boolean") {
+      unsupportedReason ??= `字段 ${name} 使用了尚不支持的复杂类型`;
+      continue;
+    }
+    if ((constraints.minimum !== undefined || constraints.maximum !== undefined) && type !== "number" && type !== "integer") unsupportedReason ??= `字段 ${name} 的数值约束与类型不符`;
+    if ((constraints.minLength !== undefined || constraints.maxLength !== undefined) && type !== "string") unsupportedReason ??= `字段 ${name} 的长度约束与类型不符`;
+    if ((constraints.minimum !== undefined && constraints.maximum !== undefined && constraints.minimum > constraints.maximum) || (constraints.minLength !== undefined && constraints.maxLength !== undefined && constraints.minLength > constraints.maxLength)) unsupportedReason ??= `字段 ${name} 的约束范围为空`;
+    if (value.enum !== undefined && (!Array.isArray(value.enum) || !value.enum.length || value.enum.length > 100 || value.enum.some((candidate) => type === "integer" ? !Number.isInteger(candidate) : typeof candidate !== type || (type === "number" && !Number.isFinite(candidate))))) unsupportedReason ??= `字段 ${name} 的枚举无效或超过支持范围`;
+    const enumValues = Array.isArray(value.enum)
+      ? value.enum.filter((candidate): candidate is McpElicitationPrimitive => ["string", "number", "boolean"].includes(typeof candidate)).slice(0, 100)
+      : undefined;
+    const defaultValue = ["string", "number", "boolean"].includes(typeof value.default)
+      ? value.default as McpElicitationPrimitive
+      : undefined;
+    properties[name] = {
+      type,
+      ...constraints,
+      ...(firstNonEmptyString(value.title) ? { title: firstNonEmptyString(value.title)!.slice(0, 256) } : {}),
+      ...(firstNonEmptyString(value.description) ? { description: firstNonEmptyString(value.description)!.slice(0, 2_048) } : {}),
+      ...(enumValues?.length ? { enum: enumValues } : {}),
+      ...(defaultValue !== undefined ? { default: defaultValue } : {}),
+    };
+  }
+  if (rawProperties && Object.keys(rawProperties).length > 64) unsupportedReason ??= "MCP 表单字段超过 64 项限制";
+  if (schema?.required !== undefined && !Array.isArray(schema.required)) unsupportedReason ??= "MCP 表单必填字段列表无效";
+  const required = (Array.isArray(schema?.required) ? schema.required : [])
+    .filter((value): value is string => typeof value === "string" && Object.hasOwn(properties, value))
+    .slice(0, 64);
+  if (Array.isArray(schema?.required) && schema.required.some((name) => typeof name !== "string" || !Object.hasOwn(properties, name))) unsupportedReason ??= "MCP 表单包含无法识别的必填字段";
+  return {
+    requestId,
+    sessionId,
+    toolCallId,
+    serverName,
+    message,
+    mode,
+    requestedSchema: { type: "object", properties, ...(required.length ? { required } : {}) },
+    schemaSupported: !unsupportedReason,
+    ...(unsupportedReason ? { unsupportedReason } : {}),
+  };
+}
+
+export function validateMcpElicitationContent(
+  request: McpElicitationRequest,
+  content: Record<string, McpElicitationPrimitive>,
+): Record<string, McpElicitationPrimitive> {
+  if (!request.schemaSupported) throw new Error(request.unsupportedReason || "MCP 表单约束不受支持");
+  if (request.mode === "url") return {};
+  const schema = request.requestedSchema;
+  if (!schema) throw new Error("MCP 表单缺少 Schema");
+  const output: Record<string, McpElicitationPrimitive> = {};
+  for (const [name, value] of Object.entries(content)) {
+    const property = schema.properties[name];
+    if (!property) throw new Error(`MCP 表单包含未知字段：${name}`);
+    const validType = property.type === "string" ? typeof value === "string"
+      : property.type === "boolean" ? typeof value === "boolean"
+        : typeof value === "number" && Number.isFinite(value) && (property.type !== "integer" || Number.isInteger(value));
+    if (!validType) throw new Error(`MCP 表单字段类型无效：${name}`);
+    if (typeof value === "number" && ((property.minimum !== undefined && value < property.minimum) || (property.maximum !== undefined && value > property.maximum))) throw new Error(`MCP 表单字段超出数值范围：${name}`);
+    if (typeof value === "string") {
+      const length = Array.from(value).length;
+      if ((property.minLength !== undefined && length < property.minLength) || (property.maxLength !== undefined && length > property.maxLength)) throw new Error(`MCP 表单字段长度不符合约束：${name}`);
+    }
+    if (typeof value === "string" && Buffer.byteLength(value, "utf8") > 32 * 1024) throw new Error(`MCP 表单字段过长：${name}`);
+    if (property.enum && !property.enum.some((candidate) => candidate === value)) throw new Error(`MCP 表单字段不在允许选项中：${name}`);
+    output[name] = value;
+  }
+  for (const name of schema.required ?? []) {
+    if (!Object.hasOwn(output, name) || output[name] === "") throw new Error(`MCP 表单缺少必填字段：${name}`);
+  }
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > 1024 * 1024) throw new Error("MCP 表单内容超过 1 MiB 限制");
+  return output;
 }
 
 function numberOrUndefined(value: unknown): number | undefined {

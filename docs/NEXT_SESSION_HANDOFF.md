@@ -1,4 +1,62 @@
-# Grok Build Desktop 下一会话完整交接（2026-08-21，0.9.3 已正式发布）
+# Grok Build Desktop 下一会话完整交接（2026-09-04，0.9.3 为正式基线）
+
+## 2026-09-08 v0.9.4 发布授权
+
+- 用户已明确要求提交并生成 Release，取代下方“不推送/不发布”的开发期限制；未授权升级本机 CLI 或替换安装版。
+- 版本与 lockfile 统一为 0.9.4。发布说明 `docs/releases/v0.9.4.md` 包含相对 v0.9.3 的中文简洁版、详细版和实机验收边界。
+- 使用受保护 main 的 PR 门禁，再由 v0.9.4 标签触发正式工作流；Setup/Portable、SHA-256、SBOM/许可证和下载回验由 GitHub Actions 生成。发布结果以该标签实际工作流与 Release 状态为准，不以本交接提前宣称通过。
+- 原有 917 项离线、DOM/CDP 和源码构建证据保留；9 项 opt-in live 仍未执行。本地旧私人文件和三份 `_tmp_*` 不进入 Git。
+
+## 优先读：2026-09-08 修复完成补记
+
+- R1–R8 和三种 CLI 单次升级策略已完成源码及离线回归；下方 09-07 的“尚未修复”是历史审核记录，详见审核报告顶部补记。
+- 完整离线：917 通过、9 opt-in live 跳过（120/126 文件通过）；TypeScript、生产构建、分块预算通过。`npm run test:regression-dom` 是独立隐藏 Electron 真实 DOM/CDP，不连接 Grok；覆盖菜单/Toast/升级阶段/MCP 提交/迟到草稿。
+- 新策略：默认 standard；try-new 忽略版本名单但核心失败回滚；retain-unverified 仅在目标正确安装而 ACP 不兼容时保留。每次预览/目标/策略/action 都绑定过期一次性令牌；高级选项不持久授权。
+- `cli-update-recovery.json` 保存白名单会话配置和恢复点，不保存 Provider 密钥、环境变量或函数。未验证状态禁止普通会话、认证 ACP 和诊断 ACP；显式重新验证或精确旧版回滚才恢复。旧 compatibility snapshot 不能单独授权未知版本；通过凭据绑定路径/版本/哈希。
+- 草稿 pending/failed 快照保存在现有 `ui-state.json`，保护期覆盖整个提交。新草稿优先；旧失败快照可在当前草稿消费后重新读取，重启不自动重发。不要恢复 Renderer 迟到回包直接覆盖另一会话草稿的路径。
+- MCP 字段校验留在主进程；独立 `McpElicitationCard` 只是现有卡片搬迁以做 DOM 回归，未做 UI 换皮或放松沙箱。
+- 本机 CLI/live 证据仍为 1.0.3。本轮没有升级、打包、安装、推送或 Release。旧测试目录保留情况不变，三份用户 `_tmp_*` 不读写、不提交。
+- 后续只有用户明确授权后才做安装版、新版 CLI 实机验收与发布；尚不能宣称安装版三种更新路径均已可用。留给后续 UI 轮的是视觉层级与大型面板细化，而不是重写本轮事务/队列。
+
+## 2026-09-07 累计复核：尚不建议发布
+
+- 首先读 `docs/POST_V093_REVIEW_2026-09-07.md`。新增审核发现 R1–R8，未修改业务源码，不能沿用下方“下一步只剩实机”的结论。
+- 已隔离复现：发送后自动保存删除失败恢复所需长附件；更新/版本复查/日志同时失败时跳过会话恢复且掩盖主因。新任务显式恢复还缺少当前目标/编辑世代保护。
+- 本次 typecheck、874 项离线测试、生产构建、分块与 diff check 通过，但没有覆盖上述故障。
+- 官方 CLI 删除 36 个测试会话。20 个无摘要残留目录 CLI 不识别、直接删除被执行策略拒绝，另有 1 个 smoke profile；不能称已清空。41 个非目标目录全部保留。清理清单在忽略目录 `out/audit`，勿提交私人记录。
+- 未升级 CLI、未打包、未安装、未推送、未 Release。用户三份 `_tmp_*` 保持不动。
+
+## 2026-09-06 高频 UI / Renderer 收口（源码与离线 UI 门禁完成）
+
+- 在累计 1.0.13 工作树上完成，不得 reset。没有升级 CLI、打包、安装、推送或创建 Release；三份用户 `_tmp_*` 未读写。
+- 保留 0.9.0 青蓝深色、浅色、自定义背景和密度数据。本轮调整行为层级，不是换皮：会话行单主按钮/单状态、更多菜单、Composer 单主队列动作+次级发送菜单+固定 Stop、统一请求卡、分离应用/CLI 更新区。
+- 新增 `AppShell`、`DialogHost`、`SessionListRow`、`GlobalErrorToast` 和 `useSubmissionController`。Conversation 继续由现有 `ConversationViewport`/derived-state 控制，导航继续由 `useNavigationController` 控制；不得另建平行会话状态。
+- CDP 验收暴露并修复一个真实 P1：持久新任务草稿已经是当前逻辑目标时，点击草稿行因 draft key 不变而不会重新水合。现在显式恢复正文、能力、附件和任务配置。
+- UI 探针已经改用语义 `.session-open`，覆盖 Plan/权限/Stop/多会话/草稿，并在三档缩放下将截图生成到 `out/ui-snapshots`。完整离线结果：117/123 文件通过，6 live 跳过；874/883 项通过，9 live 跳过。
+- `App.tsx` 的发送/打开会话事务仍较大，这是后续渐进项，不要借“拆分”重写 ACP、队列或草稿协议。下一次交付前仍需用户单独确认版本提升、安装候选和正式发布。
+
+## 2026-09-06 CLI 1.0.13 / MCP elicitation / updater transaction（源码与离线门禁完成）
+
+- 当前工作树是在 0.9.3 正式基线之上的累计未提交修复；不得 reset。三份 `_tmp_*` 是用户未跟踪文件，继续不读写、不提交。
+- 只读事实：本机 CLI 1.0.3；stable 1.0.13；官方仓库 `72a61251...`，`SOURCE_REV a549186d...`。未执行 CLI 更新，live 证据仍为 1.0.3。
+- 新增 1.0.6–1.0.13 Fixture、`clientIdentifier=grok-build-desktop`、审计范围内图片读取委托和 MCP 1.0.8+ form/URL elicitation。临时 MCP 表单/授权 URL 不持久化；Stop/退出发送 cancel。
+- Updater 现在保护完整事务生命周期：应用不能在二进制替换/验证/回滚/会话恢复途中退出；恢复失败附为 warning，不覆盖主要结果。
+- 未来 1.0.x 不再永远等待 Desktop 发版，但必须由固定目标 updater live 验证并在当前 app data 写入通过快照。外部换成未知补丁仍失败关闭；1.1+ 关闭。
+- 草稿提交增加 `submissionId` 世代：只分离匹配提交快照的草稿行；主进程复制旧长附件期间保护源文件，用户同期输入/转出的下一条草稿不会被旧提交删除或覆盖，预处理结束后自动保存继续。
+- 依赖公告已用 `@xmldom/xmldom 0.9.12`、`fast-uri 4.1.4`、`qs 6.16.0` 收口；完整 `npm audit --audit-level=high` 为 0。
+- 详细审核在 `docs/CLI_1_0_13_AUDIT_2026-09-04.md`。原生共享队列、Hook 确认和 Workflow 控制等待 1.0.13 live Wire；不要在 1.0.3 上猜测。
+- 离线门禁已完成：聚焦 7 文件/193 项；完整 119 个文件中 113 通过、6 个 live 文件跳过（867 通过、9 live 跳过）；TypeScript、生产构建、分块预算、上游快照、`npm audit`、`git diff --check` 及排除用户 `_tmp_*` 后的 434 文本文件公开扫描通过。
+- 2026-09-06 只读 stable 检查仍为 1.0.13；本机/live 仍为 1.0.3。下一步只有用户明确点击后才是 1.0.13 固定目标更新/live ACP/必要回滚；不要把离线合同冒充实机证据。不要打包、安装、推送、Release 或执行 `grok update`，除非用户明确要求。
+
+## 2026-08-26 长文本附件、Plan 策略与 CLI 更新深挖（源码完成，未打包）
+
+- 用户复现“转为附件”后 `session:send` 报“目标路径不存在或无法读取”。根因有两层：旧 Renderer 在 IPC 前清理草稿目录；新建任务把草稿目录从 `new:<project>` 重命名到 Session 后，又忽略主进程返回的新附件路径。现在主进程先物化会话附件缓存，再消费草稿；Renderer 使用迁移后的路径，失败时保留文件并恢复草稿。
+- 补充发现：`trustedPickedPaths` 是进程内集合，重启后持久文本草稿会失去 picker grant。现在只按 Session ID 对应的哈希草稿目录重新授权，跨会话路径拒绝；不能退回“信任整个 composer-drafts”这种过宽方案。
+- `MarkdownView` 现在统一输出 `.markdown-body`，消息 prose 的长账号串/哈希/Base64 在卡内断行；代码和表格仍单独横向滚动。
+- Plan 交互新增实施后的 Agent/Auto 策略，进入 Plan 前是 Auto 时默认 Auto。适配器按选择持久化、立即释放旧 Plan 门控，并修复迟到 `current_mode_update=plan` 把 Auto 重新降成 Agent 的竞态。
+- 本机只读诊断：安装 CLI 仍为 1.0.3，stable 检查快速返回 1.0.5；Desktop 设置中的 HTTP/HTTPS 回环代理均已配置且端口可达，所以不是“应用完全没用代理”。旧 `cli-update-history.jsonl` 显示多次在 360 秒后超时，随后又下载 1.0.3 回滚并再次超时，最终只显示回滚错误。当前源码显示安全代理路径，将更新上限调至 30 分钟，版本未变时不再回滚，并保留目标/回滚/恢复三类失败。
+- 验证：聚焦 9 文件/196 项；完整 119 文件中 113 通过、6 live 跳过，850/859 通过；TypeScript、生产构建、分块和 diff check 通过。未升级 CLI、未打包/安装、未推送/发布。
+- 下一步只剩用户实机面：安装候选后验证新建和重开草稿附件、Plan Auto、截图中的长文本；CLI 1.0.5 只有用户明确点击更新时才做固定目标 live 门禁。三份 `_tmp_*` 用户文件继续不动。
 
 ## 2026-08-21 0.9.3 插话/队列/子 Agent/Session Info 最终收口
 
@@ -193,7 +251,7 @@
 - App Shell 已不再订阅完整 Zustand Store；ConversationViewport、会话派生状态与 Navigation Controller 已拆分，后台会话更新不会直接让整个 App 订阅失效。
 - 2026-08-10 只读实测：GitHub 公开 Latest 仍是 v0.6.22；本机 Grok CLI 是 0.2.118，stable 检测已返回 1.0.0。应用会把本地 0.7.3 标为领先公开版，把 CLI 1.0.0 标为跨主版本并要求显式确认。本轮未升级 CLI。
 - 最终统一门禁已通过：98 个测试文件/697 项通过，6 个 live 文件/9 项按设计跳过；TypeScript、生产/资源构建、351 文件公开扫描、分块、Native/Fuses、Task Scheduler、当前 UI、覆盖层、Portable 和 `npm audit` 通过。探针时序/旧版假设修正后复用同一产物，没有第二次打包。
-- 0.7.3 已 per-user 安装；安装版主进程/About/诊断、ASAR、Fuses 及桌面/开始菜单快捷方式通过。Setup SHA-256 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19163f7e5948ac`；Portable `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`。
+- 0.7.3 已 per-user 安装；安装版主进程/About/诊断、ASAR、Fuses 及桌面/开始菜单快捷方式通过。Setup SHA-256 `28408514697e75b122a2f879083b9fea9e022e68f2f98e987e19173f7e5948ac`；Portable `8d5740b12ec5674d2cbb110afb13dc8b38c5ab1e92f6e2a15ab03feab0dcc277`。
 - 用户验收前不推送、不创建 GitHub Release。
 
 

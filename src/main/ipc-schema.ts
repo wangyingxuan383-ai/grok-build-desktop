@@ -214,9 +214,10 @@ const RULES: Record<string, Rule> = {
   "media:start": (args) => mediaCreationArg(args, 0),
   "media:get": (args) => idArg(args, 0),
   "media:cancel": (args) => idArg(args, 0),
-  "plan:respond": (args) => { idArg(args, 0); requestIdArg(args, 1, true); enumArg(args, 2, ["approved", "rejected", "cancelled"]); if (args[3] !== undefined) stringArgAllowEmpty(args, 3, 64 * 1024); },
+  "plan:respond": (args) => { idArg(args, 0); requestIdArg(args, 1, true); enumArg(args, 2, ["approved", "rejected", "cancelled"]); if (args[3] !== undefined) stringArgAllowEmpty(args, 3, 64 * 1024); if (args[4] !== undefined) enumArg(args, 4, ["agent", "auto"]); },
   "permission:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); idArg(args, 2); },
   "question:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); objectArg(args, 2); },
+  "mcp-elicitation:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); enumArg(args, 2, ["accept", "decline", "cancel"]); optionalObjectArg(args, 3); },
   "attachments:pick": noArgs,
   "attachments:pick-folders": noArgs,
   "attachments:dropped": (args) => attachmentPathArrayArg(args, 0, 128),
@@ -248,7 +249,7 @@ const RULES: Record<string, Rule> = {
   "quota:get": (args) => optionalBooleanArg(args, 0),
   "draft:get": (args) => stringArg(args, 0, 32_767),
   "draft:list": noArgs,
-  "draft:set": (args) => { stringArg(args, 0, 32_767); stringArgAllowEmpty(args, 1, 2 * 1024 * 1024); optionalObjectArg(args, 2); optionalAttachmentArrayArg(args, 3); if (args[4] !== undefined) newTaskDraftArg(args, 4); },
+  "draft:set": (args) => { stringArg(args, 0, 32_767); stringArgAllowEmpty(args, 1, 2 * 1024 * 1024); optionalObjectArg(args, 2); optionalAttachmentArrayArg(args, 3); if (args[4] !== undefined) newTaskDraftArg(args, 4); if (args[5] !== undefined) idArg(args, 5); },
   "draft:move": (args) => { stringArg(args, 0, 32_767); stringArg(args, 1, 32_767); },
   "draft:clear": (args) => stringArg(args, 0, 32_767),
   "draft:text:create": (args) => { stringArg(args, 0, 32_767); stringArg(args, 1, 32 * 1024 * 1024); },
@@ -287,7 +288,8 @@ const RULES: Record<string, Rule> = {
   "computer:settings:get": noArgs,
   "computer:settings:update": (args) => computerSettingsArg(args, 0),
   "cli:check-update": noArgs,
-  "cli:update-preview": noArgs,
+  "cli:update-preview": (args) => { if (args[0] !== undefined) enumArg(args, 0, ["standard", "try-new", "retain-unverified"]); if (args[1] !== undefined) enumArg(args, 1, ["update", "verify", "rollback"]); },
+  "cli:update-state": noArgs,
   "cli:apply-update": (args) => cliUpdateInputArg(args, 0),
   "cli:compatibility": noArgs,
   "cli:update-history": noArgs,
@@ -491,6 +493,8 @@ function promptArgs(args: unknown[]): void {
   if (typeof text !== "string" || Buffer.byteLength(text, "utf8") > 2 * 1024 * 1024 || text.includes("\0")) throw new Error("IPC Prompt 文本无效或超过限制");
   attachmentArrayArg(args, 2);
   if (args[3] !== undefined) idArg(args, 3);
+  if (args[4] !== undefined) idArg(args, 4);
+  if (args[5] !== undefined) idArg(args, 5);
 }
 
 function strictRecordArg(args: unknown[], index: number, allowed: readonly string[]): Record<string, unknown> {
@@ -838,11 +842,14 @@ function computerSettingsArg(args: unknown[], index: number): void {
   optionalRecordString(value, "emergencyShortcut", 128);
 }
 function cliUpdateInputArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["targetVersion", "expectedCurrentVersion", "allowMajorUpgrade"]);
+  const value = strictRecordArg(args, index, ["targetVersion", "expectedCurrentVersion", "allowMajorUpgrade", "policy", "action", "confirmationToken"]);
   const target = requiredRecordString(value, "targetVersion", 64);
   const current = requiredRecordString(value, "expectedCurrentVersion", 64);
   if (!/^\d+\.\d+\.\d+$/.test(target) || !/^\d+\.\d+\.\d+$/.test(current)) throw new Error("IPC CLI 版本格式无效");
   optionalRecordBoolean(value, "allowMajorUpgrade");
+  if (value.policy !== undefined) enumArg([value.policy], 0, ["standard", "try-new", "retain-unverified"]);
+  if (value.action !== undefined) enumArg([value.action], 0, ["update", "verify", "rollback"]);
+  if (value.confirmationToken !== undefined) idArg([value.confirmationToken], 0);
 }
 function sessionCompactionPolicyArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["mode", "thresholdPercent"]);

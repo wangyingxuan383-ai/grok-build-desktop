@@ -197,7 +197,20 @@ else {
       if (isMainFrame && code !== -3 && !showingStartupError) void showStartupError(`${description}（错误码 ${code}）`);
     });
     mainWindow.on("close", (event) => {
-      if (quitting || !controller?.hasWorking()) return;
+      if (quitting) return;
+      if (controller?.hasCliUpdateInProgress()) {
+        event.preventDefault();
+        dialog.showMessageBoxSync(mainWindow!, {
+          type: "warning",
+          title: "Grok CLI 正在更新",
+          message: "正在替换并验证 Grok CLI。为避免损坏可执行文件或丢失回滚点，更新结束前不能退出应用。",
+          buttons: ["继续等待"],
+          defaultId: 0,
+        });
+        mainWindow?.focus();
+        return;
+      }
+      if (!controller?.hasWorking()) return;
       const answer = dialog.showMessageBoxSync(mainWindow!, {
         type: "warning",
         title: "仍有任务运行",
@@ -221,6 +234,21 @@ else {
 
   app.on("before-quit", (event) => {
     if (quitting) return;
+    if (controller?.hasCliUpdateInProgress()) {
+      event.preventDefault();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        dialog.showMessageBoxSync(mainWindow, {
+          type: "warning",
+          title: "Grok CLI 正在更新",
+          message: "CLI 更新事务尚未完成。请等待验证、必要回滚和会话恢复结束后再退出。",
+          buttons: ["继续等待"],
+          defaultId: 0,
+        });
+        mainWindow.show();
+        mainWindow.focus();
+      }
+      return;
+    }
     event.preventDefault();
     quitting = true;
     computerOverlay?.dispose();

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, ModelInfo, OfficialFeedbackCapability, OfficialFeedbackReceipt, ProviderLaunchContext, ReasoningEffort, SessionCompactReceipt, SessionMode } from "../../shared/types";
-import { buildCliEnv, detectEffortFlag, locateGrokCli, readCliVersion } from "./cli-locator";
+import { buildCliEnv, compareVersions, detectEffortFlag, KNOWN_PUBLIC_CLI_VERSION, locateGrokCli, parseVersion, readCliVersion } from "./cli-locator";
 import { GrokAcpAdapter, LiveEffortUnsupportedError, type SessionProcessOptions } from "./grok-acp-adapter";
 import type { LogService } from "./log-service";
 import type { SessionRuntimeStateService } from "./session-runtime-state-service";
@@ -49,6 +49,7 @@ export class GrokProcessManager {
     private readonly getProviderEnvironment: (context: ProviderLaunchContext) => Promise<Record<string, string>> = async () => ({}),
     private readonly beforeSessionClose?: (sessionId: string, session: GrokAcpAdapter, reason: "close" | "shutdown" | "reap" | "cap") => Promise<void>,
     private readonly runtimeState?: SessionRuntimeStateService,
+    private readonly isFutureCliVersionAllowed?: (version: string) => Promise<boolean>,
   ) {
     this.reaper = setInterval(() => void this.reap(), 5 * 60_000);
     this.reaper.unref();
@@ -169,14 +170,15 @@ export class GrokProcessManager {
     for (const snapshot of snapshots) {
       this.sessions.delete(snapshot.sessionId);
       await snapshot.session.dispose();
-      const adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions, snapshot.sessionId);
+      let adapter: GrokAcpAdapter | undefined;
       try {
+        adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions, snapshot.sessionId);
         await adapter.start(snapshot.sessionId);
         await this.rememberSession(snapshot.sessionId, adapter);
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
-        await this.disposeFailedAdapter(adapter, `extension reload ${snapshot.sessionId}`);
+        if (adapter) await this.disposeFailedAdapter(adapter, `extension reload ${snapshot.sessionId}`);
         failures.push(`${snapshot.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -566,11 +568,12 @@ export class GrokProcessManager {
       // App shutdown/suspend will terminate the ACP process regardless. Give
       // CLI-owned tasks and child agents an explicit teardown opportunity, but
       // never let an unsupported extension strand the native process on exit.
-      await this.stopOwnedBackgroundWork(sessionId, session).catch(async (error) => {
-        await this.log.log(`session ${sessionId} shutdown cleanup failed; forcing process disposal: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      if (finalize) await this.finalizeSession(sessionId, session, "shutdown");
-      await session.dispose();
+      try {
+        await this.stopOwnedBackgroundWork(sessionId, session).catch(async (error) => {
+          await this.log.log(`session ${sessionId} shutdown cleanup failed; forcing process disposal: ${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+        });
+        if (finalize) await this.finalizeSession(sessionId, session, "shutdown");
+      } finally { await session.dispose(); }
     }));
   }
 
@@ -590,15 +593,18 @@ export class GrokProcessManager {
   async restoreAll(snapshots: LiveSessionSnapshot[]): Promise<void> {
     const failures: string[] = [];
     for (const snapshot of snapshots) {
+      // A prior bulk restore may have succeeded for only some sessions.
+      if (this.sessions.has(snapshot.sessionId)) continue;
       this.onEvent({ type: "session-reset", sessionId: snapshot.sessionId });
-      const adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions, snapshot.sessionId);
+      let adapter: GrokAcpAdapter | undefined;
       try {
+        adapter = await this.spawn(snapshot.cwd, snapshot.effort, snapshot.mode, snapshot.modelId, undefined, undefined, snapshot.processOptions, snapshot.sessionId);
         await adapter.start(snapshot.sessionId);
         await this.rememberSession(snapshot.sessionId, adapter);
         this.onSessionStarted?.(adapter.extensionLeaseId, snapshot.sessionId);
         this.sessions.set(snapshot.sessionId, adapter);
       } catch (error) {
-        await this.disposeFailedAdapter(adapter, `bulk restore ${snapshot.sessionId}`);
+        if (adapter) await this.disposeFailedAdapter(adapter, `bulk restore ${snapshot.sessionId}`);
         failures.push(`${snapshot.sessionId}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -634,9 +640,14 @@ export class GrokProcessManager {
       : {};
     const env = enforceProtectedWorkspaceEnvironment(mergeProcessEnvironment(buildCliEnv(settings, apiKey), workspaceEnvironment, mcpSecretEnvironment, providerEnvironment, compactionEnvironment, effectiveEnvironmentOverride), workspaceEnvironment);
     const cliVersion = await readCliVersion(cliPath, env).catch(async (error) => {
-      await this.log.log(`读取 Grok CLI 版本失败；保留兼容的文本文件委托：${error instanceof Error ? error.message : String(error)}`);
+      await this.log.log(`读取 Grok CLI 版本失败；不会创建 ACP 会话：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
       return undefined;
     });
+    const parsedCliVersion = parseVersion(cliVersion);
+    if (!parsedCliVersion) throw new Error("无法识别 Grok CLI 版本，未启动会话。请检查 CLI 路径后重试版本检测。");
+    if (!await this.acceptCliRuntimeVersion(parsedCliVersion.join("."))) {
+      throw new Error(`Grok CLI ${parsedCliVersion.join(".")} 尚未通过此 Desktop 安装的兼容门禁；已在创建 ACP 会话前失败关闭`);
+    }
     const adapter = new GrokAcpAdapter({
       cliPath,
       cliVersion,
@@ -671,6 +682,16 @@ export class GrokProcessManager {
       this.onSessionClosed?.(adapter.extensionLeaseId);
     });
     return adapter;
+  }
+
+  private async acceptCliRuntimeVersion(version: string): Promise<boolean> {
+    const parsed = parseVersion(version);
+    if (!parsed) return false;
+    if (this.isFutureCliVersionAllowed) return this.isFutureCliVersionAllowed(version).catch(() => false);
+    if (parsed[0] < 1) return true;
+    if (parsed[0] !== 1 || parsed[1] !== 0) return false;
+    if (compareVersions(version, KNOWN_PUBLIC_CLI_VERSION) <= 0) return true;
+    return false;
   }
 
   private joinSessionOpen(sessionId: string, owner: () => Promise<{ sessionId: string }>): Promise<{ sessionId: string }> {

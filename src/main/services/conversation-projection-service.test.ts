@@ -14,6 +14,19 @@ async function tempRoot(): Promise<string> {
 }
 
 describe("ConversationProjectionService", { timeout: 60_000 }, () => {
+  it("does not persist process-local MCP elicitation requests or authorization URLs", async () => {
+    const root = await tempRoot();
+    const service = new ConversationProjectionService(root);
+    await service.record({ type: "mcp-elicitation", sessionId: "mcp", request: { requestId: "request", sessionId: "mcp", toolCallId: "tool", serverName: "server", message: "authorize", mode: "url", url: "https://example.com/auth?secret=fixture", elicitationId: "auth", schemaSupported: true } });
+    await service.record({ type: "user-message", sessionId: "mcp", text: "keep" });
+    await service.dispose();
+    const projection = await new ConversationProjectionService(root).restore("mcp");
+    expect(projection?.events).toEqual([expect.objectContaining({ type: "user-message", text: "keep" })]);
+    const files = await readdir(join(root, "conversation-projections"));
+    const contents = await Promise.all(files.map((file) => readFile(join(root, "conversation-projections", file), "utf8")));
+    expect(contents.join("\n")).not.toContain("secret=fixture");
+  });
+
   it("rebinds the persisted runtime cwd without cloning visible events", async () => {
     const root = await tempRoot();
     const service = new ConversationProjectionService(root);

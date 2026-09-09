@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppSettings } from "../../shared/types";
-import { buildCliEnv, describeGrokConfigSource, isLockedBinaryError, isMajorUpgrade, parseVersion, validateGrokCliExecutable } from "./cli-locator";
+import { buildCliEnv, cliProxyRoute, describeGrokConfigSource, isLockedBinaryError, isMajorUpgrade, parseVersion, validateGrokCliExecutable } from "./cli-locator";
 import { DEFAULT_THEME } from "./theme-service";
 
 const settings: AppSettings = {
@@ -75,6 +75,9 @@ describe("CLI locator helpers", () => {
     expect(env.XAI_API_KEY).toBe("synthetic-test-key");
     expect(env.PATH).toBe(process.env.PATH);
     expect(env.HOME).toBeTruthy();
+    expect(cliProxyRoute(settings, {})).toBe("application-proxy");
+    expect(cliProxyRoute({ ...settings, httpProxy: "", httpsProxy: "" }, { HTTPS_PROXY: "http://proxy.invalid" })).toBe("environment-proxy");
+    expect(cliProxyRoute({ ...settings, httpProxy: "", httpsProxy: "" }, {})).toBe("direct-or-system");
   });
 
   it("preserves an explicit HOME instead of replacing it with USERPROFILE", () => {

@@ -7,7 +7,7 @@ import { buildComposerCommand, normalizeSkillCommand } from "../../shared/compos
 import { LazyMarkdownView } from "./components/LazyMarkdownView";
 import { buildChatTurns, useAppStore } from "./store";
 import { resolveMediaSessionTarget } from "./media-session-target";
-import { hasSessionSubmission, sessionSubmissionKeys, updateSessionSubmissions } from "./session-submission-state";
+import { hasSessionSubmission, sessionSubmissionKeys } from "./session-submission-state";
 import { useWorkbenchStore, type WorkbenchView } from "./workbench-store";
 import { applyShellPreferencesToDocument, applyThemeToDocument, cacheThemeForEarlyStartup, contrastRatio, DARK_COLORS, LIGHT_COLORS, themeBackgroundClass } from "./theme";
 import { groupSessionsByOrigin, sessionSourceLabel } from "./session-groups";
@@ -27,10 +27,14 @@ import { ControlPanel, OfficialFeedbackDialog, SessionHistoryPanel } from "./com
 import { RightDock } from "./components/RightDock";
 import { useSessionDraft } from "./hooks/use-session-draft";
 import { ConversationViewport, shouldFollowConversation } from "./components/ConversationViewport";
+import { AppShell } from "./components/AppShell";
+import { DialogHost } from "./components/DialogHost";
+import { GlobalErrorToast } from "./components/GlobalErrorToast";
 import { useShallow } from "zustand/react/shallow";
 import { useConversationDerivedState } from "./hooks/use-conversation-derived-state";
 import { useNavigationController } from "./hooks/use-navigation-controller";
 import { launchInputFromDraft } from "./new-task-launch";
+import { useSubmissionController } from "./hooks/use-submission-controller";
 
 const LazyExtensionsPanel = lazy(() => import("./components/ExtensionsPanel").then((module) => ({ default: module.ExtensionsPanel })));
 const LazyDiagnosticsPanel = lazy(() => import("./components/DiagnosticsPanel").then((module) => ({ default: module.DiagnosticsPanel })));
@@ -93,7 +97,7 @@ export default function App(): React.JSX.Element {
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [operationBusy, setOperationBusy] = useState(false);
-  const [sendingSessionIds, setSendingSessionIds] = useState<ReadonlySet<string>>(() => new Set());
+  const { sendingSessionIds, sendingSessionIdsRef, updateSendingSessions } = useSubmissionController();
   const [composerNotice, setComposerNotice] = useState("");
   const [diagnosingFailure, setDiagnosingFailure] = useState<TurnFailure>();
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -131,13 +135,6 @@ export default function App(): React.JSX.Element {
   const listRequestRef = useRef(0);
   const offlineFixtureRef = useRef(false);
   const openConversationTargetRef = useRef<(target: { cwd: string; sessionId: string }) => Promise<void>>(async () => undefined);
-  const sendingSessionIdsRef = useRef<ReadonlySet<string>>(new Set());
-
-  const updateSendingSessions = useCallback((keys: Iterable<string>, active: boolean) => {
-    const next = updateSessionSubmissions(sendingSessionIdsRef.current, keys, active);
-    sendingSessionIdsRef.current = next;
-    setSendingSessionIds(next);
-  }, []);
 
   const refreshModelCatalog = useCallback(async (): Promise<void> => {
     setCatalogLoading(true);
@@ -332,6 +329,8 @@ export default function App(): React.JSX.Element {
     shouldRestoreClaimedDraft,
     endDraftSubmission,
     discardCurrentDraft,
+    reloadDraft,
+    draftEditRevision,
   } = useSessionDraft({
     activeSessionId: store.activeSessionId,
     workspace: store.settings?.activeWorkspace || "",
@@ -529,6 +528,8 @@ export default function App(): React.JSX.Element {
   };
 
   const openNewSessionDialog = async (): Promise<void> => {
+    const requestId = ++openRequestRef.current;
+    const editRevision = draftEditRevision();
     let cwd = useAppStore.getState().settings?.activeWorkspace || "";
     if (!cwd) {
       cwd = await window.grokDesktop.chooseWorkspace() || "";
@@ -551,20 +552,11 @@ export default function App(): React.JSX.Element {
       ?? profiles.find((profile) => profile.effective)?.id;
     const settings = useAppStore.getState().settings;
     const projectId = project?.projectId ?? normalizedWorkspacePath(cwd);
-    const existingDraft = await window.grokDesktop.getDraft(`new:${projectId}`).catch(() => null);
-    if (!existingDraft) {
-      setNewTask({
-        projectId,
-        workspacePath: project?.canonicalPath ?? cwd,
-        profileId,
-        modelId: settings?.defaultModel || undefined,
-        effort: settings?.defaultEffort,
-        mode: settings?.defaultMode,
-      });
-      store.setWorkspaces(workspaces.map((workspace) => workspace.projectId === projectId
-        ? { ...workspace, draftCount: Math.max(1, workspace.draftCount) }
-        : workspace));
-    }
+    if (requestId !== openRequestRef.current || useAppStore.getState().activeSessionId
+      || !sameWorkspacePath(useAppStore.getState().settings?.activeWorkspace || "", cwd)
+      || editRevision !== draftEditRevision()) return;
+    reloadDraft({ projectId, workspacePath: project?.canonicalPath ?? cwd, profileId,
+      modelId: settings?.defaultModel || undefined, effort: settings?.defaultEffort, mode: settings?.defaultMode });
     window.setTimeout(focusComposer, 0);
   };
 
@@ -662,16 +654,27 @@ export default function App(): React.JSX.Element {
       || hasSessionSubmission(sendingSessionIdsRef.current, store.activeSessionId, sourceDraftKey)
       || view?.status === "needs-user"
       || (delivery === "normal" && view?.status === "working")) return;
-    const attachments = [...store.attachments];
+    let attachments = [...store.attachments];
     const draftClaimId = beginDraftSubmission();
+    const draftSubmissionId = crypto.randomUUID();
     const trackedSubmissionKeys = new Set(sessionSubmissionKeys(store.activeSessionId, sourceDraftKey));
     updateSendingSessions(trackedSubmissionKeys, true);
     let sessionId = store.activeSessionId;
     const submittedCapability = capability;
     try {
+      // Mark the exact snapshot before any session creation or attachment
+      // preflight. A follow-up autosave clears this marker, so the main process
+      // can never delete a newer draft row while the older prompt is sending.
+      if (sourceDraftKey) await window.grokDesktop.setDraft(sourceDraftKey, text, submittedCapability, attachments, newTask, draftSubmissionId);
       if (!sessionId) sessionId = await createSession(newTask ? launchInputFromDraft(newTask) : undefined) || "";
       if (!sessionId) return;
-      if (sourceDraftKey && sourceDraftKey !== sessionId) await window.grokDesktop.moveDraft(sourceDraftKey, sessionId);
+      if (sourceDraftKey && sourceDraftKey !== sessionId) {
+        const moved = await window.grokDesktop.moveDraft(sourceDraftKey, sessionId);
+        if (moved?.attachments?.length) {
+          const byId = new Map(moved.attachments.map((attachment) => [attachment.id, attachment]));
+          attachments = attachments.map((attachment) => byId.get(attachment.id) ?? attachment);
+        }
+      }
       for (const key of sessionSubmissionKeys(sessionId, sourceDraftKey)) trackedSubmissionKeys.add(key);
       updateSendingSessions(trackedSubmissionKeys, true);
       const cwd = store.settings?.activeWorkspace || activeSession?.cwd || "";
@@ -683,15 +686,12 @@ export default function App(): React.JSX.Element {
         const staleComment = await findStaleReviewComment(reviewComments, async (scope) => (await window.grokDesktop.getGitReview(executionRoot, scope)).id);
         if (staleComment) { store.setError(`审核批注 ${staleComment.path}:L${staleComment.line} 所依据的变更已更新，请在 Review 中重新定位。`); return; }
       }
-      clearClaimedDraft(draftClaimId);
       if (cwd && text) {
         void window.grokDesktop.appendPromptHistory(cwd, text);
         setPromptHistory((values) => [text, ...values.filter((value) => value !== text)].slice(0, 50));
         setHistoryIndex(-1);
       }
       setReviewComments([]);
-      if (sourceDraftKey) await window.grokDesktop.clearDraft(sourceDraftKey);
-      if (sessionId !== sourceDraftKey) await window.grokDesktop.clearDraft(sessionId);
       if (sourceDraftKey.startsWith("new:")) {
         void window.grokDesktop.discoverWorkspaces(true).then(store.setWorkspaces).catch(() => undefined);
       }
@@ -708,17 +708,18 @@ export default function App(): React.JSX.Element {
           outboundText = resolveComputerMention(text, targets)?.command || text;
         } catch (error) { store.setError(`无法解析 Computer 提及：${errorMessage(error)}`); }
       }
+      clearClaimedDraft(draftClaimId);
       const clientMessageId = crypto.randomUUID();
+      const submissionDraftKey = sourceDraftKey ? sessionId : undefined;
       if (delivery === "interject") {
-        const receipt = await window.grokDesktop.interjectPrompt(sessionId, outboundText, attachments, clientMessageId);
-        setComposerNotice(receipt.message);
+        const receipt = await window.grokDesktop.interjectPrompt(sessionId, outboundText, attachments, clientMessageId, submissionDraftKey, draftSubmissionId);
+        if (useAppStore.getState().activeSessionId === sessionId) setComposerNotice(receipt.message);
       }
       else if (delivery === "queue") {
-        const receipt = await window.grokDesktop.enqueuePrompt(sessionId, outboundText, attachments, clientMessageId);
-        setComposerNotice(receipt.message);
+        const receipt = await window.grokDesktop.enqueuePrompt(sessionId, outboundText, attachments, clientMessageId, submissionDraftKey, draftSubmissionId);
+        if (useAppStore.getState().activeSessionId === sessionId) setComposerNotice(receipt.message);
       }
-      else await window.grokDesktop.sendPrompt({ sessionId, text: outboundText, attachments, clientMessageId });
-      if (delivery !== "normal") window.setTimeout(() => setComposerNotice(""), 4_000);
+      else await window.grokDesktop.sendPrompt({ sessionId, text: outboundText, attachments, clientMessageId, draftKey: submissionDraftKey, draftSubmissionId });
     }
     catch (error) {
       const current = useAppStore.getState();
@@ -729,7 +730,7 @@ export default function App(): React.JSX.Element {
       // Never let a late transport failure overwrite a follow-up the user has
       // already typed. If the user navigated away, the failed prompt is still
       // preserved under the session/draft it actually belonged to.
-      if (!ownsCurrentComposer || mayRestore) {
+      if (!sessionId && (!ownsCurrentComposer || mayRestore)) {
         await window.grokDesktop.setDraft(sessionId || sourceDraftKey, text, submittedCapability, attachments, sessionId ? undefined : newTask).catch(() => undefined);
       }
       if (mayRestore) {
@@ -752,16 +753,16 @@ export default function App(): React.JSX.Element {
 
   const sendBtw = async (): Promise<void> => {
     const text = composer.trim();
+    const revision = draftEditRevision();
     const sessionId = store.activeSessionId;
     if (!text || !sessionId || !view?.commands.some((command) => command.name.replace(/^\//, "").toLowerCase() === "btw")) return;
     try {
       const receipt = await window.grokDesktop.sendBtwPrompt(sessionId, text);
-      if (receipt.accepted) setComposer("");
+      if (useAppStore.getState().activeSessionId !== sessionId) return;
+      if (receipt.accepted && revision === draftEditRevision()) setComposer("");
       setComposerNotice(receipt.message || (receipt.accepted ? "旁路提问已发送，不会打断当前回合。" : "当前 CLI 不支持旁路提问。"));
-      window.setTimeout(() => setComposerNotice(""), 4_000);
     } catch (error) {
-      setComposerNotice(`旁路提问失败：${errorMessage(error)}`);
-      window.setTimeout(() => setComposerNotice(""), 6_000);
+      if (useAppStore.getState().activeSessionId === sessionId) setComposerNotice(`旁路提问失败：${errorMessage(error)}`);
     }
   };
 
@@ -802,12 +803,10 @@ export default function App(): React.JSX.Element {
     try {
       await window.grokDesktop.cancelSession(sessionId);
       const notice = "当前回合已停止；若 CLI 未响应，会话已自动恢复。";
-      setComposerNotice(notice);
-      window.setTimeout(() => setComposerNotice((current) => current === notice ? "" : current), 4_000);
+      if (useAppStore.getState().activeSessionId === sessionId) setComposerNotice(notice);
     } catch (error) {
       const message = `停止失败：${errorMessage(error)}`;
-      setComposerNotice(message);
-      store.setError(message);
+      if (useAppStore.getState().activeSessionId === sessionId) { setComposerNotice(message); store.setError(message); }
     }
   }, [store.activeSessionId]);
 
@@ -843,8 +842,7 @@ export default function App(): React.JSX.Element {
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;
 
   return (
-    <div className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool && activeWorkbenchView === "chat" ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`}>
-      <Sidebar
+    <AppShell className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${rightTool && activeWorkbenchView === "chat" ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`} sidebar={<Sidebar
         version={store.appVersion}
         settings={store.settings}
         sessions={store.sessions}
@@ -965,8 +963,7 @@ export default function App(): React.JSX.Element {
           }
         }}
         onPanel={(value) => setPanel(value)}
-      />
-      <div className="workspace-shell">
+      />}>
       <main className="main-pane">
         <TopBar session={activeSession} codex={activeCodex} claude={activeClaude} workspace={executionRoot || store.settings?.activeWorkspace || ""} workbenchView={activeWorkbenchView} view={view} busy={operationBusy || activeSending || view?.status === "working" || view?.compacting === true} rightToolOpen={Boolean(rightTool)} onView={setWorkbenchView} onPanel={setPanel} onToggleSidebar={() => setSidebarCollapsed((value) => !value)} onToggleRightTool={() => setRightTool((value) => value ? null : "launcher")} onReturnToChat={() => { setWorkbenchView("chat"); window.requestAnimationFrame(() => { window.dispatchEvent(new Event("resize")); focusComposer(); }); }} />
         {activeComputerTask && <ComputerLiveStrip task={activeComputerTask} onPause={() => void window.grokDesktop.pauseComputer(activeComputerTask.sessionId)} onResume={() => void window.grokDesktop.resumeComputer(activeComputerTask.sessionId)} onStop={() => void window.grokDesktop.stopComputer(activeComputerTask.sessionId)} />}
@@ -1048,7 +1045,6 @@ export default function App(): React.JSX.Element {
               : activeSending ? "当前会话的消息正在提交，稍后会自动恢复。"
               : "界面正在处理其它操作，请稍候。";
             setComposerNotice(reason);
-            window.setTimeout(() => setComposerNotice(""), 4_000);
           }}
           onStop={() => void stopActiveSession()}
           onAdd={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachments()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
@@ -1098,9 +1094,8 @@ export default function App(): React.JSX.Element {
         </Suspense>
       </main>
       <RightDock tool={rightTool} active={activeWorkbenchView === "chat"} sessionId={store.activeSessionId} cwd={executionRoot} lastTurnPaths={lastTurnPaths} reviewInitialScope={reviewInitialScope} turn={utilityTurn} queue={view?.queue ?? []} runtimeUpdates={view?.runtimeUpdates ?? []} sessionStatus={view?.status} onTool={(tool) => { if (tool === "review") setReviewInitialScope("unstaged"); setRightTool(tool); }} onClose={() => setRightTool(null)} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onAddComment={(comment) => { setReviewComments((values) => [...values, comment]); focusComposer(); }} onExpandResult={() => { setRightTool(null); const index = utilityTurn ? turns.findIndex((turn) => turn.id === utilityTurn.id) : turns.length - 1; if (index >= 0) virtuosoRef.current?.scrollToIndex({ index, align: "end", behavior: "smooth" }); }} onError={store.setError}/>
-      </div>
-      {createPortal(<Suspense fallback={<div className="modal-backdrop"><section className="control-panel"><div className="panel-body workbench-loading"><div className="spinner"/><span>正在加载…</span></div></section></div>}>
-        {store.error && <div className="toast error-toast"><span>{store.error}</span><button onClick={() => window.location.reload()}>重新加载界面</button><button onClick={() => setPanel("diagnostics")}>诊断</button><button onClick={() => store.setError("")}>×</button></div>}
+      <DialogHost>
+        {store.error && <GlobalErrorToast message={store.error} onReload={() => window.location.reload()} onDiagnostics={() => setPanel("diagnostics")} onDismiss={() => store.setError("")} />}
         {panel === "media" && <LazyMediaStudioPanel hasGrokConversation={Boolean(!activeCodexId && !activeClaudeId && store.activeSessionId)} commands={activeCodexId || activeClaudeId ? [] : view?.commands ?? []} onCreate={createMedia} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "extensions" && <Suspense fallback={<div className="modal-backdrop"><section className="control-panel"><div className="panel-body">正在加载扩展中心…</div></section></div>}><LazyExtensionsPanel confirmAction={askConfirm} setError={store.setError} onUseSkill={(command) => { setComposer(command); focusComposer(); }} onClose={() => { setPanel(null); focusComposer(); }} /></Suspense>}
         {panel === "diagnostics" && <LazyDiagnosticsPanel confirmAction={askConfirm} onClose={() => { setPanel(null); focusComposer(); }} />}
@@ -1113,8 +1108,8 @@ export default function App(): React.JSX.Element {
         {activeComputerPermission && <ComputerPermissionDialog request={activeComputerPermission} onRespond={async (decision) => { try { await window.grokDesktop.respondComputerAppPermission(activeComputerPermission.requestId, decision); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerPermissions((current) => omitRecordKey(current, activeComputerPermission.sessionId)); focusComposer(); } }} />}
         {activeComputerRisk && <ComputerRiskDialog request={activeComputerRisk} onRespond={async (approved) => { try { await window.grokDesktop.respondComputerRisk(activeComputerRisk.requestId, approved); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerRisks((current) => omitRecordKey(current, activeComputerRisk.sessionId)); focusComposer(); } }} />}
         {dialog && <ActionDialog dialog={dialog} onClose={closeDialog} />}
-      </Suspense>, document.getElementById("overlay-root")!)}
-    </div>
+      </DialogHost>
+    </AppShell>
   );
 }
 

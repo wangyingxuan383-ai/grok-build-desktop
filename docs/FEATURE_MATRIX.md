@@ -1,5 +1,65 @@
 # Feature Matrix
 
+## v0.9.4 publication scope (2026-09-08)
+
+The user has authorized source submission and a formal release of the cumulative changes below. The version is 0.9.4; release assets are produced and verified by the tag workflow. This supersedes development-only “no push/release” restrictions, not the recorded live-test limitations. See `releases/v0.9.4.md` for the Chinese short and detailed release reports.
+
+## 2026-09-08 R1–R8 / staged CLI update policy override
+
+| Capability | Evidence | Boundary |
+|---|---|---|
+| Durable submission recovery | `ui-state-service.test.ts`: autosave after detach, newer draft, restart, attachment reuse, exact retry | Same UI store; never auto-resend after restart. |
+| Draft/menu/Toast isolation | `scripts/probe-regression-dom.mjs`: actual Electron DOM, CDP keyboard and delayed promises | Not just static HTML assertions; installed profile is not opened. |
+| Three CLI update policies | `cli-update-policy.test.ts`, `cli-update-service.test.ts`, IPC schema tests | Fixed official stable update targets; per-preview confirmation; every strategy runs core verification. |
+| Retain-unverified / recovery | Offline fault injection: deferred ACP, no restore/replay, restart recovery, exact rollback, unstable binary hash, unavailable stable source | No real CLI was updated. Credentials/environment are excluded from durable recovery. |
+| Probe cleanup | `cli-probe-cleanup.test.ts`, `cli-session-service.test.ts` | Official delete confirmation required; start/resume/optional-probe failures covered with fake transport. Live cleanup code is opt-in and not live-verified this round. |
+| MCP constrained forms | `mcp-elicitation-validation.test.ts` + real DOM card rejection/retry/pending/removal | Numeric/Unicode length/enum validated in main; unsupported constraints fail closed; IPv6 loopback allowed. |
+| Final offline suite | 917 passed / 9 live skipped; TypeScript, production build and chunk budget passed | Local installer and real upgraded CLI remain unverified. No packaging/install/push/release this round. |
+
+This section supersedes the unresolved-code statement immediately below, not its historical live-verification limitations.
+
+## 2026-09-07 review override
+
+The existing offline gate remains green (874 passed, 9 live skipped), but the cumulative review found unresolved draft hydration, failed-attachment recovery and CLI update/gating defects. See `POST_V093_REVIEW_2026-09-07.md` (R1–R8). Earlier capability rows describe covered scenarios, not unconditional production readiness. No new CLI live verification or installation was performed.
+
+## Unreleased high-frequency Renderer consolidation (2026-09-06)
+
+| Capability | Status | Evidence / behavior |
+|---|---|---|
+| Semantic session navigation | Full offline UI gate | One open button per row, one authoritative status, secondary action menu with visible focus and keyboard navigation; background state remains session-owned. |
+| Busy Composer hierarchy | Component + CDP tested | Queue is primary, interject/BTW are secondary, Stop remains fixed; Enter/Ctrl+Enter behavior and local durable queue semantics are unchanged. |
+| Unified request cards | Render + CDP tested | Plan, permission, question and MCP input share bounded body/status/footer structure; free text and Plan Agent/Auto execution policy remain available. |
+| Update center feedback | Component + source tested | Application and CLI checks show separate current/latest/check-time/status/action regions; fixed-target CLI update and proxy/rollback rules are unchanged. |
+| Renderer boundaries | Source + regression tested | App Shell, Dialog Host, session row, error toast and per-session submission controller are separated; existing Conversation and Navigation controllers remain authoritative. |
+| Responsive layout | Current-version CDP passed | 1280×720@125%, 1440×810@150%, 1920×1080@200%, plus narrow right-dock container checks; screenshots are written under ignored `out/ui-snapshots`. |
+| Current offline gate | Passed | 123 files discovered: 117 pass / 6 opt-in live skip; 874 tests pass / 9 live skip; typecheck, build, chunk budget and high audit pass. |
+
+## Unreleased CLI 1.0.13 compatibility and update transaction (2026-09-04)
+
+| Capability | Status | Evidence / behavior |
+|---|---|---|
+| CLI 1.0.6–1.0.13 offline compatibility | Source-audited + focused-tested | Sanitized initialize/event fixtures cover every patch through stable 1.0.13. Installed/live evidence remains 1.0.3. |
+| MCP form/URL elicitation | Focused-tested, live pending | Exact tagged reverse responses; bounded primitive form fields; HTTPS/localhost URL gate; Stop/teardown cancellation; transient contents are not projected. Complex arrays/multi-select fail closed. |
+| Future 1.0.x update policy | Focused-tested | A user-triggered exact update must pass live ACP and persist an app-local receipt. External unknown replacements remain blocked; 1.1+ is closed. |
+| CLI updater transaction lifetime | Focused-tested | App exit waits for update/probe/rollback/session restore. Restore errors are warnings and cannot replace the primary receipt. |
+| Draft submission ownership | Full offline gate | A random `submissionId` binds the immutable send snapshot. Main-process detach only consumes the matching generation and protects its source files during cache preparation; concurrent follow-up text/attachments survive and autosave resumes after preflight. |
+| Stable ACP client identity | Source + focused-tested | initialize and prompt metadata use `grok-build-desktop`; session ownership still isolates child/background notifications. |
+| Native CLI shared queue | Deferred/live-gated | Official 1.0.6+ exposes versioned mutations, but installed 1.0.3 reports method-not-found. Desktop retains its durable local queue until 1.0.13 Wire is sampled. |
+| Dependency security gate | Passed | Overrides pin `@xmldom/xmldom 0.9.12`, `fast-uri 4.1.4` and `qs 6.16.0`; the complete high-level npm audit reports zero vulnerabilities. |
+| Current offline gate | Passed | 119 files discovered: 113 pass / 6 opt-in live skip; 867 tests pass / 9 live skip. TypeScript, production build, chunk budget, upstream snapshot validation, diff check and an isolated 434-text-file public scan pass. |
+
+## Unreleased attachment / Plan policy / updater reliability (2026-08-26)
+
+| Capability | Status | Evidence / behavior |
+|---|---|---|
+| Long-text attachment submission | Full offline gate | Draft files are copied to the immutable session cache before their draft row/directory is consumed. New-session migration uses rewritten paths; failed sends preserve files for restore. |
+| Restored draft path trust | Focused-tested | Durable authorization is restricted to the concrete session's hashed composer-draft directory. A restart no longer loses an in-memory picker grant, while cross-session paths are rejected. |
+| Unbroken Markdown text | Source + render regression | Every Markdown surface has a bounded wrapper. Prose/links/inline code can break anywhere; fenced code and tables retain independent horizontal scrolling. |
+| Plan execution policy | Focused + render-tested | Approval explicitly chooses Agent or Desktop Auto. The pre-Plan Auto policy is the default and late Plan replay cannot downgrade it after approval. |
+| CLI update network path | Focused + local no-update diagnostic | Safe UI labels reveal app proxy/environment proxy/direct route without exposing URLs. Local settings contain reachable app proxy configuration and stable check returns 1.0.5. |
+| CLI update failure handling | Focused-tested | 30-minute bounded download, duplicate-click guard, no redundant rollback download when the old binary remains, and primary/rollback/restore errors remain distinguishable. |
+| Offline gate | Passed | 119 files discovered: 113 pass / 6 opt-in live skip; 850 tests pass / 9 live skip. TypeScript, production build, chunk budget and diff check pass. No package/live update evidence yet. |
+
 ## 0.9.3 queue/interjection/subagent reliability hotfix (2026-08-21, local candidate)
 
 | Capability | Status | Evidence / behavior |

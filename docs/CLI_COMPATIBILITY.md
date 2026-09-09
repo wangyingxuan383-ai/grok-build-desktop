@@ -1,5 +1,35 @@
 # Grok CLI Compatibility
 
+## Desktop 0.9.4 发布范围
+
+本版发布下方累计适配与分级升级功能。正式发布不等于已经在本机升级官方 CLI：已记录的 CLI live 版本仍为 1.0.3，1.0.4–1.0.13 为源码/离线证据。三种升级策略的真实下载、验证和回滚仍需实际使用环境确认，不隐去此边界。
+
+## 2026-09-08 单次分级升级策略（源码与离线验证）
+
+- 默认 **标准升级** 保留既有版本范围与后续同发行线实机验证规则；**尝试新版** 可越过名单/主版本限制，但核心失败自动回滚；**强制保留新版** 仍执行全部核心验证，只在正确目标已安装、ACP 验证失败时保留并暂停实时会话。
+- 三种策略都不接受任意下载 URL、不静默安装；一次性令牌绑定当前版本、固定目标、策略、操作，10 分钟过期。更新前再次核对 stable 目标，改变后必须重新确认。
+- 下载失败、版本不符、无法启动/识别版本不会被强制保留当作“通过”；仍精确恢复旧版。没有实际执行本机升级，`liveVerifiedVersion` 继续为 1.0.3。
+- 核心证据为 initialize 协议协商、new、resume、close、官方 delete。可选能力缺失只关闭功能；没有核心成功证据不会因版本名单通过就签发授权。
+- 本机授权绑定可执行路径、版本和 SHA-256；验证前后检查二进制未变，外部替换后凭据失效。旧快照不能自动变成高级授权。仍按运行时声明/探针/观察事件启用具体接口。
+- 保留未验证后，普通会话、认证验证 ACP 和普通诊断 ACP 均不能启动；本地记录、草稿、更新中心仍可查看。显式“重新验证”或“回滚到更新前版本”使用原事务清单，不要求旧版仍是 stable 最新，也不要求 stable 检查成功；实际下载旧版仍可能失败，不承诺离线回滚。
+- `cli-update-recovery.json` 仅持久白名单会话配置，不含环境变量、Provider 密钥或闭包。恢复部分成功后重试不会重复启动已恢复会话，不自动重发用户消息。旧历史缺 policy 按 standard 解释。
+- 测试：`cli-update-policy.test.ts`、`cli-update-service.test.ts`、`cli-probe-cleanup.test.ts`、`grok-process-manager.test.ts`、`auth-service.test.ts`、IPC schema，以及隐藏 Electron DOM 升级阶段/恢复入口；属于离线证据，不是新版 CLI 安装验收。
+
+下方 09-04 “1.1+ 关闭”的声明现在特指默认策略；用户明确选择高级单次策略后，允许固定目标核心验证，不再永久硬编码阻止跨主版本。
+
+## Desktop Unreleased / Grok Build 1.0.6–1.0.13 (2026-09-04, source-audited)
+
+- Read-only truth: installed/live CLI is `1.0.3 (1a29d5bc12)`; stable is `1.0.13`. No CLI update was executed.
+- Public-source snapshot: repository `72a61251fcffb464bcc687aeb5a998e5a98ec0c9`, `SOURCE_REV a549186d9d39311f2d3ee4208db62af8c65aa476`.
+- Sanitized initialize/event fixtures now cover every `1.0.0–1.0.13` patch. This is offline/source evidence; it does not change `liveVerifiedVersion: 1.0.3`.
+- `x.ai/mcp/elicit` and `x.ai/mcp/elicit_complete` are implemented for 1.0.8+ with bounded form/URL handling. Completion ownership checks Session, elicitation ID and optional server name. Complex Schema is declined/cancelled rather than guessed.
+- Source-audited `1.0.4–1.0.13` keeps image-aware reads inside the CLI by withholding the host text-read capability. Unknown future patches keep the conservative legacy capability set until live validation.
+- initialize/prompt attach metadata uses the stable Desktop identity `grok-build-desktop`.
+- Compatibility policy is no longer patch-release deadlock: a future `1.0.x` may be installed only by the exact-target updater and must pass the live rollback gate. The passing snapshot is bound to this app data directory; an externally replaced unknown CLI is blocked before ACP session creation. `1.1+` and unknown majors remain closed.
+- Native versioned queue mutation, Hook confirmation and Workflow controls remain disabled until exact 1.0.13 live requests are captured. Current 1.0.3 `Method not found` evidence continues to require the Desktop durable local queue.
+- Detailed evidence and repository comparison: `docs/CLI_1_0_13_AUDIT_2026-09-04.md`.
+- The 2026-09-06 read-only stable check still reports `1.0.13`; installed/live remains `1.0.3`. The completed offline gate is 867 passed / 9 opt-in live skipped, plus TypeScript, production build, chunk budget, dependency audit, upstream snapshot validation, diff check and isolated public scan.
+
 ## Desktop 0.9.3 / verified queue boundary (2026-08-21, local candidate)
 
 - Live no-prompt evidence on installed CLI `1.0.3` separates **transport correctness** from **method availability**. `_x.ai/session/info`, `_x.ai/session/usage`, Plugins, MCP and Commands succeed; `_x.ai/queue/edit`, `_x.ai/queue/remove`, `_x.ai/queue/reorder` and `_x.ai/queue/interject` return method-not-found.
