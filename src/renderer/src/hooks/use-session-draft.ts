@@ -29,11 +29,25 @@ export function useSessionDraft(input: {
   shouldRestoreClaimedDraft(claimId: number): boolean;
   endDraftSubmission(claimId: number): void;
   discardCurrentDraft(): Promise<void>;
+  reloadDraft(fallback?: NewTaskDraft): void;
+  draftEditRevision(): number;
 } {
   const [composer, setComposerState] = useState("");
   const [capability, setCapabilityState] = useState<ComposerCapabilitySelection>();
   const [newTask, setNewTaskState] = useState<NewTaskDraft>();
+  const [submissionRevision, setSubmissionRevision] = useState(0);
   const [loadedKey, setLoadedKey] = useState("");
+  const [reloadRevision, setReloadRevision] = useState(0);
+  const fallbackTaskRef = useRef<NewTaskDraft | undefined>(undefined);
+  const reloadDraft = useCallback((fallback?: NewTaskDraft) => {
+    // Reopening the same target must not replace a locally edited, not-yet-saved draft.
+    if (loadedKey && loadedKey === draftKey && (composer || input.attachments.length)) {
+      if (!newTask && !input.activeSessionId) setNewTaskState(fallback);
+      return;
+    }
+    fallbackTaskRef.current = fallback;
+    setReloadRevision((value) => value + 1);
+  }, [loadedKey, composer, input.attachments.length, input.activeSessionId, newTask, input.newDraftKey, input.workspace]);
   const loadGenerationRef = useRef(0);
   const touchedGenerationRef = useRef(0);
   const attachmentRevisionRef = useRef(0);
@@ -42,6 +56,7 @@ export function useSessionDraft(input: {
   const ignoredAttachmentFingerprintsRef = useRef(new Set<string>());
   const saveTimerRef = useRef<number | undefined>(undefined);
   const userRevisionRef = useRef(0);
+  const draftEditRevision = useCallback(() => userRevisionRef.current + attachmentRevisionRef.current, []);
   const nextSubmissionClaimRef = useRef(0);
   const submissionClaimRef = useRef<{ id: number; phase: "claiming" | "sent"; userRevision: number; attachmentRevision: number } | undefined>(undefined);
   const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
@@ -75,23 +90,29 @@ export function useSessionDraft(input: {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = undefined;
     }
+    setSubmissionRevision((value) => value + 1);
     return id;
   }, []);
 
   const clearClaimedDraft = useCallback((claimId: number): void => {
     const claim = submissionClaimRef.current;
     if (!claim || claim.id !== claimId) return;
+    const changedSinceClaim = claim.userRevision !== userRevisionRef.current
+      || claim.attachmentRevision !== attachmentRevisionRef.current;
     // This is the send operation consuming its own snapshot, not a new user
     // edit. Keep the revision stable so a later transport failure can restore
     // only when the user has not already typed a follow-up.
-    setComposerState("");
-    setCapabilityState(undefined);
-    setNewTaskState(undefined);
-    ignoredAttachmentFingerprintsRef.current.add("");
-    input.clearAttachments();
     claim.phase = "sent";
-    claim.userRevision = userRevisionRef.current;
-    claim.attachmentRevision = attachmentRevisionRef.current;
+    if (!changedSinceClaim) {
+      setComposerState("");
+      setCapabilityState(undefined);
+      setNewTaskState(undefined);
+      ignoredAttachmentFingerprintsRef.current.add("");
+      input.clearAttachments();
+      claim.userRevision = userRevisionRef.current;
+      claim.attachmentRevision = attachmentRevisionRef.current;
+    }
+    setSubmissionRevision((value) => value + 1);
   }, [input.clearAttachments]);
 
   const shouldRestoreClaimedDraft = useCallback((claimId: number): boolean => {
@@ -107,7 +128,10 @@ export function useSessionDraft(input: {
   }, []);
 
   const endDraftSubmission = useCallback((claimId: number): void => {
-    if (submissionClaimRef.current?.id === claimId) submissionClaimRef.current = undefined;
+    if (submissionClaimRef.current?.id === claimId) {
+      submissionClaimRef.current = undefined;
+      setSubmissionRevision((value) => value + 1);
+    }
   }, []);
 
   const discardCurrentDraft = useCallback(async (): Promise<void> => {
@@ -143,6 +167,7 @@ export function useSessionDraft(input: {
 
   useLayoutEffect(() => {
     let cancelled = false;
+    fallbackTaskRef.current = input.activeSessionId ? undefined : fallbackTaskRef.current;
     const generation = ++loadGenerationRef.current;
     touchedGenerationRef.current = 0;
     setLoadedKey("");
@@ -181,7 +206,7 @@ export function useSessionDraft(input: {
       })) {
         setComposerState(draft?.text || "");
         setCapabilityState(draft?.capability);
-        setNewTaskState(draft?.newTask);
+        setNewTaskState(draft?.newTask ?? fallbackTaskRef.current);
         const restoredAttachments = draft?.attachments ?? [];
         ignoredAttachmentFingerprintsRef.current.add("");
         ignoredAttachmentFingerprintsRef.current.add(fingerprintAttachments(restoredAttachments));
@@ -193,7 +218,7 @@ export function useSessionDraft(input: {
       if (!cancelled && generation === loadGenerationRef.current) setLoadedKey(draftKey);
     });
     return () => { cancelled = true; };
-  }, [draftKey, input.foreignSessionOpen, input.onSessionChange, input.clearAttachments, input.addAttachments]);
+  }, [draftKey, input.foreignSessionOpen, input.onSessionChange, input.clearAttachments, input.addAttachments, reloadRevision]);
 
   useEffect(() => {
     if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || shouldPauseDraftAutosaveForSubmission(submissionClaimRef.current?.phase)) return;
@@ -206,7 +231,7 @@ export function useSessionDraft(input: {
       window.clearTimeout(timer);
       if (saveTimerRef.current === timer) saveTimerRef.current = undefined;
     };
-  }, [composer, capability, input.attachments, newTask, draftKey, loadedKey, input.foreignSessionOpen, activeSending, input.onError]);
+  }, [composer, capability, input.attachments, newTask, draftKey, loadedKey, input.foreignSessionOpen, activeSending, submissionRevision, input.onError]);
 
   return {
     draftKey,
@@ -222,6 +247,8 @@ export function useSessionDraft(input: {
     shouldRestoreClaimedDraft,
     endDraftSubmission,
     discardCurrentDraft,
+    reloadDraft,
+    draftEditRevision,
   };
 }
 

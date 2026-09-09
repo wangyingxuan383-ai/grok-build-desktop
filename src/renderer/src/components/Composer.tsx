@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Attachment, ComposerCapabilitySelection, ComputerTaskState, ModelInfo, NewTaskDraft, PromptQueueEntry, ReasoningEffort, SessionMode, SkillSummary, WorkspaceFileCandidate } from "../../../shared/types";
 import { normalizeSkillCommand } from "../../../shared/composer-capability";
@@ -76,10 +76,51 @@ export function Composer(props: {
           compositionend and strand composingRef, killing Enter for good. Typing
           and drafting stay available; only submission is gated, and it says so. */}
       <textarea ref={props.inputRef} value={props.text} aria-keyshortcuts="Enter Control+Enter" onChange={(event) => props.setText(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length) { event.preventDefault(); props.onPaste(images); return; } const text = event.clipboardData.getData("text/plain"); if (text.length > 12_000) { event.preventDefault(); props.onPasteText(text); } }} onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) { event.preventDefault(); props.onHistory(event.key === "ArrowUp" ? -1 : 1); } else if (event.key === "Enter" && event.ctrlKey && !event.nativeEvent.isComposing && !composingRef.current) { event.preventDefault(); if (props.controlsDisabled) props.onBlockedSubmit(); else if (props.busy) props.onInterject(); else props.onSend(); } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composingRef.current && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (props.controlsDisabled) props.onBlockedSubmit(); else props.onSend(); } }} placeholder={props.controlsDisabled ? "可以继续输入；请先处理当前计划、权限或问题再发送…" : props.busy ? "继续输入；Enter 排队，Ctrl+Enter 插入当前回合…" : "给 Grok 发送消息…"} />
-      <div className="composer-toolbar"><div className="toolbar-left"><button className="icon-button add-button" title="添加文件或能力" aria-expanded={addOpen} aria-haspopup="dialog" disabled={props.controlsDisabled} onClick={() => setAddOpen(!addOpen)}><UiIcon name="plus"/></button>{props.text.length > 0 && <button className="composer-text-convert" title="将当前正文转换为 .txt 附件" onClick={props.onConvertText}>转为附件</button>}<TokenDonut percent={percent} label={tokenLabel} title={declaredWindow ? undefined : "该模型未上报上下文上限；应用不会伪造 512K 上限"} />{props.view ? <ModelControls sessionId={props.sessionId} view={props.view} disabled={props.modelControlsDisabled ?? (props.controlsDisabled || props.busy)} onSettled={props.onControlSettled} /> : props.draft && props.onDraftChange ? <DraftModelControls draft={props.draft} models={props.draftModels ?? []} loading={props.draftModelsLoading === true} disabled={props.modelControlsDisabled ?? props.controlsDisabled} onRefresh={props.onRefreshDraftModels} onChange={props.onDraftChange} /> : null}</div>{props.busy ? <div className="busy-send-actions">{props.btwAvailable && props.onBtw && <button className="btw-send" title="不打断当前回合，发送旁路提问" disabled={props.controlsDisabled || !props.text.trim()} onClick={props.onBtw}>旁路提问</button>}<button className="queue-send" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}>加入队列</button><button className="interject-send" title="将文字注入当前正在运行的回合（Ctrl+Enter）；不是另起一个 Agent" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onInterject}>插入当前回合</button><button className="send-button stop" title="停止" onClick={props.onStop}><UiIcon name="stop"/></button></div> : <button className="send-button" title="发送" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}><UiIcon name="send"/></button>}</div>
+      <div className="composer-toolbar"><div className="toolbar-left"><button className="icon-button add-button" title="添加文件或能力" aria-expanded={addOpen} aria-haspopup="dialog" disabled={props.controlsDisabled} onClick={() => setAddOpen(!addOpen)}><UiIcon name="plus"/></button>{props.text.length > 0 && <button className="composer-text-convert" title="将当前正文转换为 .txt 附件" onClick={props.onConvertText}>转为附件</button>}<TokenDonut percent={percent} label={tokenLabel} title={declaredWindow ? undefined : "该模型未上报上下文上限；应用不会伪造 512K 上限"} />{props.view ? <ModelControls sessionId={props.sessionId} view={props.view} disabled={props.modelControlsDisabled ?? (props.controlsDisabled || props.busy)} onSettled={props.onControlSettled} /> : props.draft && props.onDraftChange ? <DraftModelControls draft={props.draft} models={props.draftModels ?? []} loading={props.draftModelsLoading === true} disabled={props.modelControlsDisabled ?? props.controlsDisabled} onRefresh={props.onRefreshDraftModels} onChange={props.onDraftChange} /> : null}</div>{props.busy ? <ComposerRunActions canSubmit={!props.controlsDisabled && Boolean(props.text.trim() || props.attachments.length || props.reviewComments.length)} canAskAside={!props.controlsDisabled && Boolean(props.text.trim())} btwAvailable={Boolean(props.btwAvailable && props.onBtw)} onQueue={props.onSend} onInterject={props.onInterject} onBtw={props.onBtw} onStop={props.onStop}/> : <button className="send-button" title="发送" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}><UiIcon name="send"/></button>}</div>
     </div>
   </div>;
 }
+
+export const ComposerRunActions = memo(function ComposerRunActions(props: {
+  canSubmit: boolean;
+  canAskAside: boolean;
+  btwAvailable: boolean;
+  onQueue(): void;
+  onInterject(): void;
+  onBtw?(): void;
+  onStop(): void;
+}): React.JSX.Element {
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent): void => {
+      if (event.target instanceof Node && !detailsRef.current?.contains(event.target)) detailsRef.current?.removeAttribute("open");
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && detailsRef.current?.open) {
+        event.preventDefault();
+        detailsRef.current.removeAttribute("open");
+        detailsRef.current.querySelector<HTMLElement>("summary")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => { document.removeEventListener("pointerdown", closeOutside); window.removeEventListener("keydown", closeOnEscape); };
+  }, []);
+  const closeMenu = (event: React.MouseEvent<HTMLButtonElement>): void => {
+    event.currentTarget.closest("details")?.removeAttribute("open");
+  };
+  return <div className="busy-send-actions" aria-label="当前回合操作">
+    <button className="queue-send primary-action" disabled={!props.canSubmit} onClick={props.onQueue}>加入队列</button>
+    <details className="composer-secondary-actions" ref={detailsRef}>
+      <summary aria-label="更多发送方式" title="更多发送方式"><UiIcon name="chevron-down" size={13}/></summary>
+      <div role="menu">
+        <button role="menuitem" disabled={!props.canSubmit} onClick={(event) => { closeMenu(event); props.onInterject(); }}><strong>插入当前回合</strong><span>Ctrl+Enter · 让正在运行的回合立即看到</span></button>
+        {props.btwAvailable && props.onBtw && <button role="menuitem" disabled={!props.canAskAside} onClick={(event) => { closeMenu(event); props.onBtw?.(); }}><strong>旁路提问</strong><span>不打断当前回合，单独获取简短回答</span></button>}
+      </div>
+    </details>
+    <button className="send-button stop" title="停止当前回合" aria-label="停止当前回合" onClick={props.onStop}><UiIcon name="stop"/></button>
+  </div>;
+});
 
 function DraftModelControls({ draft, models, loading, disabled, onRefresh, onChange }: { draft: NewTaskDraft; models: ModelInfo[]; loading: boolean; disabled: boolean; onRefresh?(): void; onChange(patch: Partial<NewTaskDraft>): void }): React.JSX.Element {
   const values = Array.from(new Map([...models, ...(draft.modelId && !models.some((model) => model.modelId === draft.modelId) ? [{ modelId: draft.modelId, name: draft.modelId }] : [])].map((model) => [model.modelId, model])).values());

@@ -32,6 +32,7 @@ import type {
   TurnPresentation,
   CliRuntimeUpdate,
   SessionHydrationState,
+  McpElicitationRequest,
 } from "../../shared/types";
 
 export type UiMessage =
@@ -44,7 +45,8 @@ export type UiMessage =
   | { id: string; kind: "tool"; tool: ToolCallState }
   | { id: string; kind: "permission"; request: PermissionRequest; resolved?: boolean; resolution?: string }
   | { id: string; kind: "question"; requestId: string | number; questions: QuestionItem[]; resolved?: boolean; resolution?: string }
-  | { id: string; kind: "plan"; requestId?: string | number; text: string; interactive: boolean; resolved?: boolean; resolution?: string }
+  | { id: string; kind: "mcp-elicitation"; request: McpElicitationRequest; resolved?: boolean; resolution?: string }
+  | { id: string; kind: "plan"; requestId?: string | number; text: string; interactive: boolean; executionMode?: "agent" | "auto"; resolved?: boolean; resolution?: string }
   | { id: string; kind: "media"; media: "image" | "video"; source: string; isData?: boolean; mimeType?: string }
   | { id: string; kind: "recovery"; status: "recovered" | "unavailable"; text: string }
   | { id: string; kind: "recap"; text: string; contentHash: string }
@@ -168,7 +170,7 @@ export const useAppStore = create<AppState>((set) => ({
   resolveMessage: (sessionId, messageId) => set((state) => {
     const view = state.views[sessionId];
     if (!view) return state;
-    return { views: { ...state.views, [sessionId]: { ...view, messages: view.messages.map((message) => message.id === messageId && (message.kind === "permission" || message.kind === "question" || message.kind === "plan") ? { ...message, resolved: true } : message) } } };
+    return { views: { ...state.views, [sessionId]: { ...view, messages: view.messages.map((message) => message.id === messageId && isActionMessage(message) ? { ...message, resolved: true } : message) } } };
   }),
   handleEvent: (event) => set((state) => reduceEvent(state, event)),
   handleEvents: (events) => set((state) => {
@@ -376,11 +378,19 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       else next.messages.push(value);
       break;
     }
+    case "mcp-elicitation": {
+      const id = `mcp-elicitation-${String(event.request.requestId)}`;
+      const index = next.messages.findIndex((message) => message.id === id);
+      const value: UiMessage = { id, kind: "mcp-elicitation", request: event.request };
+      if (index >= 0) next.messages[index] = value;
+      else next.messages.push(value);
+      break;
+    }
     case "plan": {
       const interactive = event.requestId !== undefined && event.requestId !== "";
       const id = interactive ? `plan-${String(event.requestId)}` : `plan-document-${next.turnPresentations.at(-1)?.turnId ?? "active"}`;
       const existing = next.messages.findIndex((message) => message.kind === "plan" && message.id === id);
-      const value: UiMessage = { id, kind: "plan", requestId: event.requestId, text: event.text, interactive };
+      const value: UiMessage = { id, kind: "plan", requestId: event.requestId, text: event.text, interactive, ...(event.executionMode ? { executionMode: event.executionMode } : {}) };
       if (existing >= 0) next.messages[existing] = value;
       else next.messages.push(value);
       break;
@@ -429,7 +439,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       // authoritative: no child from that turn can still be running.
       next.messages = next.messages.map((message) => {
         if (message.kind === "tool" && (message.tool.status === "in_progress" || message.tool.status === "pending")) return { ...message, tool: { ...message.tool, status: "completed" as const } };
-        if (message.kind === "permission" || message.kind === "question" || (message.kind === "plan" && message.interactive)) return { ...message, resolved: true };
+        if (message.kind === "permission" || message.kind === "question" || message.kind === "mcp-elicitation" || (message.kind === "plan" && message.interactive)) return { ...message, resolved: true };
         return message;
       });
       if (next.messages.at(-1)?.kind !== "turn-end") next.messages.push({ id: `turn-end-${crypto.randomUUID()}`, kind: "turn-end" });
@@ -606,16 +616,16 @@ function buildTurn(id: string, messages: UiMessage[], completed: boolean, runnin
   return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, presentation, legacySegments, summary: { files, additions, deletions, commands, tools: tools.length, subagents, failed } };
 }
 
-function isActionMessage(message: UiMessage): message is Extract<UiMessage, { kind: "permission" | "question" | "plan" }> {
-  return message.kind === "permission" || message.kind === "question" || message.kind === "plan";
+function isActionMessage(message: UiMessage): message is Extract<UiMessage, { kind: "permission" | "question" | "plan" | "mcp-elicitation" }> {
+  return message.kind === "permission" || message.kind === "question" || message.kind === "plan" || message.kind === "mcp-elicitation";
 }
 
-function actionRequestId(message: Extract<UiMessage, { kind: "permission" | "question" | "plan" }>): string | number | undefined {
-  return message.kind === "permission" ? message.request.requestId : message.requestId;
+function actionRequestId(message: Extract<UiMessage, { kind: "permission" | "question" | "plan" | "mcp-elicitation" }>): string | number | undefined {
+  return message.kind === "permission" || message.kind === "mcp-elicitation" ? message.request.requestId : message.requestId;
 }
 
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
-  if (message.kind === "thought" || message.kind === "retry" || message.kind === "interjection" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question") return "progress";
+  if (message.kind === "thought" || message.kind === "retry" || message.kind === "interjection" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question" || message.kind === "mcp-elicitation") return "progress";
   if (message.kind !== "tool") return "other";
   const value = `${message.tool.kind || ""} ${message.tool.title}`.toLowerCase();
   if (/sub.?agent/.test(value)) return "subagents";

@@ -10,6 +10,7 @@ import { buildCliEnv, locateGrokCli } from "./cli-locator";
 import { authJsonAccountId, type AccountVault } from "./account-vault";
 import type { LogService } from "./log-service";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
+import { deleteCliSession } from "./cli-session-service";
 
 const execFileAsync = promisify(execFile);
 const DEVICE_LOGIN_TIMEOUT_MS = 5 * 60_000;
@@ -38,6 +39,7 @@ interface SpawnLoginOptions {
 }
 
 export interface AuthServiceOptions {
+  assertCliRuntimeAllowed?: (cliPath: string, env: NodeJS.ProcessEnv) => Promise<void>;
   authPath?: string;
   loginTimeoutMs?: number;
   resolveCli?: (configured: string) => Promise<string | undefined>;
@@ -64,6 +66,7 @@ export class AuthService {
   private readonly killProcessTree: (child: ChildProcessWithoutNullStreams) => Promise<void>;
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly verifyOverride?: () => Promise<void>;
+  private readonly assertCliRuntimeAllowed?: AuthServiceOptions["assertCliRuntimeAllowed"];
   private readonly detectNoBrowser: (cliPath: string, env: NodeJS.ProcessEnv) => Promise<boolean>;
   private operationTail: Promise<void> = Promise.resolve();
   private recoveryPromise?: Promise<void>;
@@ -87,6 +90,7 @@ export class AuthService {
     this.killProcessTree = options.terminateProcessTree ?? ((child) => terminateProcessTree(child));
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
     this.verifyOverride = options.verifyActive;
+    this.assertCliRuntimeAllowed = options.assertCliRuntimeAllowed;
     this.detectNoBrowser = options.supportsNoBrowser ?? supportsNoBrowser;
   }
 
@@ -178,6 +182,7 @@ export class AuthService {
     const cliPath = await this.resolveCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI");
     const active = await this.vault.active();
+    await this.assertCliRuntimeAllowed?.(cliPath, buildCliEnv(settings, active?.payload.apiKey));
     const { stdout } = await execFileAsync(cliPath, ["--no-auto-update", "models"], {
       env: buildCliEnv(settings, active?.payload.apiKey),
       timeout: 30_000,
@@ -193,8 +198,8 @@ export class AuthService {
       await adapter.dispose().catch(async (error) => {
         await this.log.log(`OAuth 验证 ACP 清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
       });
-      await rm(join(homedir(), ".grok", "sessions", encodeURIComponent(cwd)), { recursive: true, force: true }).catch(async (error) => {
-        await this.log.log(`OAuth 验证会话目录清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
+      if (adapter.sessionId) await deleteCliSession(cliPath, adapter.sessionId, buildCliEnv(settings, active?.payload.apiKey)).catch(async (error) => {
+        await this.log.log(`OAuth 验证会话官方删除失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
       });
       await rm(cwd, { recursive: true, force: true }).catch(async (error) => {
         await this.log.log(`OAuth 验证临时目录清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);

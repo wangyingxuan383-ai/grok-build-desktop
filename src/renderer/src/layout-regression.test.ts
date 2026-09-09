@@ -23,8 +23,15 @@ const providerManager = readFileSync(new URL("./components/ProviderManagerDialog
 const mediaStudio = readFileSync(new URL("./components/MediaStudioPanel.tsx", import.meta.url), "utf8");
 const agentChangePane = readFileSync(new URL("./components/AgentChangePane.tsx", import.meta.url), "utf8");
 const sidebar = readFileSync(new URL("./components/Sidebar.tsx", import.meta.url), "utf8");
+const sessionListRow = readFileSync(new URL("./components/SessionListRow.tsx", import.meta.url), "utf8");
+const dialogHost = readFileSync(new URL("./components/DialogHost.tsx", import.meta.url), "utf8");
 
 describe("renderer layout regression guards", () => {
+  it("keeps high-frequency shell selectors under one stylesheet owner", () => {
+    for (const selector of ["app-shell", "topbar", "session-row", "composer-zone"]) {
+      expect([...css.matchAll(new RegExp(`^\\.${selector}\\s*\\{`, "gm"))], selector).toHaveLength(1);
+    }
+  });
   it("renders the isolated UI fixture on clean hosts without a Grok CLI", () => {
     expect(app).toContain("!store.cli?.found && !offlineFixtureActive");
   });
@@ -54,15 +61,12 @@ describe("renderer layout regression guards", () => {
   it("mounts all root dialogs in a fixed overlay portal outside the application grid", () => {
     expect(html).toContain('<div id="overlay-root"></div>');
     expect(css).toMatch(/#overlay-root\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;/s);
-    expect(app).toContain('document.getElementById("overlay-root")!');
-    const portalStart = app.indexOf("{createPortal(<Suspense");
-    const portalEnd = app.indexOf('document.getElementById("overlay-root")!', portalStart);
-    expect(portalStart).toBeGreaterThan(0);
-    expect(portalEnd).toBeGreaterThan(portalStart);
-    const portal = app.slice(portalStart, portalEnd);
-    expect(portal).toContain("<ControlPanel");
-    expect(portal).toContain("<ComputerPermissionDialog");
-    expect(portal).toContain("<ActionDialog");
+    expect(dialogHost).toContain('document.getElementById("overlay-root")!');
+    expect(dialogHost).toContain("createPortal(<Suspense");
+    expect(app).toContain("<DialogHost>");
+    expect(app).toContain("<ControlPanel");
+    expect(app).toContain("<ComputerPermissionDialog");
+    expect(app).toContain("<ActionDialog");
     expect(overlayFocusTrap).toContain("element.getClientRects().length > 0");
     expect(overlayFocusTrap).toContain("new MutationObserver");
     expect(overlayFocusTrap).toContain("root?.contains(document.activeElement)");
@@ -100,7 +104,8 @@ describe("renderer layout regression guards", () => {
     expect(app).toContain("hasSessionSubmission(sendingSessionIdsRef.current");
     expect(app).toContain("updateSendingSessions([event.sessionId], false)");
     expect(app).not.toContain("const [sending, setSending]");
-    expect(sidebar).toContain('session.status === "working" ? "运行中"');
+    expect(sessionListRow).toContain('status === "working"');
+    expect(sessionListRow).toContain('label: "运行中"');
     expect(sidebar).toContain("liveSessionCount");
   });
 

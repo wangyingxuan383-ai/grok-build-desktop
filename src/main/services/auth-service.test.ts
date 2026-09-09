@@ -455,6 +455,13 @@ describe.skipIf(process.platform !== "win32")("Windows process-tree termination"
   }, 30_000);
 });
 
+it("blocks auxiliary authentication ACP probes while CLI validation is deferred", async () => {
+  const gate = vi.fn(async () => { throw Error("CLI retained but unverified"); });
+  const harness = await createHarness(undefined, { verifyActive: undefined, assertCliRuntimeAllowed: gate });
+  await expect(harness.service.verifyActive()).rejects.toThrow("CLI retained but unverified");
+  expect(gate).toHaveBeenCalledTimes(1);
+});
+
 async function createHarness(oldRaw: string | undefined, options: AuthServiceOptions = {}): Promise<{
   root: string;
   authPath: string;

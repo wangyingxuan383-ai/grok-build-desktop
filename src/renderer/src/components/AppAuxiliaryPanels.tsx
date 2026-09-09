@@ -1,3 +1,4 @@
+import { CliUpdateControls } from "./CliUpdateControls";
 import { useCallback, useEffect, useState } from "react";
 import type { AppSettings, ComputerUseSettings, GrokQuotaSnapshot, ModelInfo, ReasoningEffort, RewindPoint, SessionExecutionProfile, SessionMode, ThemeSettings, WorkspaceSummary } from "../../../shared/types";
 import { effortControlState } from "../model-capabilities";
@@ -48,12 +49,11 @@ export function ControlPanel({ type, onClose, confirmAction, onDiagnostics, onPr
       store.setCli(value);
       if (value.error) throw new Error(value.error);
       setCliCheckMessage(value.updateAvailable
-        ? `发现 stable ${value.latestVersion || "新版本"}（当前 ${value.currentVersion || "未知"}），可使用“更新并验证”。`
-        : `Grok CLI ${value.currentVersion || "未知"} 已是当前 stable 最新版本。`);
+        ? `发现 stable ${value.latestVersion || "新版本"}（当前 ${value.currentVersion || "未知"}），可使用“更新并验证”。下载路径：${cliProxyRouteLabel(value.proxyRoute)}。`
+        : value.currentAhead ? `当前 CLI ${value.currentVersion} 高于 stable ${value.latestVersion}。` : `Grok CLI ${value.currentVersion || "未知"} 已是当前 stable 最新版本。`);
     } catch (error) {
       const message = errorMessage(error);
       setCliCheckMessage(`检查失败：${message}`);
-      store.setError(message);
     } finally {
       setCliChecking(false);
     }
@@ -62,8 +62,57 @@ export function ControlPanel({ type, onClose, confirmAction, onDiagnostics, onPr
   if ((type as string) === "settings") return <SettingsDialog initial={settingsDraft} knownModels={knownModels} onClose={onClose} onDiagnostics={onDiagnostics} onProviders={onProviders} />;
   return <div className="modal-backdrop" onMouseDown={onClose}><section className="control-panel" onMouseDown={(event) => event.stopPropagation()}><header><h2>{type === "accounts" ? "账号" : type === "settings" ? "设置" : "关于"}</h2><button onClick={onClose}>×</button></header>
     {type === "accounts" && <div className="panel-body"><div className="account-list-heading"><strong>已保存账号</strong><span>{store.accounts.length} 个</span></div><div className="account-list">{displayAccounts.map((account) => <div className={`account-row ${account.active ? "active" : ""}`} key={account.id}><span className="avatar">{account.label.slice(0, 1).toUpperCase()}</span><div><strong title={account.label}>{account.label}</strong><span title={account.email || undefined}>{account.email || (account.kind === "api-key" ? "API Key 配置档" : "OAuth 账号")}</span></div>{account.active ? <b>当前</b> : <button onClick={async () => { setSaving(true); try { store.setAccounts(await window.grokDesktop.switchAccount(account.id)); } catch (error) { store.setError(errorMessage(error)); } finally { setSaving(false); } }}>切换</button>}<button className="danger-link" onClick={async () => { if (await confirmAction("移除此账号配置？", { title: "移除账号", confirmLabel: "移除", danger: true })) store.setAccounts(await window.grokDesktop.removeAccount(account.id)); }}>移除</button></div>)}</div><QuotaPanel quota={quota} loading={quotaLoading} onRefresh={() => void refreshQuota(true)} /><div className="login-box"><h3>添加账号</h3><button className="primary full" disabled={store.login.running || saving} onClick={async () => { try { store.setLogin(await window.grokDesktop.loginDevice()); await refreshAccounts(); } catch (error) { store.setError(errorMessage(error)); } }}>使用浏览器/设备码登录</button>{store.login.message && <p>{store.login.message}</p>}{store.login.url && <div className="device-card"><code>{store.login.url}</code>{store.login.code && <strong>{store.login.code}</strong>}<div className="button-row"><button onClick={() => void navigator.clipboard.writeText(store.login.code || store.login.url!)}>复制</button><button onClick={() => void window.grokDesktop.openExternal(store.login.url!)}>重新打开浏览器</button></div></div>}<div className="separator"><span>或使用 API Key</span></div><input placeholder="配置名称" value={apiLabel} onChange={(event) => setApiLabel(event.target.value)} /><input type="password" placeholder="xAI API Key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /><button disabled={!apiKey.trim()} onClick={async () => { try { store.setAccounts(await window.grokDesktop.loginApiKey(apiLabel, apiKey)); setApiKey(""); setApiLabel(""); } catch (error) { store.setError(errorMessage(error)); } }}>保存并验证 API Key</button></div>{store.accounts.some((value) => value.active) && <button className="danger full" onClick={async () => { if (await confirmAction("退出会清除当前凭据配置，继续吗？", { title: "退出账号", confirmLabel: "退出", danger: true })) { await window.grokDesktop.logout(); await refreshAccounts(); } }}>退出当前账号</button>}<section className="provider-entry-card"><div><h3>自定义提供商</h3><p>使用独立管理中心测试连接、发现和批量导入模型。</p></div><button onClick={onProviders}>管理提供商</button></section></div>}
-    {type === "about" && <div className="panel-body about"><div className="about-logo">G</div><h3>Grok Build Desktop {store.appVersion}</h3><p>非官方社区客户端，与 xAI 无隶属关系。Grok CLI 与模型服务由 xAI 提供。</p><dl><dt>应用渠道</dt><dd>{store.buildInfo?.channel || "stable"}</dd><dt>构建提交</dt><dd>{store.buildInfo?.commit || "未知"}</dd><dt>CLI</dt><dd>{store.cli?.currentVersion || "未知"}</dd><dt>CLI 渠道</dt><dd>{store.cli?.channel || "未知"}</dd></dl><h4>应用更新</h4><p>{store.appRelease?.error || (store.appRelease?.updateAvailable ? `发现 ${store.appRelease.latestVersion}，请在 GitHub Release 下载并手动核对 SHA-256。` : store.appRelease?.currentAhead ? `本地 ${store.appRelease.currentVersion} 高于公开 Release ${store.appRelease.latestVersion}，这是尚未公开的候选版。` : store.appRelease ? "当前已是最新稳定版。" : "尚未检查。")}</p><div className="button-row"><button onClick={async () => store.setAppRelease(await window.grokDesktop.checkAppUpdate(true))}>检查应用更新</button>{store.appRelease?.releaseUrl && <button className="primary" onClick={() => window.grokDesktop.openAppRelease(store.appRelease?.releaseUrl)}>打开 GitHub Release</button>}</div><div className="button-row"><button onClick={onDiagnostics}>兼容诊断中心</button><button onClick={onOnboarding}>重新运行首次设置</button></div><h4>Grok CLI 更新</h4><p role="status" aria-live="polite">{cliCheckMessage || store.cli?.error || (store.cli?.updateAvailable ? `发现 stable ${store.cli.latestVersion}（当前 ${store.cli.currentVersion || "未知"}）。` : store.cli?.checkedAt ? `上次检查：${new Date(store.cli.checkedAt).toLocaleString()}` : "尚未检查 stable 更新通道。")}</p><div className="button-row"><button disabled={cliChecking} onClick={() => void checkCliNow()}>{cliChecking ? "检查中…" : "检查 CLI 更新"}</button>{store.cli?.updateAvailable && <button className="primary" onClick={async () => { try { const preview = await window.grokDesktop.previewCliUpdate(); const failed = preview.compatibilityGate?.checks.filter((item) => item.status === "failed") ?? []; if (failed.length) throw new Error(`兼容门禁未通过：${failed.map((item) => item.label).join("、")}`); const publicNote = preview.publicVersionAhead ? `\n官方已公布 ${preview.publicLatestVersion}，但当前 ${preview.channel || "stable"} 通道只提供 ${preview.targetVersion}，不会跨通道安装。` : ""; const gateNote = preview.compatibilityGate?.checks.length ? `\n\n兼容检查：\n${preview.compatibilityGate.checks.map((item) => `• ${item.label}：${item.status === "passed" ? "通过" : item.status}`).join("\n")}` : ""; const majorNote = preview.majorUpgrade ? `\n\n这是跨主版本更新。Desktop 会固定目标、验证 ACP 与会话创建，并在失败时尝试回滚；仍建议先结束重要任务。` : ""; if (!await confirmAction(`将 Grok CLI 从 ${preview.fromVersion} 固定更新到 ${preview.targetVersion}。更新会停止并恢复实时会话。${publicNote}${gateNote}${majorNote}`, { title: preview.majorUpgrade ? "确认 CLI 主版本更新" : "更新 Grok CLI", confirmLabel: `更新到 ${preview.targetVersion}` })) return; const receipt = await window.grokDesktop.applyCliUpdate({ targetVersion: preview.targetVersion, expectedCurrentVersion: preview.fromVersion, allowMajorUpgrade: preview.majorUpgrade }); store.setCli(await window.grokDesktop.checkCliUpdate()); store.setUpdateHistory(await window.grokDesktop.getCliUpdateHistory()); if (receipt.status !== "updated") store.setError(receipt.message); else setCliCheckMessage(receipt.message); } catch (error) { store.setError(errorMessage(error)); setCliCheckMessage(`更新失败：${errorMessage(error)}`); } }}>更新并验证</button>}</div><h4>CLI 更新历史</h4><div className="history-list">{store.updateHistory.slice(0, 10).map((record, index) => <div key={`${record.at}-${index}`}><strong>{record.status}</strong><span>{new Date(record.at).toLocaleString()}</span><p>{record.message}</p></div>)}</div><h4>应用更新日志</h4><pre className="changelog">{store.changelog}</pre></div>}
+    {type === "about" && <AboutUpdateCenter cliChecking={cliChecking} cliCheckMessage={cliCheckMessage} onCheckCli={() => void checkCliNow()} onDiagnostics={onDiagnostics} onOnboarding={onOnboarding} />}
   </section></div>;
+}
+
+export function AboutUpdateCenter({ cliChecking, cliCheckMessage, onCheckCli, onDiagnostics, onOnboarding }: {
+  cliChecking: boolean;
+  cliCheckMessage: string;
+  onCheckCli(): void;
+  onDiagnostics(): void;
+  onOnboarding(): void;
+}): React.JSX.Element {
+  const store = useAppStore();
+  const [appChecking, setAppChecking] = useState(false);
+  const [appMessage, setAppMessage] = useState("");
+  const checkApp = async (): Promise<void> => {
+    if (appChecking) return;
+    setAppChecking(true);
+    setAppMessage("正在检查 GitHub 正式 Release…");
+    try {
+      const value = await window.grokDesktop.checkAppUpdate(true);
+      store.setAppRelease(value);
+      if (value.error) throw new Error(value.error);
+      setAppMessage(value.updateAvailable ? `发现 ${value.latestVersion}，请打开 GitHub Release 手动下载并核对 SHA-256。` : value.currentAhead ? `当前候选版 ${value.currentVersion} 高于公开版本 ${value.latestVersion}。` : `Grok Build Desktop ${value.currentVersion} 已是最新稳定版。`);
+    } catch (error) {
+      setAppMessage(`检查失败：${errorMessage(error)}`);
+    } finally {
+      setAppChecking(false);
+    }
+  };
+  const appStatus = appMessage || store.appRelease?.error || (store.appRelease?.updateAvailable ? `发现 ${store.appRelease.latestVersion}。` : store.appRelease ? "当前已是最新稳定版。" : "尚未检查 GitHub 正式 Release。");
+  const cliStatus = cliCheckMessage || store.cli?.error || (store.cli?.updateAvailable ? `发现 stable ${store.cli.latestVersion}。` : store.cli?.currentAhead ? "当前 CLI 高于 stable 通道版本。" : store.cli?.checkedAt ? "当前已是 stable 最新版本。" : "尚未检查 stable 更新通道。");
+  return <div className="panel-body about update-center">
+    <div className="about-logo">G</div><h3>Grok Build Desktop {store.appVersion}</h3><p>非官方社区客户端，与 xAI 无隶属关系。Grok CLI 与模型服务由 xAI 提供。</p>
+    <dl><dt>应用渠道</dt><dd>{store.buildInfo?.channel || "stable"}</dd><dt>构建提交</dt><dd>{store.buildInfo?.commit || "未知"}</dd></dl>
+    <section className="update-section" aria-labelledby="app-update-title"><header><div><h4 id="app-update-title">桌面应用</h4><p>仅检查 GitHub 正式 Release，不会静默下载安装。</p></div><span className={store.appRelease?.updateAvailable ? "update-badge available" : "update-badge"}>{appChecking ? "检查中" : appMessage.startsWith("检查失败") || store.appRelease?.error ? "检查失败" : !store.appRelease?.checkedAt ? "未检查" : store.appRelease?.updateAvailable ? "可更新" : store.appRelease?.currentAhead ? "当前领先" : "已最新"}</span></header>
+      <dl className="update-facts"><dt>当前版本</dt><dd>{store.appVersion}</dd><dt>最新版本</dt><dd>{store.appRelease?.latestVersion || "尚未检查"}</dd><dt>检查时间</dt><dd>{formatCheckedAt(store.appRelease?.checkedAt)}</dd></dl>
+      <p className="update-status" role="status" aria-live="polite">{appStatus}</p><div className="button-row"><button disabled={appChecking} onClick={() => void checkApp()}>{appChecking ? "检查中…" : "检查应用更新"}</button>{store.appRelease?.releaseUrl && <button className="primary" onClick={() => window.grokDesktop.openAppRelease(store.appRelease?.releaseUrl)}>打开 GitHub Release</button>}</div>
+    </section>
+    <section className="update-section" aria-labelledby="cli-update-title"><header><div><h4 id="cli-update-title">Grok CLI</h4><p>固定目标更新；更新后执行兼容验证，失败时按条件回滚并恢复会话。</p></div><span className={store.cli?.updateAvailable ? "update-badge available" : "update-badge"}>{cliChecking ? "检查中" : cliCheckMessage.startsWith("检查失败") || store.cli?.error ? "检查失败" : !store.cli?.checkedAt ? "未检查" : store.cli?.updateAvailable ? "可更新" : store.cli?.currentAhead ? "当前领先" : "已最新"}</span></header>
+      <dl className="update-facts"><dt>当前版本</dt><dd>{store.cli?.currentVersion || "未知"}</dd><dt>stable 版本</dt><dd>{store.cli?.latestVersion || "尚未检查"}</dd><dt>检查时间</dt><dd>{formatCheckedAt(store.cli?.checkedAt)}</dd><dt>下载路径</dt><dd>{cliProxyRouteLabel(store.cli?.proxyRoute)}</dd></dl>
+      <p className="update-status" role="status" aria-live="polite">{cliStatus}</p><div className="button-row"><button disabled={cliChecking} onClick={onCheckCli}>{cliChecking ? "检查中…" : "检查 CLI 更新"}</button></div>
+    </section>
+    <CliUpdateControls />
+    <div className="button-row"><button onClick={onDiagnostics}>兼容诊断中心</button><button onClick={onOnboarding}>重新运行首次设置</button></div>
+    <details className="update-history"><summary>CLI 更新历史（{store.updateHistory.length}）</summary><div className="history-list">{store.updateHistory.slice(0, 10).map((record, index) => <div key={`${record.at}-${index}`}><strong>{record.status}</strong><span>{new Date(record.at).toLocaleString()}</span><p>{record.message}</p></div>)}</div></details>
+    <details className="app-changelog"><summary>应用更新日志</summary><pre className="changelog">{store.changelog}</pre></details>
+  </div>;
+}
+
+function formatCheckedAt(value: string | undefined): string {
+  return value ? new Date(value).toLocaleString() : "尚未检查";
 }
 
 export function OfficialFeedbackDialog({ sessionId, onClose }: { sessionId: string; onClose(): void }): React.JSX.Element {
@@ -164,17 +213,8 @@ function SettingsDialog({ initial, knownModels, onClose, onDiagnostics, onProvid
       {category === "computer" && <SettingsSection title="Computer Use" description="仅控制已明确选择的 Windows 应用。">{computer ? <><label className="check"><input type="checkbox" checked={computer.enabled} onChange={(event) => void updateComputer({ enabled: event.target.checked })}/>启用 Computer Use</label><label className="check"><input type="checkbox" checked={computer.confirmNewApps} onChange={(event) => void updateComputer({ confirmNewApps: event.target.checked })}/>首次控制新应用时确认</label><label>截图最大边长 <strong>{computer.maxScreenshotEdge}px</strong><input type="range" min="640" max="1920" step="128" value={computer.maxScreenshotEdge} onChange={(event) => void updateComputer({ maxScreenshotEdge: Number(event.target.value) })}/></label><dl className="settings-facts"><dt>紧急停止</dt><dd>{computer.emergencyShortcut}</dd><dt>始终允许应用</dt><dd>{computer.alwaysAllowedAppIds.length}</dd></dl></> : <p>正在读取 Computer Use 设置…</p>}</SettingsSection>}
       {category === "updates" && <SettingsSection title="更新与诊断" description="应用只自动检测，不会静默下载或安装；CLI 更新必须由你明确确认并通过兼容门禁。"><label className="check"><input type="checkbox" checked={draft.automaticUpdateChecks !== false} onChange={(event) => setDraft({ ...draft, automaticUpdateChecks: event.target.checked })}/>启动时检查，之后每 24 小时最多检查一次</label>{draft.lastAutomaticUpdateCheckAt && <p className="settings-note">上次自动检查：{new Date(draft.lastAutomaticUpdateCheckAt).toLocaleString()}</p>}<div className="settings-action-list">
         <button disabled={updateActions.app?.state === "running"} onClick={() => void runUpdateAction("app", async () => { const value = await window.grokDesktop.checkAppUpdate(true); store.setAppRelease(value); if (value.error) throw new Error(value.error); return value.updateAvailable ? `发现 ${value.latestVersion}，请打开 GitHub Release 手动下载并核对 SHA-256。` : value.currentAhead ? `本地 ${value.currentVersion} 高于公开 Release ${value.latestVersion}；不会执行降级。` : `当前 ${value.currentVersion} 已是最新稳定版。`; })}>检查应用更新</button>
-        <button disabled={updateActions.cli?.state === "running"} onClick={() => void runUpdateAction("cli", async () => { const value = await window.grokDesktop.checkCliUpdate(); store.setCli(value); if (value.error) throw new Error(value.error); return value.updateAvailable ? `CLI ${value.currentVersion} 可更新到 ${value.latestVersion}。` : `Grok CLI ${value.currentVersion || "未知"} 已是最新版本。`; })}>检查 Grok CLI 更新</button>
-        <button disabled={updateActions.cliApply?.state === "running" || !store.cli?.updateAvailable || !store.cli.currentVersion || !store.cli.latestVersion} onClick={() => void runUpdateAction("cliApply", async () => {
-          const preview = await window.grokDesktop.previewCliUpdate();
-          const failed = preview.compatibilityGate?.checks.filter((item) => item.status === "failed") ?? [];
-          if (failed.length) throw new Error(`兼容门禁未通过：${failed.map((item) => item.label).join("、")}`);
-          const detail = preview.compatibilityGate?.checks.map((item) => `• ${item.label}：${item.status === "passed" ? "通过" : item.status}`).join("\n") ?? "";
-          if (!window.confirm(`将 Grok CLI ${preview.fromVersion} 更新到 ${preview.targetVersion}${preview.majorUpgrade ? "（跨主版本）" : ""}。\n\n${detail}\n\n更新后会执行 ACP 验证，失败时自动回滚。是否继续？`)) return "已取消";
-          const receipt = await window.grokDesktop.applyCliUpdate({ targetVersion: preview.targetVersion, expectedCurrentVersion: preview.fromVersion, allowMajorUpgrade: preview.majorUpgrade });
-          store.setCli(await window.grokDesktop.checkCliUpdate());
-          return receipt.message;
-        })}>更新并验证 Grok CLI</button>
+        <button disabled={updateActions.cli?.state === "running"} onClick={() => void runUpdateAction("cli", async () => { const value = await window.grokDesktop.checkCliUpdate(); store.setCli(value); if (value.error) throw new Error(value.error); return value.updateAvailable ? `CLI ${value.currentVersion} 可更新到 ${value.latestVersion}；下载将使用${cliProxyRouteLabel(value.proxyRoute)}。` : `Grok CLI ${value.currentVersion || "未知"} 已是最新版本。`; })}>检查 Grok CLI 更新</button>
+        <CliUpdateControls />
         <button onClick={() => { setUpdateActions((value) => ({ ...value, diagnostics: { state: "success", message: "已打开诊断中心", at: new Date().toISOString() } })); onDiagnostics(); }}>打开诊断中心</button>
         <button disabled={updateActions.logs?.state === "running"} onClick={() => void runUpdateAction("logs", async () => { const path = await window.grokDesktop.exportLogs(); return path ? `脱敏日志已导出：${path}` : "已取消"; })}>导出脱敏日志</button>
       </div><div className="settings-action-results" aria-live="polite">{Object.entries(updateActions).map(([key, value]) => <article className={value.state} key={key}><strong>{({ app: "应用更新", cli: "CLI 检查", cliApply: "CLI 更新", diagnostics: "诊断中心", logs: "脱敏日志" } as Record<string, string>)[key] || key}</strong><span>{value.message}</span><time>{new Date(value.at).toLocaleString()}</time>{value.state !== "running" && <button type="button" onClick={() => void navigator.clipboard.writeText(value.message)}>复制</button>}</article>)}</div></SettingsSection>}
@@ -204,3 +244,5 @@ function formatQuotaReset(value: string): string { const parsed = Date.parse(val
 function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
 function relativeTime(value: string): string { const time = Date.parse(value); if (!Number.isFinite(time)) return ""; const diff = Date.now() - time; if (diff < 60_000) return "刚刚"; if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`; if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`; return `${Math.floor(diff / 86_400_000)} 天前`; }
 function formatTokens(value: number): string { return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${(value / 1_000).toFixed(1)}K` : String(value); }
+function compatibilityStatusLabel(status: "passed" | "pending" | "failed" | "unsupported"): string { return status === "passed" ? "通过" : status === "pending" ? "需实机验证" : status === "unsupported" ? "不支持" : "未通过"; }
+function cliProxyRouteLabel(value: "application-proxy" | "environment-proxy" | "direct-or-system" | undefined): string { return value === "application-proxy" ? "应用设置的代理" : value === "environment-proxy" ? "进程环境代理" : "系统网络/直连"; }

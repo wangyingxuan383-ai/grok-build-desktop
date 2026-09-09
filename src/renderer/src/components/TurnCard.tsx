@@ -18,12 +18,13 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
   onFork?(): void;
 }): React.JSX.Element {
   const storageKey = `grok:turn-process:${sessionId}:${turn.presentation?.turnId || turn.id}`;
-  const [open, setOpen] = useState(() => turn.running || localStorage.getItem(storageKey) === "open");
+  const keepProcessVisible = turn.summary.failed > 0;
+  const [open, setOpen] = useState(() => turn.running || keepProcessVisible || localStorage.getItem(storageKey) === "open");
   const elapsed = useElapsed(turn.presentation?.startedAt, turn.presentation?.durationMs, turn.running);
   useEffect(() => {
-    if (turn.running) setOpen(true);
+    if (turn.running || keepProcessVisible) setOpen(true);
     else if (turn.completed && localStorage.getItem(storageKey) == null) setOpen(false);
-  }, [storageKey, turn.completed, turn.running]);
+  }, [keepProcessVisible, storageKey, turn.completed, turn.running]);
   useEffect(() => {
     const collapse = (event: Event): void => {
       if ((event as CustomEvent<{ sessionId: string }>).detail?.sessionId !== sessionId || turn.running) return;

@@ -1,7 +1,8 @@
+import { deleteCliSession } from "./cli-session-service";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import type { ChatEvent } from "../../shared/types";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
 import { LogService } from "./log-service";
@@ -24,6 +25,7 @@ describe.skipIf(!runLive)("Grok Plan mode live acceptance", () => {
       mode: "plan",
       log: new LogService(logPath),
     });
+    onTestFinished(async () => { if (adapter.sessionId) await deleteCliSession(join(homedir(), ".grok", "bin", "grok.exe"), adapter.sessionId, process.env); });
     const events: ChatEvent[] = [];
     let planDecision: Promise<unknown> | undefined;
     adapter.on("event", (event: ChatEvent) => {

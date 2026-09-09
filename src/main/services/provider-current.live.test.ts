@@ -1,3 +1,4 @@
+import { deleteCliSession } from "./cli-session-service";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,6 +119,7 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
       modelId: "grok-desktop-current-provider-probe",
       log,
     });
+    let primaryFailed = false;
     try {
       await adapter.start();
       const active = adapter.models.find((value) => value.modelId === "grok-desktop-current-provider-probe");
@@ -150,9 +152,13 @@ describe.runIf(process.platform === "win32" && process.env.GROK_CURRENT_PROVIDER
       }
       expect(gateway.recentObservations(provider.id).some((value) => (value.status ?? 0) >= 200 && (value.status ?? 0) < 300)).toBe(true);
       expect(adapter.currentModelId).toBe("grok-desktop-current-provider-probe");
-    } finally {
-      await adapter.dispose();
-      await gateway.dispose();
+    } catch (error) { primaryFailed = true; throw error; }
+    finally {
+      try { await adapter.dispose(); }
+      finally {
+        try { if (adapter.sessionId) await deleteCliSession(cliPath, adapter.sessionId, { ...process.env, GROK_HOME: grokHome }).catch((error) => { if (!primaryFailed) throw error; console.error("LIVE_SESSION_CLEANUP_FAILED", String(error)); }); }
+        finally { await gateway.dispose(); }
+      }
     }
   }, 420_000);
 });
