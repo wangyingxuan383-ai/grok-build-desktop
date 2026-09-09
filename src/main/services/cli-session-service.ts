@@ -22,11 +22,11 @@ export function deleteCliSession(
   run: (cliPath: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number) => Promise<{ stdout: string; stderr: string }> = runDeleteCommand,
 ): Promise<CliSessionDeleteResult> {
   if (!SESSION_ID.test(sessionId)) return Promise.reject(new Error("会话 ID 格式无效，拒绝调用 CLI 删除"));
-  return run(cliPath, ["--no-auto-update", "sessions", "delete", sessionId], env, timeoutMs).then(({ stdout, stderr }) => ({
-    sessionId,
-    deleted: true,
-    message: String(stdout || stderr || "会话已由 Grok CLI 删除").trim(),
-  }));
+  return run(cliPath, ["--no-auto-update", "sessions", "delete", sessionId], env, timeoutMs).then(({ stdout, stderr }) => {
+    const message = String(stdout || stderr).trim();
+    if (!(/^deleted$/i.test(message) || message.includes(`Deleted session ${sessionId}`))) throw new Error(`Grok CLI 未确认删除会话：${message || "空响应"}`);
+    return { sessionId, deleted: true, message };
+  });
 }
 
 function runDeleteCommand(cliPath: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {

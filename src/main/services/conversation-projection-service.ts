@@ -544,7 +544,9 @@ function laterTimestamp(left: string, right: string): string {
 }
 
 function isPersistable(event: ChatEvent): boolean {
-  return !["session-reset", "session-ready", "commands", "mode", "prompt-queue", "turn-presentations-restore", "user-attachments-restore", "conversation-projection-restore", "history-recovery", "follow-ups"].includes(event.type);
+  // MCP URL elicitations can contain short-lived authorization URLs and all
+  // elicitation request ids belong to one ACP process. Never persist them.
+  return !["session-reset", "session-ready", "commands", "mode", "prompt-queue", "turn-presentations-restore", "user-attachments-restore", "conversation-projection-restore", "history-recovery", "follow-ups", "mcp-elicitation"].includes(event.type);
 }
 
 function sanitizeEvent(event: ChatEvent): ChatEvent {
@@ -681,6 +683,7 @@ function replayEventKey(event: ChatEvent): string {
   if (event.type === "interjection") return `interjection:${event.id}`;
   if (event.type === "tool-call") return `tool:${event.tool.toolCallId}`;
   if (event.type === "permission") return `permission:${String(event.request.requestId)}`;
+  if (event.type === "mcp-elicitation") return `mcp-elicitation:${String(event.request.requestId)}`;
   if (event.type === "question" || event.type === "plan" || event.type === "interaction-resolved") return `${event.type}:${String(event.requestId ?? "")}`;
   if (event.type === "turn-started" || event.type === "turn-completed") return `${event.type}:${event.presentation?.turnId ?? "unknown"}`;
   if (event.type === "media") return `media:${event.media}:${event.source}`;
@@ -798,6 +801,7 @@ function stableProjectionRecordId(event: ChatEvent): string | undefined {
   }
   else if (event.type === "tool-call") identity = event.tool.toolCallId;
   else if (event.type === "permission") identity = String(event.request.requestId);
+  else if (event.type === "mcp-elicitation") identity = String(event.request.requestId);
   else if (event.type === "question" || event.type === "plan" || event.type === "interaction-resolved") identity = String(event.requestId ?? "");
   else if (event.type === "turn-started" || event.type === "turn-completed") identity = event.presentation?.turnId;
   else if (event.type === "session-recap") identity = `${event.turnId ?? "session"}:${event.contentHash}`;
@@ -866,6 +870,7 @@ function reconcileHostExitLease(sessionId: string, records: ProjectionRecord[], 
     const event = record.event;
     const interaction = event.type === "permission" ? { kind: "permission" as const, id: event.request.requestId }
       : event.type === "question" ? { kind: "question" as const, id: event.requestId }
+        : event.type === "mcp-elicitation" ? { kind: "mcp-elicitation" as const, id: event.request.requestId }
         : event.type === "plan" && event.requestId !== undefined ? { kind: "plan" as const, id: event.requestId }
           : undefined;
     if (!interaction || resolved.has(`${interaction.kind}:${String(interaction.id)}`)) continue;

@@ -41,6 +41,51 @@ function fixture(effort: ReasoningEffort, setEffort = vi.fn().mockResolvedValue(
 }
 
 describe("Grok process reasoning effort switching", () => {
+  it("still disposes a suspended ACP process when background cleanup and its log both fail", async () => {
+    const { manager, adapter, log } = fixture("low");
+    vi.spyOn(manager as any, "stopOwnedBackgroundWork").mockRejectedValue(Error("task cleanup failed"));
+    log.log.mockRejectedValue(Error("log disk failure"));
+    await manager.suspendAll();
+    expect(adapter.dispose).toHaveBeenCalledTimes(1);
+    await manager.dispose();
+  });
+  it("does not restore a session twice after a partially completed bulk recovery", async () => {
+    const { manager } = fixture("low");
+    const spawn = vi.spyOn(manager as any, "spawn");
+    await manager.restoreAll([{ sessionId: "session", cwd: "C:\\fixture", mode: "agent", effort: "low" }]);
+    expect(spawn).not.toHaveBeenCalled();
+    await manager.dispose();
+  });
+  it("rejects unreadable versions rather than treating missing evidence as compatibility", async () => {
+    const { manager } = fixture("low");
+    for (const value of ["", "unreadable", "undefined"]) await expect((manager as any).acceptCliRuntimeVersion(value)).resolves.toBe(false);
+    await manager.dispose();
+  });
+  it("requires an app-local live receipt before accepting a future 1.0 patch", async () => {
+    const allowFuture = vi.fn(async (version: string) => version === "1.0.13" || version === "1.0.14");
+    const manager = new GrokProcessManager(
+      async () => settings,
+      async () => undefined,
+      { log: vi.fn() } as any,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      allowFuture,
+    );
+    await expect((manager as any).acceptCliRuntimeVersion("1.0.13")).resolves.toBe(true);
+    await expect((manager as any).acceptCliRuntimeVersion("1.0.14")).resolves.toBe(true);
+    await expect((manager as any).acceptCliRuntimeVersion("1.0.15")).resolves.toBe(false);
+    await expect((manager as any).acceptCliRuntimeVersion("1.1.0")).resolves.toBe(false);
+    expect(allowFuture).toHaveBeenCalledTimes(4);
+    await manager.dispose();
+  });
+
   it("probes the initialize model catalog without retaining a session", async () => {
     const log = { log: vi.fn().mockResolvedValue(undefined) };
     const manager = new GrokProcessManager(async () => settings, async () => undefined, log as any, vi.fn());

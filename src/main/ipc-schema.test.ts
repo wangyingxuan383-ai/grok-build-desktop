@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { hasIpcRuntimeSchema, validateIpcInvocation } from "./ipc-schema";
 
 describe("IPC runtime schemas", () => {
+  it("validates one-shot CLI update policies and recovery actions", () => {
+    for (const policy of ["standard", "try-new", "retain-unverified"]) {
+      expect(() => validateIpcInvocation("cli:update-preview", [policy, "verify"], 2)).not.toThrow();
+      expect(() => validateIpcInvocation("cli:apply-update", [{ policy, action: "rollback", targetVersion: "1.0.3", expectedCurrentVersion: "2.0.0", confirmationToken: "one-shot" }], 1)).not.toThrow();
+    }
+    expect(() => validateIpcInvocation("cli:update-preview", ["disable-all-checks"], 2)).toThrow();
+    expect(() => validateIpcInvocation("cli:apply-update", [{ targetVersion: "2.0.0", expectedCurrentVersion: "1.0.3", downloadUrl: "https://example.com/cli" }], 1)).toThrow("未知字段");
+  });
   it("has an explicit runtime schema for every registered invoke channel", async () => {
     const source = await readFile(new URL("./ipc.ts", import.meta.url), "utf8");
     const channels = [...source.matchAll(/handle\("([^"]+)"/g)].map((match) => match[1]!);
@@ -45,9 +53,15 @@ describe("IPC runtime schemas", () => {
     expect(() => validateIpcInvocation("system:open-media", ["grok-media://access/2f0c2e69-5f7b-455a-8f04-e8eaa60acfae"], 1)).not.toThrow();
     expect(() => validateIpcInvocation("system:copy-image", ["grok-media://local/?path=C%3A%5Cprivate.png"], 1)).toThrow("受控媒体句柄");
     expect(() => validateIpcInvocation("permission:respond", ["session", { forged: true }, "allow"], 3)).toThrow("有效字符串");
+    expect(() => validateIpcInvocation("mcp-elicitation:respond", ["session", "request", "approve", {}], 4)).toThrow("允许范围");
+    expect(() => validateIpcInvocation("mcp-elicitation:respond", ["session", "request", "accept", { value: "ok" }], 4)).not.toThrow();
     expect(() => validateIpcInvocation("session:queue:reorder", ["session", "entry", -1], 3)).toThrow("整数");
     expect(() => validateIpcInvocation("session:send", ["session", "hello", Array.from({ length: 129 }, () => ({}))], 4)).toThrow("附件列表");
     expect(() => validateIpcInvocation("session:send", ["session", "hello", [{ id: "a", name: "x", kind: "executable" }]], 4)).toThrow("类型无效");
+    expect(() => validateIpcInvocation("session:send", ["session", "hello", [], "client-id", "session"], 5)).not.toThrow();
+    expect(() => validateIpcInvocation("session:send", ["session", "hello", [], "client-id", { forged: true }], 5)).toThrow("有效字符串");
+    expect(() => validateIpcInvocation("session:enqueue", ["session", "hello", [], "client-id", "session"], 5)).not.toThrow();
+    expect(() => validateIpcInvocation("session:interject", ["session", "hello", [], "client-id", "session"], 5)).not.toThrow();
   });
 
   it("allows the pre-settings empty workspace sentinel for session listing", () => {
@@ -149,6 +163,8 @@ describe("IPC runtime schemas", () => {
 
     const newTask = { projectId: "project-abc", workspacePath: "D:\\repo", modelId: "provider-model", effort: "high", mode: "agent" };
     expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], newTask], 5)).not.toThrow();
+    expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], newTask, "submission-1"], 6)).not.toThrow();
+    expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], newTask, { forged: true }], 6)).toThrow("字符串");
     expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], { ...newTask, providerSecret: "forged" }], 5)).toThrow("未知字段");
   });
 });

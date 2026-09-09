@@ -1,3 +1,5 @@
+import { McpElicitationCard } from "./McpElicitationCard";
+import { isExpiredInteractionError } from "./interaction-utils";
 import { lazy, memo, Suspense, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { EditorDocument, EditorOpenResult, NavigationIntent, TurnFailure } from "../../../shared/types";
@@ -36,12 +38,13 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
   if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;
   if (message.kind === "permission") return <PermissionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "question") return <QuestionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
+  if (message.kind === "mcp-elicitation") return <McpElicitationCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "plan") return <PlanCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   return null;
 });
 
 export function isResolvedInteraction(message: UiMessage): boolean {
-  return (message.kind === "permission" || message.kind === "question" || message.kind === "plan")
+  return (message.kind === "permission" || message.kind === "question" || message.kind === "plan" || message.kind === "mcp-elicitation")
     && message.resolved === true;
 }
 
@@ -223,17 +226,18 @@ function QuestionCard({ message, sessionId, onResolved }: { message: Extract<UiM
       setState({ value: "failed", message: detail });
     }
   };
-  return <section className="action-card decision-card"><header><span className="decision-icon" aria-hidden="true">?</span><div><strong>Grok 需要你的回答</strong><p>可以选择建议项，也可以选择“其他”直接说明你的要求；回答后原回合继续。</p></div></header>{message.questions.map((question) => <label key={question.question}><span>{question.header || question.question}</span>{question.header && <small>{question.question}</small>}{question.options?.length ? <><select disabled={state.value === "submitting"} value={customQuestions[question.question] ? "__custom__" : answers[question.question] || ""} onChange={(event) => {
+  return <section className="action-card decision-card codex-request-card" aria-label="问题确认"><header><span className="decision-icon" aria-hidden="true">?</span><div><strong>Grok 需要你的回答</strong><p>可以选择建议项，也可以选择“其他”直接说明你的要求；回答后原回合继续。</p></div></header><div className="request-form-body">{message.questions.map((question) => <label key={question.question}><span>{question.header || question.question}</span>{question.header && <small>{question.question}</small>}{question.options?.length ? <><select disabled={state.value === "submitting"} value={customQuestions[question.question] ? "__custom__" : answers[question.question] || ""} onChange={(event) => {
         const custom = event.target.value === "__custom__";
         setCustomQuestions({ ...customQuestions, [question.question]: custom });
         setAnswers({ ...answers, [question.question]: custom ? "" : event.target.value });
         setState({ value: "idle" });
-      }}><option value="">请选择</option>{question.options.map((option) => <option key={option.label} value={option.label}>{option.label}</option>)}<option value="__custom__">其他（自行输入）</option></select>{customQuestions[question.question] && <textarea autoFocus disabled={state.value === "submitting"} rows={3} placeholder="输入你的回答或补充要求" value={answers[question.question] || ""} onChange={(event) => { setAnswers({ ...answers, [question.question]: event.target.value }); setState({ value: "idle" }); }} />}</> : <textarea disabled={state.value === "submitting"} rows={3} placeholder="输入你的回答" value={answers[question.question] || ""} onChange={(event) => { setAnswers({ ...answers, [question.question]: event.target.value }); setState({ value: "idle" }); }} />}</label>)}{state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}<button disabled={state.value === "submitting"} onClick={() => void submit()}>{state.value === "submitting" ? "提交中…" : "提交回答"}</button></section>;
+      }}><option value="">请选择</option>{question.options.map((option) => <option key={option.label} value={option.label}>{option.label}</option>)}<option value="__custom__">其他（自行输入）</option></select>{customQuestions[question.question] && <textarea autoFocus disabled={state.value === "submitting"} rows={3} placeholder="输入你的回答或补充要求" value={answers[question.question] || ""} onChange={(event) => { setAnswers({ ...answers, [question.question]: event.target.value }); setState({ value: "idle" }); }} />}</> : <textarea disabled={state.value === "submitting"} rows={3} placeholder="输入你的回答" value={answers[question.question] || ""} onChange={(event) => { setAnswers({ ...answers, [question.question]: event.target.value }); setState({ value: "idle" }); }} />}</label>)}</div>{state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}<footer className="request-card-actions"><div className="request-primary-actions"><button className="primary" disabled={state.value === "submitting"} onClick={() => void submit()}>{state.value === "submitting" ? "提交中…" : "提交回答"}</button></div></footer></section>;
 }
 
 function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "plan" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
   const [comment, setComment] = useState("");
   const [showComment, setShowComment] = useState(false);
+  const [executionMode, setExecutionMode] = useState<"agent" | "auto">(message.executionMode ?? "agent");
   const [decision, setDecision] = useState<{ state: "idle" | "submitting" | "accepted" | "failed"; message?: string }>({ state: message.resolved ? "accepted" : "idle" });
   if (!message.interactive || message.requestId === undefined || message.requestId === "") {
     return <details className="plan-card plan-document" open><summary>实施计划</summary><LazyMarkdownView text={message.text || "计划正在生成。"} /></details>;
@@ -242,7 +246,7 @@ function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessa
     if (decision.state !== "idle" && decision.state !== "failed") return;
     setDecision({ state: "submitting", message: "正在提交计划决策…" });
     try {
-      const receipt = await window.grokDesktop.respondPlan(sessionId, message.requestId, verdict, comment);
+      const receipt = await window.grokDesktop.respondPlan(sessionId, message.requestId, verdict, comment, executionMode);
       setDecision({ state: "accepted", message: receipt.message });
       onResolved?.(message.id);
     } catch (error) {
@@ -255,6 +259,7 @@ function PlanCard({ message, sessionId, onResolved }: { message: Extract<UiMessa
   return <section className="plan-card decision-card codex-request-card codex-plan-request">
     <div className="request-card-body"><span className="request-card-eyebrow">计划</span><strong>准备实施以下计划</strong><p>实施、继续规划或取消只会响应当前计划请求一次。</p></div>
     <div className="plan-content"><LazyMarkdownView text={message.text || "计划已生成，请选择下一步。"} /></div>
+    <label className="plan-execution-mode"><span>实施后的权限策略</span><select disabled={locked} value={executionMode} onChange={(event) => setExecutionMode(event.target.value as "agent" | "auto")}><option value="agent">Agent · 工具操作询问</option><option value="auto">自动批准 · 直接执行</option></select><small>{executionMode === "auto" ? "批准计划后，普通工具与写入按自动批准继续。" : "批准计划后，受保护工具仍会向你询问。"}</small></label>
     {showComment && <div className="plan-feedback"><textarea autoFocus disabled={locked} placeholder="补充要求（可选，随本次决定提交）" value={comment} onChange={(event) => setComment(event.target.value)} /></div>}
     {decision.message && <div className={`plan-decision-status ${decision.state}`}>{decision.message}</div>}
     <footer className="request-card-actions">
@@ -327,9 +332,6 @@ function localizedPermissionName(name?: string, kind?: string): string {
   return name?.trim() || permissionLabel(kind);
 }
 function isDenyPermission(name?: string, kind?: string): boolean { return /^(?:no|deny|reject)/i.test(name || "") || /reject|deny/.test(kind || ""); }
-function isExpiredInteractionError(value: string): boolean {
-  return /已经结束|已被响应|已被回答|没有可响应|request.*(?:ended|closed|expired|not found)|invalid request/i.test(value);
-}
 export function protectedActionSummary(value: unknown): string {
   if (!value || typeof value !== "object") return "";
   const tool = value as Record<string, unknown>;

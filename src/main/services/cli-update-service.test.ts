@@ -23,19 +23,25 @@ function createService(root: string): CliUpdateService {
   );
 }
 
-function createUpdateHarness(root: string, options: { failTarget?: boolean; failRollback?: boolean; failProbeAtTarget?: boolean; failRestore?: boolean; stableTarget?: string } = {}) {
+function createUpdateHarness(root: string, options: { failTarget?: boolean; failRollback?: boolean; failProbeAtTarget?: boolean; failRestore?: boolean; failVersionRecheck?: boolean; stableTarget?: string } = {}) {
   let version = "0.2.117";
+  let readVersionCalls = 0;
   const updates: string[][] = [];
   const restored = vi.fn(async () => { if (options.failRestore) throw new Error("restore failed"); });
   const suspended = [{ sessionId: "session-a" }] as any[];
   const compatibility = (): CliCompatibilitySnapshot => ({
     cliVersion: version,
     checkedAt: new Date().toISOString(),
-    capabilities: [{ name: "acp.initialize", state: "supported", source: "successful-probe", observedAt: new Date().toISOString() }],
+    capabilities: ["acp.initialize", "session.new", "core.resume", "core.close", "core.delete"].map((name) => ({ name, state: "supported", source: "successful-probe", observedAt: new Date().toISOString() })),
   });
   const runtime: CliUpdateServiceRuntime = {
+    identity: async () => `fixture-${version}`,
     locateCli: vi.fn(async () => "C:\\fake\\grok.exe"),
-    readVersion: vi.fn(async () => `grok ${version} (fixture)`),
+    readVersion: vi.fn(async () => {
+      readVersionCalls += 1;
+      if (options.failVersionRecheck && readVersionCalls === 2) throw new Error("version unreadable");
+      return `grok ${version} (fixture)`;
+    }),
     check: vi.fn(async (): Promise<CliVersionStatus> => ({
       found: true,
       currentVersion: version,
@@ -67,6 +73,12 @@ function createUpdateHarness(root: string, options: { failTarget?: boolean; fail
     undefined,
     runtime,
   );
+  const rawApply = service.apply.bind(service);
+  service.apply = async (input) => {
+    const token = "harness-token";
+    (service as any).confirmations.set(token, { key: `${input.expectedCurrentVersion}->${input.targetVersion}:${input.policy ?? "standard"}:${input.action ?? "update"}`, expires: Date.now() + 60_000 });
+    return rawApply({ ...input, confirmationToken: token });
+  };
   return { service, runtime, updates, restored };
 }
 
@@ -99,10 +111,10 @@ describe("CliUpdateService", () => {
     expect(result.snapshot).toMatchObject({ closeOutcomeSupported: true, gitStatusUsesExplicitOptions: true });
   });
 
-  it("keeps sanitized fixtures through the source-audited stable 1.0.5 target and records the live 1.0.3 baseline", async () => {
+  it("keeps sanitized fixtures through the source-audited stable 1.0.13 target and records the live 1.0.3 baseline", async () => {
     expect(CLI_V1_COMPATIBILITY_PROFILE).toMatchObject({
-      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.5", stableTargetVersion: "1.0.5", liveVerifiedVersion: "1.0.3",
-      fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5"],
+      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.13", stableTargetVersion: "1.0.13", liveVerifiedVersion: "1.0.3",
+      fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12", "1.0.13"],
     });
     for (const version of CLI_V1_COMPATIBILITY_PROFILE.fixtureVersions) {
       const fixture = JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", `initialize-${version}.json`), "utf8"));
@@ -112,10 +124,47 @@ describe("CliUpdateService", () => {
     }
   });
 
-  it("fails closed for an unknown future 1.x patch instead of enabling it from the major number", () => {
-    expect(offlineCompatibilityGate("1.0.6")).toMatchObject({
-      status: "failed", major: 1, checks: [expect.objectContaining({ id: "unverified-minor" })],
+  it("allows an explicit future 1.0 patch only through the live rollback gate", () => {
+    expect(offlineCompatibilityGate("1.0.14")).toMatchObject({
+      status: "pending", major: 1, liveVerified: false, checks: [expect.objectContaining({ id: "future-patch-live-gate", status: "pending" })],
     });
+    expect(offlineCompatibilityGate("1.1.0")).toMatchObject({
+      status: "failed", major: 1, checks: [expect.objectContaining({ id: "unverified-release-line" })],
+    });
+  });
+
+  it("does not trust an externally installed future patch until this app persisted a passing live gate", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const service = createService(root);
+    await expect(service.isRuntimeVersionAllowed("1.0.13")).resolves.toBe(true);
+    await expect(service.isRuntimeVersionAllowed("1.0.14")).resolves.toBe(false);
+    await expect(service.isRuntimeVersionAllowed("1.1.0")).resolves.toBe(false);
+
+    const handshake = normalizeRuntimeHandshake({
+      protocolVersion: 1,
+      agentCapabilities: { sessionCapabilities: { close: {}, list: {}, resume: {} } },
+      _meta: { agentVersion: "1.0.14", availableCommands: [{ name: "context" }] },
+    });
+    const persisted: CliCompatibilitySnapshot = {
+      cliVersion: "1.0.14",
+      checkedAt: new Date().toISOString(),
+      handshake,
+      capabilities: [],
+      v1: {
+        version: "1.0.14",
+        observedAt: new Date().toISOString(),
+        attachPolicy: { nonInteractive: false, deliveryTools: [] },
+        closeOutcomeSupported: true,
+        mcpMethods: [],
+        gitStatusUsesExplicitOptions: true,
+        dataViews: ["context"],
+      },
+      gate: { targetVersion: "1.0.14", major: 1, status: "passed", checkedAt: new Date().toISOString(), liveVerified: true, checks: [] },
+    };
+    await writeFile(join(root, "cli-compatibility-snapshot.json"), JSON.stringify(persisted), "utf8");
+    await expect(service.isRuntimeVersionAllowed("1.0.14")).resolves.toBe(false); // legacy snapshots are not binary-bound authorization
+    await expect(service.isRuntimeVersionAllowed("1.0.15")).resolves.toBe(false);
   });
 
   it("accepts the stable 1.0.0 core contract when only context and session-info commands are present", async () => {
@@ -157,7 +206,8 @@ describe("CliUpdateService", () => {
     };
     await writeFile(join(root, "cli-compatibility-snapshot.json"), JSON.stringify(persisted), "utf8");
     const runtime: CliUpdateServiceRuntime = {
-      locateCli: vi.fn(async () => "C:\\fake\\grok.exe"),
+      identity: async () => "fixture-1.0.0",
+    locateCli: vi.fn(async () => "C:\\fake\\grok.exe"),
       readVersion: vi.fn(async () => "1.0.0 (fixture)"),
       check: vi.fn(), runUpdate: vi.fn(), probe: vi.fn(),
     };
@@ -179,6 +229,11 @@ describe("CliUpdateService", () => {
     });
   });
 
+  it("does not let a runtime handshake bypass the blocked 1.1 release line", () => {
+    const handshake = normalizeRuntimeHandshake({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {}, list: {}, resume: {} } }, _meta: { agentVersion: "1.1.0" } });
+    expect(runtimeV1Compatibility("1.1.0", handshake, true).gate).toMatchObject({ status: "failed", checks: [expect.objectContaining({ id: "unverified-release-line" })] });
+  });
+
   it("coalesces concurrent apply requests into one update operation", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
@@ -188,13 +243,16 @@ describe("CliUpdateService", () => {
     const applyOnce = vi.fn(() => operation);
     (service as any).applyOnce = applyOnce;
 
-    const input = { targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" };
+    const input = { targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117", confirmationToken: "test-token" };
+    (service as any).confirmations.set("test-token", { key: "0.2.117->0.2.118:standard:update", expires: Date.now() + 60_000 });
     const first = service.apply(input);
     const second = service.apply(input);
+    expect(service.isActive()).toBe(true);
     expect(applyOnce).toHaveBeenCalledTimes(1);
     finish({ fromVersion: "0.2.117", toVersion: "0.2.118", status: "updated", verifiedAt: new Date().toISOString(), message: "ok" });
     await expect(first).resolves.toMatchObject({ toVersion: "0.2.118" });
     await expect(second).resolves.toMatchObject({ toVersion: "0.2.118" });
+    expect(service.isActive()).toBe(false);
   });
 
   it("requires an explicit acknowledgement before crossing a CLI major version", async () => {
@@ -243,6 +301,45 @@ describe("CliUpdateService", () => {
     expect(harness.restored).toHaveBeenCalledTimes(1);
   });
 
+  it("does not redownload the old version when a failed update left the binary unchanged", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const harness = createUpdateHarness(root, { failTarget: true });
+    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).resolves.toMatchObject({
+      fromVersion: "0.2.117",
+      toVersion: "0.2.117",
+      status: "failed",
+      message: expect.stringContaining("无需回滚"),
+    });
+    expect(harness.updates).toEqual([["update", "--version", "0.2.118"]]);
+    expect(harness.restored).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a verified update receipt when only suspended-session restoration fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const harness = createUpdateHarness(root, { failRestore: true });
+    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).resolves.toMatchObject({
+      status: "updated",
+      toVersion: "0.2.118",
+      sessionRestore: { status: "partial", message: expect.stringContaining("restore failed") },
+      warnings: [expect.stringContaining("restore failed")],
+      message: expect.stringContaining("部分会话恢复失败"),
+    });
+  });
+
+  it("keeps an unchanged-binary failure receipt when session restoration also fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const harness = createUpdateHarness(root, { failTarget: true, failRestore: true });
+    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).resolves.toMatchObject({
+      status: "failed",
+      toVersion: "0.2.117",
+      sessionRestore: { status: "partial" },
+      warnings: [expect.stringContaining("restore failed")],
+    });
+  });
+
   it("rejects a target that drifted in the stable feed before suspending sessions", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
@@ -267,11 +364,26 @@ describe("CliUpdateService", () => {
     expect(harness.restored).toHaveBeenCalledTimes(1);
   });
 
+  it("still rolls back and restores sessions when the failure-time version recheck is unreadable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
+    roots.push(root);
+    const harness = createUpdateHarness(root, { failTarget: true, failVersionRecheck: true });
+    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).resolves.toMatchObject({
+      toVersion: "0.2.117",
+      status: "rolled-back",
+    });
+    expect(harness.updates).toEqual([
+      ["update", "--version", "0.2.118"],
+      ["update", "--version", "0.2.117"],
+    ]);
+    expect(harness.restored).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces rollback failure and still attempts to restore suspended sessions", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
     const harness = createUpdateHarness(root, { failProbeAtTarget: true, failRollback: true });
-    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).rejects.toThrow("CLI 更新失败且回滚未通过");
+    await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).rejects.toThrow(/CLI 目标更新失败：probe failed；回滚也未通过：rollback failed/);
     expect(harness.updates).toEqual([
       ["update", "--version", "0.2.118"],
       ["update", "--version", "0.2.117"],
@@ -283,7 +395,7 @@ describe("CliUpdateService", () => {
     roots.push(root);
     const harness = createUpdateHarness(root, { failProbeAtTarget: true, failRollback: true, failRestore: true });
     await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).rejects.toThrow(
-      /CLI 更新失败且回滚未通过.*部分会话恢复失败/,
+      /CLI 目标更新失败：probe failed；回滚也未通过：rollback failed.*部分会话恢复失败/,
     );
     expect(harness.restored).toHaveBeenCalledTimes(1);
   });

@@ -1,3 +1,4 @@
+import type { CliUpdateInput, CliUpdatePolicy, CliUpdateAction } from "../shared/types";
 import { ipcMain, type BrowserWindow, type IpcMainInvokeEvent } from "electron";
 import type { AppController } from "./app-controller";
 import type { AgentDashboardQuery, AgentDefinitionSaveInput, AppSettings, Attachment, AutomationGlobalPolicy, AutomationTaskInput, CapabilityApplicationSelection, ComposerCapabilitySelection, ComputerUseSettings, CustomProviderInput, EditorSaveInput, ExecutionProfileLaunchInput, ExecutionProfileSaveInput, GitDiscardInput, GitHunkActionInput, GitReviewScope, McpServerInput, MediaCreationRequest, MemoryDeletePreview, MemoryRememberPreview, MemorySaveInput, MemorySettings, OnboardingState, OpenTargetIntent, PersonaDefinitionSaveInput, ProviderConnectionDraft, ProviderDeepScanOptions, ProviderScanScope, ReasoningEffort, SessionExecutionProfile, SessionMode, ThemeSettings, TokenActivityQuery, TurnFailure, WorktreeCreateInput, WorkspaceTreeOptions } from "../shared/types";
@@ -135,10 +136,10 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("media:start", (request: MediaCreationRequest & { sessionId: string }) => controller.startMediaGeneration(request));
   handle("media:get", (jobId: string) => controller.getMediaGenerationJob(jobId));
   handle("media:cancel", (jobId: string) => controller.cancelMediaGeneration(jobId));
-  handle("session:send", (id: string, text: string, attachments: Attachment[], clientMessageId?: string) => controller.sendPrompt(id, text, attachments, clientMessageId));
+  handle("session:send", (id: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string) => controller.sendPrompt(id, text, attachments, clientMessageId, draftKey, draftSubmissionId));
   handle("ui-fixture:get", () => controller.getOfflineUiFixture());
-  handle("session:enqueue", (id: string, text: string, attachments: Attachment[], clientMessageId?: string) => controller.enqueuePrompt(id, text, attachments, clientMessageId));
-  handle("session:interject", (id: string, text: string, attachments: Attachment[], clientMessageId?: string) => controller.interjectPrompt(id, text, attachments, clientMessageId));
+  handle("session:enqueue", (id: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string) => controller.enqueuePrompt(id, text, attachments, clientMessageId, draftKey, draftSubmissionId));
+  handle("session:interject", (id: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string) => controller.interjectPrompt(id, text, attachments, clientMessageId, draftKey, draftSubmissionId));
   handle("session:queue:edit", (sessionId: string, id: string, text: string) => controller.editQueuedPrompt(sessionId, id, text));
   handle("session:queue:remove", (sessionId: string, id: string) => controller.removeQueuedPrompt(sessionId, id));
   handle("session:queue:reorder", (sessionId: string, id: string, position: number) => controller.reorderQueuedPrompt(sessionId, id, position));
@@ -160,7 +161,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:mode", (id: string, mode: SessionMode) => controller.setMode(id, mode));
   handle("permission:respond", (id: string, requestId: string | number, optionId: string) => controller.respondPermission(id, requestId, optionId));
   handle("question:respond", (id: string, requestId: string | number, answers: Record<string, string>) => controller.respondQuestion(id, requestId, answers));
-  handle("plan:respond", (id: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string) => controller.respondPlan(id, requestId, verdict, comment));
+  handle("mcp-elicitation:respond", (id: string, requestId: string | number, outcome: "accept" | "decline" | "cancel", content?: Record<string, string | number | boolean>) => controller.respondMcpElicitation(id, requestId, outcome, content));
+  handle("plan:respond", (id: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string, executionMode?: "agent" | "auto") => controller.respondPlan(id, requestId, verdict, comment, executionMode));
   handle("attachments:pick", () => controller.pickAttachments());
   handle("attachments:pick-folders", () => controller.pickAttachmentFolders());
   handle("attachments:dropped", (paths: string[]) => controller.attachmentsFromDroppedPaths(paths));
@@ -235,7 +237,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:clear-context", (id: string) => controller.clearAutomationContext(id));
   handle("draft:get", (key: string) => controller.getDraft(key));
   handle("draft:list", () => controller.listDrafts());
-  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: import("../shared/types").NewTaskDraft) => controller.setDraft(key, text, capability, attachments, newTask));
+  handle("draft:set", (key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: import("../shared/types").NewTaskDraft, submissionId?: string) => controller.setDraft(key, text, capability, attachments, newTask, submissionId));
   handle("draft:move", (sourceKey: string, targetKey: string) => controller.moveDraft(sourceKey, targetKey));
   handle("draft:clear", (key: string) => controller.clearDraft(key));
   handle("draft:text:create", (key: string, text: string) => controller.createTextDraftAttachment(key, text));
@@ -275,8 +277,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("computer:settings:update", (patch: Partial<ComputerUseSettings>) => controller.updateComputerSettings(patch));
   handle("cli:check-update", () => controller.checkCliUpdate());
   handle("updates:auto-check", () => controller.checkUpdatesAutomatically());
-  handle("cli:update-preview", () => controller.previewCliUpdate());
-  handle("cli:apply-update", (input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }) => controller.applyCliUpdate(input));
+  handle("cli:update-preview", (policy?: CliUpdatePolicy, action?: CliUpdateAction) => controller.previewCliUpdate(policy, action));
+  handle("cli:update-state", () => controller.getCliUpdateState());
+  handle("cli:apply-update", (input: CliUpdateInput) => controller.applyCliUpdate(input));
   handle("cli:compatibility", () => controller.getCliCompatibilitySnapshot());
   handle("cli:update-history", () => controller.getCliUpdateHistory());
   handle("logs:export", () => controller.exportLogs());

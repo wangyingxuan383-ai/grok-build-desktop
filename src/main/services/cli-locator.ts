@@ -11,7 +11,7 @@ export const CLI_CHANGELOG_URL = "https://x.ai/build/changelog";
 // Highest public release observed in the official changelog when this build
 // was cut. It is display-only: it does not prove wire compatibility, and the
 // CLI stable feed remains the sole authority for an installable target.
-export const KNOWN_PUBLIC_CLI_VERSION = "1.0.5";
+export const KNOWN_PUBLIC_CLI_VERSION = "1.0.13";
 
 export interface GrokConfigSourceDiagnostic {
   kind: "default" | "path" | "inline" | "multiple";
@@ -103,6 +103,12 @@ export function buildCliEnv(settings: AppSettings, apiKey?: string): NodeJS.Proc
   return env;
 }
 
+export function cliProxyRoute(settings: AppSettings, env: NodeJS.ProcessEnv = process.env): NonNullable<CliVersionStatus["proxyRoute"]> {
+  if (settings.httpProxy?.trim() || settings.httpsProxy?.trim()) return "application-proxy";
+  if (env.HTTP_PROXY?.trim() || env.HTTPS_PROXY?.trim() || env.ALL_PROXY?.trim()) return "environment-proxy";
+  return "direct-or-system";
+}
+
 export async function readCliVersion(cliPath: string, env = process.env): Promise<string | undefined> {
   try {
     const { stdout } = await execFileAsync(cliPath, ["version", "--json"], { env, timeout: 15_000, windowsHide: true });
@@ -139,6 +145,7 @@ export async function checkCliUpdate(cliPath: string, env = process.env): Promis
       changelogUrl: CLI_CHANGELOG_URL,
       publicLatestVersion: KNOWN_PUBLIC_CLI_VERSION,
       majorUpgrade: isMajorUpgrade(result.currentVersion, result.latestVersion),
+      currentAhead: Boolean(result.currentVersion && result.latestVersion && compareVersions(result.currentVersion, result.latestVersion) > 0),
       distributionState: result.error ? "error" : publicAhead ? "public-ahead" : result.updateAvailable ? "stable-update" : "current",
     };
   } catch (error) {

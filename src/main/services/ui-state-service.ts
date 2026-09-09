@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Attachment, ComposerCapabilitySelection, ComposerDraftState, NewTaskDraft } from "../../shared/types";
 import { JsonStore } from "./json-store";
@@ -9,11 +9,13 @@ const MAX_TEXT_DRAFT_BYTES = 5 * 1024 * 1024;
 interface UiStateData {
   drafts: Record<string, ComposerDraftState>;
   promptHistory: Record<string, string[]>;
+  submissions?: Record<string, { draft: ComposerDraftState; state: "pending" | "failed" }>;
 }
 
 export class UiStateService {
   private readonly store: JsonStore<UiStateData>;
   private readonly draftAttachmentRoot: string;
+  private readonly protectedDraftFiles = new Map<string, Map<string, number>>();
 
   constructor(userDataPath: string) {
     this.store = new JsonStore(join(userDataPath, "ui-state.json"), { drafts: {}, promptHistory: {} });
@@ -21,15 +23,24 @@ export class UiStateService {
   }
 
   async getDraft(key: string): Promise<ComposerDraftState | null> {
-    return (await this.store.get()).drafts[normalizeKey(key)] ?? null;
+    const data = await this.store.get();
+    return data.drafts[normalizeKey(key)] ?? Object.values(data.submissions ?? {}).reverse().find((entry) => entry.state === "failed" && normalizeKey(entry.draft.key) === normalizeKey(key))?.draft ?? null;
   }
 
-  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = [], newTask?: NewTaskDraft): Promise<void> {
+  async setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments: Attachment[] = [], newTask?: NewTaskDraft, submissionId?: string): Promise<void> {
     const normalized = normalizeKey(key);
     const persistedAttachments = attachments.filter((attachment) => attachment.path && isAbsolute(attachment.path) && (!attachment.draftText || this.isDraftPathForKey(key, attachment.path)));
     await this.store.mutate((data) => {
+      // Consume only the exact failed snapshot being retried. An unrelated failed
+      // prompt remains recoverable even while a newer follow-up is submitted.
+      if (submissionId) for (const [id, entry] of Object.entries(data.submissions ?? {})) {
+        if (entry.state === "failed" && normalizeKey(entry.draft.key) === normalized && entry.draft.text === text
+          && JSON.stringify(entry.draft.attachments ?? []) === JSON.stringify(persistedAttachments)
+          && JSON.stringify(entry.draft.capability) === JSON.stringify(capability)) delete data.submissions![id];
+      }
       if (!text && !capability && !persistedAttachments.length && !newTask) delete data.drafts[normalized];
-      else data.drafts[normalized] = { key, text, capability, attachments: persistedAttachments, newTask, updatedAt: new Date().toISOString() };
+      else data.drafts[normalized] = { key, text, capability, attachments: persistedAttachments, newTask, ...(submissionId ? { submissionId } : {}), updatedAt: new Date().toISOString() };
+      if (submissionId && data.drafts[normalized]) (data.submissions ??= {})[submissionId] = { draft: structuredClone(data.drafts[normalized]), state: "pending" };
     });
     await this.cleanupDraftDirectory(key, new Set(persistedAttachments.flatMap((attachment) => attachment.draftText && attachment.path ? [resolve(attachment.path)] : [])));
   }
@@ -65,6 +76,9 @@ export class UiStateService {
         if (data.drafts[targetNormalized]) throw new Error("目标会话已有草稿；未覆盖任何内容");
         delete data.drafts[sourceNormalized];
         data.drafts[targetNormalized] = moved;
+        for (const entry of Object.values(data.submissions ?? {})) {
+          if (normalizeKey(entry.draft.key) === sourceNormalized) entry.draft = { ...entry.draft, key: targetKey, attachments: entry.draft.attachments?.map((attachment) => attachment.draftText && attachment.path && this.isDraftPathForKey(sourceKey, attachment.path) ? { ...attachment, path: join(targetDirectory, relative(sourceDirectory, attachment.path)) } : attachment) };
+        }
       });
     } catch (error) {
       if (attachmentDirectoryMoved) {
@@ -81,7 +95,90 @@ export class UiStateService {
     // a pasted-text attachment after the row has been removed; retry cache
     // cleanup, then leave any survivor for sweepDraftAttachments on startup
     // instead of reporting a false "draft deletion failed" to the user.
-    await rm(this.draftDirectory(key), { recursive: true, force: true, maxRetries: 3, retryDelay: 80 }).catch(() => undefined);
+    await this.store.mutate((data) => { for (const [id, entry] of Object.entries(data.submissions ?? {})) if (entry.state === "failed" && normalizeKey(entry.draft.key) === normalizeKey(key)) delete data.submissions![id]; });
+    await this.cleanupDraftDirectory(key, new Set()).catch(() => undefined);
+  }
+
+  /** Durable recovery is owned by the host, never by a late Renderer callback. */
+  async settleSubmission(submissionId: string | undefined, succeeded: boolean): Promise<void> {
+    if (!submissionId) return;
+    let key: string | undefined;
+    await this.store.mutate((data) => {
+      const entry = data.submissions?.[submissionId];
+      if (!entry) return;
+      key = entry.draft.key;
+      if (succeeded) delete data.submissions![submissionId];
+      else {
+        entry.state = "failed";
+        const normalized = normalizeKey(key);
+        if (!data.drafts[normalized]) data.drafts[normalized] = structuredClone(entry.draft);
+      }
+    });
+    if (key && succeeded) await this.cleanupDraftDirectory(key, new Set()).catch(() => undefined);
+  }
+
+  private async referencedPaths(): Promise<Set<string>> {
+    const data = await this.store.get();
+    const drafts = [...Object.values(data.drafts), ...Object.values(data.submissions ?? {}).map((entry) => entry.draft)];
+    return new Set(drafts.flatMap((draft) => (draft.attachments ?? []).flatMap((a) => a.draftText && a.path ? [resolve(a.path)] : [])));
+  }
+
+  /**
+   * Consume the persisted row without deleting its attachment directory yet.
+   * A send operation first materializes every attachment into the immutable
+   * session cache, then calls this method. If ACP submission fails, the
+   * Renderer can safely recreate the row from the still-existing files.
+   */
+  async detachDraftForSubmission(key: string, submissionId?: string): Promise<string[]> {
+    const detachedFiles: string[] = [];
+    await this.store.mutate((data) => {
+      const draft = data.drafts[normalizeKey(key)];
+      if (!draft || (submissionId && draft.submissionId !== submissionId)) return;
+      for (const attachment of draft?.attachments ?? []) {
+        if (attachment.draftText && attachment.path && this.isDraftPathForKey(key, attachment.path)) {
+          detachedFiles.push(resolve(attachment.path));
+        }
+      }
+      delete data.drafts[normalizeKey(key)];
+    });
+    return detachedFiles;
+  }
+
+  /** Keep a submitted text file alive while it is copied into session cache. */
+  protectDraftFiles(key: string, paths: readonly string[]): () => void {
+    const protectedPaths = paths.map((value) => resolve(value)).filter((value) => this.isDraftPathForKey(key, value));
+    const normalized = normalizeKey(key);
+    const current = this.protectedDraftFiles.get(normalized) ?? new Map<string, number>();
+    for (const path of protectedPaths) current.set(path, (current.get(path) ?? 0) + 1);
+    if (current.size) this.protectedDraftFiles.set(normalized, current);
+    return () => {
+      const active = this.protectedDraftFiles.get(normalized);
+      if (!active) return;
+      for (const path of protectedPaths) {
+        const count = active.get(path) ?? 0;
+        if (count <= 1) active.delete(path);
+        else active.set(path, count - 1);
+      }
+      if (!active.size) this.protectedDraftFiles.delete(normalized);
+    };
+  }
+
+  /**
+   * Remove only the files that belonged to the submitted draft snapshot.
+   * A user may start composing the next follow-up while the previous prompt is
+   * still running; recursively deleting the keyed directory at turn completion
+   * would otherwise erase those newly-created attachments.
+   */
+  async discardDetachedDraftFiles(key: string, paths: readonly string[]): Promise<void> {
+    const referenced = await this.referencedPaths();
+    for (const path of new Set(paths.map((value) => resolve(value)))) {
+      if (!this.isDraftPathForKey(key, path) || referenced.has(path)) continue;
+      await rm(path, { force: true, maxRetries: 3, retryDelay: 80 }).catch(() => undefined);
+    }
+    const directory = this.draftDirectory(key);
+    if (!(await readdir(directory).catch(() => [])).length) {
+      await rm(directory, { force: true }).catch(() => undefined);
+    }
   }
 
   async createTextDraftAttachment(key: string, text: string): Promise<Attachment> {
@@ -115,14 +212,45 @@ export class UiStateService {
     return readFile(target, "utf8");
   }
 
+  /**
+   * Re-authorize a renderer-restored text attachment for one concrete
+   * session. Picker grants are intentionally process-local, while draft files
+   * survive restarts, so relying only on the in-memory issued-path set makes a
+   * legitimate restored attachment fail after relaunch. The keyed cache
+   * directory is the durable authority and also prevents cross-draft reads.
+   */
+  async resolveTextDraftAttachment(key: string, path: string): Promise<string> {
+    const target = await this.resolveDraftPath(path, true);
+    // The user-data root may be a Windows short path or junction. Compare both
+    // sides in canonical-root space, but do not realpath the keyed directory:
+    // a junction there must not authorize another session's attachments.
+    const canonicalRoot = await realpath(this.draftAttachmentRoot);
+    const keyedDirectory = join(canonicalRoot, relative(this.draftAttachmentRoot, this.draftDirectory(key)));
+    const keyedRelative = relative(keyedDirectory, target);
+    if (!keyedRelative || keyedRelative.startsWith("..") || isAbsolute(keyedRelative)) throw new Error("文本草稿不属于当前会话");
+    const info = await stat(target);
+    if (!info.isFile() || info.size > MAX_TEXT_DRAFT_BYTES) throw new Error("文本草稿不存在或超过大小限制");
+    return target;
+  }
+
   async deleteTextDraftAttachment(path: string): Promise<void> {
     const target = await this.resolveDraftPath(path, false);
+    const data = await this.store.get();
+    if (Object.values(data.submissions ?? {}).some((entry) => entry.draft.attachments?.some((a) => a.path && resolve(a.path) === target))) return;
     await rm(target, { force: true });
   }
 
   async sweepDraftAttachments(): Promise<void> {
-    const drafts = Object.values((await this.store.get()).drafts);
-    const keep = new Set(drafts.flatMap((draft) => (draft.attachments ?? []).flatMap((attachment) => attachment.draftText && attachment.path ? [resolve(attachment.path)] : [])));
+    // Called once on startup: pending records from the prior host are recoverable,
+    // never automatically resent. Keep newer drafts authoritative.
+    await this.store.mutate((data) => {
+      for (const entry of Object.values(data.submissions ?? {})) {
+        entry.state = "failed";
+        const key = normalizeKey(entry.draft.key);
+        if (!data.drafts[key]) data.drafts[key] = structuredClone(entry.draft);
+      }
+    });
+    const keep = await this.referencedPaths();
     for (const directory of await readdir(this.draftAttachmentRoot, { withFileTypes: true }).catch(() => [])) {
       const directoryPath = join(this.draftAttachmentRoot, directory.name);
       if (!directory.isDirectory()) { await rm(directoryPath, { recursive: true, force: true }); continue; }
@@ -177,11 +305,19 @@ export class UiStateService {
 
   private async cleanupDraftDirectory(key: string, keep: Set<string>): Promise<void> {
     const directory = this.draftDirectory(key);
-    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
-      const path = join(directory, entry.name);
-      if (!entry.isFile() || !keep.has(resolve(path))) await rm(path, { recursive: true, force: true });
-    }
-    if (!(await readdir(directory).catch(() => [])).length) await rm(directory, { recursive: true, force: true });
+    // Keep the reference read and deletion under the same store lock: a late
+    // autosave must not delete a file after a new submission has protected it.
+    await this.store.mutate(async (data) => {
+      for (const draft of [...Object.values(data.drafts), ...Object.values(data.submissions ?? {}).map((entry) => entry.draft)]) {
+        for (const attachment of draft.attachments ?? []) if (attachment.draftText && attachment.path) keep.add(resolve(attachment.path));
+      }
+      for (const path of this.protectedDraftFiles.get(normalizeKey(key))?.keys() ?? []) keep.add(path);
+      for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+        const path = join(directory, entry.name);
+        if (!entry.isFile() || !keep.has(resolve(path))) await rm(path, { recursive: true, force: true });
+      }
+    });
+    await rmdir(directory).catch(() => undefined); // Never recursively delete a directory that just gained a new attachment.
   }
 }
 

@@ -1,3 +1,4 @@
+import { deleteCliSession } from "./cli-session-service";
 import { createServer } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -77,15 +78,20 @@ max_completion_tokens = 1024
       modelId: "grok-desktop-env-probe",
       log: new LogService(join(root, "probe.log")),
     });
+    let primaryFailed = false;
     try {
       await adapter.start();
       await adapter.prompt("Reply only OK.");
       expect(capturedUrl).toBe("/v1/chat/completions");
       expect(capturedAuthorization).toBe("Bearer local-probe-placeholder");
       expect(JSON.parse(capturedBody)).toMatchObject({ model: "upstream-probe" });
-    } finally {
-      await adapter.dispose();
-      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    } catch (error) { primaryFailed = true; throw error; }
+    finally {
+      try { await adapter.dispose(); }
+      finally {
+        try { if (adapter.sessionId) await deleteCliSession(cliPath, adapter.sessionId, { ...process.env, GROK_HOME: grokHome }).catch((error) => { if (!primaryFailed) throw error; console.error("LIVE_SESSION_CLEANUP_FAILED", String(error)); }); }
+        finally { await new Promise<void>((resolve) => upstream.close(() => resolve())); }
+      }
     }
   }, 30_000);
 });

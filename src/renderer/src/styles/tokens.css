@@ -34,4 +34,11 @@
   --danger: #ef6c72;
   --success: #56c596;
   --warning: #e7b75d;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --control-height: 32px;
 }
