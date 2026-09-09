@@ -1,8 +1,9 @@
+import { deleteCliSession } from "./cli-session-service";
 import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { ComputerUseService } from "./computer-use-service";
 import { GrokAcpAdapter } from "./grok-acp-adapter";
 
@@ -16,13 +17,15 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER !== "1")("real Grok Computer Use 
     const service = new ComputerUseService(userData, join(root, "resources", "native", "win-x64", "GrokComputerHost.exe"), join(root, "resources", "plugins", "grok-computer-use"), log, () => "agent", () => undefined);
     const injection = await service.createSessionInjection();
     const adapter = new GrokAcpAdapter({ cliPath: cli, cwd, env: process.env, effort: "low", mode: "agent", log, sessionMcpServers: injection.mcpServers, pluginDirs: injection.pluginDirs });
+    onTestFinished(async () => { if (adapter.sessionId) await deleteCliSession(cli, adapter.sessionId, process.env); });
     try {
       const created = await adapter.start(); service.bindLease(injection.leaseId, created.sessionId);
       const commands = await adapter.waitForCommands(5_000);
       expect(commands.some((value) => /(^|:)computer$/.test(value.name))).toBe(true);
       expect((await service.listApps()).length).toBeGreaterThan(0);
     } finally {
-      await adapter.dispose(); await service.dispose(); await removeTemporaryPath(userData); await removeTemporaryPath(cwd);
+      await adapter.dispose();
+      await service.dispose(); await removeTemporaryPath(userData); await removeTemporaryPath(cwd);
     }
   }, 120_000);
 });
@@ -54,6 +57,7 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER_ACTION !== "1" || process.platfor
     await service.updateSettings({ enabled: true, experimentalUnlocked: true });
     const injection = await service.createSessionInjection();
     const adapter = new GrokAcpAdapter({ cliPath: cli, cwd, env: process.env, effort: "low", mode: "auto", log, sessionMcpServers: injection.mcpServers, pluginDirs: injection.pluginDirs });
+    onTestFinished(async () => { if (adapter.sessionId) await deleteCliSession(cli, adapter.sessionId, process.env); });
     adapter.on("event", (event) => trace.push(`event:${event.type}${event.type === "status" ? `:${event.status}` : ""}`));
     try {
       const app = await waitFor(async () => (await service.listApps()).find((value) => value.processName === "GrokComputerTestPage"), 15_000, "test app");
@@ -93,7 +97,8 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER_ACTION !== "1" || process.platfor
         passed: true,
       }, null, 2), "utf8");
     } finally {
-      await adapter.dispose(); await service.dispose();
+      await adapter.dispose();
+      await service.dispose();
       if (appProcess.exitCode === null) {
         appProcess.kill();
         await Promise.race([

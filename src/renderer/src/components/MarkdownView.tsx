@@ -7,7 +7,7 @@ import remarkMath from "remark-math";
 
 export const MarkdownView = memo(function MarkdownView({ text }: { text: string }): React.JSX.Element {
   return (
-    <ReactMarkdown
+    <div className="markdown-body"><ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeSanitize, rehypeKatex]}
       components={{
@@ -20,7 +20,7 @@ export const MarkdownView = memo(function MarkdownView({ text }: { text: string 
           return <code {...props} className={className}>{children}</code>;
         },
       }}
-    >{text}</ReactMarkdown>
+    >{text}</ReactMarkdown></div>
   );
 });
 

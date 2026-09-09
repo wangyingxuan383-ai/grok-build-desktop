@@ -113,6 +113,7 @@ export class OfflineUiSessionResponder {
     requestId: string | number | undefined,
     verdict: "approved" | "rejected" | "cancelled",
     _comment = "",
+    executionMode: "agent" | "auto" = "agent",
   ): Promise<PlanDecisionReceipt> {
     this.assertSession(sessionId, OFFLINE_UI_SESSION_IDS.waiting);
     const requested = String(requestId ?? "");
@@ -127,7 +128,8 @@ export class OfflineUiSessionResponder {
       requestId: requested,
       verdict,
       state: "accepted",
-      message: verdict === "approved" ? "计划已批准，原回合将继续执行" : verdict === "rejected" ? "已要求继续规划" : "计划已取消",
+      message: verdict === "approved" ? `计划已批准，将以${executionMode === "auto" ? "自动批准" : "Agent 询问"}策略继续执行` : verdict === "rejected" ? "已要求继续规划" : "计划已取消",
+      ...(verdict === "approved" ? { executionMode } : {}),
     };
     this.state.waiting.planPending = false;
     this.state.waiting.planReceipts.set(requested, receipt);
@@ -141,7 +143,7 @@ export class OfflineUiSessionResponder {
       requestId: requested,
       outcome: verdict,
     });
-    if (verdict !== "rejected") await this.publish({ type: "mode", sessionId, mode: "agent" });
+    if (verdict !== "rejected") await this.publish({ type: "mode", sessionId, mode: executionMode });
     await this.publishWaitingStatus();
     return receipt;
   }

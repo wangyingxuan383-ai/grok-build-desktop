@@ -733,6 +733,7 @@ export interface PlanDecisionReceipt {
   verdict: "approved" | "rejected" | "cancelled";
   state: "accepted" | "duplicate";
   message: string;
+  executionMode?: "agent" | "auto";
 }
 
 export interface BackgroundTaskSummary {
@@ -1000,6 +1001,8 @@ export interface ComposerDraftState {
   capability?: ComposerCapabilitySelection;
   attachments?: Attachment[];
   newTask?: NewTaskDraft;
+  /** Ephemeral ownership marker used to consume only the snapshot being sent. */
+  submissionId?: string;
   updatedAt: string;
 }
 
@@ -1586,6 +1589,38 @@ export interface QuestionItem {
   multiSelect?: boolean;
 }
 
+export type McpElicitationPrimitive = string | number | boolean;
+
+export interface McpElicitationSchemaProperty {
+  type: "string" | "number" | "integer" | "boolean";
+  title?: string;
+  description?: string;
+  enum?: McpElicitationPrimitive[];
+  minimum?: number;
+  maximum?: number;
+  minLength?: number;
+  maxLength?: number;
+  default?: McpElicitationPrimitive;
+}
+
+export interface McpElicitationRequest {
+  requestId: string | number;
+  sessionId: string;
+  toolCallId: string;
+  serverName: string;
+  message: string;
+  mode: "form" | "url";
+  requestedSchema?: {
+    type: "object";
+    properties: Record<string, McpElicitationSchemaProperty>;
+    required?: string[];
+  };
+  url?: string;
+  elicitationId?: string;
+  schemaSupported: boolean;
+  unsupportedReason?: string;
+}
+
 export interface ConversationProjection {
   version: 1 | 2;
   sessionId: string;
@@ -1611,8 +1646,9 @@ export type ChatEvent =
   | { type: "tool-call"; sessionId: string; tool: ToolCallState }
   | { type: "permission"; sessionId: string; request: PermissionRequest }
   | { type: "question"; sessionId: string; requestId: string | number; questions: QuestionItem[] }
-  | { type: "plan"; sessionId: string; requestId?: string | number; text: string }
-  | { type: "interaction-resolved"; sessionId: string; interaction: "permission" | "question" | "plan"; requestId: string | number; outcome?: string }
+  | { type: "mcp-elicitation"; sessionId: string; request: McpElicitationRequest }
+  | { type: "plan"; sessionId: string; requestId?: string | number; text: string; executionMode?: "agent" | "auto" }
+  | { type: "interaction-resolved"; sessionId: string; interaction: "permission" | "question" | "plan" | "mcp-elicitation"; requestId: string | number; outcome?: string }
   | { type: "media"; sessionId: string; media: "image" | "video"; source: string; isData?: boolean; mimeType?: string }
   | { type: "commands"; sessionId: string; commands: CommandInfo[] }
   | { type: "mode"; sessionId: string; mode: SessionMode | string }
@@ -1637,6 +1673,7 @@ export type ChatEvent =
 
 export interface CliVersionStatus {
   found: boolean;
+  currentAhead?: boolean;
   path?: string;
   currentVersion?: string;
   latestVersion?: string;
@@ -1651,6 +1688,8 @@ export interface CliVersionStatus {
   majorUpgrade?: boolean;
   updateAvailable?: boolean;
   error?: string | null;
+  /** Safe route label only; proxy URLs and credentials never cross IPC. */
+  proxyRoute?: "application-proxy" | "environment-proxy" | "direct-or-system";
 }
 
 export type CliCapabilityEvidenceSource = "runtime-declaration" | "successful-probe" | "observed-event" | "version-hint";
@@ -1802,7 +1841,23 @@ export interface CliCompatibilitySnapshot {
   gate?: CliCompatibilityGate;
 }
 
+export type CliUpdatePolicy = "standard" | "try-new" | "retain-unverified";
+export type CliUpdateAction = "update" | "verify" | "rollback";
+export interface CliUpdateInput {
+  action?: CliUpdateAction;
+  targetVersion: string;
+  expectedCurrentVersion: string;
+  allowMajorUpgrade?: boolean;
+  policy?: CliUpdatePolicy;
+  confirmationToken?: string;
+}
+export interface CliUpdateState {
+  phase: "idle" | "preparing" | "downloading" | "verifying" | "rolling-back" | "restoring";
+  recovery?: { previousVersion: string; targetVersion: string; retained: boolean };
+}
 export interface CliUpdatePreview {
+  policy?: CliUpdatePolicy;
+  confirmationToken?: string;
   fromVersion: string;
   targetVersion: string;
   channel?: string;
@@ -1813,15 +1868,23 @@ export interface CliUpdatePreview {
   publicVersionAhead: boolean;
   majorUpgrade: boolean;
   compatibilityGate?: CliCompatibilityGate;
+  proxyRoute?: CliVersionStatus["proxyRoute"];
 }
 
 export interface CliUpdateReceipt {
   fromVersion: string;
   toVersion: string;
-  status: "updated" | "rolled-back" | "failed";
+  status: "updated" | "rolled-back" | "failed" | "retained-unverified";
+  policy?: CliUpdatePolicy;
+  failureStage?: CliUpdateState["phase"];
   verifiedAt: string;
   message: string;
   compatibility?: CliCompatibilitySnapshot;
+  warnings?: string[];
+  sessionRestore?: {
+    status: "restored" | "partial" | "not-needed" | "deferred";
+    message?: string;
+  };
 }
 
 export interface CliRuntimeUpdate {
@@ -1929,9 +1992,10 @@ export interface LoginState {
 
 export interface CliUpdateRecord {
   at: string;
+  policy?: CliUpdatePolicy;
   from?: string;
   to?: string;
-  status: "checked" | "updated" | "rolled-back" | "failed";
+  status: "checked" | "updated" | "rolled-back" | "failed" | "retained-unverified";
   message: string;
 }
 
@@ -1956,6 +2020,13 @@ export interface SendPromptInput {
   text: string;
   attachments: Attachment[];
   clientMessageId?: string;
+  /**
+   * Draft row consumed by this submission. The main process removes it only
+   * after every attachment has been copied into the session cache, so a
+   * pasted-text file cannot disappear between Renderer cleanup and ACP send.
+   */
+  draftKey?: string;
+  draftSubmissionId?: string;
 }
 
 export interface OfflineUiFixture {
@@ -2098,7 +2169,8 @@ export interface GrokDesktopApi {
   setMode(sessionId: string, mode: SessionMode): Promise<void>;
   respondPermission(sessionId: string, requestId: string | number, optionId: string): Promise<void>;
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>): Promise<void>;
-  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string): Promise<PlanDecisionReceipt>;
+  respondMcpElicitation(sessionId: string, requestId: string | number, outcome: "accept" | "decline" | "cancel", content?: Record<string, McpElicitationPrimitive>): Promise<void>;
+  respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string, executionMode?: "agent" | "auto"): Promise<PlanDecisionReceipt>;
   pickAttachments(): Promise<Attachment[]>;
   pickAttachmentFolders(): Promise<Attachment[]>;
   attachmentsFromPaths(paths: string[], sessionId?: string): Promise<Attachment[]>;
@@ -2170,8 +2242,8 @@ export interface GrokDesktopApi {
   repairAutomationRegistrations(): Promise<AutomationTask[]>;
   checkAutomationHealth(repair?: boolean): Promise<import("./workbench-types").AutomationHealthReport>;
   clearAutomationContext(id: string): Promise<AutomationTask[]>;
-  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<QueueOperationReceipt>;
-  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<QueueOperationReceipt>;
+  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string): Promise<QueueOperationReceipt>;
+  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string): Promise<QueueOperationReceipt>;
   editQueuedPrompt(sessionId: string, id: string, text: string): Promise<QueueOperationReceipt>;
   removeQueuedPrompt(sessionId: string, id: string): Promise<QueueOperationReceipt>;
   reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<QueueOperationReceipt>;
@@ -2189,7 +2261,7 @@ export interface GrokDesktopApi {
   clearInbox(): Promise<NotificationInboxItem[]>;
   getDraft(key: string): Promise<ComposerDraftState | null>;
   listDrafts(): Promise<ComposerDraftState[]>;
-  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: NewTaskDraft): Promise<void>;
+  setDraft(key: string, text: string, capability?: ComposerCapabilitySelection, attachments?: Attachment[], newTask?: NewTaskDraft, submissionId?: string): Promise<void>;
   moveDraft(sourceKey: string, targetKey: string): Promise<ComposerDraftState | null>;
   clearDraft(key: string): Promise<void>;
   createTextDraftAttachment(key: string, text: string): Promise<Attachment>;
@@ -2229,8 +2301,9 @@ export interface GrokDesktopApi {
   updateComputerSettings(patch: Partial<ComputerUseSettings>): Promise<ComputerUseSettings>;
   checkCliUpdate(): Promise<CliVersionStatus>;
   checkUpdatesAutomatically(): Promise<AutomaticUpdateCheckResult>;
-  previewCliUpdate(): Promise<CliUpdatePreview>;
-  applyCliUpdate(input: { targetVersion: string; expectedCurrentVersion: string; allowMajorUpgrade?: boolean }): Promise<CliUpdateReceipt>;
+  previewCliUpdate(policy?: CliUpdatePolicy, action?: CliUpdateAction): Promise<CliUpdatePreview>;
+  getCliUpdateState(): Promise<CliUpdateState>;
+  applyCliUpdate(input: CliUpdateInput): Promise<CliUpdateReceipt>;
   getCliCompatibilitySnapshot(): Promise<CliCompatibilitySnapshot>;
   getCliUpdateHistory(): Promise<CliUpdateRecord[]>;
   exportLogs(): Promise<string | null>;

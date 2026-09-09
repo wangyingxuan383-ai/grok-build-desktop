@@ -256,10 +256,10 @@ describe("session event reducer", () => {
 
   it("keeps plan documents separate from actionable plan decisions and resolves by request id", () => {
     let state = apply(baseState(), { type: "plan", sessionId: "session", text: "draft plan" });
-    state = apply(state, { type: "plan", sessionId: "session", requestId: 41, text: "approve this plan" });
+    state = apply(state, { type: "plan", sessionId: "session", requestId: 41, text: "approve this plan", executionMode: "auto" });
     expect(state.views.session.messages).toEqual([
       expect.objectContaining({ kind: "plan", interactive: false, text: "draft plan" }),
-      expect.objectContaining({ kind: "plan", requestId: 41, interactive: true, text: "approve this plan" }),
+      expect.objectContaining({ kind: "plan", requestId: 41, interactive: true, text: "approve this plan", executionMode: "auto" }),
     ]);
     state = apply(state, { type: "interaction-resolved", sessionId: "session", interaction: "plan", requestId: 41, outcome: "approved" });
     const [turn] = buildChatTurns(state.views.session.messages, "working");
@@ -276,6 +276,13 @@ describe("session event reducer", () => {
     });
     expect(state.views.session.messages[0]).toMatchObject({ kind: "permission", resolved: true });
     expect(buildChatTurns(state.views.session.messages, "idle")[0]?.pending).toEqual([]);
+  });
+
+  it("keeps MCP reverse requests in the owning session and removes them after resolution", () => {
+    let state = apply(baseState(), { type: "mcp-elicitation", sessionId: "session", request: { requestId: "mcp-1", sessionId: "session", toolCallId: "tool", serverName: "GitHub", message: "授权", mode: "url", url: "https://example.com/auth", schemaSupported: true } });
+    expect(state.views.session.messages).toContainEqual(expect.objectContaining({ kind: "mcp-elicitation", request: expect.objectContaining({ requestId: "mcp-1" }) }));
+    state = apply(state, { type: "interaction-resolved", sessionId: "session", interaction: "mcp-elicitation", requestId: "mcp-1", outcome: "accept" });
+    expect(buildChatTurns(state.views.session.messages, "working")[0]?.pending).toEqual([]);
   });
 });
 

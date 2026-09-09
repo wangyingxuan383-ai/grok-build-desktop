@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const endpoint = process.argv[2];
 if (!endpoint) throw new Error("Usage: node scripts/probe-v070-ui.mjs <cdp-endpoint>");
@@ -80,12 +80,12 @@ async function scrollToFind(selector, message, steps = 70) {
 async function collectVirtualizedText(selector, steps = 40) {
   const scroller = "document.querySelector('.conversation')";
   const values = new Set();
-  await evaluate(`(() => { const s=${scroller}; if (s) s.scrollTop = 0; return true; })()`);
-  await sleep(300);
+  await evaluate(`(() => { const s=${scroller}; if (s) { s.scrollTop = 0; s.dispatchEvent(new Event('scroll')); } return true; })()`);
+  await sleep(750);
   for (let step = 0; step < steps; step += 1) {
     const mounted = await evaluate(`Array.from(document.querySelectorAll(${JSON.stringify(selector)})).map((node) => node.textContent || '')`);
     for (const value of mounted || []) values.add(value);
-    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); return s.scrollTop === before; })()`);
+    const atEnd = await evaluate(`(() => { const s=${scroller}; if (!s) return true; const before = s.scrollTop; s.scrollTop = Math.min(s.scrollHeight, s.scrollTop + Math.max(200, s.clientHeight * 0.6)); s.dispatchEvent(new Event('scroll')); return s.scrollTop === before; })()`);
     await sleep(220);
     // An empty virtualized list may temporarily report that it is already at
     // the end while the selected projection is still hydrating.
@@ -125,7 +125,7 @@ async function reloadFixture() {
   await ensureFixtureSessions();
 }
 async function openFixtureSession(label) {
-  if (!(await clickText('.session-row', label))) throw new Error(`Fixture conversation is missing: ${label}`);
+  if (!(await clickText('.session-row .session-open', label))) throw new Error(`Fixture conversation is missing: ${label}`);
   await waitFor(() => callFunction("function (label) { return Array.from(document.querySelectorAll('.session-row.active')).some((node) => (node.textContent || '').includes(label)); }", label), `Fixture conversation did not become active: ${label}`);
   await sleep(350);
 }
@@ -226,8 +226,8 @@ try {
   await sleep(700);
   await reloadFixture();
   await waitFor(() => evaluate("Boolean(document.querySelector('.session-row.draft'))"), "Persisted draft row was lost after restart");
-  await evaluate("document.querySelector('.session-row.draft')?.click()");
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.1 重启后仍存在的草稿'"), "Persisted draft body was not restored after restart");
+  await evaluate("document.querySelector('.session-row.draft .session-open')?.click()");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.1 重启后仍存在的草稿'"), `Persisted draft body was not restored after restart: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, rows: Array.from(document.querySelectorAll('.session-row.draft')).map((node) => node.textContent), error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
   if ((await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
 
   // A background running conversation owns its own Stop button, queue and
@@ -246,14 +246,14 @@ try {
   const requestCards = await evaluate(`({ plan:Array.from(document.querySelectorAll('.codex-plan-request button')).map((node)=>node.textContent.trim()), permission:Array.from(document.querySelectorAll('[aria-label="权限确认"] button')).map((node)=>node.textContent.trim()) })`);
   if (!requestCards.plan.includes('实施计划') || !requestCards.plan.includes('继续规划') || !requestCards.permission.includes('仅本次允许') || !requestCards.permission.includes('拒绝并说明原因')) throw new Error(`Codex-style decision controls mismatch: ${JSON.stringify(requestCards)}`);
   await openFixtureSession('后台并行队列');
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '后台会话独立草稿'"), "Background draft was not restored after session switch");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '后台会话独立草稿'"), `Background draft was not restored after session switch: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, active: document.querySelector('.session-row.active')?.textContent, error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
   const decisionReceipts = [];
   decisionReceipts.push(await exercisePlanAndPermission('实施计划', '仅本次允许'));
   decisionReceipts.push(await exercisePlanAndPermission('继续规划', '仅本次允许'));
   decisionReceipts.push(await exercisePlanAndPermission('取消', '仅本次允许'));
   decisionReceipts.push(await exercisePlanAndPermission('取消', '拒绝并说明原因'));
   const stopReceipt = await exerciseStop();
-  await clickText('.session-row', '会话生命周期与并发验收');
+  await clickText('.session-row .session-open', '会话生命周期与并发验收');
   await waitFor(() => evaluate("!document.querySelector('.send-button.stop') && !document.querySelector('.prompt-queue')"), "Idle session inherited background controls");
   await scrollToFindText('.turn-metrics', '1分23秒', 'Completed turn metrics were not reachable');
   const turnMetrics = await evaluate(`Array.from(document.querySelectorAll('.turn-metrics')).map((node) => node.textContent || '').join(' · ')`);
@@ -317,6 +317,8 @@ try {
   // every supported build. Use physical window bounds when available, while
   // retaining the deterministic CSS viewport/DPR check as the portable path.
   const responsiveEvidence = [];
+  const screenshotDirectory = new URL("../out/ui-snapshots/", import.meta.url);
+  mkdirSync(screenshotDirectory, { recursive: true });
   for (const [physicalWidth, physicalHeight, scale] of [[1280, 720, 1.25], [1440, 810, 1.5], [1920, 1080, 2]]) {
     const cssWidth = Math.floor(physicalWidth / scale);
     const cssHeight = Math.floor(physicalHeight / scale);
@@ -325,7 +327,10 @@ try {
     await evaluate("window.dispatchEvent(new Event('resize'))"); await sleep(240);
     const bounds = await evaluate(`(() => { const box = document.querySelector('.composer')?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom, height: box.height, viewportWidth: innerWidth, viewportHeight: innerHeight, scale: devicePixelRatio } : null; })()`);
     if (!bounds || bounds.viewportWidth !== cssWidth || bounds.viewportHeight !== cssHeight || Math.abs(bounds.scale - scale) > 0.01 || bounds.top < 0 || bounds.bottom > bounds.viewportHeight + 1 || bounds.height < 50) throw new Error(`Composer escaped scaled usable viewport at ${physicalWidth}x${physicalHeight}@${scale} (${cssWidth}x${cssHeight} CSS): ${JSON.stringify(bounds)}`);
-    responsiveEvidence.push({ physicalWidth, physicalHeight, scale, cssWidth, cssHeight, composerHeight: bounds.height });
+    const capture = await request("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false });
+    const screenshot = `ui-${physicalWidth}x${physicalHeight}-${String(scale).replace(".", "_")}x.png`;
+    writeFileSync(new URL(screenshot, screenshotDirectory), Buffer.from(capture.data, "base64"));
+    responsiveEvidence.push({ physicalWidth, physicalHeight, scale, cssWidth, cssHeight, composerHeight: bounds.height, screenshot });
   }
 
   if (windowTarget) await request("Browser.setWindowBounds", { windowId: windowTarget.windowId, bounds: { width: 1100, height: 720, windowState: "normal" } });
@@ -348,7 +353,7 @@ try {
   if (tokenUi.cells !== 371 || !tokenUi.windows.includes("最近 24 小时") || !tokenUi.windows.includes("本月") || !tokenUi.privacy.includes("不包含任何提示词")) throw new Error(`Token activity mismatch: ${JSON.stringify(tokenUi)}`);
   await clickText('.settings-layout > nav button', '更新与诊断');
   const updateUi = await evaluate(`({ actions: document.querySelectorAll('.settings-action-list button').length, labels: Array.from(document.querySelectorAll('.settings-action-list button')).map((node) => node.textContent.trim()), resultRegion: document.querySelector('.settings-action-results')?.getAttribute('aria-live') })`);
-  if (updateUi.actions !== 5 || !updateUi.labels.includes('更新并验证 Grok CLI') || updateUi.resultRegion !== "polite") throw new Error(`Update/diagnostic actions mismatch: ${JSON.stringify(updateUi)}`);
+  if (updateUi.actions !== 5 || !updateUi.labels.includes('预览并更新 CLI') || updateUi.resultRegion !== "polite") throw new Error(`Update/diagnostic actions mismatch: ${JSON.stringify(updateUi)}`);
   await clickText('.settings-action-list button', '打开诊断中心');
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostics-panel'))"), "Settings did not navigate to diagnostics");
   await evaluate("document.querySelector('.diagnostics-panel > header .icon-button')?.click()");

@@ -40,11 +40,17 @@ try {
   const sourceChanged = current.repositoryCommit !== snapshot.repositoryCommit || current.sourceRevision !== snapshot.sourceRevision;
   // Source-only syncs remain visible in the JSON result but do not create
   // recurring issues once the distributed stable has already been verified.
-  const changed = stableChanged || current.stableVersion !== snapshot.verifiedDesktopCliVersion;
+  // The snapshot is advanced only after a maintainer has reviewed that stable
+  // release and recorded its fixture gap. Do not append the same comment every
+  // week merely because installed/live verification intentionally trails the
+  // reviewed stable; a later stable change will open or refresh its own issue.
+  const changed = stableChanged;
+  const verificationPending = current.stableVersion !== snapshot.verifiedDesktopCliVersion;
   const result = {
     changed,
     stableChanged,
     sourceChanged,
+    verificationPending,
     snapshot: {
       repositoryCommit: snapshot.repositoryCommit,
       sourceRevision: snapshot.sourceRevision,
@@ -61,6 +67,7 @@ try {
       `changed=${changed}`,
       `stable_changed=${stableChanged}`,
       `source_changed=${sourceChanged}`,
+      `verification_pending=${verificationPending}`,
       `stable_version=${current.stableVersion}`,
       `commit=${current.repositoryCommit}`,
       `source_revision=${current.sourceRevision}`,

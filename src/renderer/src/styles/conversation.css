@@ -20,6 +20,37 @@
   user-select: none;
 }
 
+/* Untrusted model/user text can contain account exports, hashes or Base64
+   without any break opportunity. Keep prose inside its card while preserving
+   independent horizontal scrolling for code and tables. */
+.message-row,
+.bubble,
+.assistant-body,
+.final-answer,
+.thought-card,
+.activity-items,
+.markdown-body,
+.markdown-body > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.markdown-body { overflow-wrap: anywhere; word-break: break-word; }
+.markdown-body p,
+.markdown-body li,
+.markdown-body blockquote,
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6,
+.markdown-body a,
+.markdown-body code:not(pre code) { overflow-wrap: anywhere; word-break: break-word; }
+.markdown-body pre,
+.markdown-body .code-wrap { max-width: 100%; overflow-x: auto; overflow-wrap: normal; word-break: normal; }
+.markdown-body pre code { white-space: pre; overflow-wrap: normal; word-break: normal; }
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
+
 .composer-text-chip {
   max-width: min(520px, 90vw);
 }
@@ -38,6 +69,21 @@
 }
 .composer-text-chip button {
   flex: 0 0 auto;
+}
+.attachment-row {
+  flex-wrap: nowrap;
+  max-height: 76px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.attachment-row > span {
+  flex: 0 0 auto;
+  max-width: min(420px, 72vw);
+}
+.review-comment-drafts {
+  max-height: 84px;
+  overflow: auto;
 }
 .composer-text-convert {
   padding: 4px 7px;
@@ -339,6 +385,34 @@
 }
 .media-unavailable strong { color: var(--text-secondary); }
 .media-unavailable span { max-width: 420px; font-size: 12px; line-height: 1.5; }
+
+.request-form-body {
+  display: grid;
+  gap: 10px;
+  max-height: min(44vh, 380px);
+  overflow: auto;
+  padding: 0 16px;
+}
+.request-form-body > label,
+.mcp-elicitation-fields > label {
+  margin: 0;
+}
+.final-answer-toolbar button { opacity: .72; }
+.final-answer:hover .final-answer-toolbar button,
+.final-answer:focus-within .final-answer-toolbar button { opacity: 1; }
+.permission-script,
+.codex-plan-request .plan-content,
+.mcp-elicitation-fields {
+  max-height: min(46vh, 420px);
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.permission-script pre,
+.error-detail pre {
+  overflow: auto;
+  overflow-wrap: normal;
+  white-space: pre;
+}
 .image-lightbox-actions {
   display: flex;
   gap: 5px;
@@ -347,4 +421,24 @@
   border-radius: 9px;
   background: #0d1015e8;
 }
+
+.mcp-elicitation-fields {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0;
+}
+.mcp-elicitation-fields > label,
+.mcp-elicitation-url {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.mcp-elicitation-fields small,
+.mcp-elicitation-url span { color: var(--muted); }
+.mcp-elicitation-url {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  margin: 10px 0;
+}
+.mcp-elicitation-url strong { overflow-wrap: anywhere; }
 

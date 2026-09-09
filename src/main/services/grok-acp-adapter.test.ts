@@ -34,11 +34,13 @@ describe("Grok ACP process arguments", () => {
     });
   });
 
-  it("lets source-verified 1.0.4-1.0.5 own image-aware reads without weakening unknown versions", () => {
+  it("lets source-verified 1.0.4-1.0.13 own image-aware reads without weakening unknown versions", () => {
     expect(buildAcpClientCapabilities("grok 1.0.3 (old)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.4 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.5 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
-    expect(buildAcpClientCapabilities("grok 1.0.6 (future)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.6 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.13 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.14 (future)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities()).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
   });
 
@@ -81,7 +83,109 @@ describe("Grok ACP process arguments", () => {
     expect(isSessionOwnedRuntimeMethod("session/update")).toBe(true);
     expect(isSessionOwnedRuntimeMethod("x.ai/queue/changed")).toBe(true);
     expect(isSessionOwnedRuntimeMethod("x.ai/session/interjection")).toBe(true);
+    expect(isSessionOwnedRuntimeMethod("x.ai/mcp/elicit")).toBe(true);
     expect(isSessionOwnedRuntimeMethod("x.ai/mcp/init_progress")).toBe(false);
+  });
+
+  it("handles bounded MCP form elicitation and sends the exact tagged response", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "s1",
+      working: true,
+      needsUser: false,
+      pendingPlanRequest: undefined,
+      pendingPermissionRequests: new Set(),
+      pendingQuestionRequests: new Set(),
+      pendingMcpElicitations: new Map(),
+      pendingInteractionRequestIds: new Map(),
+      emitEvent: vi.fn((event) => events.push(event)),
+      emitStatus: vi.fn(),
+      observeRuntimeExtension: vi.fn(),
+      respondError: vi.fn(),
+      write: vi.fn(() => true),
+      options: { log: { log: vi.fn() } },
+    });
+    await adapter.handleServerRequest("x.ai/mcp/elicit", "mcp-1", {
+      sessionId: "s1",
+      toolCallId: "tool-1",
+      serverName: "GitHub",
+      message: "Choose repository access",
+      mode: "form",
+      requestedSchema: {
+        type: "object",
+        properties: { repository: { type: "string", title: "Repository" }, private: { type: "boolean", default: false } },
+        required: ["repository"],
+      },
+    });
+    expect(events).toContainEqual(expect.objectContaining({ type: "mcp-elicitation", request: expect.objectContaining({ requestId: "mcp-1", schemaSupported: true, serverName: "GitHub" }) }));
+    adapter.respondMcpElicitation("mcp-1", "accept", { repository: "owner/repo", private: true });
+    expect(adapter.write).toHaveBeenCalledWith({ jsonrpc: "2.0", id: "mcp-1", result: { outcome: "accept", content: { repository: "owner/repo", private: true } } });
+    expect(events).toContainEqual(expect.objectContaining({ type: "interaction-resolved", interaction: "mcp-elicitation", requestId: "mcp-1", outcome: "accept" }));
+  });
+
+  it("fails closed for unsafe MCP URL elicitation and cancels pending requests on Stop", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "s1",
+      working: true,
+      needsUser: false,
+      cancelRequested: false,
+      pendingPlanRequest: undefined,
+      pendingPermissionRequests: new Set(),
+      pendingQuestionRequests: new Set(),
+      pendingMcpElicitations: new Map(),
+      pendingInteractionRequestIds: new Map(),
+      emitEvent: vi.fn((event) => events.push(event)),
+      emitStatus: vi.fn(),
+      observeRuntimeExtension: vi.fn(),
+      respondError: vi.fn(),
+      respondOk: vi.fn(),
+      write: vi.fn(() => true),
+      options: { log: { log: vi.fn() } },
+    });
+    await adapter.handleServerRequest("x.ai/mcp/elicit", "unsafe", { sessionId: "s1", serverName: "Bad", mode: "url", url: "http://example.com/auth" });
+    expect(adapter.respondError).toHaveBeenCalledWith("unsafe", -32603, expect.stringContaining("仅允许 HTTPS"));
+    await adapter.handleServerRequest("x.ai/mcp/elicit", "safe", { sessionId: "s1", serverName: "Good", mode: "url", url: "https://example.com/auth", elicitationId: "auth-1" });
+    adapter.cancel();
+    expect(adapter.write).toHaveBeenCalledWith({ jsonrpc: "2.0", id: "safe", result: { outcome: "cancel" } });
+    expect(adapter.write).toHaveBeenCalledWith({ jsonrpc: "2.0", method: expect.any(String), params: { sessionId: "s1" } });
+    expect(events).toContainEqual(expect.objectContaining({ type: "interaction-resolved", interaction: "mcp-elicitation", requestId: "safe", outcome: "cancel" }));
+  });
+
+  it("dismisses URL elicitation completion only for the matching server", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "s1",
+      working: true,
+      needsUser: false,
+      pendingPlanRequest: undefined,
+      pendingPermissionRequests: new Set(),
+      pendingQuestionRequests: new Set(),
+      pendingMcpElicitations: new Map(),
+      pendingInteractionRequestIds: new Map(),
+      emitEvent: vi.fn((event) => events.push(event)),
+      emitStatus: vi.fn(),
+      observeRuntimeExtension: vi.fn(),
+      respondError: vi.fn(),
+      respondOk: vi.fn(),
+      write: vi.fn(() => true),
+      options: { log: { log: vi.fn() } },
+    });
+    await adapter.handleServerRequest("x.ai/mcp/elicit", "safe", {
+      sessionId: "s1", serverName: "github", mode: "url", url: "https://example.com/auth", elicitationId: "auth-1",
+    });
+    await adapter.handleServerRequest("x.ai/mcp/elicit_complete", undefined, {
+      sessionId: "s1", serverName: "other", elicitationId: "auth-1",
+    });
+    expect(adapter.pendingMcpElicitations.has("safe")).toBe(true);
+    await adapter.handleServerRequest("x.ai/mcp/elicit_complete", undefined, {
+      sessionId: "s1", serverName: "github", elicitationId: "auth-1",
+    });
+    expect(adapter.pendingMcpElicitations.size).toBe(0);
+    expect(events).toContainEqual(expect.objectContaining({ type: "interaction-resolved", interaction: "mcp-elicitation", requestId: "safe", outcome: "completed" }));
   });
 
   it("parses Grok Build 1.0 close outcomes without collapsing unknown results", () => {
@@ -641,6 +745,58 @@ describe("Plan permission handling", () => {
     expect(adapter.planActive).toBe(false);
     releaseMode();
     await Promise.resolve();
+  });
+
+  it("lets Plan approval resume with the explicitly selected Auto policy", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "plan-auto-session",
+      pendingPlanRequest: "plan-auto-request",
+      resolvedPlanRequests: new Map(),
+      working: true,
+      needsUser: true,
+      mode: "plan",
+      planActive: true,
+      planExecutionMode: "agent",
+      autoApprove: false,
+      options: {},
+      write: vi.fn(() => true),
+      applyMode: vi.fn().mockResolvedValue(undefined),
+      emitEvent: vi.fn((event: unknown) => events.push(event)),
+      emitStatus: vi.fn(),
+      buildFailure: vi.fn(),
+    });
+
+    const receipt = await adapter.respondPlan("plan-auto-request", "approved", "", "auto");
+    expect(receipt).toMatchObject({ state: "accepted", executionMode: "auto" });
+    expect(adapter.mode).toBe("auto");
+    expect(adapter.autoApprove).toBe(true);
+    expect(adapter.applyMode).toHaveBeenCalledWith("auto", false);
+    expect(events).toContainEqual({ type: "mode", sessionId: "plan-auto-session", mode: "auto" });
+  });
+
+  it("does not let a late Plan replay downgrade an approved Auto policy to Agent", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "plan-auto-session",
+      mode: "auto",
+      planActive: false,
+      planGateReleased: true,
+      planExecutionMode: "auto",
+      autoApprove: true,
+      lastTouched: 0,
+      emitEvent: vi.fn((event: unknown) => events.push(event)),
+    });
+
+    adapter.handleSessionUpdate({ sessionUpdate: "current_mode_update", currentModeId: "plan" });
+
+    expect(adapter.mode).toBe("auto");
+    expect(adapter.autoApprove).toBe(true);
+    expect(adapter.planActive).toBe(false);
+    expect(adapter.planExecutionMode).toBe("auto");
+    expect(events).toContainEqual({ type: "mode", sessionId: "plan-auto-session", mode: "auto" });
   });
 
   it("persists the asynchronous mode reconciliation after a Plan decision", async () => {
