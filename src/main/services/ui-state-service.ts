@@ -221,7 +221,13 @@ export class UiStateService {
    */
   async resolveTextDraftAttachment(key: string, path: string): Promise<string> {
     const target = await this.resolveDraftPath(path, true);
-    if (!this.isDraftPathForKey(key, target)) throw new Error("文本草稿不属于当前会话");
+    // The user-data root may be a Windows short path or junction. Compare both
+    // sides in canonical-root space, but do not realpath the keyed directory:
+    // a junction there must not authorize another session's attachments.
+    const canonicalRoot = await realpath(this.draftAttachmentRoot);
+    const keyedDirectory = join(canonicalRoot, relative(this.draftAttachmentRoot, this.draftDirectory(key)));
+    const keyedRelative = relative(keyedDirectory, target);
+    if (!keyedRelative || keyedRelative.startsWith("..") || isAbsolute(keyedRelative)) throw new Error("文本草稿不属于当前会话");
     const info = await stat(target);
     if (!info.isFile() || info.size > MAX_TEXT_DRAFT_BYTES) throw new Error("文本草稿不存在或超过大小限制");
     return target;
