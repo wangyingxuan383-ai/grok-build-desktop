@@ -1,6 +1,6 @@
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { UiStateService } from "./ui-state-service";
 
@@ -209,9 +209,25 @@ describe("UiStateService", () => {
     expect(await service.getDraft(sourceKey)).toBeNull();
     expect(moved).toMatchObject({ key: "session-created", text: "准备发送", newTask });
     expect(await service.readTextDraftAttachment(moved?.attachments?.[0]?.path!)).toBe("长文本草稿");
-    expect(await service.resolveTextDraftAttachment("session-created", moved?.attachments?.[0]?.path!)).toBe(moved?.attachments?.[0]?.path);
+    expect(await service.resolveTextDraftAttachment("session-created", moved?.attachments?.[0]?.path!)).toBe(await realpath(moved?.attachments?.[0]?.path!));
     await expect(service.resolveTextDraftAttachment("another-session", moved?.attachments?.[0]?.path!)).rejects.toThrow("不属于当前会话");
     expect(await service.listDrafts()).toHaveLength(1);
+  });
+
+  it("resolves an aliased user-data root without authorizing cross-session directory links", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-ui-draft-alias-"));
+    const actual = join(root, "actual");
+    const alias = join(root, "alias");
+    await mkdir(actual);
+    await symlink(actual, alias, process.platform === "win32" ? "junction" : "dir");
+    const service = new UiStateService(alias);
+    const attachment = await service.createTextDraftAttachment("session-owner", "owned text");
+    expect(await service.resolveTextDraftAttachment("session-owner", attachment.path!)).toBe(await realpath(attachment.path!));
+    await expect(service.resolveTextDraftAttachment("other-session", attachment.path!)).rejects.toThrow("不属于当前会话");
+    const link = join(dirname(attachment.path!), "cross-session");
+    const foreign = await service.createTextDraftAttachment("other-session", "foreign text");
+    await symlink(dirname(foreign.path!), link, process.platform === "win32" ? "junction" : "dir");
+    await expect(service.resolveTextDraftAttachment("session-owner", join(link, basename(foreign.path!)))).rejects.toThrow("不属于当前会话");
   });
 
   it("does not overwrite an existing target draft during migration", async () => {
