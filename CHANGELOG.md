@@ -6,6 +6,8 @@
 
 用户授权发布之前已完成的修复。中文简洁版和详细版见 `docs/releases/v0.9.5.md`。本版不包含仍待自动化回归的分段下载原型，不宣称已修复公网速度；下方历史试验状态以各自日期为准。
 
+本版离线验证：929项通过、9项opt-in live跳过；TypeScript、生产构建、分块预算、真实Electron DOM回归、457文件公开扫描通过。依赖审计零漏洞。
+
 ### 五分钟下载/安装预算
 
 - 单次CLI下载/安装最多等待5分钟，文件锁重试共享预算；必要回滚、验证和会话恢复独立处理。
@@ -1324,3 +1326,4 @@
 - Fixed virtualized conversation horizontal overflow and clipped user messages.
 - Fixed restored events losing their session id during `session/load`.
 - Fixed old VS Code Grok sessions not appearing when Windows drive/path casing differed.
+
