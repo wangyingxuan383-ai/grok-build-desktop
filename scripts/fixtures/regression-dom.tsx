@@ -11,12 +11,18 @@ const root = createRoot(document.getElementById("root")!);
 const noop = () => undefined;
 const waiting: Array<{ key: string; resolve(value: ComposerDraftState | null): void }> = [];
 let updateState: any = { phase: "idle", recovery: { previousVersion: "1.0.3", targetVersion: "2.0.0", retained: true } };
+const updateCalls: any[] = [];
 let mcpCalls = 0;
 let mcpResolve: (() => void) | undefined;
 const api = {
   getDraft: (key: string) => new Promise<ComposerDraftState | null>((resolve) => waiting.push({ key, resolve })),
   setDraft: async () => undefined,
   getCliUpdateState: async () => updateState,
+  previewCliUpdate: async (policy: string, action: string) => ({ fromVersion: "1.0.3", targetVersion: action === "verify" ? "1.0.3" : "2.0.0", policy, confirmationToken: "fixture-token", majorUpgrade: true }),
+  applyCliUpdate: async (input: unknown) => { updateCalls.push(input); throw Error("fixture update failed"); },
+  // Deliberately unresolved network metadata request: controls must unlock anyway.
+  checkCliUpdate: () => new Promise(() => undefined),
+  getCliUpdateHistory: async () => [],
   respondMcpElicitation: async (_s: string, _r: string, _outcome: string, values: any) => {
     mcpCalls++;
     if (values.count < 2) throw Error("MCP 表单字段超出数值范围：count");
@@ -43,6 +49,7 @@ Object.assign(window, { fixture: {
   menus: () => root.render(<Menus />),
   toast: (message: string) => root.render(<GlobalErrorToast message={message} onReload={noop} onDiagnostics={noop} onDismiss={noop} />),
   controls: () => root.render(<CliUpdateControls />),
+  updateCalls: () => updateCalls,
   phase: (phase: string) => { updateState = { ...updateState, phase }; },
   mcp: () => root.render(<McpElicitationCard sessionId="s" message={{ id: "m", kind: "mcp-elicitation", request: { requestId: "r", sessionId: "s", serverName: "fixture", message: "Fixture constraints", mode: "form", schemaSupported: true, requestedSchema: { type: "object", required: ["count"], properties: { count: { type: "integer", minimum: 2, maximum: 4 } } } } }} onResolved={() => root.render(<div>mcp resolved</div>)} />),
   mcpCalls: () => mcpCalls, mcpResolve: () => mcpResolve?.(),

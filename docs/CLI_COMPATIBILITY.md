@@ -1,5 +1,25 @@
 # Grok CLI Compatibility
 
+## Desktop 0.9.5 release boundary
+
+Publishes the recovery and optional-probe corrections below without changing the audited fixture range or disabling the core gate. Five minutes limits each CLI download/install attempt, not the complete rollback/ACP transaction. A separate experimental segmented-downloader run installed1.0.25 and passed core verification/restoration; that downloader is not shipped in0.9.5. Local CLI is now1.0.25, superseding historical1.0.3 end-state records below.
+
+## 2026-09-10 public update timeout boundary
+
+Official preview advanced to stable1.0.25. The real default-public-source update did not finish downloading within30 minutes and was terminated by the service;1.0.25 was not installed or ACP-verified. Installed1.0.3 stayed byte-identical and restored the same test session. Old source with a fake runtime separately reproduced post-rollback verify comparing current1.0.0 to historical1.0.24. Do not confuse that second-action error with a proven bad official binary. See `CLI_PUBLIC_UPDATE_2026-09-10.md`.
+
+## 2026-09-09 real CLI 1.0.24 core verification
+
+User-authorized real upgrade from 1.0.3 to official stable **1.0.24 (68e414c661e3)** passed initialize/new/resume/close/delete and restoration of the same no-prompt session with the fixed updater. The original 0.9.4 updater failed on optional non-Git status both before and after rollback, leaving runtime quarantine. The fixed updater also recovered that real retained transaction. Evidence remains in the isolated test profile; the shipped fixture range and ordinary installation receipts are not silently expanded. See `CLI_LIVE_UPGRADE_2026-09-09.md` for verified official-byte caching and unverified public-network/other-computer boundaries.
+
+## 2026-09-09 failed-update recovery correction (Unreleased)
+
+- A non-Git temporary probe directory can make optional `x.ai/git/status` fail through the CLI hub/fallback. Git/Info/Usage/rename errors now produce diagnostics, not a failed core gate. Core initialize/new/resume/close/delete still must succeed.
+- Recovery revalidation targets the binary actually selected now, not a failed historical install target. It requires a fresh path/version/hash-bound core probe before clearing quarantine, even for an offline-allowlisted 1.0.0.
+- Explicit retries can choose another policy/stable target while retaining the original pre-transaction rollback version. A rollback already at that version verifies without downloading; same version text alone does not prove unchanged bytes.
+- Failed rollback leaves sessions deferred and the recovery manifest intact. No prompts are replayed and no unverified version is silently accepted.
+- No CLI update/live ACP was performed this round. Only local `--no-auto-update update --help` and `--no-auto-update version --json` were read; local version remains 1.0.3. The other computer's original target mismatch still needs its diagnostics.
+
 ## Desktop 0.9.4 发布范围
 
 本版发布下方累计适配与分级升级功能。正式发布不等于已经在本机升级官方 CLI：已记录的 CLI live 版本仍为 1.0.3，1.0.4–1.0.13 为源码/离线证据。三种升级策略的真实下载、验证和回滚仍需实际使用环境确认，不隐去此边界。

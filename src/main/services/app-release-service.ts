@@ -1,5 +1,5 @@
-import { net } from "electron";
-import type { AppReleaseStatus, BuildInfo } from "../../shared/types";
+import { net, session } from "electron";
+import type { AppReleaseStatus, AppSettings, BuildInfo } from "../../shared/types";
 import type { LogService } from "./log-service";
 import { parseVersion } from "./cli-locator";
 
@@ -12,17 +12,31 @@ interface GitHubRelease {
   prerelease?: boolean;
 }
 
+/** Isolated from provider/direct partitions; re-read proxy settings on retry. */
+export function createAppReleaseFetcher(build: BuildInfo, getSettings: () => Promise<AppSettings>) {
+  return async (url: string, init?: { signal?: AbortSignal }): Promise<Response> => {
+    const settings = await getSettings();
+    const network = session.fromPartition("grok-app-releases", { cache: false });
+    const proxy = settings.httpsProxy || settings.httpProxy;
+    await network.setProxy(proxy ? { proxyRules: proxy } : { mode: "system" });
+    return network.fetch(url, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": `Grok-Build-Desktop/${build.version}` },
+      redirect: "error", signal: init?.signal,
+    });
+  };
+}
+
 export class AppReleaseService {
   private cached?: AppReleaseStatus;
   constructor(
     private readonly build: BuildInfo,
     private readonly log: LogService,
-    private readonly fetchRelease: (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; text?(): Promise<string> }> = (url, init) => net.fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": `Grok-Build-Desktop/${build.version}` }, redirect: "error", signal: init?.signal }),
+    private readonly fetchRelease: (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; headers?: { get(name: string): string | null }; json(): Promise<unknown>; text?(): Promise<string> }> = (url, init) => net.fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": `Grok-Build-Desktop/${build.version}` }, redirect: "error", signal: init?.signal }),
     private readonly timeoutMs = 15_000,
   ) {}
 
   async check(force = false): Promise<AppReleaseStatus> {
-    if (!force && this.cached && Date.now() - Date.parse(this.cached.checkedAt) < 6 * 60 * 60_000) return this.cached;
+    if (!force && this.cached && !this.cached.error && Date.now() - Date.parse(this.cached.checkedAt) < 6 * 60 * 60_000) return this.cached;
     const checkedAt = new Date().toISOString();
     if (!this.build.repository) return this.cached = { configured: false, currentVersion: this.build.version, updateAvailable: false, checkedAt, error: "本地构建，未配置公开更新源" };
     const url = `https://api.github.com/repos/${this.build.repository}/releases/latest`;
@@ -31,7 +45,11 @@ export class AppReleaseService {
     timeout.unref?.();
     try {
       const response = await this.fetchRelease(url, { signal: controller.signal });
-      if (!response.ok) throw new Error(`GitHub Release API 返回 HTTP ${response.status}`);
+      if (!response.ok) {
+        const limited = response.status === 429 || response.headers?.get("x-ratelimit-remaining") === "0" || Boolean(response.headers?.get("retry-after"));
+        if (response.status === 403 || response.status === 429) throw new Error(`GitHub Release API 返回 HTTP ${response.status}：${limited ? "GitHub API 请求额度或频率受限，请稍后重试" : "请求被拒绝，可能为 GitHub 限流或代理出口限制，不能仅凭 403 判定原因"}。检查应用代理，或打开官方发布页手动查看`);
+        throw new Error(`GitHub Release API 返回 HTTP ${response.status}`);
+      }
       let payload: unknown;
       if (response.text) {
         const raw = await response.text();
@@ -43,8 +61,8 @@ export class AppReleaseService {
       return status;
     } catch (error) {
       const message = controller.signal.aborted ? "应用更新检查响应超时" : error instanceof Error ? error.message : String(error);
-      await this.log.log(`Application update check failed: ${message}`);
-      return this.cached = { ...(this.cached ?? { configured: true, currentVersion: this.build.version, updateAvailable: false, checkedAt }), checkedAt, error: message };
+      await this.log.log(`Application update check failed: ${message}`).catch(() => undefined);
+      return this.cached = { ...(this.cached ?? { configured: true, currentVersion: this.build.version, updateAvailable: false, checkedAt, releaseUrl: `https://github.com/${this.build.repository}/releases` }), checkedAt, error: message };
     } finally { clearTimeout(timeout); }
   }
 

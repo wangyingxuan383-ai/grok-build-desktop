@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +38,54 @@ async function fixture() {
 }
 
 describe("confirmed CLI policies (no CLI or model requests)", () => {
+  it("recovers the screenshot's quarantined 1.0.0 by verifying current, without stable access or downloading", async () => {
+    const f = await fixture(); f.state.version = "1.0.0";
+    await writeFile(join(f.root, "cli-update-recovery.json"), JSON.stringify({ recovery: { previousVersion: "1.0.0", targetVersion: "1.0.24", retained: true, snapshots: [{ sessionId: "s1", cwd: f.root, mode: "agent", effort: "" }] } }));
+    f.runtime.check = async () => { throw Error("stable unavailable"); };
+    const restarted = f.service();
+    expect(await restarted.isRuntimeVersionAllowed("1.0.0")).toBe(false);
+    expect(await restarted.preview("standard", "verify")).toMatchObject({ fromVersion: "1.0.0", targetVersion: "1.0.0" });
+    await f.apply("standard", "verify", restarted);
+    expect(f.update).not.toHaveBeenCalled();
+    expect(f.restore).toHaveBeenCalledTimes(1);
+    expect(await restarted.state()).toEqual({ phase: "idle" });
+    expect(await restarted.isRuntimeVersionAllowed("1.0.0")).toBe(true);
+  });
+  it("allows a new strategy/target after failure while preserving the original rollback point and snapshots", async () => {
+    const f = await fixture(); f.state.badCore = true;
+    await f.apply("retain-unverified");
+    f.state.stable = "2.0.1";
+    await f.apply("retain-unverified");
+    expect((await f.updater.state()).recovery).toMatchObject({ previousVersion: "1.0.3", targetVersion: "2.0.1", retained: true });
+    await f.apply("standard", "rollback");
+    expect(f.state.version).toBe("1.0.3");
+    expect(f.restore).toHaveBeenCalledWith([expect.objectContaining({ sessionId: "s1" })]);
+  });
+  it("verifies a rollback already on disk without downloading it again", async () => {
+    const f = await fixture(); f.state.badCore = true;
+    await f.apply("retain-unverified");
+    f.state.version = "1.0.3";
+    await f.apply("standard", "rollback");
+    expect(f.update).toHaveBeenCalledTimes(1);
+    expect(await f.updater.isRuntimeVersionAllowed("1.0.3")).toBe(true);
+  });
+  it("keeps a quarantined old release blocked when its current-binary core probe still fails", async () => {
+    const f = await fixture(); f.state.badCore = true;
+    await f.apply("retain-unverified"); f.state.version = "1.0.3";
+    f.runtime.probe = async () => { throw Error("initialize failed"); };
+    await expect(f.apply("standard", "verify")).rejects.toThrow("initialize failed");
+    expect(f.update).toHaveBeenCalledTimes(1);
+    expect(f.restore).not.toHaveBeenCalled();
+    expect(await f.updater.isRuntimeVersionAllowed("1.0.3")).toBe(false);
+  });
+  it("does not consider an unchanged version banner proof that the old binary was untouched", async () => {
+    const f = await fixture();
+    f.runtime.runUpdate = async () => { f.state.hash = "replaced-same-version"; };
+    f.runtime.probe = async () => { throw Error("core failure"); };
+    await expect(f.apply("try-new")).rejects.toThrow("core failure");
+    expect(f.restore).not.toHaveBeenCalled();
+    expect(await f.updater.isRuntimeVersionAllowed("1.0.3")).toBe(false);
+  });
   it("rejects an expired or stale stable preview before touching sessions", async () => {
     const f = await fixture(); const p = await f.updater.preview("try-new");
     (f.updater as any).confirmations.get(p.confirmationToken).expires = 0;
