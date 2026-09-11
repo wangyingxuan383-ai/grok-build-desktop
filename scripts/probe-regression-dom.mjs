@@ -42,6 +42,13 @@ app.whenReady().then(async()=>{
       await run('fixture.phase('+JSON.stringify(phase)+')'); await new Promise(r=>setTimeout(r,1100));
       assert(await run('document.body.textContent.includes('+JSON.stringify(label)+') && Array.from(document.querySelectorAll("button")).every(b=>b.disabled)'),'update phase '+phase);
     }
+    await run('fixture.phase("idle");window.confirm=()=>true;void 0');await new Promise(r=>setTimeout(r,1100));
+    await run('document.querySelector("select").value="try-new";document.querySelector("select").dispatchEvent(new Event("change",{bubbles:true}))');await wait();
+    await run('document.querySelector(".button-row button").click()');await wait();
+    assert(await run('fixture.updateCalls()[0].policy==="try-new" && fixture.updateCalls()[0].action==="update"'),'recovery retry changed strategy');
+    assert(await run('document.body.textContent.includes("fixture update failed") && !document.querySelector("select").disabled && Array.from(document.querySelectorAll("button")).every(b=>!b.disabled)'),'network refresh kept strategy/recovery locked');
+    await run('document.querySelectorAll(".button-row button")[1].click()');await wait();
+    assert(await run('fixture.updateCalls()[1].action==="verify" && fixture.updateCalls()[1].targetVersion==="1.0.3"'),'verify current after failed update');
     await run('fixture.mcp()');await wait();
     await run('document.querySelector("button.primary").click()');await wait();assert(await run('fixture.mcpCalls()===0 && document.body.textContent.includes("请先填写")'),'MCP required validation');
     await run('Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(document.querySelector("input"),"1");document.querySelector("input").dispatchEvent(new Event("input",{bubbles:true}))');await wait();

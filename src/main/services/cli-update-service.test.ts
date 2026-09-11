@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings, CliCompatibilitySnapshot, CliVersionStatus } from "../../shared/types";
-import { CLI_V1_COMPATIBILITY_PROFILE, CliUpdateService, compatibilityEvidence, offlineCompatibilityGate, runtimeV1Compatibility, type CliUpdateServiceRuntime } from "./cli-update-service";
+import { CLI_UPDATE_TIMEOUT_MS, runProcessTree, CLI_V1_COMPATIBILITY_PROFILE, CliUpdateService, compatibilityEvidence, offlineCompatibilityGate, runtimeV1Compatibility, type CliUpdateServiceRuntime } from "./cli-update-service";
 import { normalizeRuntimeHandshake } from "./grok-acp-adapter";
 
 const roots: string[] = [];
@@ -83,6 +83,19 @@ function createUpdateHarness(root: string, options: { failTarget?: boolean; fail
 }
 
 describe("CliUpdateService", () => {
+  it("caps an installer at five minutes and retains redacted diagnostics on timeout", async () => {
+    expect(CLI_UPDATE_TIMEOUT_MS).toBe(300_000);
+    const error = await runProcessTree(process.execPath, ["-e", "console.error('range transfer stalled; XAI_API_KEY=xai-private-test-credential');setInterval(()=>{},1000)"], process.env, 1_500).catch((value: Error) => value);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("range transfer stalled");
+    expect((error as Error).message).toContain("上限");
+    expect((error as Error).message).not.toContain("xai-private-test-credential");
+  });
+  it("rejects the official installer's successful-exit manual-install no-op", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-update-service-")); roots.push(root);
+    const service = createService(root);
+    await expect((service as any).runUpdate(process.execPath, ["-e", "console.error('Auto-update is not available for manual installations.')"], process.env)).rejects.toThrow("不支持自更新的手动安装");
+  });
   it("records standard session resume/close from the runtime declaration", async () => {
     const handshake = normalizeRuntimeHandshake(JSON.parse(await readFile(join(process.cwd(), "src", "main", "services", "fixtures", "cli-wire", "initialize-0.2.120.json"), "utf8")));
     const names = compatibilityEvidence(handshake).filter((item) => item.state === "supported").map((item) => item.name);
@@ -379,7 +392,7 @@ describe("CliUpdateService", () => {
     expect(harness.restored).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces rollback failure and still attempts to restore suspended sessions", async () => {
+  it("surfaces rollback failure and defers sessions while the binary is quarantined", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
     const harness = createUpdateHarness(root, { failProbeAtTarget: true, failRollback: true });
@@ -388,15 +401,16 @@ describe("CliUpdateService", () => {
       ["update", "--version", "0.2.118"],
       ["update", "--version", "0.2.117"],
     ]);
-    expect(harness.restored).toHaveBeenCalledTimes(1);
+    expect(harness.restored).not.toHaveBeenCalled();
+    expect((await harness.service.state()).recovery?.retained).toBe(true);
   });
-  it("keeps the rollback failure visible when suspended-session restoration also fails", async () => {
+  it("keeps the rollback failure primary without attempting blocked session restoration", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
     const harness = createUpdateHarness(root, { failProbeAtTarget: true, failRollback: true, failRestore: true });
     await expect(harness.service.apply({ targetVersion: "0.2.118", expectedCurrentVersion: "0.2.117" })).rejects.toThrow(
-      /CLI 目标更新失败：probe failed；回滚也未通过：rollback failed.*部分会话恢复失败/,
+      /CLI 目标更新失败：probe failed；回滚也未通过：rollback failed/,
     );
-    expect(harness.restored).toHaveBeenCalledTimes(1);
+    expect(harness.restored).not.toHaveBeenCalled();
   });
 });

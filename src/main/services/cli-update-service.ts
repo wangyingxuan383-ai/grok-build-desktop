@@ -49,7 +49,7 @@ export const CLI_V1_COMPATIBILITY_PROFILE: CliMajorCompatibilityProfile = {
   changelogUrl: CLI_CHANGELOG_URL,
 };
 
-const CLI_UPDATE_TIMEOUT_MS = 30 * 60_000;
+export const CLI_UPDATE_TIMEOUT_MS = 5 * 60_000;
 
 export function offlineCompatibilityGate(targetVersion: string): CliCompatibilityGate | undefined {
   const major = parseVersion(targetVersion)?.[0];
@@ -245,7 +245,7 @@ export class CliUpdateService {
       if (!cliPath) throw new Error("未找到 Grok CLI");
       const env = buildCliEnv(settings, await this.getApiKey());
       const current = await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env));
-      status = { found: true, currentVersion: parseVersion(current)?.join("."), latestVersion: action === "rollback" ? recovery.previousVersion : recovery.targetVersion, updateAvailable: true, proxyRoute: cliProxyRoute(settings, env) };
+      status = { found: true, currentVersion: parseVersion(current)?.join("."), latestVersion: action === "rollback" ? recovery.previousVersion : parseVersion(current)?.join("."), updateAvailable: true, proxyRoute: cliProxyRoute(settings, env) };
     }
     if (!status.currentVersion) throw new Error(status.error || "无法读取当前 Grok CLI 版本");
     if (!status.latestVersion) throw new Error(status.error || "stable 更新源没有返回目标版本");
@@ -377,13 +377,16 @@ export class CliUpdateService {
     if (!previous || previous !== input.expectedCurrentVersion) throw new Error("CLI 当前版本已改变或无法识别，请重新检查更新");
     const saved = (await this.recovery.get()).recovery;
     if (action === "update") {
-      if (saved) throw new Error("请先完成上次更新的重新验证或回滚");
       const stable = await (this.testRuntime?.check(cliPath, env) ?? checkCliUpdate(cliPath, env));
       if (stable.error) throw new Error(`重新检查 stable 更新源失败：${stable.error}`);
       if (stable.latestVersion !== input.targetVersion) throw new Error(`stable 更新目标已从 ${input.targetVersion} 变为 ${stable.latestVersion || "未知"}，请重新确认`);
       if (!stable.updateAvailable) throw new Error("stable 不再提供该目标");
-    } else if (!saved || input.targetVersion !== (action === "rollback" ? saved.previousVersion : saved.targetVersion)) throw new Error("CLI 恢复目标已失效");
-    const snapshots = this.suspendedInMemory ?? saved?.snapshots ?? await this.suspendSessions();
+    } else if (!saved || input.targetVersion !== (action === "rollback" ? saved.previousVersion : previous)) throw new Error("CLI 恢复目标已失效");
+    const previousAllowed = await this.isRuntimeVersionAllowed(previous);
+    const previousIdentity = await this.binaryIdentity(cliPath, previous);
+    const pendingSnapshots = this.suspendedInMemory ?? saved?.snapshots ?? [];
+    const freshSnapshots = action === "update" || !saved ? await this.suspendSessions() : [];
+    const snapshots = [...new Map([...pendingSnapshots, ...freshSnapshots].map((item) => [item.sessionId, item])).values()];
     this.suspendedInMemory = snapshots;
     const durableSnapshots = snapshots.map(({ sessionId, cwd, effort, mode, modelId }) => ({ sessionId, cwd, effort, mode, modelId }));
     const rollbackVersion = saved?.previousVersion ?? previous;
@@ -405,12 +408,13 @@ export class CliUpdateService {
       return snapshot;
     };
     try {
-      await this.recovery.mutate((data) => { data.recovery = { previousVersion: rollbackVersion, targetVersion: input.targetVersion, snapshots: durableSnapshots, retained: true }; });
-      if (action !== "verify") {
+      await this.recovery.mutate((data) => { data.recovery = { previousVersion: rollbackVersion, targetVersion: action === "update" ? input.targetVersion : saved!.targetVersion, snapshots: durableSnapshots, retained: true }; });
+      if (action !== "verify" && !(action === "rollback" && previous === input.targetVersion)) {
         this.phase = action === "rollback" ? "rolling-back" : "downloading";
         await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", input.targetVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", input.targetVersion], env));
       }
-      if (await readVersion() !== input.targetVersion) throw new Error("CLI 实际版本不是固定目标");
+      const installedVersion = await readVersion();
+      if (installedVersion !== input.targetVersion) throw new Error(`CLI 实际版本不是固定目标：目标 ${input.targetVersion}，实际 ${installedVersion ?? "无法识别"}；检查路径 ${cliPath}。更新命令结束不代表该路径已替换，请检查是否为手动安装副本或 GROK_HOME 与 CLI 路径不一致`);
       targetInstalled = true;
       this.phase = "verifying";
       const compatibility = await probe(input.targetVersion);
@@ -424,20 +428,21 @@ export class CliUpdateService {
       if (action !== "rollback" && policy === "retain-unverified" && targetInstalled && current === input.targetVersion) {
         retain = true;
         receipt = { fromVersion: previous, toVersion: input.targetVersion, status: "retained-unverified", policy, failureStage: failedStage, verifiedAt: new Date().toISOString(), message: `新版已保留，但 ACP 验证失败，实时会话暂停：${message}`, sessionRestore: { status: "deferred" } };
-      } else if (current === rollbackVersion && action === "update") {
+      } else if (current === rollbackVersion && action === "update" && previousAllowed
+        && previousIdentity === await this.binaryIdentity(cliPath, current).catch(() => undefined)) {
         receipt = { fromVersion: previous, toVersion: current, status: "failed", policy, failureStage: failedStage, verifiedAt: new Date().toISOString(), message: `CLI 更新未改变当前版本 ${current}，无需回滚：${message}` };
         await this.recovery.mutate((data) => { if (data.recovery) data.recovery.retained = false; }).catch(() => undefined);
       } else {
         try {
           this.phase = "rolling-back";
-          await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", rollbackVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", rollbackVersion], env));
+          if (current !== rollbackVersion) await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", rollbackVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", rollbackVersion], env));
           if (await readVersion() !== rollbackVersion) throw new Error("回滚版本核验失败");
           const compatibility = await probe(rollbackVersion);
           receipt = { fromVersion: input.targetVersion, toVersion: rollbackVersion, status: "rolled-back", policy, failureStage: failedStage, verifiedAt: new Date().toISOString(), message: `新版本失败，已回滚到 ${rollbackVersion}：${message}`, compatibility };
         } catch (rollbackError) { failure = new Error(`CLI 目标更新失败：${message}；回滚也未通过：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`); }
       }
     } finally {
-      if (!retain) {
+      if (!retain && !failure) {
         this.phase = "restoring";
         try {
           if (snapshots.length) await this.restoreSessions(snapshots);
@@ -446,7 +451,6 @@ export class CliUpdateService {
         } catch (error) {
           const warning = `部分会话恢复失败：${error instanceof Error ? error.message : String(error)}`;
           if (receipt) { receipt.sessionRestore = { status: "partial", message: warning }; receipt.warnings = [warning]; receipt.message += `；${warning}`; }
-          if (failure) failure = new Error(`${failure.message}；此外，${warning}`);
           await this.diagnostic(warning);
         }
       }
@@ -466,10 +470,14 @@ export class CliUpdateService {
   }
 
   private async runUpdate(cliPath: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
+    const deadline = Date.now() + CLI_UPDATE_TIMEOUT_MS;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const result = await runProcessTree(cliPath, args, env, CLI_UPDATE_TIMEOUT_MS);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("CLI 下载/安装已达到 5 分钟上限");
+        const result = await runProcessTree(cliPath, args, env, remaining);
         await this.diagnostic(result.stdout || result.stderr || `grok ${args.join(" ")} complete`);
+        if (/Auto-update is not available for manual installations/i.test(`${result.stdout}\n${result.stderr}`)) throw new Error(`此 CLI 是不支持自更新的手动安装：${cliPath}。请将设置中的 CLI 路径指向官方安装器管理的 grok，再重新预览升级`);
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -500,16 +508,18 @@ export class CliUpdateService {
           })
           .catch((error) => this.diagnostic(`Optional compatibility: ${method} unavailable (${error instanceof Error ? error.message : String(error)})`));
       }
-      const sessionInfo = await adapter.sessionInfo();
-      await this.diagnostic(`Core compatibility: x.ai/session/info supported=${String(sessionInfo.supported)}`);
-      if (sessionInfo.supported) successfulExtensions.add("x.ai/session/info");
-      const sessionUsage = await adapter.sessionUsage();
-      await this.diagnostic(`Core compatibility: x.ai/session/usage supported=${String(sessionUsage.supported)}`);
-      if (sessionUsage.supported) successfulExtensions.add("x.ai/session/usage");
-      const renameSource = await adapter.renameSession("Desktop compatibility probe");
+      const optional = async <T>(name: string, run: () => Promise<T>): Promise<T | undefined> => {
+        try { return await run(); }
+        catch (error) { await this.diagnostic(`Optional compatibility: ${name} unavailable (${String(error)})`); return undefined; }
+      };
+      const sessionInfo = await optional("x.ai/session/info", () => adapter.sessionInfo());
+      if (sessionInfo?.supported) successfulExtensions.add("x.ai/session/info");
+      const sessionUsage = await optional("x.ai/session/usage", () => adapter.sessionUsage());
+      if (sessionUsage?.supported) successfulExtensions.add("x.ai/session/usage");
+      const renameSource = await optional("x.ai/session/rename", () => adapter.renameSession("Desktop compatibility probe"));
       await this.diagnostic(`Optional compatibility: x.ai/session/rename source=${renameSource}`);
       if (renameSource === "official") successfulExtensions.add("x.ai/session/rename");
-      const gitStatus = await adapter.officialGitStatus();
+      const gitStatus = await optional("x.ai/git/status", () => adapter.officialGitStatus());
       if (gitStatus) successfulExtensions.add("x.ai/git/status");
       const reader = join(homedir(), ".grok", "bundled", "skills", "shared", "resume-session", "session_reader.py");
       await access(reader).then(() => this.diagnostic("Optional compatibility: Codex session reader found")).catch(() => this.diagnostic("Optional compatibility: Codex session reader unavailable"));
@@ -614,7 +624,7 @@ function probeComputerHost(executable: string): Promise<string> {
   });
 }
 
-function runProcessTree(executable: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
+export function runProcessTree(executable: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const batch = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable);
     const command = batch ? (env.ComSpec || process.env.ComSpec || "cmd.exe") : executable;
@@ -623,6 +633,7 @@ function runProcessTree(executable: string, args: string[], env: NodeJS.ProcessE
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timeoutError: Error | undefined;
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
@@ -635,11 +646,13 @@ function runProcessTree(executable: string, args: string[], env: NodeJS.ProcessE
     child.stderr.on("data", (chunk) => { stderr = appendBounded(stderr, chunk); });
     child.once("error", (error) => finish(error));
     child.once("exit", (code, signal) => {
-      if (code === 0) finish();
+      if (timeoutError) finish(timeoutError);
+      else if (code === 0) finish();
       else finish(new Error(`${executable} ${args.join(" ")} failed (${String(code ?? signal)}): ${stderr || stdout}`));
     });
     const timer = setTimeout(() => {
-      const error = new Error(`Grok CLI 更新进程在 ${Math.round(timeoutMs / 60_000)} 分钟内未结束，已停止；当前版本会在决定是否回滚前重新核验`);
+      const output = redactSecrets(`${stderr}\n${stdout}`.trim().slice(-8_192));
+      const error = timeoutError = new Error(`Grok CLI 子进程超过 ${Math.ceil(timeoutMs / 1_000)} 秒上限，已停止；当前版本会在决定是否回滚前重新核验${output ? `；退出前输出：\n${output}` : "；子进程没有输出诊断"}`);
       if (process.platform === "win32" && child.pid) {
         execFile("taskkill", ["/PID", String(child.pid), "/T", "/F"], () => finish(error));
       } else {
