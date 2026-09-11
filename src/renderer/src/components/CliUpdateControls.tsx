@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CliUpdateAction, CliUpdatePolicy, CliUpdateState } from "../../../shared/types";
 import { useAppStore } from "../store";
 
@@ -13,14 +13,16 @@ export function CliUpdateControls(): React.JSX.Element {
   const [state, setState] = useState<CliUpdateState>({ phase: "idle" });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const generation = useRef(0);
   useEffect(() => {
     let disposed = false;
     const refresh = () => void window.grokDesktop.getCliUpdateState().then((value) => { if (!disposed) setState(value); }).catch(() => undefined);
     refresh(); const timer = window.setInterval(refresh, 1_000);
-    return () => { disposed = true; window.clearInterval(timer); };
+    return () => { disposed = true; generation.current++; window.clearInterval(timer); };
   }, []);
   const run = async (action: CliUpdateAction): Promise<void> => {
     if (busy || state.phase !== "idle") return;
+    const request = ++generation.current;
     setBusy(true);
     try {
       const selected = action === "rollback" ? "standard" : policy;
@@ -35,14 +37,18 @@ export function CliUpdateControls(): React.JSX.Element {
     } catch (error) { setMessage(`操作未完成：${error instanceof Error ? error.message : String(error)}`); }
     finally {
       setPolicy("standard");
-      const [nextState, cli, history] = await Promise.all([
-        window.grokDesktop.getCliUpdateState().catch(() => ({ phase: "idle" as const })),
+      const nextState = await window.grokDesktop.getCliUpdateState().catch(() => ({ phase: "idle" as const }));
+      if (request === generation.current) { setState(nextState); setBusy(false); }
+      // The transaction has ended. A slow/proxied stable check must not keep
+      // strategy selection or offline recovery locked, or overwrite a later run.
+      void Promise.all([
         window.grokDesktop.checkCliUpdate().catch(() => undefined),
         window.grokDesktop.getCliUpdateHistory().catch(() => undefined),
-      ]);
-      if (cli) useAppStore.getState().setCli(cli);
-      if (history) useAppStore.getState().setUpdateHistory(history);
-      setState(nextState); setBusy(false);
+      ]).then(([cli, history]) => {
+        if (request !== generation.current) return;
+        if (cli) useAppStore.getState().setCli(cli);
+        if (history) useAppStore.getState().setUpdateHistory(history);
+      });
     }
   };
   const locked = busy || state.phase !== "idle";
@@ -50,10 +56,13 @@ export function CliUpdateControls(): React.JSX.Element {
     <label>本次升级策略 <select aria-label="CLI 升级策略" value={policy} disabled={locked} onChange={(event) => setPolicy(event.target.value as CliUpdatePolicy)}>
       <option value="standard">标准升级（默认）</option><option value="try-new">尝试新版：忽略兼容名单</option><option value="retain-unverified">高级：验证失败仍保留新版</option>
     </select></label>
-    <div className="button-row">{state.recovery ? <>
-      <button disabled={locked} onClick={() => void run("verify")}>重新验证 {state.recovery.targetVersion}</button>
+    <div className="button-row">
+      <button disabled={locked} onClick={() => void run("update")}>{state.recovery ? "重新预览并升级 CLI" : "预览并更新 CLI"}</button>
+      {state.recovery && <>
+      <button disabled={locked} onClick={() => void run("verify")}>重新验证当前 CLI</button>
       <button disabled={locked} onClick={() => void run("rollback")}>回滚到 {state.recovery.previousVersion}</button>
-    </> : <button disabled={locked} onClick={() => void run("update")}>预览并更新 CLI</button>}</div>
-    <p role="status" aria-live="polite">{state.phase !== "idle" ? phases[state.phase] : message || (state.recovery?.retained ? "新版尚未通过验证，实时会话暂停；本地记录仍可查看。" : "更新前展示固定目标并确认；不会静默安装。")}</p>
+    </>}</div>
+    {state.recovery && <p>上次目标 {state.recovery.targetVersion}；回滚点 {state.recovery.previousVersion} 为本次连续升级前版本，不是固定版本。</p>}
+    <p role="status" aria-live="polite">{state.phase !== "idle" ? phases[state.phase] : message || (state.recovery?.retained ? "上次更新尚未完成兼容验证，实时会话暂停；可验证当前 CLI、回滚或重新选择策略升级。本地记录仍可查看。" : "更新前展示固定目标并确认；不会静默安装。")}</p>
   </section>;
 }

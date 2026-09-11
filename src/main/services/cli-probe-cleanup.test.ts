@@ -37,6 +37,18 @@ describe("probe cleanup on real control-flow with fake transport only", () => {
     expect(result.capabilities).toEqual(expect.arrayContaining([expect.objectContaining({ name: "core.delete", state: "supported" })]));
     expect(mocks.remove).toHaveBeenCalledTimes(1);
   });
+  it("does not let non-Git/optional extension errors fail the core rollback probe", async () => {
+    const service = await setup(); const a = adapter("non-git");
+    a.officialGitStatus = async () => { throw Error("hub error: CLI fallback also failed: not a git repository"); };
+    a.sessionInfo = async () => { throw Error("optional info unavailable"); };
+    a.sessionUsage = async () => { throw Error("optional usage unavailable"); };
+    a.renameSession = async () => { throw Error("optional rename unavailable"); };
+    mocks.adapters.push(a, adapter("non-git"));
+    const result = await (service as any).probe("fixture.exe", {});
+    expect(result.capabilities).toEqual(expect.arrayContaining([expect.objectContaining({ name: "core.resume", state: "supported" }), expect.objectContaining({ name: "core.delete", state: "supported" })]));
+    expect(result.capabilities.find((item: any) => item.name === "x.ai/git/status").state).not.toBe("supported");
+    expect(mocks.remove).toHaveBeenCalledTimes(1);
+  });
   it("removes both IDs if resume unexpectedly creates another session", async () => {
     const service = await setup(); mocks.adapters.push(adapter("original"), adapter("unexpected"));
     await expect((service as any).probe("fixture.exe", {})).rejects.toThrow("不同会话");

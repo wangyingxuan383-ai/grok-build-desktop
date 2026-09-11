@@ -1,5 +1,33 @@
 # Feature Matrix
 
+## v0.9.5 release scope (2026-09-11)
+
+Includes update recovery/strategy unlocking, optional probe isolation, application-proxy release checks and a five-minute per-install deadline with diagnostic output. The experimental segmented downloader is excluded pending automated coverage; its separate live success is not evidence of public download performance in this release. See `releases/v0.9.5.md`.
+
+## Five-minute installer budget
+
+Installer attempts share a five-minute budget, including the locked-binary retry. Timeout errors retain redacted output and cannot be replaced by the termination exit event. Focused41 tests/typecheck passed; rollback and ACP recovery have independent budgets. This is not proof of public download success.
+
+## 2026-09-10 public-network evidence
+
+Real uncached stable1.0.25 update reached the built-in30-minute timeout; original1.0.3 binary/hash and same-session restore passed, state returned idle. Public installation success remains unverified. Real Electron AppReleaseService through current app proxy returned Latest0.9.4. Old post-rollback verify-target mismatch was reproduced with an explicitly fake runtime, not a new real install mismatch. See `CLI_PUBLIC_UPDATE_2026-09-10.md`.
+
+## 2026-09-09 live updater evidence
+
+Real installed CLI 1.0.3 → official stable 1.0.24: the published updater reproduces non-Git probe failure, rollback probe failure and retained runtime rejection. The fixed updater clears the real failed transaction, then passes 1.0.24 initialize/new/resume/close/delete and restores the same test session. Downloads use checksum-matched official bytes through a process-local loopback cache after slow public transport was interrupted. This does not verify default network throughput or the other computer's initial version mismatch. See `CLI_LIVE_UPGRADE_2026-09-09.md`; no desktop release or paid prompt.
+
+## 2026-09-09 updater recovery hotfix (Unreleased)
+
+| Capability | Evidence | Boundary |
+|---|---|---|
+| Optional probe isolation | Fake transport runs real probe flow with non-Git/info/usage/rename errors | Core initialize/new/resume/close/delete remains mandatory; no real CLI upgrade. |
+| Failed-update recovery | Restart fixture: quarantined 1.0.0 with old target 1.0.24 verifies current without stable access | No whitelist bypass; failed core remains quarantined. |
+| Retry and dynamic rollback | Policy retry retains original version and merges pending session snapshots | Reconfirmation required; no prompt replay. |
+| Strategy unlock | Hidden Electron DOM with indefinitely pending network refresh | Local transaction remains locked until settled; late metadata cannot overwrite next run. |
+| App Release network | Dedicated partition, current app proxy, typed 403/429 tests | No automatic direct fallback, credentials or app installation; remote computer proxy still unverified. |
+
+See `UPDATER_RECOVERY_2026-09-09.md`. This source hotfix is not included in the published 0.9.4 installer.
+
 ## 2026-09-09 发布门禁补修
 
 - GitHub Windows CI 发现短路径/目录别名经 realpath 规范化后，文本附件归属检查误报；现改为在规范缓存根下校验会话目录，不跟随会话目录链接授权其他会话。
