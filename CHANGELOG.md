@@ -1326,4 +1326,3 @@
 - Fixed virtualized conversation horizontal overflow and clipped user messages.
 - Fixed restored events losing their session id during `session/load`.
 - Fixed old VS Code Grok sessions not appearing when Windows drive/path casing differed.
-
