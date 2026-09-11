@@ -188,7 +188,7 @@ import { ComputerUseService } from "./services/computer-use-service";
 import { loadAppConfig, createBuildInfo, type PublicAppConfig } from "./services/app-config";
 import { OnboardingService } from "./services/onboarding-service";
 import { DiagnosticsService } from "./services/diagnostics-service";
-import { AppReleaseService } from "./services/app-release-service";
+import { AppReleaseService, createAppReleaseFetcher } from "./services/app-release-service";
 import { WorkspaceFileService } from "./services/workspace-file-service";
 import { ExternalOpenToolService } from "./services/external-open-tool-service";
 import { inspectAttachmentPrivacy } from "./services/attachment-privacy-service";
@@ -452,7 +452,7 @@ export class AppController {
     );
     this.extensions = new ExtensionService(() => this.settingsStore.get(), (method, params) => this.processes.extensionRequest(method, params), this.log, (name, values) => this.vault.setMcpSecrets(name, values), (name) => this.vault.removeMcpSecrets(name), () => this.processes.reloadIdleExtensions());
     this.codexPlugins = new CodexPluginService(userDataPath, this.log);
-    this.appRelease = new AppReleaseService(this.buildInfo, this.log);
+    this.appRelease = new AppReleaseService(this.buildInfo, this.log, createAppReleaseFetcher(this.buildInfo, () => this.settingsStore.get()));
     this.inbox = new NotificationInboxService(userDataPath);
     const workerBaseArgs = app.isPackaged ? [] : [app.getAppPath()];
     this.automations = new AutomationService(userDataPath, this.log, {
