@@ -4,10 +4,11 @@ import { mkdir, open, readFile, readdir, rm, stat, utimes, writeFile } from "nod
 import { dirname, join } from "node:path";
 import type { AutomationGlobalPolicy, AutomationPendingConfirmation, AutomationRegistrationDiagnostic, AutomationRunRecord, AutomationTask, AutomationTaskInput, ComputerRiskCategory } from "../../shared/types";
 import iconv from "iconv-lite";
-import { JsonStore } from "./json-store";
+import { calendarWakeups, latestCalendarOccurrence, nextScheduledRun } from "./automation-schedule";
+import { JsonStore, withCrossProcessFileLock } from "./json-store";
 import type { LogService } from "./log-service";
 
-interface StoredAutomationTask extends AutomationTask { encryptedPrompt: string; sessionMigrationComplete?: boolean; }
+interface StoredAutomationTask extends AutomationTask { encryptedPrompt: string; sessionMigrationComplete?: boolean; deletedAt?: string; }
 interface PendingFile { public: AutomationPendingConfirmation; encryptedSummary: string; decision?: boolean; }
 
 export interface AutomationCipher { encrypt(value: string): string; decrypt(value: string): string; }
@@ -92,45 +93,49 @@ export class AutomationService {
     await mkdir(this.tasksRoot, { recursive: true });
     const values = await Promise.all((await readdir(this.tasksRoot).catch(() => [])).filter((name) => name.endsWith(".json")).map((name) => this.readTaskFile(join(this.tasksRoot, name)).catch(() => undefined)));
     const tasks = values.filter((value): value is StoredAutomationTask => Boolean(value));
-    const runs = await this.readRuns();
-    for (const task of tasks) {
-      if (task.sessionId || task.sessionMigrationComplete) continue;
-      const latest = runs.find((run) => run.taskId === task.id && run.sessionId);
-      if (latest?.sessionId) {
-        task.sessionId = latest.sessionId;
-      }
-      task.sessionMigrationComplete = true;
-      await this.writeTask(task);
-    }
     return tasks.map((value) => stripPrompt(value, this.now())).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
   }
 
-  async create(input: AutomationTaskInput): Promise<AutomationTask[]> {
-    const normalized = { ...input, contextPolicy: input.contextPolicy ?? "reuse" };
+  async create(input: AutomationTaskInput): Promise<AutomationTask[]> { await this.createOne(input); return this.list(); }
+
+  async createOne(input: AutomationTaskInput): Promise<AutomationTask> {
+    const normalized = { ...input, contextPolicy: input.contextPolicy ?? "reuse", timeZone: input.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, scheduleAnchor: input.scheduleAnchor ?? this.now().toISOString() };
     validateTaskInput(normalized, true);
+    if (normalized.schedule.kind === "once") normalized.schedule = { kind: "once", at: new Date(normalized.schedule.at).toISOString() };
     const id = crypto.randomUUID(); const now = this.now().toISOString();
-    const task: StoredAutomationTask = { ...normalized, missedRunPolicy: normalized.missedRunPolicy ?? "run-once", id, promptPresent: true, encryptedPrompt: this.cipher.encrypt(normalized.prompt!.trim()), sessionMigrationComplete: true, registrationStatus: this.scheduler.supported() ? "registered" : "unsupported", createdAt: now, updatedAt: now };
+    const task: StoredAutomationTask = { ...normalized, missedRunPolicy: normalized.missedRunPolicy ?? "run-once", id, revision: 1, sessionId: normalized.destination === "current-session" ? normalized.targetSessionId : undefined, promptPresent: true, encryptedPrompt: this.cipher.encrypt(normalized.prompt!.trim()), sessionMigrationComplete: true, registrationStatus: this.scheduler.supported() ? "needs-repair" : "unsupported", createdAt: now, updatedAt: now };
     delete (task as Partial<AutomationTaskInput>).prompt;
-    await this.writeTask(task);
-    await this.register(task);
+    await this.definitionTransaction(id, async () => { await this.writeTask(task); await this.register(task); });
     this.options.onChanged?.({ taskId: id, task: stripPrompt(task) });
-    return this.list();
+    return stripPrompt(task, this.now());
   }
 
   async update(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> {
+    await this.definitionTransaction(id, async () => {
     const current = await this.readTask(id);
-    const candidate = { ...current, ...patch, id, profile: { ...current.profile, ...patch.profile }, schedule: patch.schedule ?? current.schedule, updatedAt: this.now().toISOString() } as StoredAutomationTask;
+    if (current.destination === "current-session") {
+      if ((patch.targetSessionId !== undefined && patch.targetSessionId !== current.targetSessionId) || (patch.destination !== undefined && patch.destination !== current.destination) || (patch.executionProfileId !== undefined && patch.executionProfileId !== current.executionProfileId) || (patch.contextPolicy !== undefined && patch.contextPolicy !== "reuse") || (patch.profile && Object.entries(patch.profile).some(([key, value]) => value !== current.profile[key as keyof typeof current.profile]))) throw new Error("当前会话任务保留绑定时的执行配置；更改配置请重新创建任务");
+    }
+    if ((patch.schedule && scheduleKey(patch.schedule) !== scheduleKey(current.schedule)) || (patch.timeZone !== undefined && patch.timeZone !== current.timeZone)) patch = { ...patch, scheduleAnchor: this.now().toISOString() };
+    const candidate = { ...current, ...patch, id, revision: (current.revision ?? 1) + 1, profile: { ...current.profile, ...patch.profile }, schedule: patch.schedule ?? current.schedule, updatedAt: this.now().toISOString() } as StoredAutomationTask;
     if (patch.prompt !== undefined) { if (!patch.prompt.trim()) throw new Error("任务提示词不能为空"); candidate.encryptedPrompt = this.cipher.encrypt(patch.prompt.trim()); candidate.promptPresent = true; }
     delete (candidate as Partial<AutomationTaskInput>).prompt;
     validateTaskInput({ ...candidate, prompt: this.cipher.decrypt(candidate.encryptedPrompt) }, true);
+    if (candidate.schedule.kind === "once") candidate.schedule = { kind: "once", at: new Date(candidate.schedule.at).toISOString() };
     await this.writeTask(candidate); await this.register(candidate);
     this.options.onChanged?.({ taskId: id, task: stripPrompt(candidate) });
+    });
     return this.list();
   }
 
   async delete(id: string): Promise<AutomationTask[]> {
-    await this.scheduler.unregister(id).catch((error) => this.log.log(error));
-    await rm(this.taskPath(id), { force: true });
+    await this.definitionTransaction(id, async () => {
+      const task = await this.readTask(id);
+      task.deletedAt = this.now().toISOString(); task.enabled = false; task.revision = (task.revision ?? 1) + 1;
+      await this.writeTask(task);
+      await this.scheduler.unregister(id).catch((error) => this.log.log(error));
+    });
+    for (const run of await this.listRuns(id)) if (["queued", "running", "awaiting-confirmation"].includes(run.status)) await this.cancelRun(run.id);
     this.options.onChanged?.({ taskId: id });
     return this.list();
   }
@@ -147,6 +152,7 @@ export class AutomationService {
   }
 
   async listRuns(taskId?: string): Promise<AutomationRunRecord[]> {
+    await this.recoverAbandonedRuns();
     return (await this.readRuns()).filter((value) => !taskId || value.taskId === taskId).slice(0, 500);
   }
 
@@ -167,14 +173,16 @@ export class AutomationService {
     return cancelled;
   }
 
-  async setExecutionSession(id: string, sessionId?: string): Promise<void> {
-    const task = await this.readTask(id);
-    if (sessionId) task.sessionId = sessionId;
-    else delete task.sessionId;
-    task.sessionMigrationComplete = true;
-    task.updatedAt = this.now().toISOString();
-    await this.writeTask(task);
-    this.options.onChanged?.({ taskId: id, task: stripPrompt(task, this.now()) });
+  async setExecutionSession(id: string, sessionId?: string, expectedRevision?: number): Promise<void> {
+    await this.definitionTransaction(id, async () => {
+      const task = await this.readTask(id).catch(() => undefined);
+      if (!task || (expectedRevision !== undefined && task.revision !== expectedRevision)) return;
+      await atomicJson(join(this.root, "runtime", `${safeId(id)}.json`), { sessionId, sessionRevision: task.revision, sessionMigrationComplete: true });
+    });
+  }
+
+  private definitionTransaction<T>(id: string, action: () => Promise<T>): Promise<T> {
+    return withCrossProcessFileLock(join(this.root, "definition-locks", `${safeId(id)}.lock`), action);
   }
 
   async clearSession(id: string, cleanup: (task: AutomationTask) => Promise<void>): Promise<AutomationTask[]> {
@@ -183,10 +191,7 @@ export class AutomationService {
     try {
       const task = await this.readTask(id);
       await cleanup(stripPrompt(task, this.now()));
-      delete task.sessionId;
-      task.sessionMigrationComplete = true;
-      task.updatedAt = this.now().toISOString();
-      await this.writeTask(task);
+      await this.setExecutionSession(id, undefined, task.revision);
       this.options.onChanged?.({ taskId: id, task: stripPrompt(task, this.now()) });
     } finally {
       await lock.release().catch(async (error) => {
@@ -209,29 +214,34 @@ export class AutomationService {
 
   async applyPolicyToAll(): Promise<AutomationTask[]> {
     const policy = await this.getPolicy();
-    for (const task of await this.readStoredTasks()) { task.profile = { ...policy.defaultProfile }; task.updatedAt = this.now().toISOString(); await this.writeTask(task); await this.register(task); }
+    for (const task of await this.readStoredTasks()) if (task.destination !== "current-session") await this.update(task.id, { profile: { ...policy.defaultProfile }, frozenExecutionProfile: undefined, executionProfileId: undefined });
     return this.list();
   }
 
-  async repairRegistrations(): Promise<AutomationTask[]> { for (const task of await this.readStoredTasks()) await this.register(task); return this.list(); }
+  async repairRegistrations(): Promise<AutomationTask[]> { for (const task of await this.readStoredTasks()) await this.definitionTransaction(task.id, async () => { const current = await this.readTask(task.id).catch(() => undefined); if (current) await this.register(current); }); return this.list(); }
 
   async unregisterAll(): Promise<void> {
     for (const task of await this.readStoredTasks()) await this.scheduler.unregister(task.id).catch((error) => this.log.log(`删除计划任务失败：${sanitizeError(error)}`));
   }
 
-  async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; signal: AbortSignal; confirm(toolCall: unknown, force?: boolean): Promise<boolean> }) => Promise<{ sessionId?: string }>): Promise<AutomationRunRecord> {
-    const task = await this.readTask(taskId); const id = runId && runId !== "scheduled" ? runId : crypto.randomUUID();
-    if (!task.sessionId && !task.sessionMigrationComplete) {
-      const previous = (await this.readRuns()).find((value) => value.taskId === taskId && value.sessionId);
-      if (previous?.sessionId) task.sessionId = previous.sessionId;
-      task.sessionMigrationComplete = true;
-      await this.writeTask(task);
-    }
+  async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; signal: AbortSignal; confirm(toolCall: unknown, force?: boolean): Promise<boolean> }) => Promise<{ sessionId?: string }>, ready?: (task: AutomationTask) => boolean): Promise<AutomationRunRecord> {
+    let task = await this.readTask(taskId); const id = runId && runId !== "scheduled" ? runId : crypto.randomUUID();
     let run: AutomationRunRecord = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => ({ id, taskId, status: "queued", scheduledAt: this.now().toISOString() }));
-    if (run.status === "cancelled") return run;
+    if (run.taskId !== taskId) throw new Error("运行不属于指定任务");
+    if (["completed", "failed", "cancelled", "skipped"].includes(run.status)) return run;
     if (!task.enabled) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "任务已暂停" }; await this.writeRun(run); return run; }
+    if (runId === "scheduled" && !await this.admitCalendarOccurrence(taskId)) {
+      return { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "本次唤醒不对应新的日历执行时间" };
+    }
     const lock = await this.acquire(taskId, id);
-    if (!lock) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "同一任务已有运行实例，本次触发已合并" }; await this.writeRun(run); return run; }
+    if (!lock) {
+      const active = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => undefined);
+      if (active && ["running", "awaiting-confirmation"].includes(active.status)) return active;
+      run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "同一任务已有运行实例，本次触发已合并" }; await this.writeRun(run); return run; }
+    if (["running", "awaiting-confirmation"].includes(run.status)) {
+      try { run = { ...run, status: "failed", error: "上次运行已中断，不会自动重放同一个运行 ID", finishedAt: this.now().toISOString() }; await this.writeRun(run); return run; }
+      finally { await lock.release(); }
+    }
     let slot: AutomationLease | undefined;
     let prompt: string | undefined;
     const controller = new AbortController();
@@ -243,19 +253,20 @@ export class AutomationService {
     }, Math.max(50, this.options.cancellationPollMs ?? 1_000));
     cancellationPoll.unref?.();
     try {
-      slot = await this.acquireGlobalSlot(id, controller.signal);
+      await this.writeRun(run);
+      slot = await this.acquireGlobalSlot(id, controller.signal, ready ? async () => {
+        task = await this.readTask(taskId);
+        return !task.enabled || ready(task);
+      } : undefined);
       const beforeStart = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
       if (beforeStart.status === "cancelled" || controller.signal.aborted) return beforeStart;
-      run = { ...run, status: "running", startedAt: this.now().toISOString() }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
+      task = await this.readTask(taskId);
+      if (!task.enabled) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "任务已暂停" }; await this.writeRun(run); return run; }
+      run = { ...run, definitionRevision: task.revision, status: "running", startedAt: this.now().toISOString() }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
       prompt = this.cipher.decrypt(task.encryptedPrompt);
       const result = await executor({ task: stripPrompt(task), prompt, runId: id, signal: controller.signal, confirm: (toolCall, force) => this.confirmHighImpact(taskId, id, toolCall, force, controller.signal) });
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("任务已取消");
-      if (result.sessionId) {
-        task.sessionId = result.sessionId;
-        task.sessionMigrationComplete = true;
-        task.updatedAt = this.now().toISOString();
-        await this.writeTask(task);
-      }
+      if (result.sessionId) await this.setExecutionSession(taskId, result.sessionId, task.revision);
       const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
       run = current.status === "cancelled"
         ? current
@@ -266,6 +277,7 @@ export class AutomationService {
         ? { ...(current ?? run), status: "cancelled", error: current?.error || "用户已停止任务", finishedAt: current?.finishedAt ?? this.now().toISOString() }
         : { ...run, status: "failed", error: sanitizeError(error, prompt ? [prompt] : []), finishedAt: this.now().toISOString() };
     } finally {
+      await this.writeRun(run).catch(error => this.log.log(`运行状态持久化失败：${sanitizeError(error)}`));
       clearInterval(cancellationPoll);
       this.activeRunControllers.delete(id);
       if (slot) await slot.release().catch(async (error) => {
@@ -279,14 +291,55 @@ export class AutomationService {
     return run;
   }
 
+  private async admitCalendarOccurrence(taskId: string): Promise<boolean> {
+    return this.definitionTransaction(taskId, async () => {
+      const task = await this.readTask(taskId);
+      if (!task.enabled) return false;
+      if (task.schedule.kind !== "daily" && task.schedule.kind !== "weekly") return true;
+      const now = this.now();
+      const due = latestCalendarOccurrence(task.schedule, now, task.timeZone!);
+      const anchor = task.scheduleAnchor ?? task.createdAt;
+      if (!due || +due < Date.parse(anchor)) return false;
+      const path = join(this.root, "calendar-cursors", `${safeId(taskId)}.json`);
+      const key = `${scheduleKey(task.schedule)}|${task.timeZone}|${anchor}`;
+      const saved = await readJson<{ key: string; at: string }>(path).catch(() => undefined);
+      if (saved?.key === key && Date.parse(saved.at) >= +due) return false;
+      // Consume even a coalesced/late occurrence. The recurring OS trigger,
+      // independent of this worker, continues to supply future occurrences.
+      await atomicJson(path, { key, at: due.toISOString() });
+      return task.missedRunPolicy !== "skip" || +now - +due < 5 * 60_000;
+    });
+  }
+
+  private async recoverAbandonedRuns(): Promise<void> {
+    for (const run of await this.readRuns()) {
+      if (!["running", "awaiting-confirmation"].includes(run.status)) continue;
+      const modified = await stat(this.runPath(run.id)).catch(() => undefined);
+      if (!modified || Date.now() - modified.mtimeMs < 5000) continue;
+      await withCrossProcessFileLock(join(this.root, "lease-allocation.lock"), async () => {
+        const lease = await readJson<AutomationLeaseRecord>(this.lockPath(run.taskId)).catch(() => undefined);
+        if (lease?.runId === run.id && isProcessAlive(lease.pid)) return;
+        run.status = "failed"; run.error = "执行进程已退出，本次运行不会自动重放；可检查结果后重新运行"; run.finishedAt = this.now().toISOString();
+        await this.writeRun(run); await this.rejectPendingForRun(run.id);
+      });
+    }
+  }
+
   async pending(): Promise<AutomationPendingConfirmation[]> {
+    await this.recoverAbandonedRuns();
     await mkdir(this.pendingRoot, { recursive: true });
     const values = await Promise.all((await readdir(this.pendingRoot).catch(() => [])).filter((name) => name.endsWith(".json")).map((name) => readJson<PendingFile>(join(this.pendingRoot, name)).catch(() => undefined)));
     return values.filter((value): value is PendingFile => Boolean(value && value.decision === undefined && new Date(value.public.expiresAt).getTime() > this.now().getTime())).map((value) => ({ ...value.public, summary: this.cipher.decrypt(value.encryptedSummary) }));
   }
 
   async respondPending(id: string, approved: boolean): Promise<void> {
-    const path = join(this.pendingRoot, `${safeId(id)}.json`); const value = await readJson<PendingFile>(path); value.decision = approved; await atomicJson(path, value);
+    const path = join(this.pendingRoot, `${safeId(id)}.json`);
+    await withCrossProcessFileLock(`${path}.lock`, async () => {
+      const value = await readJson<PendingFile>(path);
+      const run = await readJson<AutomationRunRecord>(this.runPath(value.public.runId)).catch(() => undefined);
+      if (value.decision !== undefined || Date.parse(value.public.expiresAt) <= this.now().getTime() || run?.status !== "awaiting-confirmation") throw new Error("确认已失效或任务已停止");
+      value.decision = approved; await atomicJson(path, value);
+    });
   }
 
   private async confirmHighImpact(taskId: string, runId: string, toolCall: unknown, force = false, signal?: AbortSignal): Promise<boolean> {
@@ -295,12 +348,13 @@ export class AutomationService {
     const pending: PendingFile = { public: { id, taskId, runId, category: risk?.category ?? "tool-permission", summary: force && !risk ? "任务需要工具权限确认" : "高影响操作等待确认", expiresAt }, encryptedSummary: this.cipher.encrypt(risk?.summary ?? JSON.stringify(toolCall ?? {}).slice(0, 500)) };
     await mkdir(this.pendingRoot, { recursive: true }); await atomicJson(join(this.pendingRoot, `${id}.json`), pending);
     const waitingRun = await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined);
-    if (waitingRun) { waitingRun.status = "awaiting-confirmation"; await this.writeRun(waitingRun); this.options.onChanged?.({ taskId, run: waitingRun, pending: { ...pending.public } }); }
+    if (waitingRun && !["completed", "failed", "cancelled", "skipped"].includes(waitingRun.status)) { waitingRun.status = "awaiting-confirmation"; await this.writeRun(waitingRun); this.options.onChanged?.({ taskId, run: waitingRun, pending: { ...pending.public } }); }
     else this.options.onChanged?.({ taskId, pending: { ...pending.public } });
     let decision: boolean | undefined;
     while (!signal?.aborted && this.now().getTime() < new Date(expiresAt).getTime()) { const current = await readJson<PendingFile>(join(this.pendingRoot, `${id}.json`)); if (current.decision !== undefined) { decision = current.decision; break; } await delay(this.options.pendingPollMs ?? 1_000); }
-    if (waitingRun && decision !== undefined) { waitingRun.status = "running"; await this.writeRun(waitingRun); this.options.onChanged?.({ taskId, run: waitingRun }); }
-    await rm(join(this.pendingRoot, `${id}.json`), { force: true }); return decision === true;
+    const latestRun = waitingRun ? await readJson<AutomationRunRecord>(this.runPath(runId)) : undefined;
+    if (latestRun?.status === "awaiting-confirmation" && !signal?.aborted) { latestRun.status = "running"; await this.writeRun(latestRun); this.options.onChanged?.({ taskId, run: latestRun }); }
+    await rm(join(this.pendingRoot, `${id}.json`), { force: true }); return decision === true && !signal?.aborted && latestRun?.status === "running";
   }
 
   private async register(task: StoredAutomationTask): Promise<void> {
@@ -316,19 +370,25 @@ export class AutomationService {
     await this.writeTask(task);
   }
 
-  private async acquireGlobalSlot(runId: string, signal?: AbortSignal): Promise<AutomationLease> {
+  private async acquireGlobalSlot(runId: string, signal?: AbortSignal, ready?: () => boolean | Promise<boolean>): Promise<AutomationLease> {
     const policy = await this.getPolicy(); await mkdir(this.slotsRoot, { recursive: true });
-    const started = Date.now();
+    let started = Date.now();
     while (true) {
       if (signal?.aborted) throw signal.reason ?? new Error("任务已取消");
-      await this.cleanupStaleSlots();
-      for (let index = 0; index < policy.maxConcurrentRuns; index++) {
-        const path = join(this.slotsRoot, `${index}.slot`);
-        try {
-          return await this.createLease(path, runId);
-        } catch (error: any) {
-          if (error?.code !== "EEXIST") throw error;
+      if (ready && !await ready()) { started = Date.now(); await delay(this.options.globalSlotPollMs ?? 1_000); continue; }
+      const available = await withCrossProcessFileLock(join(this.root, "lease-allocation.lock"), async () => {
+        await this.cleanupStaleSlots();
+        for (let index = 0; index < policy.maxConcurrentRuns; index++) {
+          try { return await this.createLease(join(this.slotsRoot, `${index}.slot`), runId); }
+          catch (error: any) { if (error?.code !== "EEXIST") throw error; }
         }
+        return undefined;
+      });
+      if (available) {
+        try { if (!ready || await ready()) return available; }
+        catch (error) { await available.release(); throw error; }
+        await available.release();
+        continue;
       }
       if (Date.now() - started > (this.options.globalSlotTimeoutMs ?? 10 * 60_000)) throw new Error("等待全局自动化并发槽位超时");
       await delay(this.options.globalSlotPollMs ?? 1_000);
@@ -337,6 +397,7 @@ export class AutomationService {
 
   private async acquire(taskId: string, runId: string) {
     await mkdir(this.locksRoot, { recursive: true });
+    return withCrossProcessFileLock(join(this.root, "lease-allocation.lock"), async () => {
     for (let attempt = 0; attempt < 2; attempt++) {
       try { return await this.createLease(this.lockPath(taskId), runId); }
       catch (error: any) {
@@ -346,6 +407,7 @@ export class AutomationService {
       }
     }
     return undefined;
+    });
   }
   private async cleanupStaleSlots(): Promise<void> {
     for (const name of (await readdir(this.slotsRoot).catch(() => [])).filter((value) => value.endsWith(".slot"))) {
@@ -371,6 +433,8 @@ export class AutomationService {
     } catch { /* v0.6 lock files contained only the run id */ }
     const runId = lease?.runId ?? raw;
     const run = runId ? await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined) : undefined;
+    // A live owner may still be unwinding a cancelled turn. Never reassign its resource.
+    if (lease?.pid) return !isProcessAlive(lease.pid);
     if (run && ["completed", "failed", "cancelled", "skipped"].includes(run.status)) return true;
     const modified = await stat(path).catch(() => undefined);
     if (!modified) return true;
@@ -402,8 +466,10 @@ export class AutomationService {
       release: async () => {
         if (lease.heartbeat) clearInterval(lease.heartbeat);
         await handle.close().catch(() => undefined);
-        const current = await readFile(path, "utf8").catch(() => "");
-        if (current.includes(record.leaseId)) await rm(path, { force: true });
+        await withCrossProcessFileLock(join(this.root, "lease-allocation.lock"), async () => {
+          const current = await readFile(path, "utf8").catch(() => "");
+          if (current.includes(record.leaseId)) await rm(path, { force: true });
+        });
       },
     };
     const heartbeatMs = Math.max(10, this.options.leaseHeartbeatMs ?? 30_000);
@@ -417,14 +483,36 @@ export class AutomationService {
   }
   private async readStoredTasks(): Promise<StoredAutomationTask[]> { const publicTasks = await this.list(); return Promise.all(publicTasks.map((task) => this.readTask(task.id))); }
   private readTask(id: string): Promise<StoredAutomationTask> { return this.readTaskFile(this.taskPath(id)); }
-  private async readTaskFile(path: string): Promise<StoredAutomationTask> { const value = await readJson<StoredAutomationTask>(path); if (!value.id || !value.encryptedPrompt) throw new Error("自动化任务文件损坏"); value.missedRunPolicy ??= "run-once"; value.contextPolicy ??= "reuse"; return value; }
+  private async readTaskFile(path: string): Promise<StoredAutomationTask> {
+    const value = await readJson<StoredAutomationTask>(path);
+    if (value.deletedAt) throw new Error("任务已删除");
+    if (!value.id || !value.encryptedPrompt) throw new Error("自动化任务文件损坏");
+    value.revision ??= 1; value.missedRunPolicy ??= "run-once"; value.contextPolicy ??= "reuse";
+    value.timeZone ??= Intl.DateTimeFormat().resolvedOptions().timeZone; value.scheduleAnchor ??= value.createdAt;
+    const runtime = await readJson<{ sessionId?: string; sessionRevision?: number; sessionMigrationComplete: boolean }>(join(this.root, "runtime", `${safeId(value.id)}.json`)).catch(() => undefined);
+    if (runtime) { value.sessionId = runtime.sessionId; value.sessionRevision = runtime.sessionRevision; value.sessionMigrationComplete = true; }
+    else if (!value.sessionId && !value.sessionMigrationComplete) value.sessionId = (await this.readRuns()).find(run => run.taskId === value.id && run.sessionId)?.sessionId;
+    return value;
+  }
+
   private async readRuns(): Promise<AutomationRunRecord[]> {
     await mkdir(this.runsRoot, { recursive: true });
     const values = await Promise.all((await readdir(this.runsRoot).catch(() => [])).filter((name) => name.endsWith(".json")).map((name) => readJson<AutomationRunRecord>(join(this.runsRoot, name)).catch(() => undefined)));
     return values.filter((value): value is AutomationRunRecord => Boolean(value)).sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt));
   }
-  private async writeTask(task: StoredAutomationTask): Promise<void> { await mkdir(this.tasksRoot, { recursive: true }); await atomicJson(this.taskPath(task.id), task); }
-  private async writeRun(run: AutomationRunRecord): Promise<void> { await mkdir(this.runsRoot, { recursive: true }); await atomicJson(this.runPath(run.id), run); }
+  private async writeTask(task: StoredAutomationTask): Promise<void> {
+    const { sessionId, sessionRevision, ...definition } = task;
+    const runtimePath = join(this.root, "runtime", `${safeId(task.id)}.json`);
+    if (sessionId && !await stat(runtimePath).catch(() => undefined)) await atomicJson(runtimePath, { sessionId, sessionRevision: sessionRevision ?? task.revision, sessionMigrationComplete: true });
+    await atomicJson(this.taskPath(task.id), definition);
+  }
+  private async writeRun(run: AutomationRunRecord): Promise<void> {
+    await withCrossProcessFileLock(join(this.root, "run-transactions", `${safeId(run.id)}.lock`), async () => {
+      const current = await readJson<AutomationRunRecord>(this.runPath(run.id)).catch(() => undefined);
+      if (current && ["completed", "failed", "cancelled", "skipped"].includes(current.status)) { Object.assign(run, current); return; }
+      await atomicJson(this.runPath(run.id), run);
+    });
+  }
   private taskPath(id: string): string { return join(this.tasksRoot, `${safeId(id)}.json`); }
   private runPath(id: string): string { return join(this.runsRoot, `${safeId(id)}.json`); }
   private lockPath(id: string): string { return join(this.locksRoot, `${safeId(id)}.lock`); }
@@ -460,16 +548,28 @@ export class WindowsTaskScheduler implements TaskSchedulerAdapter {
 }
 
 export function buildTaskXml(task: AutomationTask, executable: string, args: string[]): string {
-  const trigger = scheduleXml(task.schedule);
+  const trigger = task.schedule.kind === "daily" || task.schedule.kind === "weekly"
+    ? calendarWakeups(task.schedule, new Date(), task.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone).map(wake => {
+      const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      const date = (task.scheduleAnchor ?? task.createdAt).slice(0, 10);
+      return `<CalendarTrigger><StartBoundary>${date}T${wake.time}:00Z</StartBoundary><Enabled>true</Enabled><ScheduleByWeek><WeeksInterval>1</WeeksInterval><DaysOfWeek>${wake.days.map(day => `<${names[day]}/>`).join("")}</DaysOfWeek></ScheduleByWeek></CalendarTrigger>`;
+    }).join("") : scheduleXml(task.schedule, task.scheduleAnchor);
   return `<?xml version="1.0" encoding="UTF-16"?>\n<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>${xml(task.name)}</Description></RegistrationInfo><Triggers>${trigger}</Triggers><Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><StartWhenAvailable>${task.missedRunPolicy === "skip" ? "false" : "true"}</StartWhenAvailable><WakeToRun>${task.wakeToRun}</WakeToRun><ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings><Actions Context="Author"><Exec><Command>${xml(executable)}</Command><Arguments>${xml(args.map(quoteArg).join(" "))}</Arguments><WorkingDirectory>${xml(task.workspace)}</WorkingDirectory></Exec></Actions></Task>`;
 }
 
-function scheduleXml(schedule: AutomationTask["schedule"]): string {
-  if (schedule.kind === "once") return `<TimeTrigger><StartBoundary>${xml(localIso(new Date(schedule.at)))}</StartBoundary><Enabled>true</Enabled></TimeTrigger>`;
+function scheduleXml(schedule: AutomationTask["schedule"], anchor?: string): string {
+  if (schedule.kind === "once") return `<TimeTrigger><StartBoundary>${xml(new Date(schedule.at).toISOString())}</StartBoundary><Enabled>true</Enabled></TimeTrigger>`;
   const start = nextBoundary(schedule.kind === "daily" || schedule.kind === "weekly" ? schedule.time : "00:00");
   if (schedule.kind === "daily") return `<CalendarTrigger><StartBoundary>${start}</StartBoundary><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay><Enabled>true</Enabled></CalendarTrigger>`;
   if (schedule.kind === "weekly") { const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]; return `<CalendarTrigger><StartBoundary>${start}</StartBoundary><ScheduleByWeek><WeeksInterval>1</WeeksInterval><DaysOfWeek>${schedule.days.map((day) => `<${names[day]}/>`).join("")}</DaysOfWeek></ScheduleByWeek><Enabled>true</Enabled></CalendarTrigger>`; }
-  return `<TimeTrigger><StartBoundary>${localIso(new Date())}</StartBoundary><Repetition><Interval>PT${Math.max(1, Math.floor(schedule.minutes))}M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled></TimeTrigger>`;
+  return `<TimeTrigger><StartBoundary>${(anchor ?? new Date().toISOString())}</StartBoundary><Repetition><Interval>PT${Math.max(1, Math.floor(schedule.minutes))}M</Interval><Duration>P3650D</Duration><StopAtDurationEnd>false</StopAtDurationEnd></Repetition><Enabled>true</Enabled></TimeTrigger>`;
+}
+
+function scheduleKey(schedule: AutomationTask["schedule"]): string {
+  if (schedule.kind === "weekly") return `weekly|${schedule.time}|${[...new Set(schedule.days)].sort().join(",")}`;
+  if (schedule.kind === "daily") return `daily|${schedule.time}`;
+  if (schedule.kind === "interval") return `interval|${schedule.minutes}`;
+  return `once|${new Date(schedule.at).toISOString()}`;
 }
 
 function nextBoundary(time: string): string { const match = /^(\d{2}):(\d{2})$/.exec(time); const date = new Date(); date.setHours(Number(match?.[1] ?? 0), Number(match?.[2] ?? 0), 0, 0); if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1); return localIso(date); }
@@ -535,9 +635,9 @@ function stripPrompt(value: StoredAutomationTask, now = new Date()): AutomationT
   const registrationDiagnostic = registrationError && registrationError !== task.registrationError
     ? { operation: "register" as const, code: "historical-encoding-damaged" as const, message: registrationError, repairable: true }
     : task.registrationDiagnostic;
-  return { ...task, registrationError, registrationDiagnostic, nextRunAt: task.enabled ? calculateNextRun(task.schedule, now)?.toISOString() : undefined };
+  return { ...task, registrationError, registrationDiagnostic, nextRunAt: task.enabled ? nextScheduledRun(task.schedule, now, task.scheduleAnchor ?? task.createdAt, task.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone)?.toISOString() : undefined };
 }
-function validateTaskInput(value: AutomationTaskInput, requirePrompt: boolean): void { if (!value.name.trim()) throw new Error("任务名称不能为空"); if (!value.workspace.trim()) throw new Error("任务工作区不能为空"); if (requirePrompt && !value.prompt?.trim()) throw new Error("任务提示词不能为空"); if (!(value.contextPolicy === "reuse" || value.contextPolicy === "fresh")) throw new Error("任务上下文策略无效"); if (!(["run-once", "skip"] as const).includes(value.missedRunPolicy)) throw new Error("错过运行策略无效"); if (value.skillCommand && !/^\/[A-Za-z0-9._-]+$/.test(value.skillCommand.trim())) throw new Error("Skill 命令必须以 / 开头且不包含参数"); if (value.schedule.kind === "interval" && (!Number.isInteger(value.schedule.minutes) || value.schedule.minutes < 1)) throw new Error("固定间隔不得小于一分钟"); if (value.schedule.kind === "daily" || value.schedule.kind === "weekly") { if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.schedule.time)) throw new Error("任务执行时间格式无效"); } if (value.schedule.kind === "weekly" && (!value.schedule.days.length || value.schedule.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("每周任务至少选择一个有效星期"); if (value.schedule.kind === "once" && !Number.isFinite(new Date(value.schedule.at).getTime())) throw new Error("单次任务时间无效"); }
+function validateTaskInput(value: AutomationTaskInput, requirePrompt: boolean): void { if (value.timeZone) new Intl.DateTimeFormat("en", { timeZone: value.timeZone }); if (value.scheduleAnchor && !Number.isFinite(Date.parse(value.scheduleAnchor))) throw new Error("调度起点无效"); if (value.destination === "current-session" && !value.targetSessionId) throw new Error("当前会话任务缺少目标会话"); if (!value.name.trim()) throw new Error("任务名称不能为空"); if (!value.workspace.trim()) throw new Error("任务工作区不能为空"); if (requirePrompt && !value.prompt?.trim()) throw new Error("任务提示词不能为空"); if (!(value.contextPolicy === "reuse" || value.contextPolicy === "fresh")) throw new Error("任务上下文策略无效"); if (!(["run-once", "skip"] as const).includes(value.missedRunPolicy)) throw new Error("错过运行策略无效"); if (value.skillCommand && !/^\/[A-Za-z0-9._-]+$/.test(value.skillCommand.trim())) throw new Error("Skill 命令必须以 / 开头且不包含参数"); if (value.schedule.kind === "interval" && (!Number.isInteger(value.schedule.minutes) || value.schedule.minutes < 1)) throw new Error("固定间隔不得小于一分钟"); if (value.schedule.kind === "daily" || value.schedule.kind === "weekly") { if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value.schedule.time)) throw new Error("任务执行时间格式无效"); } if (value.schedule.kind === "weekly" && (!value.schedule.days.length || value.schedule.days.some((day) => !Number.isInteger(day) || day < 0 || day > 6))) throw new Error("每周任务至少选择一个有效星期"); if (value.schedule.kind === "once" && !Number.isFinite(new Date(value.schedule.at).getTime())) throw new Error("单次任务时间无效"); }
 function sanitizeError(value: unknown, sensitive: string[] = []): string { let text = value instanceof Error ? value.message : String(value); for (const item of sensitive.filter(Boolean)) text = text.split(item).join("[REDACTED]"); return text.replace(/(?:sk|xai|ghp|github_pat)_[A-Za-z0-9_-]{8,}/gi, "[REDACTED]").slice(0, 1000); }
 async function readJson<T>(path: string): Promise<T> { return JSON.parse(await readFile(path, "utf8")) as T; }
 async function atomicJson(path: string, value: unknown): Promise<void> { await mkdir(dirname(path), { recursive: true }); const temp = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`; try { await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8"); await renameSafe(temp, path); } catch (error) { await rm(temp, { force: true }).catch(() => undefined); throw error; } }

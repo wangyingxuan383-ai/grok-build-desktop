@@ -152,3 +152,12 @@ async function createFixture(name: string, extra: { calls?: Array<{ args: string
 function agentRaw(name: string, description: string, body: string, extra = ""): string {
   return `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n${extra}---\n\n${body}\n`;
 }
+
+
+it.each([
+  ["all", "all"], ["none", "none"], ["\n  except: [grok_desktop_computer, grok_desktop]", { except: ["grok_desktop_computer", "grok_desktop"] }],
+  ["\n  named:\n    - docs", { named: ["docs"] }],
+])("reads native mcpInheritance %s without discarding future fields", (yaml, expected) => {
+  const raw = `---\nname: test\ndescription: test\nmcpInheritance: ${yaml}\nfuture_field: keep\n---\nbody`;
+  expect(agentDefinitionInternals.parseAgent(raw, "test")).toMatchObject({ validation: { valid: true }, mcpInheritance: expected });
+});

@@ -1,6 +1,6 @@
 {
   "name": "grok-build-desktop",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "private": true,
   "description": "Windows desktop GUI for the local Grok Build CLI",
   "main": "out/main/index.js",
@@ -153,6 +153,10 @@
       {
         "from": "resources/plugins/grok-computer-use",
         "to": "plugins/grok-computer-use"
+      },
+      {
+        "from": "resources/plugins/grok-desktop",
+        "to": "plugins/grok-desktop"
       },
       {
         "from": "resources/resource-manifest.json",

@@ -1,17 +1,17 @@
 ---
 name: computer
-description: Use Grok Build Desktop's experimental Windows foreground Computer Use harness only when the user explicitly selects @Computer or asks for visual desktop control.
+description: Use the available Windows GUI tools when a task requires observing or operating desktop applications; natural-language requests are sufficient.
 ---
 
 # Grok Computer Use
 
-Use this Skill only for an explicit `@Computer` request. The available `grok_desktop_computer` MCP tools implement an observe → one action → observe loop.
+Select this skill when GUI interaction is needed within the user’s requested task; `@Computer` is optional. A disabled capability must never be bypassed. The available `grok_desktop_computer` MCP tools implement an observe → one action → observe loop.
 
 ## Tool choice
 
 1. Prefer a dedicated plugin or MCP whenever it offers the needed structured operation.
 2. For browser inspection and automation, prefer the official `chrome-devtools` Grok plugin. Use visual Computer Use only for browser chrome, pixel verification, or when structured tools cannot complete the request.
-3. Never attempt to control Grok Build Desktop, Codex/ChatGPT, a terminal, PowerShell, CMD, Windows Terminal, UAC, Windows Security, an elevated window, or a non-interactive desktop.
+3. Never attempt to control Grok Build Desktop, ChatGPT, a terminal, PowerShell, CMD, Windows Terminal, UAC, Windows Security, an elevated window, or a non-interactive desktop.
 
 ## Loop
 
@@ -25,7 +25,7 @@ Use this Skill only for an explicit `@Computer` request. The available `grok_des
 ## Permissions and risk
 
 - Plan mode is observation-only.
-- Ordinary applications are available by default. A user may optionally enable confirmation for new applications; auto approval never bypasses high-impact confirmation.
+- Ordinary applications are available by default. A user may optionally enable confirmation for new applications; Agent mode requests high-impact confirmation; Auto mode follows the user’s automatic-approval choice. Protected targets and manual-secret boundaries still apply.
 - Set `risk` and `riskSummary` before any deletion, external communication/publication/submission, financial or subscription action, software/script/extension installation, account permission/API-key change, security/privacy/VPN/password change, or sensitive-data transfer.
 - Never enter passwords, one-time codes, or CAPTCHA answers. Hand UAC, Windows Security/privacy prompts, and final password changes back to the user.
 - Do not place secrets or full typed text into progress summaries.

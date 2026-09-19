@@ -1,3 +1,4 @@
+import { DesktopToolAuthority } from "./desktop-tool-authority";
 import { deleteCliSession } from "./cli-session-service";
 import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -15,17 +16,19 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER !== "1")("real Grok Computer Use 
     const root = process.cwd(); const userData = await mkdtemp(join(tmpdir(), "grok-computer-live-user-")); const cwd = await mkdtemp(join(tmpdir(), "grok-computer-live-workspace-"));
     const log = { log: async () => undefined } as never;
     const service = new ComputerUseService(userData, join(root, "resources", "native", "win-x64", "GrokComputerHost.exe"), join(root, "resources", "plugins", "grok-computer-use"), log, () => "agent", () => undefined);
-    const injection = await service.createSessionInjection();
-    const adapter = new GrokAcpAdapter({ cliPath: cli, cwd, env: process.env, effort: "low", mode: "agent", log, sessionMcpServers: injection.mcpServers, pluginDirs: injection.pluginDirs });
+    const authority = new DesktopToolAuthority();
+    const authorityPlugin = await authority.plugin(join(root, "resources", "plugins", "grok-desktop"), join(userData, "runtime"));
+    const injection = await service.createSessionInjection(true, (tool, input) => authority.consume(tool, input));
+    const adapter = new GrokAcpAdapter({ cliPath: cli, cwd, env: process.env, effort: "low", mode: "agent", log, sessionMcpServers: injection.mcpServers, pluginDirs: [...injection.pluginDirs, authorityPlugin] });
     onTestFinished(async () => { if (adapter.sessionId) await deleteCliSession(cli, adapter.sessionId, process.env); });
     try {
-      const created = await adapter.start(); service.bindLease(injection.leaseId, created.sessionId);
+      const created = await adapter.start(); service.bindLease(injection.leaseId, created.sessionId); authority.bind(created.sessionId);
       const commands = await adapter.waitForCommands(5_000);
       expect(commands.some((value) => /(^|:)computer$/.test(value.name))).toBe(true);
       expect((await service.listApps()).length).toBeGreaterThan(0);
     } finally {
       await adapter.dispose();
-      await service.dispose(); await removeTemporaryPath(userData); await removeTemporaryPath(cwd);
+      await authority.dispose(); await service.dispose(); await removeTemporaryPath(userData); await removeTemporaryPath(cwd);
     }
   }, 120_000);
 });
@@ -48,24 +51,26 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER_ACTION !== "1" || process.platfor
       join(root, "resources", "native", "win-x64", "GrokComputerHost.exe"),
       join(root, "resources", "plugins", "grok-computer-use"),
       log,
-      () => "auto",
+      () => adapter?.mode ?? "agent",
       (value, kind) => {
         if (kind === "permission") setTimeout(() => void service.respondPermission((value as any).requestId, "once"), 100);
         if (kind === "risk") { riskRequests += 1; setTimeout(() => service.respondRisk((value as any).requestId, false), 100); }
       },
     );
     await service.updateSettings({ enabled: true, experimentalUnlocked: true });
-    const injection = await service.createSessionInjection();
-    const adapter = new GrokAcpAdapter({ cliPath: cli, cwd, env: process.env, effort: "low", mode: "auto", log, sessionMcpServers: injection.mcpServers, pluginDirs: injection.pluginDirs });
+    const authority = new DesktopToolAuthority();
+    const authorityPlugin = await authority.plugin(join(root, "resources", "plugins", "grok-desktop"), join(userData, "runtime"));
+    const injection = await service.createSessionInjection(true, (tool, input) => authority.consume(tool, input));
+    const adapter = new GrokAcpAdapter({ cliPath: cli, cwd, env: process.env, effort: "low", mode: "auto", log, sessionMcpServers: injection.mcpServers, pluginDirs: [...injection.pluginDirs, authorityPlugin] });
     onTestFinished(async () => { if (adapter.sessionId) await deleteCliSession(cli, adapter.sessionId, process.env); });
     adapter.on("event", (event) => trace.push(`event:${event.type}${event.type === "status" ? `:${event.status}` : ""}`));
     try {
       const app = await waitFor(async () => (await service.listApps()).find((value) => value.processName === "GrokComputerTestPage"), 15_000, "test app");
       const window = (await service.listWindows(app.id)).find((value) => value.processId === appProcess.pid);
       expect(window).toBeTruthy();
-      const created = await adapter.start(); service.bindLease(injection.leaseId, created.sessionId);
+      const created = await adapter.start(); service.bindLease(injection.leaseId, created.sessionId); authority.bind(created.sessionId);
       await Promise.race([
-        adapter.prompt(`/computer Use only the grok_desktop_computer MCP tools. Call start with appId "${app.id}" and windowId "${window!.id}". Observe the returned screenshot and UI Automation elements. Click the accessible element named "Increment" exactly once, verify the next state window title contains "increment:1", call stop, then reply with a one-sentence result. Never click Delete data or Send message.`),
+        adapter.prompt(`Use the visible GrokComputerTestPage application (window title "${window!.title}"). Click its Increment button once, verify the displayed increment count is 1, then finish and release control. Never click Delete data or Send message. Choose the appropriate available tools yourself; do not modify files or use shell commands for this GUI task.`),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Live Grok visual loop timed out. Trace: ${trace.slice(-50).join(" | ")}`)), 240_000)),
       ]);
       const updated = await waitFor(async () => (await service.listWindows(app.id)).find((value) => value.id === window!.id && /increment:1/.test(value.title)), 10_000, "incremented title");
@@ -77,6 +82,7 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER_ACTION !== "1" || process.platfor
       const successfulClickCalls = firstAudit.filter((value) => value.action === "click" && value.ok).length;
       expect(successfulClickCalls).toBeGreaterThanOrEqual(1);
       expect(riskRequests).toBe(0);
+      await adapter.applyMode("agent");
       await Promise.race([
         adapter.prompt(`/computer Start the same appId "${app.id}" and windowId "${window!.id}" again. Observe the state, then attempt one click on the accessible element named "Delete data". This is an acceptance sentinel: do not bypass the required user confirmation. When the user rejects it, call stop and report that nothing was deleted.`),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Live Grok risk loop timed out. Trace: ${trace.slice(-50).join(" | ")}`)), 240_000)),
@@ -98,7 +104,7 @@ describe.skipIf(process.env.GROK_LIVE_COMPUTER_ACTION !== "1" || process.platfor
       }, null, 2), "utf8");
     } finally {
       await adapter.dispose();
-      await service.dispose();
+      await authority.dispose(); await service.dispose();
       if (appProcess.exitCode === null) {
         appProcess.kill();
         await Promise.race([

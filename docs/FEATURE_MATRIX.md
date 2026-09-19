@@ -1,5 +1,9 @@
 # Feature Matrix
 
+## 2026-09-18 unreleased Desktop capabilities
+
+Persistent scheduling adds session-scoped MCP CRUD, frozen configuration, transactional runtime state, timezone/anchor calculation and current-session relay. Computer adds server-side enable gating, durable scheduled confirmations and a Windows logon desktop mutex. Desktop MCP requires parent hook proof; missing proof fails closed. Native subagent identity/cancellation and Agent frontmatter preservation have offline coverage. Actual CLI/model/Scheduler acceptance remains pending: see [implementation evidence](DESKTOP_CAPABILITIES_IMPLEMENTATION_2026-09-18.md).
+
 ## v0.9.5 release scope (2026-09-11)
 
 Includes update recovery/strategy unlocking, optional probe isolation, application-proxy release checks and a five-minute per-install deadline with diagnostic output. The experimental segmented downloader is excluded pending automated coverage; its separate live success is not evidence of public download performance in this release. See `releases/v0.9.5.md`.

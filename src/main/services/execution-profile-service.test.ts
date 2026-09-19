@@ -81,3 +81,13 @@ function editable(id: string, name: string, patch: Partial<SessionExecutionProfi
 }
 
 type ExecutionProfileSaveInputProfile = Omit<SessionExecutionProfile, "id" | "scope" | "workspaceIdentity" | "readOnly" | "createdAt" | "updatedAt" | "effective" | "shadowedBy"> & { id?: string };
+
+
+it("preserves unknown fields, comments and MCP inheritance in the generated runtime agent", async () => {
+  const { service, workspace } = await createFixture();
+  const profile = await service.resolve(workspace); profile.agentId = "reviewer";
+  const compiled = await service.compileProfile(profile, [{ id: "agent", name: "reviewer", source: "project", enabled: true, readOnly: false, effective: true, instructions: "review", rawMarkdown: "---\nname: reviewer\ndescription: review\n# future CLI settings\nmcpInheritance:\n  except: [grok_desktop_computer]\nfuture_config:\n  nested: untouched\n---\nreview\n" }]);
+  const raw = await readFile(compiled.agentProfilePath, "utf8");
+  expect(raw).toContain("# future CLI settings"); expect(raw).toContain("mcpInheritance:\n  except: [grok_desktop_computer]");
+  expect(raw).toContain("future_config:\n  nested: untouched");
+});

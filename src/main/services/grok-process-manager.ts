@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { acquireProcessResource } from "./process-resource-lease";
 import { randomUUID } from "node:crypto";
 import type { AppSettings, ChatEvent, CliBtwReceipt, CliSessionInfo, CliSessionListResult, CliSessionUsage, CommandInfo, LiveStatus, ModelInfo, OfficialFeedbackCapability, OfficialFeedbackReceipt, ProviderLaunchContext, ReasoningEffort, SessionCompactReceipt, SessionMode } from "../../shared/types";
 import { buildCliEnv, compareVersions, detectEffortFlag, KNOWN_PUBLIC_CLI_VERSION, locateGrokCli, parseVersion, readCliVersion } from "./cli-locator";
@@ -33,6 +36,7 @@ export class GrokProcessManager {
    * CLI processes and makes every waiter observe the owner's failure.
    */
   private readonly sessionOpenFlights = new Map<string, Promise<{ sessionId: string }>>();
+  private readonly ownership = new WeakMap<GrokAcpAdapter, { release(): Promise<void> }>();
   private focusedId = "";
   private readonly reaper: NodeJS.Timeout;
 
@@ -41,7 +45,7 @@ export class GrokProcessManager {
     private readonly getApiKey: () => Promise<string | undefined>,
     private readonly log: LogService,
     private readonly onEvent: (event: ChatEvent) => void,
-    private readonly getSessionExtensions?: () => Promise<{ leaseId?: string; mcpServers?: unknown[]; pluginDirs?: string[] }>,
+    private readonly getSessionExtensions?: (context?: { cwd: string; computerEnabled?: boolean }) => Promise<{ leaseId?: string; mcpServers?: unknown[]; pluginDirs?: string[] }>,
     private readonly onSessionStarted?: (leaseId: string | undefined, sessionId: string) => void,
     private readonly onSessionClosed?: (leaseId: string | undefined) => void,
     private readonly getMcpSecretEnvironment: () => Promise<Record<string, string>> = async () => ({}),
@@ -50,6 +54,7 @@ export class GrokProcessManager {
     private readonly beforeSessionClose?: (sessionId: string, session: GrokAcpAdapter, reason: "close" | "shutdown" | "reap" | "cap") => Promise<void>,
     private readonly runtimeState?: SessionRuntimeStateService,
     private readonly isFutureCliVersionAllowed?: (version: string) => Promise<boolean>,
+    private readonly sessionLockRoot?: string,
   ) {
     this.reaper = setInterval(() => void this.reap(), 5 * 60_000);
     this.reaper.unref();
@@ -632,7 +637,6 @@ export class GrokProcessManager {
       : savedRuntime?.modelId ?? modelId;
     const providerEnvironment = await this.getProviderEnvironment({ scopeId: providerScopeId, sessionId: resumeSessionId, cwd, modelId, localModelId, providerId, effort });
     const initialPromptQueue = resumeSessionId ? await this.runtimeState?.getQueue(resumeSessionId) : undefined;
-    const extensions = await this.getSessionExtensions?.();
     const effectivePermissionDecider = permissionDecider ?? processOptions?.permissionDecider;
     const effectiveEnvironmentOverride = environmentOverride ?? processOptions?.environmentOverride;
     const compactionEnvironment = savedRuntime?.compaction?.mode === "custom" && savedRuntime.compaction.thresholdPercent
@@ -648,8 +652,14 @@ export class GrokProcessManager {
     if (!await this.acceptCliRuntimeVersion(parsedCliVersion.join("."))) {
       throw new Error(`Grok CLI ${parsedCliVersion.join(".")} 尚未通过此 Desktop 安装的兼容门禁；已在创建 ACP 会话前失败关闭`);
     }
+    const effortFlag = await detectEffortFlag(cliPath, env);
+    const ownership = resumeSessionId && this.sessionLockRoot ? await acquireProcessResource(this.sessionLockPath(resumeSessionId), 1500) : undefined;
+    let extensions: Awaited<ReturnType<NonNullable<typeof this.getSessionExtensions>>>;
+    try { extensions = await this.getSessionExtensions?.({ cwd, computerEnabled: processOptions?.computerEnabled }) ?? {}; }
+    catch (error) { await ownership?.release(); throw error; }
     const adapter = new GrokAcpAdapter({
       cliPath,
+      computerEnabled: processOptions?.computerEnabled,
       cliVersion,
       cwd,
       env,
@@ -661,7 +671,7 @@ export class GrokProcessManager {
       sessionMcpServers: extensions?.mcpServers,
       pluginDirs: extensions?.pluginDirs,
       extensionLeaseId: extensions?.leaseId,
-      effortFlag: await detectEffortFlag(cliPath, env),
+      effortFlag,
       permissionDecider: effectivePermissionDecider,
       providerScopeId,
       initialPromptQueue,
@@ -675,10 +685,13 @@ export class GrokProcessManager {
       alwaysApprove: mode === "auto",
       environmentOverride: effectiveEnvironmentOverride ? { ...effectiveEnvironmentOverride } : undefined,
     });
+    if (ownership) this.ownership.set(adapter, ownership);
     adapter.on("event", (event: ChatEvent) => this.onEvent(event));
     adapter.on("closed", () => {
       const sessionId = adapter.sessionId;
       if (sessionId && this.sessions.get(sessionId) === adapter) this.sessions.delete(sessionId);
+      void this.ownership.get(adapter)?.release();
+      this.ownership.delete(adapter);
       this.onSessionClosed?.(adapter.extensionLeaseId);
     });
     return adapter;
@@ -704,7 +717,10 @@ export class GrokProcessManager {
     return flight;
   }
 
+  private sessionLockPath(sessionId: string): string { return join(this.sessionLockRoot!, `${createHash("sha256").update(sessionId).digest("hex")}.lock`); }
+
   private async rememberSession(sessionId: string, adapter: GrokAcpAdapter, identity?: ManagedModelIdentity): Promise<void> {
+    if (this.sessionLockRoot && !this.ownership.has(adapter)) this.ownership.set(adapter, await acquireProcessResource(this.sessionLockPath(sessionId), 1500));
     if (!this.runtimeState) return;
     const previous = await this.runtimeState.get(sessionId);
     await this.runtimeState.save({
