@@ -25,6 +25,7 @@ app.whenReady().then(async()=>{
     await win.loadFile(path.join(__dirname,'index.html'));
     win.webContents.debugger.attach('1.3');
     const key=async(key,code)=>{await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code});await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code});await wait()};
+    if (process.env.REGRESSION_SCOPE !== 'automation') {
     await run('fixture.menus()'); await wait();
     await run('document.querySelectorAll("summary")[0].click();document.querySelectorAll("summary")[1].click()');await wait();
     assert(await run('document.querySelectorAll("details[open]").length===1 && document.querySelectorAll("details")[1].open'),'menu switch race');
@@ -64,7 +65,20 @@ app.whenReady().then(async()=>{
     assert(await run('document.querySelector("#draft").value==="stored c"'),'draft hydration missing');
     await run('fixture.edit("unsaved c")');await wait();await run('fixture.reload()');await wait();
     assert(await run('document.querySelector("#draft").value==="unsaved c"'),'same-target reload lost edits');
-    console.log('REGRESSION_DOM_PASSED menu switch/arrows/Esc/Tab, toast failure/reset, recovery controls/phases, MCP validation/retry/pending/removal, late hydration, unsaved reload');
+    }
+    await run('fixture.taskCenter()');await wait();
+    await run('Array.from(document.querySelectorAll(".automation-row button")).find(b=>b.textContent==="编辑").click()');await wait();
+    assert(await run('document.body.textContent.includes("保留此前的会话和运行记录")'),'fresh context deletes history in UI copy');
+    assert(await run('(()=>{const d=new Date("2030-01-01T01:30:00Z");return document.querySelector("input[type=datetime-local]").value===new Date(+d-d.getTimezoneOffset()*60000).toISOString().slice(0,16)})()'),'one-off schedule timezone shifted');
+    await run('Array.from(document.querySelectorAll(".automation-editor button")).find(b=>b.textContent==="保存并注册").click()');await wait();
+    assert(await run('(()=>{const p=fixture.automationPayload();return p && p.timeZone==="Asia/Shanghai" && !["revision","sessionRevision","frozenExecutionProfile","scheduleAnchor"].some(k=>k in p)})()'),'runtime-only task fields leaked into strict IPC');
+    await run('fixture.taskCenter(true)');await wait();
+    await run('Array.from(document.querySelectorAll(".automation-row button")).find(b=>b.textContent==="编辑").click()');await wait();
+    assert(await run('(()=>{const labels=Array.from(document.querySelectorAll(".automation-editor label"));const input=labels.find(l=>l.textContent.startsWith("工作区")).querySelector("input");return !input.disabled && labels.find(l=>l.textContent.startsWith("会话上下文")).querySelector("select").disabled && labels.find(l=>l.textContent.startsWith("会话模式")).querySelector("select").disabled})()'),'bound workspace must remain editable while fixed execution fields are clear');
+    await run('(()=>{const el=Array.from(document.querySelectorAll(".automation-editor label")).find(l=>l.textContent.startsWith("工作区")).querySelector("input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(el,"moved-workspace");el.dispatchEvent(new Event("input",{bubbles:true}))})()');await wait();
+    await run('Array.from(document.querySelectorAll(".automation-editor button")).find(b=>b.textContent==="保存并注册").click()');await wait();
+    assert(await run('fixture.automationPayload().workspace==="moved-workspace" && fixture.automationPayload().targetSessionId==="parent"'),'workspace edit lost the bound session');
+    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation payload/timezone/history/bound workspace' : 'REGRESSION_DOM_PASSED all fixture groups including automation');
     app.exit(0);
   }catch(error){console.error(error.stack);app.exit(1)}
 });`;

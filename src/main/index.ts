@@ -66,6 +66,7 @@ if (schedulerProbeIndex >= 0) {
   const { canonicalUserData, workerSessionData } = configureAutomationWorkerStorage(app);
   app.whenReady().then(async () => {
     controller = new AppController(canonicalUserData);
+    globalShortcut.register("CommandOrControl+Alt+Esc", () => controller?.emergencyStopComputer("Ctrl+Alt+Esc"));
     await controller.runAutomationWorker(taskId, runId);
   }).catch((error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)).finally(async () => {
     await controller?.dispose().catch(() => undefined);

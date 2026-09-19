@@ -15,6 +15,16 @@ using System.Windows.Automation;
 
 internal static class GrokComputerHost
 {
+    // Local namespace scopes ownership to the Windows logon session; abandoned
+    // ownership is released by Windows when a worker crashes.
+    private static readonly Mutex DesktopMutex = new Mutex(false, @"Local\GrokBuildDesktop.ComputerUse");
+    private static bool OwnsDesktop;
+    private static void AcquireDesktop() {
+        if (OwnsDesktop) return;
+        try { OwnsDesktop = DesktopMutex.WaitOne(0); }
+        catch (AbandonedMutexException) { OwnsDesktop = true; }
+        if (!OwnsDesktop) throw new InvalidOperationException("桌面正在由另一个 Grok 任务控制");
+    }
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 32 * 1024 * 1024, RecursionLimit = 80 };
     private static readonly Dictionary<string, AutomationElement> Elements = new Dictionary<string, AutomationElement>();
     private static readonly Dictionary<IntPtr, string> LatestStates = new Dictionary<IntPtr, string>();
@@ -28,6 +38,11 @@ internal static class GrokComputerHost
         if (args.Length > 0 && args[0] == "--self-test") {
             Console.WriteLine(Json.Serialize(new Dictionary<string, object> { { "ok", true }, { "version", "0.3.1" }, { "platform", Environment.Is64BitProcess ? "win-x64" : "win-x86" } }));
             return Environment.Is64BitProcess ? 0 : 2;
+        }
+        // Offline resource-ownership probe: never reads or acts on the desktop.
+        if (args.Length > 0 && args[0] == "--lease-probe") {
+            try { AcquireDesktop(); Console.WriteLine("acquired"); Console.ReadLine(); return 0; }
+            catch { Console.WriteLine("busy"); return 3; }
         }
         Console.InputEncoding = Encoding.UTF8; Console.OutputEncoding = new UTF8Encoding(false);
         string line;
@@ -54,6 +69,7 @@ internal static class GrokComputerHost
         if (action == "self_test") return new Dictionary<string, object> { { "version", "0.3.1" }, { "x64", Environment.Is64BitProcess } };
         if (!IsInteractiveDefaultDesktop()) throw new InvalidOperationException("当前不是已解锁的前台 Default 桌面；Computer Use 已停止");
         if (action == "list_windows" || action == "list_apps") return EnumerateWindows();
+        AcquireDesktop();
         if (action == "get_cursor_position") { POINT cursor; if (!GetCursorPos(out cursor)) throw new InvalidOperationException("无法读取系统鼠标位置"); return new Dictionary<string, object> { { "x", cursor.X }, { "y", cursor.Y } }; }
         if (action == "wait") { Thread.Sleep(Math.Max(0, Math.Min(30000, IntValue(input, "milliseconds", 500)))); return new Dictionary<string, object> { { "waited", true } }; }
         if (action == "launch_app") { string path = StringValue(input, "executablePath"); if (String.IsNullOrEmpty(path) || !File.Exists(path)) throw new InvalidOperationException("缺少已验证的应用路径"); Process.Start(path); return new Dictionary<string, object> { { "launched", true } }; }

@@ -726,7 +726,7 @@ function providerScanScopeArg(args: unknown[], index: number): void {
   }
 }
 function automationTaskInputArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["id", "name", "workspace", "schedule", "profile", "executionProfileId", "enabled", "wakeToRun", "notify", "missedRunPolicy", "skillCommand", "contextPolicy", "prompt"]);
+  const value = strictRecordArg(args, index, ["id", "name", "workspace", "schedule", "profile", "executionProfileId", "enabled", "wakeToRun", "notify", "missedRunPolicy", "skillCommand", "contextPolicy", "prompt", "timeZone", "destination", "targetSessionId"]);
   optionalRecordString(value, "id", 512);
   requiredRecordString(value, "name", 512);
   requiredRecordString(value, "workspace", 32_767);
@@ -737,6 +737,9 @@ function automationTaskInputArg(args: unknown[], index: number): void {
   requiredRecordEnum(value, "missedRunPolicy", ["run-once", "skip"]);
   optionalRecordString(value, "skillCommand", 4_096);
   requiredRecordEnum(value, "contextPolicy", ["reuse", "fresh"]);
+  optionalRecordEnum(value, "destination", ["standalone", "current-session"]);
+  optionalRecordString(value, "timeZone", 100);
+  optionalRecordString(value, "targetSessionId", 512);
   optionalRecordString(value, "prompt", 2 * 1024 * 1024);
   const schedule = value.schedule;
   if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) throw new Error("IPC 自动化 schedule 无效");
@@ -761,7 +764,7 @@ function automationTaskInputArg(args: unknown[], index: number): void {
   requiredRecordBoolean(profileValue, "computerEnabled");
 }
 function automationTaskPatchArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["id", "name", "workspace", "schedule", "profile", "executionProfileId", "enabled", "wakeToRun", "notify", "missedRunPolicy", "skillCommand", "contextPolicy", "prompt"]);
+  const value = strictRecordArg(args, index, ["id", "name", "workspace", "schedule", "profile", "executionProfileId", "enabled", "wakeToRun", "notify", "missedRunPolicy", "skillCommand", "contextPolicy", "prompt", "timeZone", "destination", "targetSessionId"]);
   optionalRecordString(value, "id", 512);
   optionalRecordString(value, "name", 512);
   optionalRecordString(value, "workspace", 32_767);
@@ -772,6 +775,9 @@ function automationTaskPatchArg(args: unknown[], index: number): void {
   optionalRecordEnum(value, "missedRunPolicy", ["run-once", "skip"]);
   optionalRecordString(value, "skillCommand", 4_096);
   optionalRecordEnum(value, "contextPolicy", ["reuse", "fresh"]);
+  optionalRecordEnum(value, "destination", ["standalone", "current-session"]);
+  optionalRecordString(value, "timeZone", 100);
+  optionalRecordString(value, "targetSessionId", 512);
   if (value.prompt !== undefined) requiredRecordString(value, "prompt", 2 * 1024 * 1024, true);
   if (value.schedule !== undefined) {
     automationTaskInputArg([{

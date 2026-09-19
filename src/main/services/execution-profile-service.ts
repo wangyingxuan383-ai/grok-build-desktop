@@ -1,3 +1,4 @@
+import { setAgentFrontmatterField } from "./agent-definition-service";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -302,6 +303,20 @@ function runtimeAgentMarkdown(profile: SessionExecutionProfile, agent?: AgentDef
     agent?.instructions?.trim() || "遵循当前会话的用户要求与项目规则。",
     "",
   ];
+  if (agent?.rawMarkdown) {
+    // Preserve unrecognized and nested future CLI fields instead of rebuilding
+    // the selected agent from the Desktop's smaller structured model.
+    let raw = agent.rawMarkdown;
+    const overrides: Record<string, string | boolean | string[] | undefined> = {
+      name: `desktop-${profile.id}`, description: profile.description || `Grok Build Desktop 执行配置档：${profile.name}`,
+      model: profile.modelId || agent.modelId || "inherit", prompt_mode: agent.promptMode ?? "extend",
+      permission_mode: profile.mode === "plan" ? "plan" : profile.mode === "auto" ? "auto" : agent.permissionMode || "default",
+      agents_md: agent.agentsMd ?? true, tools: tools.length ? tools : undefined,
+      disallowed_tools: denied.length ? denied : undefined,
+    };
+    for (const [key, value] of Object.entries(overrides)) raw = setAgentFrontmatterField(raw, key, value);
+    return raw;
+  }
   return fields.join("\n");
 }
 

@@ -1,3 +1,9 @@
+import { automationRuntimeProfile, resolveAutomationProfile } from "./services/automation-effective-profile";
+import { watchAutomationInactivity } from "./services/automation-activity-watch";
+import { NativeAgentCapabilities } from "./services/native-agent-capabilities";
+import { DesktopToolAuthority } from "./services/desktop-tool-authority";
+import { DesktopToolsService } from "./services/desktop-tools-service";
+import { SessionRelayService } from "./services/session-relay-service";
 import type { CliUpdateInput, CliUpdatePolicy, CliUpdateAction } from "../shared/types";
 import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
@@ -277,6 +283,11 @@ export class AppController {
   private readonly themeService: ThemeService;
   private readonly providers: ProviderService;
   private readonly automations: AutomationService;
+  private readonly nativeAgentCapabilities = new NativeAgentCapabilities();
+  private readonly desktopTools: DesktopToolsService;
+  private readonly sessionRelay: SessionRelayService;
+  private readonly extensionLeases = new Map<string, { computer?: string; desktop: string; sessionId?: string; authority: DesktopToolAuthority }>();
+  private readonly automationSessionReservations = new Set<string>();
   private readonly inbox: NotificationInboxService;
   private readonly cliCapabilities: CliCapabilityService;
   private readonly workspaceTree = new WorkspaceTreeService();
@@ -383,20 +394,55 @@ export class AppController {
         const size = source.thumbnail.getSize(); return { base64: source.thumbnail.toPNG().toString("base64"), width: size.width, height: size.height };
       },
     );
+    this.sessionRelay = new SessionRelayService(userDataPath, async (sessionId, taskId, runId) => {
+      const task = (await this.automations.list()).find(task => task.id === taskId);
+      if (task?.destination !== "current-session" || task.targetSessionId !== sessionId) throw new Error("任务未绑定此会话");
+      return this.runAutomationWorker(taskId, runId);
+    });
     this.processes = new GrokProcessManager(
       () => this.settingsStore.get(),
       () => this.auth?.activeApiKey(),
       this.log,
       (event) => void this.handleEvent(event),
-      () => this.computer.createSessionInjection(),
-      (leaseId, sessionId) => this.computer.bindLease(leaseId, sessionId),
-      (leaseId) => void this.computer.releaseLease(leaseId),
+      async (context) => {
+        const authority = new DesktopToolAuthority();
+        const authorize = (tool: string, input: Record<string, unknown>) => authority.consume(tool, input);
+        let desktopLeaseId: string | undefined;
+        const computer = await this.computer.createSessionInjection(context?.computerEnabled ?? true, authorize);
+        try {
+          const desktop = await this.desktopTools.injection(context?.cwd ?? process.cwd(), authorize);
+          desktopLeaseId = desktop.leaseId;
+          const plugin = await authority.plugin(join(resourcesRoot, "plugins", `grok-desktop${resourceSuffix}`), join(userDataPath, "desktop-tools-runtime"));
+          const leaseId = crypto.randomUUID();
+          this.extensionLeases.set(leaseId, { computer: computer.leaseId, desktop: desktop.leaseId, authority });
+          return { leaseId, mcpServers: [...computer.mcpServers, ...desktop.mcpServers], pluginDirs: [...computer.pluginDirs, plugin] };
+        } catch (error) { await this.computer.releaseLease(computer.leaseId); if (desktopLeaseId) await this.desktopTools.release(desktopLeaseId); await authority.dispose(); throw error; }
+      },
+      (leaseId, sessionId) => {
+        const lease = leaseId ? this.extensionLeases.get(leaseId) : undefined;
+        if (!lease) return;
+        lease.sessionId = sessionId;
+        lease.authority.bind(sessionId);
+        this.computer.bindLease(lease.computer, sessionId);
+        this.desktopTools.bind(lease.desktop, sessionId);
+        void this.sessionRelay.own(sessionId).catch(error => this.log.log(error));
+      },
+      (leaseId) => {
+        const lease = leaseId ? this.extensionLeases.get(leaseId) : undefined;
+        if (!lease) return;
+        this.extensionLeases.delete(leaseId!);
+        if (lease.sessionId) this.nativeAgentCapabilities.release(lease.sessionId);
+        void Promise.allSettled([this.computer.releaseLease(lease.computer), this.desktopTools.release(lease.desktop), lease.authority.dispose(), lease.sessionId ? this.sessionRelay.release(lease.sessionId) : Promise.resolve()]).then(results => {
+          for (const result of results) if (result.status === "rejected") void this.log.log(`会话扩展清理失败：${String(result.reason)}`).catch(() => undefined);
+        });
+      },
       () => this.vault.mcpSecretEnvironment(),
       (cwd) => this.memory.sessionEnvironment(cwd),
       (context) => this.providerLaunchEnvironment(context),
       (sessionId, session) => this.finalizeMemorySession(sessionId, session),
       this.sessionRuntime,
       (version) => this.updater?.isRuntimeVersionAllowed(version) ?? Promise.resolve(false),
+      join(userDataPath, "session-ownership"),
     );
     this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
       reload: {
@@ -472,6 +518,26 @@ export class AppController {
         if (event.run?.status === "completed" || event.run?.status === "failed") void this.recordAutomationResult(event.run);
       },
     });
+    this.desktopTools = new DesktopToolsService({
+      mode: id => this.processes.snapshot(id)?.mode,
+      list: () => this.automations.list(),
+      create: async (context, input) => {
+        const snapshot = this.processes.snapshot(context.sessionId);
+        if (!snapshot) throw new Error("会话已关闭");
+        const assignment = await this.profiles.assignment(context.sessionId);
+        const runtime = await this.sessionRuntime.get(context.sessionId);
+        const account = await this.vault.active();
+        return this.automations.createOne(await this.applyExecutionProfileToAutomation({ ...input, workspace: context.cwd, enabled: true, wakeToRun: false, notify: true,
+          missedRunPolicy: "run-once", contextPolicy: input.contextPolicy ?? "reuse", targetSessionId: input.destination === "current-session" ? context.sessionId : undefined,
+          frozenExecutionProfile: assignment?.profile, profile: { modelId: snapshot.modelId ?? "", effort: snapshot.effort, mode: snapshot.mode,
+            permissionPolicy: snapshot.mode === "auto" ? "auto" : snapshot.mode === "plan" ? "read-only" : "agent",
+            computerEnabled: snapshot.processOptions?.computerEnabled ?? true, providerId: runtime?.providerId, accountId: account?.profile.id } }));
+      },
+      update: (id, patch) => this.updateAutomation(id, patch), remove: id => this.deleteAutomation(id),
+      runs: id => this.automations.listRuns(id), cancel: id => this.automations.cancelRun(id),
+      capabilities: async id => ({ computer: await this.getComputerCapability(id), desktop: { injected: true, liveVerified: false, callerIdentity: [...this.extensionLeases.values()].find(lease => lease.sessionId === id)?.authority.evidence() },
+        subagents: this.nativeAgentCapabilities.snapshot(id, this.processes.get(id).runtimeHandshake), sessionId: id }),
+    }, join(resourcesRoot, "plugins", `grok-desktop${resourceSuffix}`));
     this.providers = new ProviderService(userDataPath, this.log, {
       fetcher: async (input, init, proxyMode = "inherit") => {
         const settings = await this.settingsStore.get();
@@ -1070,7 +1136,11 @@ export class AppController {
     if (nodeId.startsWith("task:")) return this.killBackgroundTask(nodeId.slice("task:".length));
     const marker = ":subagent:";
     const at = nodeId.indexOf(marker);
-    if (at >= 0) return this.processes.killBackgroundTask(nodeId.slice("session:".length, at), `subagent:${nodeId.slice(at + marker.length)}`);
+    if (at >= 0) {
+      const target = await this.dashboard.cancellationTarget(nodeId);
+      if (!target) throw new Error("CLI 尚未提供此子智能体的可取消原生 ID；不能用子会话 ID 代替");
+      return this.processes.killBackgroundTask(target.sessionId, `subagent:${target.nativeSubagentId}`);
+    }
     if (nodeId.startsWith("session:")) return this.cancelSession(nodeId.slice("session:".length));
     throw new Error("Agent Dashboard 节点标识无效");
   }
@@ -2125,12 +2195,12 @@ export class AppController {
   }
   async createAutomation(input: AutomationTaskInput): Promise<AutomationTask[]> { return this.automations.create(await this.applyExecutionProfileToAutomation(input)); }
   async updateAutomation(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> {
-    if (!patch.executionProfileId && !patch.workspace) return this.automations.update(id, patch);
+    if (!("executionProfileId" in patch) && !patch.workspace && !patch.profile) return this.automations.update(id, patch);
     const current = (await this.automations.list()).find((value) => value.id === id);
     if (!current) throw new Error("持久任务不存在");
     const merged = { ...current, ...patch, profile: { ...current.profile, ...patch.profile }, schedule: patch.schedule ?? current.schedule, prompt: patch.prompt } as AutomationTaskInput;
-    const profiled = await this.applyExecutionProfileToAutomation(merged);
-    return this.automations.update(id, { ...patch, executionProfileId: profiled.executionProfileId, profile: profiled.profile });
+    const profiled = await this.applyExecutionProfileToAutomation({ ...merged, frozenExecutionProfile: "executionProfileId" in patch && patch.executionProfileId !== current.executionProfileId ? undefined : current.frozenExecutionProfile });
+    return this.automations.update(id, { ...patch, executionProfileId: profiled.executionProfileId, profile: profiled.profile, frozenExecutionProfile: profiled.frozenExecutionProfile });
   }
   deleteAutomation(id: string): Promise<AutomationTask[]> { return this.automations.delete(id); }
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]> { return this.automations.pause(id, paused); }
@@ -2177,6 +2247,7 @@ export class AppController {
   }
   clearAutomationContext(id: string): Promise<AutomationTask[]> {
     return this.automations.clearSession(id, async (task) => {
+      if (task.destination === "current-session") throw new Error("继续当前会话的任务不能删除用户会话；请删除或重新绑定该任务");
       if (!task.sessionId) return;
       const assignment = await this.profiles.assignment(task.sessionId);
       await this.processes.close(task.sessionId);
@@ -2187,8 +2258,35 @@ export class AppController {
   unregisterAllAutomations(): Promise<void> { return this.automations.unregisterAll(); }
 
   async runAutomationWorker(taskId: string, runId?: string): Promise<AutomationRunRecord> {
-    return this.automations.execute(taskId, runId, async ({ task, prompt, runId: activeRunId, confirm, signal }) => {
+    const requested = (await this.automations.list()).find(task => task.id === taskId);
+    if (requested?.destination === "current-session" && requested.targetSessionId) {
+      const forwarded = await this.sessionRelay.forward(requested.targetSessionId, taskId, runId);
+      if (forwarded) return forwarded;
+    }
+    let reservedSession: string | undefined;
+    try { return await this.automations.execute(taskId, runId, async ({ task, prompt, runId: activeRunId, confirm, signal }) => {
       if (signal.aborted) throw signal.reason ?? new Error("任务已取消");
+      if (task.destination === "current-session" && task.targetSessionId && this.processes.snapshot(task.targetSessionId)) {
+        let adapter = this.processes.get(task.targetSessionId);
+        const activeAccount = await this.vault.active();
+        if (task.profile.accountId && task.profile.accountId !== activeAccount?.profile.id) throw new Error("当前会话账号与任务固定账号不同，请切回原账号后执行");
+        while (adapter.working || adapter.needsUser) { signal.throwIfAborted(); await new Promise(resolve => setTimeout(resolve, 200)); }
+        signal.throwIfAborted();
+        if (!samePath(adapter.cwd, task.workspace)) {
+          const source = (await this.catalog.list(adapter.cwd)).find(session => session.id === task.targetSessionId);
+          if (!source) throw new Error("原工作区中未找到绑定会话，未改变执行目录");
+          await this.rebindSession(source, await canonicalExistingPath(task.workspace, "directory"), (cwd, id) => this.processes.openConfigured(cwd, id, adapter.effort, adapter.mode, adapter.currentModelId ?? "", undefined, undefined, adapter.processOptions, true));
+          adapter = this.processes.get(task.targetSessionId);
+        }
+        const execution = resolveAutomationExecutionPolicy(task.profile);
+        if (adapter.mode !== execution.mode || (task.profile.modelId && adapter.currentModelId !== task.profile.modelId) || adapter.effort !== task.profile.effort) throw new Error("绑定会话的执行配置已改变，请重新创建当前会话任务");
+        this.computer.configureSession(task.targetSessionId, { enabled: task.profile.computerEnabled, confirm: request => confirm(request, true), signal });
+        const restorePermission = adapter.usePermissionDecider(execution.permission === "allow" ? async () => true : execution.permission === "deny" ? async () => false : request => confirm(request, execution.permission === "confirm-all"));
+        const cancel = (): void => adapter.cancel(); signal.addEventListener("abort", cancel, { once: true });
+        const stopInactivity = watchAutomationInactivity((await this.automations.getPolicy()).inactivityTimeoutMinutes, () => adapter.lastTouched, () => this.automations.cancelRun(activeRunId));
+        try { await waitForAbort(adapter.prompt(task.skillCommand ? `${task.skillCommand} ${prompt}` : prompt), signal); return { sessionId: task.targetSessionId }; }
+        finally { stopInactivity(); restorePermission(); signal.removeEventListener("abort", cancel); this.computer.configureSession(task.targetSessionId, { enabled: adapter.processOptions.computerEnabled ?? true }); }
+      }
       const accountContext = await this.prepareAutomationAccount(task);
       const execution = resolveAutomationExecutionPolicy(task.profile);
       const decision = execution.permission === "allow"
@@ -2197,23 +2295,30 @@ export class AppController {
           ? async () => false
           : (toolCall: unknown) => confirm(toolCall, execution.permission === "confirm-all");
       try {
-        let sessionId = task.sessionId;
+        let sessionId = task.destination === "current-session" ? task.targetSessionId : task.sessionId;
         let assignment = sessionId ? await this.profiles.assignment(sessionId) : undefined;
-        const mappedSessionExists = Boolean(sessionId && await this.catalog.has(assignment?.cwd ?? task.workspace, sessionId));
-        const sessionAction = resolveAutomationSessionAction(task.contextPolicy, Boolean(sessionId), mappedSessionExists);
+        const mappedCwd = assignment?.cwd ?? (sessionId ? (await this.sessionRuntime.get(sessionId))?.cwd : undefined) ?? task.workspace;
+        const mappedSessionExists = Boolean(sessionId && await this.catalog.has(mappedCwd, sessionId));
+        if (task.destination === "current-session" && !mappedSessionExists) throw new Error("绑定的目标会话已不存在，不能静默创建独立任务");
+        let sessionAction = resolveAutomationSessionAction(task.destination === "current-session" ? "reuse" : task.contextPolicy, Boolean(sessionId), mappedSessionExists);
         if (sessionId && sessionAction === "replace") {
           await this.processes.close(sessionId);
-          await this.catalog.delete(assignment?.cwd ?? task.workspace, sessionId);
-          await this.profiles.removeAssignment(sessionId);
           await this.automations.setExecutionSession(task.id, undefined);
           sessionId = undefined;
           assignment = undefined;
         }
-        const agents = await this.definitions.listAgents(assignment?.cwd ?? task.workspace);
-        const compiled = assignment
-          ? await this.profiles.compileProfile(assignment.profile, agents)
-          : await this.profiles.compile(task.workspace, task.executionProfileId, agents);
+        const agents = await this.definitions.listAgents(task.workspace);
+        const frozen = task.frozenExecutionProfile ?? assignment?.profile ?? (await this.profiles.resolve(task.workspace, task.executionProfileId));
+        const compiled = await this.profiles.compileProfile(automationRuntimeProfile(task.profile, frozen), agents);
+        if (task.destination !== "current-session" && sessionAction === "reuse" && assignment && JSON.stringify(assignment.profile) !== JSON.stringify(compiled.profile)) {
+          sessionAction = "replace";
+          sessionId = undefined;
+          assignment = undefined;
+        }
         let targetCwd = assignment?.cwd ?? task.workspace;
+        const sourceCwd = assignment?.cwd ?? (sessionId ? (await this.sessionRuntime.get(sessionId))?.cwd : undefined) ?? task.workspace;
+        const relocate = Boolean(sessionId && (task.destination === "current-session" ? !samePath(sourceCwd, task.workspace) : assignment && !samePath(assignment.sourceWorkspacePath, task.workspace)));
+        if (relocate) targetCwd = await canonicalExistingPath(task.workspace, "directory");
         let worktree: GrokWorktreeSummary | undefined;
         if (sessionAction !== "reuse" && compiled.profile.worktree) {
           worktree = await this.worktrees.create({ workspacePath: task.workspace, name: `${profileSlug(task.name)}-${new Date().toISOString().slice(0, 10)}`, baseRef: compiled.profile.worktreeRef, agentId: compiled.profile.agentId });
@@ -2227,9 +2332,15 @@ export class AppController {
         if (sessionAction === "reuse" && previousRuntime) await this.sessionRuntime.patch(sessionId!, { modelId, providerId });
         let result: { sessionId: string };
         try {
+          if (relocate && sessionId) {
+            const source = (await this.catalog.list(sourceCwd)).find(session => session.id === sessionId);
+            if (!source) throw new Error("原工作区中未找到任务会话，未改变执行目录");
+            await this.rebindSession(source, targetCwd, (cwd, id) => this.processes.openConfigured(cwd, id, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, computerEnabled: task.profile.computerEnabled, alwaysApprove: compiled.mode === "auto" }));
+            assignment = await this.profiles.assignment(sessionId);
+          }
           result = sessionAction === "reuse"
-            ? await this.processes.openConfigured(targetCwd, sessionId!, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" })
-            : await this.processes.createConfigured(targetCwd, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: compiled.mode === "auto" });
+            ? await this.processes.openConfigured(targetCwd, sessionId!, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, computerEnabled: task.profile.computerEnabled, alwaysApprove: compiled.mode === "auto" })
+            : await this.processes.createConfigured(targetCwd, compiled.effort || task.profile.effort, compiled.mode, modelId, decision, environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, computerEnabled: task.profile.computerEnabled, alwaysApprove: compiled.mode === "auto" });
         } catch (error) {
           if (previousRuntime) await this.sessionRuntime.save(previousRuntime);
           throw error;
@@ -2241,8 +2352,9 @@ export class AppController {
         }
         await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "automation", id: task.id, title: task.name, suggestedTitle: task.name }]);
         if (sessionAction !== "reuse") await this.catalog.rename(result.sessionId, task.name);
-        await this.automations.setExecutionSession(task.id, result.sessionId);
-        const text = task.profile.computerEnabled ? `/computer ${prompt}` : task.skillCommand ? `${task.skillCommand} ${prompt}` : prompt;
+        await this.automations.setExecutionSession(task.id, result.sessionId, task.revision);
+        this.computer.configureSession(result.sessionId, { enabled: task.profile.computerEnabled, confirm: request => confirm(request, true), signal });
+        const text = task.skillCommand ? `${task.skillCommand} ${prompt}` : prompt;
         const adapter = this.processes.get(result.sessionId);
         const runController = new AbortController();
         const forwardCancellation = (): void => {
@@ -2252,17 +2364,7 @@ export class AppController {
         const stopAdapter = (): void => adapter.cancel();
         runController.signal.addEventListener("abort", stopAdapter, { once: true });
         const automationPolicy = await this.automations.getPolicy();
-        const inactivityMs = Math.max(0, automationPolicy.inactivityTimeoutMinutes) * 60_000;
-        const inactivityPoll = inactivityMs > 0 ? setInterval(() => {
-          if (runController.signal.aborted || Date.now() - adapter.lastTouched < inactivityMs) return;
-          // Persist the cancellation before unwinding the worker. The worker and
-          // the interactive Desktop process may be different OS processes, so
-          // the run file is the shared cancellation authority.
-          void this.automations.cancelRun(activeRunId).finally(() => {
-            if (!runController.signal.aborted) runController.abort(new Error(`任务连续 ${automationPolicy.inactivityTimeoutMinutes} 分钟没有 ACP 活动，已自动停止`));
-          });
-        }, Math.max(1_000, Math.min(15_000, Math.floor(inactivityMs / 4)))) : undefined;
-        inactivityPoll?.unref?.();
+        const stopInactivity = watchAutomationInactivity(automationPolicy.inactivityTimeoutMinutes, () => adapter.lastTouched, () => this.automations.cancelRun(activeRunId));
         try {
           // Persisted tasks have no Desktop wall-clock ceiling. Completion,
           // explicit user stop, process exit and the automation lease are the
@@ -2270,7 +2372,7 @@ export class AppController {
           await waitForAbort(adapter.prompt(text), runController.signal);
           return { sessionId: result.sessionId };
         } finally {
-          if (inactivityPoll) clearInterval(inactivityPoll);
+          stopInactivity();
           signal.removeEventListener("abort", forwardCancellation);
           runController.signal.removeEventListener("abort", stopAdapter);
           await this.processes.close(result.sessionId).catch(async (error) => {
@@ -2282,7 +2384,18 @@ export class AppController {
           await this.log.log(`自动化账号上下文清理失败：${error instanceof Error ? error.message : String(error)}`).catch(() => undefined);
         });
       }
+    }, task => {
+      if (task.destination !== "current-session" || !task.targetSessionId) return true;
+      if (this.automationSessionReservations.has(task.targetSessionId) && reservedSession !== task.targetSessionId) return false;
+      if (this.processes.snapshot(task.targetSessionId)) {
+        const adapter = this.processes.get(task.targetSessionId);
+        if (adapter.working || adapter.needsUser) return false;
+      }
+      reservedSession = task.targetSessionId;
+      this.automationSessionReservations.add(reservedSession);
+      return true;
     });
+    } finally { if (reservedSession) this.automationSessionReservations.delete(reservedSession); }
   }
   async enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string) {
     clientMessageId ??= crypto.randomUUID();
@@ -2449,7 +2562,7 @@ export class AppController {
     return receipt;
   }
 
-  private async rebindSession(source: SessionSummary, targetCwd: string): Promise<SessionRebindReceipt> {
+  private async rebindSession(source: SessionSummary, targetCwd: string, openTarget: (cwd: string, sessionId: string) => Promise<{ sessionId: string }> = (cwd, id) => this.processes.open(cwd, id)): Promise<SessionRebindReceipt> {
     const parentRuntime = await this.sessionRuntime.get(source.id);
     const parentAssignment = await this.profiles.assignment(source.id);
     const originalLive = this.processes.snapshot(source.id);
@@ -2466,7 +2579,7 @@ export class AppController {
       await this.catalog.materializeAtWorkspace(source.cwd, targetCwd, source.id);
       targetMaterialized = true;
       try {
-        await this.processes.open(targetCwd, source.id);
+        await openTarget(targetCwd, source.id);
       } catch (error) {
         await this.processes.close(source.id, false).catch(() => undefined);
         await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
@@ -2567,7 +2680,7 @@ export class AppController {
     for (const task of await this.automations.list()) output.push({ id: `automation:${task.id}`, kind: "automation", title: task.name, status: task.enabled ? "queued" : "cancelled", updatedAt: task.updatedAt, detail: task.registrationStatus });
     return output;
   }
-  async killBackgroundTask(id: string): Promise<void> { const separator = id.indexOf(":"); if (separator < 1) throw new Error("后台任务标识无效"); await this.processes.killBackgroundTask(id.slice(0, separator), id.slice(separator + 1)); }
+  async killBackgroundTask(id: string): Promise<void> { if (/(?:^|:)unidentified-/.test(id)) throw new Error("CLI 未提供可取消的原生任务 ID"); const separator = id.indexOf(":"); if (separator < 1) throw new Error("后台任务标识无效"); await this.processes.killBackgroundTask(id.slice(0, separator), id.slice(separator + 1)); }
   async listInbox(): Promise<NotificationInboxItem[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
     const stored = await this.inbox.list(); const pending = await this.automations.pending();
@@ -2637,8 +2750,8 @@ export class AppController {
   scanCodexPlugins(force = false): Promise<CodexPluginCompatibility[]> { return this.codexPlugins.scan(force); }
   adaptCodexPlugin(id: string): Promise<CodexPluginCompatibility[]> { return this.codexPlugins.adapt(id); }
   removeCodexPluginAdapter(id: string): Promise<CodexPluginCompatibility[]> { return this.codexPlugins.removeAdapter(id); }
-  async getComputerCapability(): Promise<ComputerCapability> {
-    const capability = await this.computer.capability();
+  async getComputerCapability(sessionId?: string): Promise<ComputerCapability> {
+    const capability = await this.computer.capability(sessionId);
     if (this.resourceIntegrity.ok) return capability;
     return { ...capability, available: false, diagnostics: [...this.resourceIntegrity.diagnostics, ...capability.diagnostics] };
   }
@@ -2662,6 +2775,10 @@ export class AppController {
    * continues with its next step.
    */
   emergencyStopComputer(source = "Ctrl+Alt+Esc"): void {
+    void Promise.all([this.automations.list(), this.automations.listRuns()]).then(async ([tasks, runs]) => {
+      const computerTasks = new Set(tasks.filter(task => task.profile.computerEnabled).map(task => task.id));
+      await Promise.all(runs.filter(run => computerTasks.has(run.taskId) && ["running", "awaiting-confirmation", "queued"].includes(run.status)).map(run => this.automations.cancelRun(run.id)));
+    }).catch(error => this.log.log(error));
     for (const sessionId of this.computer.emergencyStop(source)) {
       void this.processes.cancelSession(sessionId).catch((error) => void this.log.log(`紧急停止后取消会话失败：${error instanceof Error ? error.message : String(error)}`));
     }
@@ -2810,19 +2927,10 @@ export class AppController {
   }
 
   private async applyExecutionProfileToAutomation(input: AutomationTaskInput): Promise<AutomationTaskInput> {
-    if (!input.executionProfileId) return input;
-    const compiled = await this.compileExecutionProfile(input.workspace, input.executionProfileId);
-    return {
-      ...input,
-      executionProfileId: compiled.profile.id,
-      profile: {
-        ...input.profile,
-        modelId: compiled.modelId || input.profile.modelId,
-        effort: compiled.effort || input.profile.effort,
-        mode: compiled.mode,
-        permissionPolicy: compiled.mode === "auto" ? "auto" : input.profile.permissionPolicy,
-      },
-    };
+    const compiled = input.frozenExecutionProfile
+      ? await this.profiles.compileProfile(input.frozenExecutionProfile, await this.definitions.listAgents(input.workspace))
+      : await this.compileExecutionProfile(input.workspace, input.executionProfileId);
+    return resolveAutomationProfile(input, compiled);
   }
 
   private async openAssignedSession(assignment: SessionExecutionAssignment): Promise<{ sessionId: string }> {
@@ -2892,6 +3000,8 @@ export class AppController {
     await this.processes.dispose();
     await this.providers.dispose();
     await this.computer.dispose();
+    await this.desktopTools.dispose();
+    await this.sessionRelay.dispose();
   }
 
   /**
@@ -3042,6 +3152,7 @@ export class AppController {
   }
 
   private async handleEvent(event: ChatEvent): Promise<void> {
+    this.nativeAgentCapabilities.record(event);
     if (event.type === "session-title") {
       await this.catalog.syncOfficialTitle(event.sessionId, event.title, event.manual);
     }

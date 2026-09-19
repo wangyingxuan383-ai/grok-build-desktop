@@ -186,3 +186,19 @@ describe("elevated target handling", () => {
     expect(published.at(-1)?.interventionKind).toBe("elevation-blocked");
   });
 });
+
+
+it("serializes simultaneous target selection so only one local controller can own the host", async () => {
+  const root = await mkdtemp(join(tmpdir(), "computer-lease-"));
+  const service = new ComputerUseService(root, "fixture", "fixture", { log: async () => undefined } as never, () => "auto", () => undefined);
+  const window = { id: "ABC", appId: "fixture", processId: 42, processName: "fixture", title: "Fixture", x: 0, y: 0, width: 800, height: 600, controllable: true };
+  (service as any).host = { call: async (action: string) => action === "list_windows" ? [window] : action === "get_window_state" ? { stateId: "state", window, elements: [], screenshotWidth: 800, screenshotHeight: 600 } : window, dispose: async () => undefined };
+  try {
+    const appId = (await service.listApps())[0]!.id;
+    const results = await Promise.allSettled([service.start({ sessionId: "one", appId }), service.start({ sessionId: "two", appId })]);
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+    await service.updateSettings({ enabled: false });
+    await expect(service.start({ sessionId: "one", appId: "fixture" })).rejects.toThrow("关闭");
+  } finally { await service.dispose(); await rm(root, { recursive: true, force: true }); }
+});
