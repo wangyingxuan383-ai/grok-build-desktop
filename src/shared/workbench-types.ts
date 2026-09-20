@@ -465,6 +465,7 @@ export interface AgentDefinition {
   disallowedTools?: string[];
   skills?: string[];
   agentsMd?: boolean;
+  mcpInheritance?: "all" | "none" | { named: string[] } | { except: string[] };
   instructions: string;
   rawMarkdown: string;
   validation?: DefinitionValidation;
@@ -505,6 +506,8 @@ export type AgentDashboardStatus = "queued" | "running" | "waiting" | "completed
 
 export interface AgentDashboardNode {
   id: string;
+  nativeSubagentId?: string;
+  childSessionId?: string;
   sessionId: string;
   parentId?: string;
   children: AgentDashboardNode[];

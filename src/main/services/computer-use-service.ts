@@ -35,7 +35,7 @@ const DEFAULT_COMPUTER_SETTINGS: ComputerUseSettings = {
 };
 
 interface PendingHost { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }
-interface Lease { id: string; token: string; sessionId: string; server: McpServer; transport: StreamableHTTPServerTransport }
+interface Lease { enabled: boolean; requested?: boolean; discovered?: boolean; authorize?: (tool: string, input: Record<string, unknown>) => Record<string, unknown>; id: string; token: string; sessionId: string; server: McpServer; transport: StreamableHTTPServerTransport }
 interface PendingPermission { request: ComputerAppPermissionRequest; resolve?(approved: boolean): void; onDecision?(approved: boolean): void | Promise<void> }
 interface PendingRisk { request: ComputerRiskConfirmation; resolve(approved: boolean): void }
 
@@ -43,6 +43,7 @@ export class ComputerUseService {
   private readonly settings: JsonStore<ComputerUseSettings>;
   private readonly auditPath: string;
   private readonly leases = new Map<string, Lease>();
+  private readonly sessionPolicies = new Map<string, { enabled: boolean; confirm?: (request: unknown) => Promise<boolean>; signal?: AbortSignal }>();
   private readonly tasks = new Map<string, ComputerTaskState>();
   private readonly onceAllowed = new Set<string>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
@@ -64,7 +65,7 @@ export class ComputerUseService {
     this.auditPath = join(userDataPath, "computer-use-audit.jsonl");
   }
 
-  async capability(): Promise<ComputerCapability> {
+  async capability(sessionId?: string): Promise<ComputerCapability> {
     const diagnostics: string[] = [];
     const helper = await stat(this.helperPath).then((value) => value.isFile()).catch(() => false);
     const plugin = await stat(join(this.pluginPath, "plugin.json")).then((value) => value.isFile()).catch(() => false);
@@ -76,7 +77,10 @@ export class ComputerUseService {
     }
     if (!plugin) diagnostics.push("未找到内置 /computer Skill");
     const available = helper && plugin && !diagnostics.length && process.platform === "win32" && process.arch === "x64";
-    return { available, experimental: true, accepted: true, acceptanceSummary: "24/24 确定性流程、真实 Grok 视觉动作、风险拒绝与打包版 UI 已通过", helperPath: this.helperPath, helperVersion, pluginPath: this.pluginPath, pluginDirs: plugin, mcpImageContent: true, diagnostics };
+    const leases = [...this.leases.values()].filter(lease => sessionId === undefined || lease.sessionId === sessionId);
+    const configured = (await this.settings.get()).enabled && (sessionId === undefined || this.sessionPolicies.get(sessionId)?.enabled !== false);
+    if (sessionId && !configured) diagnostics.push("当前会话未允许 Computer Use");
+    return { available: available && (sessionId === undefined || configured), experimental: true, accepted: false, acceptanceSummary: "组件自检不代表当前 CLI / 模型实测通过", evidence: { configured, injected: leases.some(lease => lease.enabled), requested: leases.some(lease => lease.requested), discovered: leases.some(lease => lease.discovered), liveVerified: false }, helperPath: this.helperPath, helperVersion, pluginPath: this.pluginPath, pluginDirs: plugin, mcpImageContent: true, diagnostics };
   }
 
   async getSettings(): Promise<ComputerUseSettings> {
@@ -88,28 +92,31 @@ export class ComputerUseService {
     const safe: Partial<ComputerUseSettings> = { ...patch, experimentalUnlocked: true, acceptanceVersion: "0.3.1" };
     if (safe.maxScreenshotEdge !== undefined) safe.maxScreenshotEdge = Math.max(640, Math.min(2000, safe.maxScreenshotEdge));
     if (safe.emergencyShortcut !== undefined && safe.emergencyShortcut !== "Ctrl+Alt+Esc") delete safe.emergencyShortcut;
-    return this.settings.patch(safe);
+    const settings = await this.settings.patch(safe);
+    if (!settings.enabled) await Promise.all([...this.tasks.keys()].map(id => this.settleSession(id, "stopped", "Computer Use 已关闭")));
+    return settings;
   }
 
-  async createSessionInjection(): Promise<{ leaseId: string; mcpServers: unknown[]; pluginDirs: string[] }> {
+  async createSessionInjection(enabled = true, authorize?: (tool: string, input: Record<string, unknown>) => Record<string, unknown>): Promise<{ leaseId: string; mcpServers: unknown[]; pluginDirs: string[] }> {
+    enabled = enabled && (await this.settings.get()).enabled;
     await this.ensureHttp();
     const id = randomUUID(); const token = randomBytes(32).toString("base64url");
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), enableJsonResponse: true });
     const server = this.createMcpServer(id);
     await server.connect(transport);
-    this.leases.set(id, { id, token, sessionId: "", server, transport });
+    this.leases.set(id, { id, token, enabled, authorize, sessionId: "", server, transport });
     return {
       leaseId: id,
-      mcpServers: [{ type: "http", name: "grok_desktop_computer", url: `http://127.0.0.1:${this.port}/mcp/${id}`, headers: [{ name: "Authorization", value: `Bearer ${token}` }] }],
-      pluginDirs: [this.pluginPath],
+      mcpServers: enabled ? [{ type: "http", name: "grok_desktop_computer", url: `http://127.0.0.1:${this.port}/mcp/${id}`, headers: [{ name: "Authorization", value: `Bearer ${token}` }] }] : [],
+      pluginDirs: enabled ? [this.pluginPath] : [],
     };
   }
 
-  bindLease(leaseId: string | undefined, sessionId: string): void { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (lease) lease.sessionId = sessionId; }
+  bindLease(leaseId: string | undefined, sessionId: string): void { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (lease) { lease.sessionId = sessionId; this.sessionPolicies.set(sessionId, { enabled: lease.enabled }); } }
   /** Sessions the user emergency-stopped; cleared only by an explicit re-arm or lease release. */
   private readonly emergencyStopped = new Set<string>();
 
-  async releaseLease(leaseId: string | undefined): Promise<void> { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (!lease) return; this.leases.delete(lease.id); this.emergencyStopped.delete(lease.sessionId); const task = this.tasks.get(lease.sessionId); if (task && ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) this.stopWith(task, "Grok 会话已关闭，Computer Use 已清理"); await lease.server.close().catch(() => undefined); this.tasks.delete(lease.sessionId); await this.stopHostIfIdle(); }
+  async releaseLease(leaseId: string | undefined): Promise<void> { const lease = leaseId ? this.leases.get(leaseId) : undefined; if (!lease) return; this.leases.delete(lease.id); this.sessionPolicies.delete(lease.sessionId); this.abortCleanups.get(lease.sessionId)?.(); this.abortCleanups.delete(lease.sessionId); this.emergencyStopped.delete(lease.sessionId); const task = this.tasks.get(lease.sessionId); if (task && ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) this.stopWith(task, "Grok 会话已关闭，Computer Use 已清理"); await lease.server.close().catch(() => undefined); this.tasks.delete(lease.sessionId); await this.stopHostIfIdle(); }
 
   async listWindows(appId?: string): Promise<ComputerWindow[]> {
     const raw = await this.getHost().call("list_windows", {}) as unknown[];
@@ -122,8 +129,30 @@ export class ComputerUseService {
     return Array.from(groups, ([id, rows]) => { const first = rows[0]!; return { id, name: first.processName, processName: first.processName, executablePath: first.executablePath, windowCount: rows.length, controllable: rows.some((row) => row.controllable), blockedReason: rows.every((row) => !row.controllable) ? first.blockedReason : undefined }; });
   }
 
-  async start(input: { sessionId: string; appId: string; windowId?: string }): Promise<ComputerTaskState> {
+  private readonly abortCleanups = new Map<string, () => void>();
+  configureSession(sessionId: string, policy: { enabled: boolean; confirm?: (request: unknown) => Promise<boolean>; signal?: AbortSignal }): void {
+    this.abortCleanups.get(sessionId)?.(); this.abortCleanups.delete(sessionId);
+    this.sessionPolicies.set(sessionId, policy);
+    if (policy.signal) {
+      const stop = () => { void this.settleSession(sessionId, "stopped", "任务已取消"); };
+      policy.signal.addEventListener("abort", stop, { once: true });
+      this.abortCleanups.set(sessionId, () => policy.signal!.removeEventListener("abort", stop));
+      if (policy.signal.aborted) stop();
+    }
+    if (!policy.enabled) void this.settleSession(sessionId, "stopped", "当前执行配置已关闭 Computer Use");
+  }
+
+  private startQueue: Promise<unknown> = Promise.resolve();
+  start(input: { sessionId: string; appId: string; windowId?: string }): Promise<ComputerTaskState> {
+    const result = this.startQueue.then(() => this.startExclusive(input));
+    this.startQueue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async startExclusive(input: { sessionId: string; appId: string; windowId?: string }): Promise<ComputerTaskState> {
     const config = await this.getSettings();
+    if (this.sessionPolicies.get(input.sessionId)?.enabled === false) throw new Error("当前任务未允许 Computer Use");
+    if ([...this.tasks.values()].some(task => task.sessionId !== input.sessionId && ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status))) throw new Error("桌面正在由另一个任务控制，请等待它完成");
     if (!config.enabled) throw new Error("Computer Use 已在扩展中心关闭");
     if (this.emergencyStopped.has(input.sessionId)) throw new Error("已紧急停止 Computer Use；需要用户在界面上重新授权后才能继续控制");
     const app = (await this.listApps()).find((value) => value.id === input.appId);
@@ -142,7 +171,7 @@ export class ComputerUseService {
       task.status = "awaiting-app-permission"; this.publish(task);
       const request: ComputerAppPermissionRequest = { requestId: randomUUID(), sessionId: input.sessionId, app, window };
       this.pendingPermissions.set(request.requestId, { request, onDecision: async (approved) => { if (approved) await this.activateTask(task, window); else this.stopWith(task, "应用控制已拒绝"); } });
-      this.emit(request, "permission");
+      if (!this.sessionPolicies.get(input.sessionId)?.confirm) this.emit(request, "permission");
       return { ...task };
     }
     return this.activateTask(task, window);
@@ -263,7 +292,7 @@ export class ComputerUseService {
       launch_app: "Launch another instance of the currently authorized installed application.", activate_window: "Bring an authorized target window to the foreground.", get_window_state: "Observe the target using UI Automation and a PNG screenshot.",
       click: "Invoke or click one element.", double_click: "Double-click one element.", scroll: "Scroll one target.", press_key: "Press one key or chord.", type_text: "Type non-secret text.", set_value: "Set a non-secret accessible value.", drag: "Perform one drag.", perform_secondary_action: "Open one context menu.", wait: "Wait briefly, then observe.",
     };
-    for (const name of Object.keys(descriptions)) server.registerTool(name, { description: descriptions[name], inputSchema: schemas[name] ?? {} }, async (input) => this.mcpCall(leaseId, name, input as Record<string, unknown>));
+    for (const name of Object.keys(descriptions)) server.registerTool(name, { description: descriptions[name], inputSchema: { ...schemas[name], _desktopCallerProof: z.string().optional().describe("Internal CLI hook proof; do not supply this argument yourself") } }, async (input) => this.mcpCall(leaseId, name, input as Record<string, unknown>));
     return server;
   }
 
@@ -273,6 +302,13 @@ export class ComputerUseService {
     try {
       const lease = this.leases.get(leaseId); if (!lease?.sessionId) throw new Error("Computer Use 会话尚未绑定");
       const sessionId = lease.sessionId;
+      const policy = this.sessionPolicies.get(sessionId);
+      if (!lease.enabled || policy?.enabled === false || !(await this.settings.get()).enabled) throw new Error("当前任务未允许 Computer Use");
+      policy?.signal?.throwIfAborted();
+      lease.requested = true;
+      if (!lease.authorize) throw new Error("Desktop 调用身份校验尚未配置");
+      input = lease.authorize(`grok_desktop_computer__${name}`, input);
+      lease.discovered = true;
       if (name === "list_apps") return textResult(await this.listApps());
       if (name === "list_windows") return textResult(await this.listWindows(string(input.appId)));
       if (name === "start") { const task = await this.startAndWait(sessionId, requiredString(input.appId, "appId"), string(input.windowId)); return buildComputerStateResult(task.lastState, task); }
@@ -321,6 +357,7 @@ export class ComputerUseService {
       this.announce(task, actionDescription, action, computerPointerForAction(task, request, element));
       const inferredRisk = request.risk || inferComputerRisk(actionContext, action);
       if (shouldConfirmComputerRisk(this.getMode(sessionId), inferredRisk)) await this.confirmRisk(task, inferredRisk!, request.riskSummary || element?.name || "检测到高影响操作", action);
+      await this.assertEnabled(sessionId);
       const maxEdge = (await this.settings.get()).maxScreenshotEdge;
       const raw = await this.getHost().call(action, { ...mapScreenshotCoordinates(request, task.lastState), maxEdge });
       const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), sessionId); task.lastState = state; task.stepCount += 1; task.lastAction = action; task.message = `${actionDescription.replace(/^正在/, "已").replace(/…$/, "")}，正在分析新画面`; task.updatedAt = new Date().toISOString(); this.publish(task);
@@ -348,13 +385,22 @@ export class ComputerUseService {
     if (result.status !== "awaiting-app-permission") return result;
     const pending = Array.from(this.pendingPermissions.values()).find((value) => value.request.sessionId === sessionId && value.request.app.id === appId);
     if (!pending) throw new Error("应用授权请求丢失");
-    const approved = await new Promise<boolean>((resolve) => { pending.resolve = resolve; });
+    const bridge = this.sessionPolicies.get(sessionId)?.confirm;
+    if (bridge) await this.respondPermission(pending.request.requestId, await bridge({ category: "app-access", app: pending.request.app.name }) ? "once" : "deny");
+    const approved = bridge ? this.requiredTask(sessionId).status === "running" : await new Promise<boolean>((resolve) => { pending.resolve = resolve; });
     if (!approved) throw new Error("用户拒绝控制该应用");
     return this.requiredTask(sessionId);
   }
 
+  private async assertEnabled(sessionId: string): Promise<void> {
+    if (this.sessionPolicies.get(sessionId)?.enabled === false || !(await this.settings.get()).enabled) throw new Error("Computer Use 已关闭");
+    this.sessionPolicies.get(sessionId)?.signal?.throwIfAborted();
+    if (this.emergencyStopped.has(sessionId)) throw new Error("Computer Use 已紧急停止");
+  }
+
   private async activateTask(task: ComputerTaskState, window: ComputerWindow): Promise<ComputerTaskState> {
     try {
+      await this.assertEnabled(task.sessionId);
       const observationOnly = this.getMode(task.sessionId) === "plan";
       task.status = "running"; task.startedAt ||= new Date().toISOString(); task.manualInterventionRequired = false; task.message = observationOnly ? "Plan 模式：正在只读观察窗口…" : `正在接管 ${task.appName || "目标应用"}…`; task.updatedAt = new Date().toISOString(); this.publish(task);
       if (!observationOnly) await this.getHost().call("activate_window", { windowId: window.id });
@@ -379,8 +425,11 @@ export class ComputerUseService {
 
   private async confirmRisk(task: ComputerTaskState, category: ComputerRiskCategory, summary: string, action: ComputerActionName): Promise<void> {
     const request: ComputerRiskConfirmation = { requestId: randomUUID(), sessionId: task.sessionId, category, summary, appName: task.appName || task.appId || "应用", action };
-    task.status = "awaiting-risk-confirmation"; task.message = `等待你确认高影响操作：${summary}`; task.updatedAt = new Date().toISOString(); this.publish(task); this.emit(request, "risk");
-    const approved = await new Promise<boolean>((resolve) => this.pendingRisks.set(request.requestId, { request, resolve }));
+    task.status = "awaiting-risk-confirmation"; task.message = `等待你确认高影响操作：${summary}`; task.updatedAt = new Date().toISOString(); this.publish(task);
+    const bridge = this.sessionPolicies.get(task.sessionId)?.confirm;
+    if (!bridge) this.emit(request, "risk");
+    const approved = bridge ? await bridge({ category, summary, action }) : await new Promise<boolean>((resolve) => this.pendingRisks.set(request.requestId, { request, resolve }));
+    this.sessionPolicies.get(task.sessionId)?.signal?.throwIfAborted();
     task.status = approved ? "running" : "stopped"; task.message = approved ? "高影响操作已确认，正在执行…" : "用户已取消高影响操作"; task.updatedAt = new Date().toISOString(); this.publish(task); if (!approved) throw new Error("用户拒绝高影响操作");
   }
 
@@ -441,8 +490,9 @@ export class ComputerUseService {
     this.host = undefined;
   }
 
-  private async ensureHttp(): Promise<void> {
-    if (this.http) return;
+  private httpReady?: Promise<void>;
+  private ensureHttp(): Promise<void> { return this.httpReady ??= this.startHttp(); }
+  private async startHttp(): Promise<void> {
     this.http = createServer(async (request, response) => {
       const match = request.url?.match(/^\/mcp\/([0-9a-f-]+)$/i); const lease = match?.[1] ? this.leases.get(match[1]) : undefined;
       if (!lease || request.headers.authorization !== `Bearer ${lease.token}`) { response.writeHead(401).end("Unauthorized"); return; }

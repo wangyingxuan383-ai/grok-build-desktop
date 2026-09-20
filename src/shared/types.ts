@@ -571,6 +571,13 @@ export interface AutomationExecutionProfile {
 
 export interface AutomationTask {
   id: string;
+  revision?: number;
+  sessionRevision?: number;
+  timeZone?: string;
+  scheduleAnchor?: string;
+  destination?: "standalone" | "current-session";
+  targetSessionId?: string;
+  frozenExecutionProfile?: import("./workbench-types").SessionExecutionProfile;
   name: string;
   workspace: string;
   schedule: AutomationSchedule;
@@ -600,7 +607,7 @@ export interface AutomationRegistrationDiagnostic {
   repairable: boolean;
 }
 
-export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "sessionId" | "promptPresent" | "registrationStatus" | "registrationError" | "registrationDiagnostic" | "nextRunAt" | "createdAt" | "updatedAt"> {
+export interface AutomationTaskInput extends Omit<AutomationTask, "id" | "sessionId" | "sessionRevision" | "revision" | "promptPresent" | "registrationStatus" | "registrationError" | "registrationDiagnostic" | "nextRunAt" | "createdAt" | "updatedAt"> {
   id?: string;
   prompt?: string;
 }
@@ -616,6 +623,7 @@ export interface AutomationGlobalPolicy {
 }
 
 export interface AutomationRunRecord {
+  definitionRevision?: number;
   id: string;
   taskId: string;
   status: "queued" | "running" | "awaiting-confirmation" | "completed" | "failed" | "cancelled" | "skipped";
@@ -1298,6 +1306,7 @@ export interface ComputerUseSettings {
 }
 
 export interface ComputerCapability {
+  evidence?: { configured: boolean; injected: boolean; requested?: boolean; discovered: boolean; liveVerified: boolean };
   available: boolean;
   experimental: boolean;
   accepted: boolean;

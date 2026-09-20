@@ -222,6 +222,7 @@ function countChangedLines(before: string, after: string): { additions: number; 
 }
 
 export interface SessionProcessOptions {
+  computerEnabled?: boolean;
   agentProfilePath?: string;
   sessionMeta?: Record<string, unknown>;
   alwaysApprove?: boolean;
@@ -428,6 +429,7 @@ export class GrokAcpAdapter extends EventEmitter {
   get currentUpstreamModelId(): string { return this.upstreamModelId; }
   get processOptions(): SessionProcessOptions {
     return {
+      computerEnabled: this.options.computerEnabled,
       agentProfilePath: this.options.agentProfilePath,
       sessionMeta: this.options.sessionMeta ? structuredClone(this.options.sessionMeta) : undefined,
       // Mode is the source of truth. Retaining the launch-time boolean made an
@@ -875,6 +877,13 @@ export class GrokAcpAdapter extends EventEmitter {
     }));
     if (result.success === false) throw new Error(firstNonEmptyString(result.message, result.error) || "官方反馈提交失败");
     return { sessionId: this.sessionId, submitted: true, message: "反馈已通过当前 Grok Build CLI 提交。" };
+  }
+
+  /** Temporarily route a scheduled turn's ACP confirmations into the persistent inbox. */
+  usePermissionDecider(decider: (toolCall: unknown) => Promise<boolean | undefined>): () => void {
+    const previous = this.options.permissionDecider;
+    this.options.permissionDecider = decider;
+    return () => { if (this.options.permissionDecider === decider) this.options.permissionDecider = previous; };
   }
 
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {

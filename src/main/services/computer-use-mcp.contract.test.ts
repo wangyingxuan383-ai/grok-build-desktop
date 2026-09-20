@@ -1,3 +1,4 @@
+import { DesktopToolAuthority } from "./desktop-tool-authority";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,9 @@ describe.skipIf(process.platform !== "win32" || process.arch !== "x64")("Compute
     const userData = await mkdtemp(join(tmpdir(), "grok-computer-mcp-")); roots.push(userData);
     const root = process.cwd();
     const service = new ComputerUseService(userData, join(root, "resources", "native", "win-x64", "GrokComputerHost.exe"), join(root, "resources", "plugins", "grok-computer-use"), { log: async () => undefined } as never, () => "agent", () => undefined);
-    const injection = await service.createSessionInjection(); service.bindLease(injection.leaseId, "test-session");
+    const authority = new DesktopToolAuthority(); authority.bind("test-session");
+    (service as any).host = { call: async () => [], dispose: async () => undefined };
+    const injection = await service.createSessionInjection(true, (tool, input) => authority.consume(tool, input)); service.bindLease(injection.leaseId, "test-session");
     const config = injection.mcpServers[0] as { url: string; headers: Array<{ name: string; value: string }> };
     const unauthorized = await fetch(config.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } } }) });
     expect(unauthorized.status).toBe(401);
@@ -23,8 +26,18 @@ describe.skipIf(process.platform !== "win32" || process.arch !== "x64")("Compute
     await client.connect(new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers } }));
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["list_apps", "list_windows", "start", "get_window_state", "click", "type_text", "set_value", "drag", "wait"]));
-    const result = await client.callTool({ name: "list_apps", arguments: {} });
-    expect(result.isError).not.toBe(true);
-    await client.close(); await service.dispose();
+    try {
+      expect((await client.callTool({ name: "list_apps", arguments: {} })).isError).toBe(true);
+      expect((await service.capability("test-session")).evidence).toMatchObject({ requested: true, discovered: false });
+      const disabled = await service.createSessionInjection(false); service.bindLease(disabled.leaseId, "disabled-session");
+      expect((await service.capability("disabled-session")).evidence).toMatchObject({ configured: false, injected: false, requested: false, discovered: false });
+      const argumentsFor = () => (authority.authorize({ sessionId: "test-session", toolName: "grok_desktop_computer__list_apps", toolInput: {} }) as any).hookSpecificOutput.updatedInput;
+      const result = await client.callTool({ name: "list_apps", arguments: argumentsFor() });
+      expect(result.isError).not.toBe(true);
+      expect((await service.capability("test-session")).evidence).toMatchObject({ configured: true, injected: true, discovered: true });
+      expect((await service.capability("disabled-session")).evidence?.discovered).toBe(false);
+      service.configureSession("test-session", { enabled: false });
+      expect((await client.callTool({ name: "list_apps", arguments: argumentsFor() })).isError).toBe(true);
+    } finally { await client.close(); await service.dispose(); }
   }, 30_000);
 });

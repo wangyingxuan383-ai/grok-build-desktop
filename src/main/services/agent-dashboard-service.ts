@@ -127,6 +127,12 @@ export class AgentDashboardService {
     };
   }
 
+  async cancellationTarget(nodeId: string): Promise<{ sessionId: string; nativeSubagentId: string } | undefined> {
+    const record = (await this.store.get()).records[nodeId];
+    if (!record?.nativeSubagentId || record.nativeSubagentId.startsWith("unidentified-")) return undefined;
+    return { sessionId: record.sessionId, nativeSubagentId: record.nativeSubagentId };
+  }
+
   async clear(nodeId?: string): Promise<void> {
     await this.store.mutate((state) => {
       if (!nodeId) state.records = {};
@@ -139,11 +145,18 @@ export class AgentDashboardService {
 }
 
 function updateSubagent(records: Record<string, DashboardRecord>, root: DashboardRecord, update: Record<string, unknown>, now: string): void {
-  const subagentId = String(update.child_session_id ?? update.childSessionId ?? update.subagent_id ?? update.subagentId ?? update.id ?? "").trim();
+  const childSessionId = textValue(update.child_session_id ?? update.childSessionId);
+  const nativeSubagentId = textValue(update.subagent_id ?? update.subagentId ?? update.id);
+  const subagentId = nativeSubagentId ?? childSessionId ?? "";
   if (!subagentId) return;
-  const id = subagentNodeId(root.sessionId, subagentId);
+  const previous = Object.values(records).find(record => record.sessionId === root.sessionId && record.parentId && ((nativeSubagentId && record.nativeSubagentId === nativeSubagentId) || (childSessionId && record.childSessionId === childSessionId)));
+  const id = previous?.id ?? subagentNodeId(root.sessionId, subagentId);
   const current = records[id] ?? createRecord(id, root.sessionId, String(update.description ?? update.subagent_type ?? update.agent ?? "子 Agent"), now);
   current.parentId = root.id;
+  current.nativeSubagentId = nativeSubagentId ?? current.nativeSubagentId;
+  current.childSessionId = childSessionId ?? current.childSessionId;
+  current.worktreeId = textValue(update.worktree_id ?? update.worktreeId) ?? current.worktreeId;
+  if (current.worktreeId || update.isolation === "worktree") current.isolation = "worktree";
   current.title = textValue(update.description ?? update.subagent_type ?? update.role) || current.title;
   current.agentId = textValue(update.agent_id ?? update.agent ?? update.subagent_type);
   current.personaId = textValue(update.persona_id ?? update.persona);
@@ -181,7 +194,7 @@ function materialize(record: DashboardRecord, parentLive: boolean): AgentDashboa
 
 function taskChildren(tasks: BackgroundTaskSummary[], sessionId: string, now: string): AgentDashboardNode[] {
   return tasks.filter((task) => task.kind === "subagent").map((task) => ({
-    id: `task:${task.id}`, sessionId, parentId: rootNodeId(sessionId), children: [], title: task.title,
+    id: `task:${task.id}`, nativeSubagentId: (task.id.startsWith(`${sessionId}:`) ? task.id.slice(sessionId.length + 1) : task.id).replace(/^subagent:/, ""), sessionId, parentId: rootNodeId(sessionId), children: [], title: task.title,
     status: task.status === "running" ? "running" : task.status === "queued" ? "queued" : task.status === "completed" ? "completed" : task.status === "failed" ? "failed" : "stopped",
     toolCount: toolCountFromDetail(task.detail), isolation: "workspace", latestAction: task.detail, live: ["running", "queued"].includes(task.status), updatedAt: task.updatedAt || now,
   }));
@@ -190,9 +203,11 @@ function taskChildren(tasks: BackgroundTaskSummary[], sessionId: string, now: st
 function dedupe(nodes: AgentDashboardNode[]): AgentDashboardNode[] {
   const byIdentity = new Map<string, AgentDashboardNode>();
   for (const node of nodes) {
-    const key = node.id.replace(/^task:/, "").replace(/^[^:]+:subagent:/, "subagent:");
+    const key = `${node.sessionId}:${node.nativeSubagentId ?? node.childSessionId ?? node.id}`;
     const previous = byIdentity.get(key);
-    if (!previous || node.live || node.updatedAt > previous.updatedAt) byIdentity.set(key, node);
+    if (!previous) byIdentity.set(key, node);
+    else if (node.id.startsWith("task:")) byIdentity.set(key, { ...previous, status: node.status, live: node.live, updatedAt: node.updatedAt > previous.updatedAt ? node.updatedAt : previous.updatedAt });
+    else byIdentity.set(key, { ...previous, ...node });
   }
   return [...byIdentity.values()];
 }

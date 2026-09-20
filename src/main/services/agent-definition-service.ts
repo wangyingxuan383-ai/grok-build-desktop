@@ -64,6 +64,7 @@ interface ParsedAgent {
   disallowedTools?: string[];
   skills?: string[];
   agentsMd?: boolean;
+  mcpInheritance?: AgentDefinition["mcpInheritance"];
   instructions: string;
   validation: DefinitionValidation;
 }
@@ -317,6 +318,7 @@ export class AgentDefinitionService {
       disallowedTools: parsed.disallowedTools,
       skills: parsed.skills,
       agentsMd: parsed.agentsMd,
+      mcpInheritance: parsed.mcpInheritance,
       instructions: parsed.instructions,
       rawMarkdown,
       validation: parsed.validation,
@@ -444,12 +446,26 @@ function parseAgent(rawMarkdown: string, expectedName?: string, requireNameMatch
       disallowedTools: stringArray(values.disallowed_tools),
       skills: stringArray(values.skills),
       agentsMd,
+      mcpInheritance: parseMcpInheritance(values.mcpInheritance),
       instructions: frontmatter.body,
       validation: validValidation(),
     };
   } catch (error) {
     return { name: expectedName ?? "", instructions: "", validation: invalidValidation(errorMessage(error)) };
   }
+}
+
+function parseMcpInheritance(value: unknown): AgentDefinition["mcpInheritance"] {
+  if (value === "all" || value === "none") return value;
+  if (typeof value !== "string") return undefined;
+  // The small frontmatter parser preserves nested blocks as text. Decode only
+  // the documented variants; future forms stay intact in rawMarkdown.
+  const block = value.trim().replace(/^\{\s*|\s*\}$/g, "");
+  const match = /^(named|except):\s*([\s\S]*)$/.exec(block);
+  if (!match) return undefined;
+  const values = match[2]!.trim().startsWith("[") ? parseYamlScalar(match[2]!.trim()) : match[2]!.split(/\r?\n/).filter(line => line.trim()).map(line => parseYamlScalar(line.trim().replace(/^-\s*/, "")));
+  const servers = stringArray(values);
+  return match[1] === "named" ? { named: servers ?? [] } : { except: servers ?? [] };
 }
 
 function parsePersona(rawToml: string): ParsedPersona {
