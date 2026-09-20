@@ -1,12 +1,45 @@
 # Grok Build Desktop 实施计划
 
+## 2026-09-19 v0.9.6 发布
+
+- [x] 用户授权发布，统一 package/lock 版本并编写中文发布说明，保留实际验收边界。
+- [ ] 生成并校验 Setup、Portable、SHA256SUMS、SBOM 与许可证。
+- [ ] 推送发布提交，完成远程门禁、上传及下载回验后发布。
+
+## 2026-09-19 审查修正（Unreleased）
+
+- [x] 保留绑定工作区可编辑，执行时复用现有会话迁移事务；表单明确固定执行字段。
+- [x] 修复完整表单重置锚点；重复 CalendarTrigger 与持久游标替代 Worker 重登记。
+- [x] 等待会话不占全局槽，统一无活动超时，MCP fresh/reuse 与会话级能力证据。
+- [x] 58 项定向测试、类型检查、任务中心 DOM 和未注册 XML 解析；不重复全量测试。
+- [ ] 固定选中 CLI 验证工作区迁移、hook 身份、父子隔离及真实模型调用。
+- [ ] 真实 Windows 重复触发、DST/错过运行与 GUI 急停验收。
+
+## 2026-09-18 Desktop 能力实施（Unreleased）
+
+- [x] 定义 revision、运行映射、删除标记、终态事务、并发资源和崩溃恢复。
+- [x] 统一执行配置、Computer 禁用门禁、持久确认桥接、桌面/会话独占锁。
+- [x] Desktop MCP、当前会话 relay、独立运行历史保留、时区与调度锚点。
+- [x] 原生子智能体能力证据、ID 关联/取消、Agent 未知字段和 mcpInheritance 保留。
+- [x] 自然语言 Skills、主会话调用证明、能力展示及离线回归。
+- [ ] 固定本机实际所选 CLI/模型，验证 hook 身份、updatedInput、父子 MCP 隔离及端到端流程。
+- [ ] 真实 Windows Scheduler 重复日历触发、漏触发恢复和跨进程急停验收。
+
+实现、验证和边界见 [实施记录](DESKTOP_CAPABILITIES_IMPLEMENTATION_2026-09-18.md)。本轮不安装、发布、升级 CLI 或调用模型。
+
+## 2026-09-17 跨电脑交接
+
+- [x] 编写会话总结与阅读顺序，保留发布后文档补记和未发布分段下载器。
+- [x] 创建独立Git bundle并克隆验证基线提交；源码公开扫描458文件通过。
+- 本轮无代码功能修改、CLI升级或新版本发布。
+
 ## 2026-09-11 v0.9.5 发布
 
 - [x] 用户授权打包上传；package/lock版本统一0.9.5，保留中文发布说明及实测边界。
 - [x] 将未完成自动化回归的分段下载器从发布源码隔离并保留。其独立实测已成功安装1.0.25，不代表本版已修复公网速度。
 - [x] 依赖补修后全量929项通过/9 live跳过、TypeScript、生产构建和分块预算通过；真实DOM回归通过；457文件公开扫描通过，smol-toml1.8.0审计零漏洞。
-- [ ] PR云端门禁。
-- [ ] 标签工作流生成Setup/Portable、校验清单与SBOM；上传后回验并发布Latest。
+- [x] PR #51 的Windows、Gitleaks和CodeQL门禁通过并合并；v0.9.5标签已推送。
+- [x] 正式工作流34601626752两项任务成功：Setup/Portable、SHA256SUMS、SBOM及许可证已上传，下载回验SHA-256和来源证明通过，发布为Latest。发布页：https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.9.5
 
 ## 2026-09-10 五分钟等待上限
 

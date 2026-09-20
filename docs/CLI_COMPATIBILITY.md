@@ -1,5 +1,9 @@
 # Grok CLI Compatibility
 
+## 2026-09-18 new-machine boundary (Unreleased)
+
+The default managed CLI was read as 1.0.30; the Desktop-selected path, provider and live contracts have not been accepted on this computer. Desktop tool authority now depends on documented PreToolUse sessionId/subagentType and updatedInput semantics. MCP rejects missing/reused/mismatched parent proofs even if a hook fails open. Offline SDK/HTTP tests do not extend the runtime compatibility gate. See [implementation evidence and live checks](DESKTOP_CAPABILITIES_IMPLEMENTATION_2026-09-18.md). Versions below refer to the prior computer.
+
 ## Desktop 0.9.5 release boundary
 
 Publishes the recovery and optional-probe corrections below without changing the audited fixture range or disabling the core gate. Five minutes limits each CLI download/install attempt, not the complete rollback/ACP transaction. A separate experimental segmented-downloader run installed1.0.25 and passed core verification/restoration; that downloader is not shipped in0.9.5. Local CLI is now1.0.25, superseding historical1.0.3 end-state records below.

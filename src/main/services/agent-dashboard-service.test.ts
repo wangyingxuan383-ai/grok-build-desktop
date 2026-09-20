@@ -77,3 +77,15 @@ describe("AgentDashboardService", () => {
 function historySession(): SessionSummary {
   return { id: "s1", cwd: "C:\\repo", title: "会话", createdAt: "2026-07-22T00:00:00.000Z", updatedAt: "2026-07-22T00:01:00.000Z", messageCount: 2, status: "cold" };
 }
+
+
+it("joins native task identity with child session progress and keeps worktree association", async () => {
+  const root = await mkdtemp(join(tmpdir(), "grok-dashboard-")); roots.push(root);
+  const service = new AgentDashboardService(root);
+  await service.record({ type: "subagent", sessionId: "s1", update: { child_session_id: "child", sessionUpdate: "subagent_progress" } });
+  await service.record({ type: "subagent", sessionId: "s1", update: { child_session_id: "child", subagent_id: "native-id", worktree_id: "wt", sessionUpdate: "subagent_finished", output: "verified" } });
+  const snapshot = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [historySession()], liveSessions: [{ sessionId: "s1", cwd: "C:\\repo" }], tasks: [{ id: "s1:subagent:native-id", sessionId: "s1", kind: "subagent", title: "child", status: "completed", updatedAt: new Date().toISOString() }], assignments: [], liveCapability: "supported" });
+  expect(snapshot.roots[0]?.children).toHaveLength(1);
+  expect(await service.cancellationTarget(snapshot.roots[0]!.children[0]!.id)).toEqual({ sessionId: "s1", nativeSubagentId: "native-id" });
+  expect(snapshot.roots[0]?.children[0]).toMatchObject({ nativeSubagentId: "native-id", childSessionId: "child", worktreeId: "wt", isolation: "worktree", status: "completed", summary: "verified" });
+});
