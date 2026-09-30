@@ -109,7 +109,9 @@
       "CHANGELOG.md",
       "THIRD_PARTY_NOTICES.md",
       "README.md",
-      "SECURITY.md"
+      "SECURITY.md",
+      "!node_modules/node-pty/build/**",
+      "!node_modules/node-pty/**/*.pdb"
     ],
     "win": {
       "target": [
@@ -131,6 +133,7 @@
       "verifyUpdateCodeSignature": false
     },
     "forceCodeSigning": false,
+    "npmRebuild": false,
     "electronLanguages": [
       "zh-CN"
     ],
