@@ -13,6 +13,11 @@ const chooseText=async text=>{await wait(`[...document.querySelectorAll('button'
 try {
  await send('Runtime.enable');await wait('Boolean(document.querySelector(".app-shell"))');
  const settings=await run('window.grokDesktop.getSettings()');if(!settings.activeWorkspace.includes('Grok-Build-Desktop-smoke-'))throw Error('Not isolated');
+ const terminal=await run(`window.grokDesktop.createWorkspaceTerminal(${JSON.stringify(settings.activeWorkspace)})`);
+ try {
+  await run(`window.grokDesktop.writeWorkspaceTerminal(${JSON.stringify(terminal.id)},${JSON.stringify("Write-Output ('RELEASE_'+'PTY_OK'); exit 0\r")})`);
+  await wait(`window.grokDesktop.listWorkspaceTerminals(${JSON.stringify(settings.activeWorkspace)}).then(rows=>rows.some(row=>row.id===${JSON.stringify(terminal.id)}&&row.status==='exited'&&row.output.includes('RELEASE_PTY_OK')))`);
+ } finally {await run(`window.grokDesktop.closeWorkspaceTerminal(${JSON.stringify(terminal.id)})`)}
  await run('localStorage.setItem("grok.app-mode.v1","image")');await send('Page.reload');await wait('Boolean(document.querySelector(".image-shell"))');
  await click('button[aria-label="账号与用量"]');await wait('document.body.innerText.includes("账号管理") || Boolean(document.querySelector(".account-list")) || document.body.innerText.includes("设备码登录")');
  await click('.control-panel > header button');await wait('!document.querySelector(".control-panel")');
@@ -30,5 +35,5 @@ try {
  await wait('document.body.innerText.includes("图像草稿保存失败")');
  if(!await run('localStorage.getItem("grok.image-drafts.v1").includes("RECOVERY_DRAFT")'))throw Error('Draft recovery lost');
  if(errors.length)throw Error(JSON.stringify(errors));
- console.log('IMAGE_REVIEW_PACKAGED_PASSED accounts/settings, partial-gallery, per-picture deletion, failed-cleanup retry, rejected-draft mode exit');
+ console.log('IMAGE_REVIEW_PACKAGED_PASSED native PTY execution/exit, accounts/settings, partial-gallery, per-picture deletion, failed-cleanup retry, rejected-draft mode exit');
 } finally {socket.close()}

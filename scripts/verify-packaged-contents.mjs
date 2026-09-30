@@ -19,6 +19,11 @@ if (!existsSync(asarPath) || statSync(asarPath).size < 1_000_000) throw new Erro
 const files = new Set(listPackage(asarPath).map((entry) => entry.replaceAll("\\", "/").replace(/^\//, "")));
 const requiredAsarEntries = ["package.json", "out/main/index.js", "out/main/token-activity-worker.js", "out/preload/index.cjs", "out/renderer/index.html"];
 for (const entry of requiredAsarEntries) if (!files.has(entry)) throw new Error(`Application ASAR is missing: ${entry}`);
+for (const entry of files) if (/^node_modules\/node-pty\/(?:build\/|.*\.pdb$)/i.test(entry)) throw new Error(`Native build intermediate must not be packaged: ${entry}`);
+for (const name of ["conpty.node", "conpty_console_list.node"]) {
+  const path = join(resourcesRoot, "app.asar.unpacked", "node_modules", "node-pty", "prebuilds", "win32-x64", name);
+  if (!existsSync(path) || statSync(path).size === 0) throw new Error(`Windows PTY runtime is missing: ${name}`);
+}
 const extractAsar = (entry) => extractFile(asarPath, entry.split("/").join(sep));
 
 const packagedPackage = JSON.parse(extractAsar("package.json").toString("utf8"));
