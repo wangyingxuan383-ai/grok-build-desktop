@@ -5,6 +5,7 @@ const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 export interface CliSessionDeleteResult {
   sessionId: string;
   deleted: boolean;
+  alreadyAbsent?: boolean;
   message: string;
 }
 
@@ -24,7 +25,10 @@ export function deleteCliSession(
   if (!SESSION_ID.test(sessionId)) return Promise.reject(new Error("会话 ID 格式无效，拒绝调用 CLI 删除"));
   return run(cliPath, ["--no-auto-update", "sessions", "delete", sessionId], env, timeoutMs).then(({ stdout, stderr }) => {
     const message = String(stdout || stderr).trim();
-    if (!(/^deleted$/i.test(message) || message.includes(`Deleted session ${sessionId}`))) throw new Error(`Grok CLI 未确认删除会话：${message || "空响应"}`);
+    // Accept only the exact official response for the requested identity.
+    // Permission/transport errors and a missing *different* ID remain failures.
+    if (message === `No session found with id ${sessionId}.`) return { sessionId, deleted: false, alreadyAbsent: true, message };
+    if (!(/^deleted$/i.test(message) || message === `Deleted session ${sessionId}` || message === `Deleted session ${sessionId}.`)) throw new Error(`Grok CLI 未确认删除会话：${message || "空响应"}`);
     return { sessionId, deleted: true, message };
   });
 }

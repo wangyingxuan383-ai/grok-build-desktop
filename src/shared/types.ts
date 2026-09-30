@@ -32,12 +32,23 @@ export interface ThemeSettings {
   };
 }
 
-export interface ComposerCapabilitySelection {
+export interface McpToolSelection {
+  sessionId: string;
+  serverName: string;
+  toolName: string;
+  generation: string;
+}
+export interface SessionMcpToolSnapshot {
+  sessionId: string;
+  tools: Array<{ selection: McpToolSelection; description?: string }>;
+  notice: string;
+}
+export type ComposerCapabilitySelection = {
   kind: "computer" | "skill";
   label: string;
   command: string;
   source?: string;
-}
+} | { kind: "mcp"; label: string; command: ""; source?: string; selection: McpToolSelection };
 
 export type AppMenuCommand =
   | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
@@ -110,6 +121,8 @@ export interface TokenActivityWindow {
   from: string;
   turns: number;
   turnsWithUsage: number;
+  /** Turns where the provider/CLI explicitly returned a total; component fields are not added to invent one. */
+  turnsWithTotal: number;
   inputTokens: number;
   outputTokens: number;
   cachedReadTokens: number;
@@ -121,7 +134,9 @@ export interface TokenDayBucket {
   day: string;
   turns: number;
   turnsWithUsage: number;
+  turnsWithTotal: number;
   totalTokens: number;
+  source: "turn-details" | "anonymous-local" | "legacy-utc" | "mixed" | "none";
 }
 
 export interface TokenActivityQuery {
@@ -132,6 +147,9 @@ export interface TokenActivityQuery {
 
 export interface TokenActivityReport {
   generatedAt: string;
+  timeZone: string;
+  /** True when anonymous/deleted-session aggregates were excluded by active filters. */
+  anonymousExcludedByFilter: boolean;
   windows: {
     rolling24h: TokenActivityWindow;
     today: TokenActivityWindow;
@@ -140,7 +158,9 @@ export interface TokenActivityReport {
     month: TokenActivityWindow;
   };
   days: TokenDayBucket[];
+  sources: string[];
   models: string[];
+  providers: string[];
   workspaces: string[];
 }
 
@@ -570,6 +590,7 @@ export interface AutomationExecutionProfile {
 }
 
 export interface AutomationTask {
+  projectRemoved?: boolean;
   id: string;
   revision?: number;
   sessionRevision?: number;
@@ -641,9 +662,11 @@ export interface AutomationPendingConfirmation {
   category: ComputerRiskCategory | "tool-permission";
   summary: string;
   expiresAt: string;
+  source?: "computer";
 }
 
 export interface PromptQueueEntry {
+  toolSelection?: McpToolSelection;
   id: string;
   sessionId: string;
   text: string;
@@ -1372,6 +1395,8 @@ export interface MediaCreationRequest {
   providerId?: string;
   modelId?: string;
   referencePaths?: string[];
+  /** Optional project-relative directory for an additional durable result copy. */
+  projectOutputDirectory?: string;
 }
 
 export interface MediaArtifact {
@@ -1381,6 +1406,12 @@ export interface MediaArtifact {
   mimeType?: string;
   isData?: boolean;
   name?: string;
+  /**
+   * The project copy this artifact was saved to, when project output was on. Kept on the
+   * artifact itself because `savedProjectFiles[index]` does not line up when one picture in a
+   * batch fails to save, and deleting the wrong file is worse than deleting none.
+   */
+  savedPath?: string;
 }
 
 /** Opaque, session-bound access to a cached media file. Local paths stay in main. */
@@ -1402,10 +1433,14 @@ export interface MediaGenerationJob {
   progress?: number;
   message: string;
   artifacts: MediaArtifact[];
+  savedProjectFiles?: string[];
+  outputWarning?: string;
   startedAt: string;
   updatedAt: string;
   completedAt?: string;
   error?: string;
+  /** Set when the conversation's earlier CLI session was gone and this turn started fresh. */
+  contextReset?: boolean;
 }
 
 export interface OpenTargetIntent {
@@ -1485,6 +1520,11 @@ export interface ToolCallState {
   toolCallId: string;
   title: string;
   kind?: string;
+  /** Structured identity supplied by the runtime; display titles are never used as capability evidence. */
+  toolName?: string;
+  serverName?: string;
+  source?: "cli" | "mcp" | "computer-host" | "subagent-lifecycle";
+  computerEvidence?: "attempted" | "observed" | "operated" | "controlled" | "failed" | "unknown";
   /** CLI-declared property; undefined means the CLI did not provide evidence. */
   readOnly?: boolean;
   status: "pending" | "in_progress" | "completed" | "failed";
@@ -1638,6 +1678,20 @@ export interface ConversationProjection {
   events: Array<Record<string, unknown>>;
   runtime?: SessionRuntimePreferences;
   queue?: PersistedPromptQueue;
+}
+
+export interface SubagentConversationSnapshot {
+  nodeId: string;
+  parentSessionId: string;
+  childSessionId?: string;
+  title: string;
+  status: import("./workbench-types").AgentDashboardStatus;
+  summary?: string;
+  source: "desktop-projection" | "cli-updates" | "cli-subagent-files" | "summary-only";
+  notice?: string;
+  /** Run facts the CLI recorded for the sub-agent (meta.json). */
+  details?: { type?: string; model?: string; cwd?: string; startedAt?: string; completedAt?: string; durationMs?: number; toolCalls?: number; turns?: number; contextSource?: string };
+  projection?: ConversationProjection;
 }
 
 export type ChatEvent =
@@ -2025,6 +2079,7 @@ export interface BootstrapData {
 }
 
 export interface SendPromptInput {
+  toolSelection?: McpToolSelection;
   sessionId: string;
   text: string;
   attachments: Attachment[];
@@ -2047,6 +2102,23 @@ export interface OfflineUiFixture {
 }
 
 export interface GrokDesktopApi {
+  listWorkspaceBrowserTabs():Promise<import("./workspace-tools").WorkspaceBrowserTab[]>;
+  createWorkspaceBrowserTab(url:string):Promise<import("./workspace-tools").WorkspaceBrowserTab>;
+  navigateWorkspaceBrowser(id:string,url:string):Promise<void>;
+  commandWorkspaceBrowser(id:string,action:"back"|"forward"|"reload"|"stop"):Promise<void>;
+  boundsWorkspaceBrowser(id:string,bounds:import("./workspace-tools").WorkspaceViewBounds):Promise<void>;
+  closeWorkspaceBrowserTab(id:string):Promise<void>;
+  clearWorkspaceBrowserSite(id:string):Promise<boolean>;
+  onWorkspaceBrowser(listener:(tabs:import("./workspace-tools").WorkspaceBrowserTab[])=>void):()=>void;
+  pickWorkspaceArtifact(cwd:string):Promise<import("./workspace-tools").WorkspaceArtifact|undefined>;
+  saveWorkspaceArtifact(cwd:string,path:string):Promise<boolean>;
+  readWorkspaceArtifact(cwd:string,path:string):Promise<import("./workspace-tools").WorkspaceArtifact>;
+  listWorkspaceTerminals(cwd:string):Promise<import("./workspace-tools").WorkspaceTerminal[]>;
+  createWorkspaceTerminal(cwd:string):Promise<import("./workspace-tools").WorkspaceTerminal>;
+  writeWorkspaceTerminal(id:string,data:string):Promise<void>;
+  resizeWorkspaceTerminal(id:string,cols:number,rows:number):Promise<void>;
+  closeWorkspaceTerminal(id:string):Promise<void>;
+  onWorkspaceTerminal(listener:(event:import("./workspace-tools").WorkspaceTerminalEvent)=>void):()=>void;
   bootstrap(): Promise<BootstrapData>;
   getBuildInfo(): Promise<BuildInfo>;
   getOnboarding(): Promise<OnboardingState>;
@@ -2071,6 +2143,8 @@ export interface GrokDesktopApi {
   discoverWorkspaces(force?: boolean): Promise<WorkspaceSummary[]>;
   pinWorkspace(cwd: string, pinned: boolean): Promise<WorkspaceSummary[]>;
   listHiddenWorkspaces(): Promise<WorkspaceSummary[]>;
+  previewWorkspaceRemoval(cwd: string): Promise<{ sessionIds: string[]; running: string[]; automationCount: number }>;
+  removeWorkspace(cwd: string): Promise<{ removedIds: string[]; failures: Array<{ id: string; message: string }>; removed: boolean }>;
   setWorkspaceHidden(cwd: string, hidden: boolean): Promise<WorkspaceSummary[]>;
   searchWorkspaceFiles(cwd: string, query: string, limit?: number): Promise<WorkspaceFileCandidate[]>;
   listWorkspaceTree(cwd: string, directoryPath?: string, options?: import("./workbench-types").WorkspaceTreeOptions): Promise<import("./workbench-types").WorkspaceTreeNode[]>;
@@ -2142,6 +2216,7 @@ export interface GrokDesktopApi {
   deleteExecutionProfile(cwd: string, profileId: string, confirmed: boolean): Promise<import("./workbench-types").SessionExecutionProfile[]>;
   getSessionExecutionAssignment(sessionId: string): Promise<import("./workbench-types").SessionExecutionAssignment | undefined>;
   getAgentDashboard(query: import("./workbench-types").AgentDashboardQuery): Promise<import("./workbench-types").AgentDashboardSnapshot>;
+  getSubagentConversation(nodeId: string): Promise<SubagentConversationSnapshot>;
   stopAgentDashboardNode(nodeId: string): Promise<void>;
   clearAgentDashboardRecord(nodeId?: string): Promise<void>;
   inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]>;
@@ -2149,6 +2224,7 @@ export interface GrokDesktopApi {
   listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult>;
   createSession(input: string | import("./workbench-types").ExecutionProfileLaunchInput): Promise<import("./workbench-types").SessionLaunchResult>;
   previewSession(cwd: string, sessionId: string): Promise<SessionPreviewSnapshot>;
+  inspectSession(cwd: string, sessionId: string): Promise<ConversationProjection | undefined>;
   openSession(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: SessionHydrationState; message?: string }>;
   getCliSessionInfo(sessionId: string): Promise<CliSessionInfo>;
   getCliSessionUsage(sessionId: string): Promise<CliSessionUsage>;
@@ -2171,6 +2247,7 @@ export interface GrokDesktopApi {
   cancelMediaGeneration(jobId: string): Promise<MediaGenerationJob>;
   onMediaGenerationProgress(listener: (job: MediaGenerationJob) => void): () => void;
   sendPrompt(input: SendPromptInput): Promise<void>;
+  getSessionMcpTools(sessionId: string): Promise<SessionMcpToolSnapshot>;
   getOfflineUiFixture(): Promise<OfflineUiFixture | null>;
   cancelSession(sessionId: string): Promise<void>;
   setModel(sessionId: string, modelId: string): Promise<void>;
@@ -2187,6 +2264,17 @@ export interface GrokDesktopApi {
   openTarget(intent: OpenTargetIntent): Promise<OpenTargetResult>;
   listOpenTargetTools(): Promise<ExternalOpenTool[]>;
   copyImage(source: string): Promise<void>;
+  listImageWorkspace():Promise<import("./image-workspace").ImageWorkspace>;
+  listCodeImages():Promise<MediaAccessHandle[]>;
+  createImageConversation():Promise<import("./image-workspace").ImageConversation>;
+  saveImageDraft(id:string,draft:string):Promise<void>;
+  pickImageOutputRoot():Promise<string|undefined>;
+  deleteImageConversation(id:string,deleteFiles?:boolean):Promise<{removedFiles:boolean;removedFileCount:number;keptFiles:string[];recordRemoved:boolean;cleanupError?:string}>;
+  renameImageConversation(id:string,title:string):Promise<void>;
+  deleteImageJob(conversationId:string,jobId:string,deleteFiles:boolean):Promise<{removedFiles:number;keptFiles:string[];recordRemoved:boolean}>;
+  deleteImageArtifact(conversationId:string,jobId:string,artifactId:string,deleteFiles:boolean):Promise<{removedFiles:number;keptFiles:string[];recordRemoved:boolean}>;
+  previewImageOriginal(id:string,jobId:string,artifactId:string):Promise<MediaArtifact>;
+  submitImage(input:import("./image-workspace").ImageSubmit):Promise<MediaGenerationJob>;
   saveImage(source: string): Promise<string | null>;
   openMedia(source: string): Promise<void>;
   openExternal(url: string): Promise<void>;
@@ -2251,8 +2339,8 @@ export interface GrokDesktopApi {
   repairAutomationRegistrations(): Promise<AutomationTask[]>;
   checkAutomationHealth(repair?: boolean): Promise<import("./workbench-types").AutomationHealthReport>;
   clearAutomationContext(id: string): Promise<AutomationTask[]>;
-  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string): Promise<QueueOperationReceipt>;
-  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string): Promise<QueueOperationReceipt>;
+  enqueuePrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string, toolSelection?: McpToolSelection): Promise<QueueOperationReceipt>;
+  interjectPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string, draftKey?: string, draftSubmissionId?: string, toolSelection?: McpToolSelection): Promise<QueueOperationReceipt>;
   editQueuedPrompt(sessionId: string, id: string, text: string): Promise<QueueOperationReceipt>;
   removeQueuedPrompt(sessionId: string, id: string): Promise<QueueOperationReceipt>;
   reorderQueuedPrompt(sessionId: string, id: string, position: number): Promise<QueueOperationReceipt>;

@@ -1,3 +1,4 @@
+import { PanelSurface } from "./ui/PanelSurface";
 import { useEffect, useState } from "react";
 import type { CliCompatibilitySnapshot, GrokDoctorFixPreview, SupportBundlePreview, SystemCompatibilityReport } from "../../../shared/types";
 
@@ -60,7 +61,7 @@ export function DiagnosticsPanel({ onClose, confirmAction }: { onClose(): void; 
     finally { setBusy(false); }
   };
 
-  return <div className="modal-backdrop"><section className="control-panel diagnostics-panel" role="dialog" aria-modal="true">
+  return <PanelSurface className="modal-backdrop"><section className="control-panel diagnostics-panel" role="dialog" aria-modal="true">
     <header><div><h2>兼容诊断中心</h2><p>只执行无模型消耗的能力探测；额度与真实会话不会被读取。</p></div><button className="icon-button" onClick={onClose}>×</button></header>
     <div className="panel-scroll">
       <div className={`diagnostic-overall ${report?.overall || "checking"}`}>{busy ? "正在检查…" : report ? ({ ready: "可以使用", limited: "部分能力受限", blocked: "核心能力不可用" }[report.overall]) : "等待检查"}</div>
@@ -72,5 +73,5 @@ export function DiagnosticsPanel({ onClose, confirmAction }: { onClose(): void; 
       {message && <p className="panel-message">{message}</p>}
     </div>
     <footer className="button-row"><button onClick={run} disabled={busy}>重新检查</button><button onClick={copy} disabled={!report}>复制摘要</button><button className="primary" onClick={exportBundle} disabled={busy}>导出支持包</button></footer>
-  </section></div>;
+  </section></PanelSurface>;
 }

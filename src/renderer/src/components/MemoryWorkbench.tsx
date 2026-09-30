@@ -155,4 +155,4 @@ export function MemoryWorkbench({ workspace, activeSessionId, dialogs }: { works
 function indexLabel(value: MemorySettings["indexStatus"]): string { return value === "ready" ? "就绪" : value === "building" ? "构建中" : value === "failed" ? "失败" : value === "disabled" ? "关闭" : "待建立"; }
 function formatTime(value?: string): string { return value ? new Date(value).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "尚无"; }
 function relativeTime(value: string): string { const delta = Date.now() - new Date(value).getTime(); if (delta < 60_000) return "刚刚"; if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`; if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`; return new Date(value).toLocaleDateString("zh-CN"); }
-function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+import { errorMessage } from "../error-message";

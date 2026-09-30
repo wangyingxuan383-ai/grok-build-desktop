@@ -1,0 +1,3 @@
+import {expect,it} from "vitest";
+import {mediaRequestSession,scopedMediaUrl} from "./media-scope";
+it("binds thumbnail/full actions to the displayed owner independently of focus",()=>{const src=scopedMediaUrl("grok-media://access/opaque?variant=thumbnail","background");expect(mediaRequestSession(src,"foreground")).toBe("background");expect(new URL(src).searchParams.get("variant")).toBe("thumbnail");expect(mediaRequestSession("grok-media://access/opaque","foreground")).toBe("foreground");expect(()=>mediaRequestSession("grok-media://access/opaque?session=one&session=two","")).toThrow();expect(()=>mediaRequestSession("grok-media://access/opaque","")).toThrow()});

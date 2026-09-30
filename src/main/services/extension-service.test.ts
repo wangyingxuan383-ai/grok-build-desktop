@@ -8,6 +8,11 @@ const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
 describe("ExtensionService normalization", () => {
+  it("keeps unresolved CLI MCP entries pending instead of treating them as disabled failures", () => {
+    const servers = [{ name: "desktop", session: { enabled: false, status: "unavailable" } }];
+    expect(normalizeMcpList({ sessionMcpResolved: false, servers })[0]!.status).toBe("initializing");
+    expect(normalizeMcpList({ sessionMcpResolved: true, servers })[0]!.status).toBe("unavailable");
+  });
   it("normalizes private ACP plugin inventory", () => {
     expect(normalizePluginList({ plugins: [{ id: "user:test", name: "test", enabled: true, trusted: true, skillNames: ["review"], hookCount: 2, mcpServerCount: 1, marketplaceSource: "xAI Official" }] })).toEqual([
       expect.objectContaining({ id: "user:test", name: "test", enabled: true, trusted: true, skills: ["review"], hookCount: 2, mcpServerCount: 1, source: "xAI Official" }),

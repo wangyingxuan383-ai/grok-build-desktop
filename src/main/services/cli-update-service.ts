@@ -237,7 +237,7 @@ export class CliUpdateService {
     if (action === "update") status = await this.check();
     else {
       const recovery = (await this.recovery.get()).recovery;
-      if (!recovery) throw new Error("没有待恢复的 CLI 更新事务");
+      if (!recovery && action !== "verify") throw new Error("没有待恢复的 CLI 更新事务");
       // Recovery is pinned to its transaction, not today's stable channel or
       // that channel's network availability. The installer can still fail to download.
       const settings = await this.getSettings();
@@ -245,7 +245,7 @@ export class CliUpdateService {
       if (!cliPath) throw new Error("未找到 Grok CLI");
       const env = buildCliEnv(settings, await this.getApiKey());
       const current = await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env));
-      status = { found: true, currentVersion: parseVersion(current)?.join("."), latestVersion: action === "rollback" ? recovery.previousVersion : parseVersion(current)?.join("."), updateAvailable: true, proxyRoute: cliProxyRoute(settings, env) };
+      status = { found: true, currentVersion: parseVersion(current)?.join("."), latestVersion: action === "rollback" ? recovery!.previousVersion : parseVersion(current)?.join("."), updateAvailable: true, proxyRoute: cliProxyRoute(settings, env) };
     }
     if (!status.currentVersion) throw new Error(status.error || "无法读取当前 Grok CLI 版本");
     if (!status.latestVersion) throw new Error(status.error || "stable 更新源没有返回目标版本");
@@ -315,8 +315,11 @@ export class CliUpdateService {
    * probe and persisted a passing receipt. This keeps the updater flexible
    * without silently trusting a CLI that was replaced outside the app.
    */
-  async isRuntimeVersionAllowed(version: string): Promise<boolean> {
-    if (!parseVersion(version)) return false;
+  async isRuntimeVersionAllowed(rawVersion: string): Promise<boolean> {
+    // `grok version --json` reports "1.0.40 (eb1a2256660d)"; approvals are
+    // stored against the bare semver, so compare only the normalized form.
+    const version = parseVersion(rawVersion)?.join(".");
+    if (!version) return false;
     const saved = await this.recovery.get();
     if (saved.recovery?.retained) return false;
     const gate = offlineCompatibilityGate(version);
@@ -381,7 +384,7 @@ export class CliUpdateService {
       if (stable.error) throw new Error(`重新检查 stable 更新源失败：${stable.error}`);
       if (stable.latestVersion !== input.targetVersion) throw new Error(`stable 更新目标已从 ${input.targetVersion} 变为 ${stable.latestVersion || "未知"}，请重新确认`);
       if (!stable.updateAvailable) throw new Error("stable 不再提供该目标");
-    } else if (!saved || input.targetVersion !== (action === "rollback" ? saved.previousVersion : previous)) throw new Error("CLI 恢复目标已失效");
+    } else if ((action === "rollback" && !saved) || input.targetVersion !== (action === "rollback" ? saved!.previousVersion : previous)) throw new Error("CLI 恢复目标已失效");
     const previousAllowed = await this.isRuntimeVersionAllowed(previous);
     const previousIdentity = await this.binaryIdentity(cliPath, previous);
     const pendingSnapshots = this.suspendedInMemory ?? saved?.snapshots ?? [];
@@ -408,7 +411,7 @@ export class CliUpdateService {
       return snapshot;
     };
     try {
-      await this.recovery.mutate((data) => { data.recovery = { previousVersion: rollbackVersion, targetVersion: action === "update" ? input.targetVersion : saved!.targetVersion, snapshots: durableSnapshots, retained: true }; });
+      await this.recovery.mutate((data) => { data.recovery = { previousVersion: rollbackVersion, targetVersion: action === "update" ? input.targetVersion : saved?.targetVersion ?? input.targetVersion, snapshots: durableSnapshots, retained: true }; });
       if (action !== "verify" && !(action === "rollback" && previous === input.targetVersion)) {
         this.phase = action === "rollback" ? "rolling-back" : "downloading";
         await (this.testRuntime?.runUpdate(cliPath, ["update", "--version", input.targetVersion], env) ?? this.runUpdate(cliPath, ["update", "--version", input.targetVersion], env));

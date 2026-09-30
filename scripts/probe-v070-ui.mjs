@@ -67,7 +67,7 @@ async function scrollToFind(selector, message, steps = 70) {
   }
   if (!(await present())) {
     const state = await evaluate(`(() => { const s=${scroller}; const box=s?.getBoundingClientRect(); return {
-      active: document.querySelector('.session-row.active')?.textContent || '',
+      active: document.querySelector('.sb-session.active')?.textContent || '',
       viewport: { width: innerWidth, height: innerHeight, scale: devicePixelRatio },
       conversation: box ? { width: box.width, height: box.height, scrollTop: s.scrollTop, scrollHeight: s.scrollHeight, clientHeight: s.clientHeight } : null,
       turns: document.querySelectorAll('.chat-turn').length,
@@ -110,9 +110,9 @@ async function scrollToFindText(selector, text, message, steps = 40) {
   throw new Error(message);
 }
 async function ensureFixtureSessions() {
-  if (!(await evaluate("Boolean(document.querySelector('.session-row'))"))) {
+  if (!(await evaluate("Boolean(document.querySelector('.sb-session'))"))) {
     await evaluate("document.querySelector('.session-origin-group.normal .session-group-heading')?.click()");
-    await waitFor(() => evaluate("Boolean(document.querySelector('.session-row'))"), "Fixture session group did not expand");
+    await waitFor(() => evaluate("Boolean(document.querySelector('.sb-session'))"), "Fixture session group did not expand");
   }
 }
 async function reloadFixture() {
@@ -125,8 +125,8 @@ async function reloadFixture() {
   await ensureFixtureSessions();
 }
 async function openFixtureSession(label) {
-  if (!(await clickText('.session-row .session-open', label))) throw new Error(`Fixture conversation is missing: ${label}`);
-  await waitFor(() => callFunction("function (label) { return Array.from(document.querySelectorAll('.session-row.active')).some((node) => (node.textContent || '').includes(label)); }", label), `Fixture conversation did not become active: ${label}`);
+  if (!(await clickText('.sb-session .session-open', label))) throw new Error(`Fixture conversation is missing: ${label}`);
+  await waitFor(() => callFunction("function (label) { return Array.from(document.querySelectorAll('.sb-session.active')).some((node) => (node.textContent || '').includes(label)); }", label), `Fixture conversation did not become active: ${label}`);
   await sleep(350);
 }
 async function clickDecision(cardSelector, buttonText, missingMessage) {
@@ -168,7 +168,7 @@ async function exerciseStop() {
     elapsedMs: ${Date.now()} - ${startedAt},
     notice: document.querySelector('.composer-operation-notice')?.textContent || '',
     error: document.querySelector('.error-toast')?.textContent || '',
-    session: document.querySelector('.session-row.active')?.textContent || ''
+    session: document.querySelector('.sb-session.active')?.textContent || ''
   })`);
   if (result.error || /失败/.test(result.notice) || /运行中/.test(result.session)) throw new Error(`Stop settled into an invalid state: ${JSON.stringify(result)}`);
   return result;
@@ -195,7 +195,7 @@ try {
   // requiring its persisted projection to mount a virtualized turn.
   await waitFor(async () => {
     const state = await evaluate(`({
-      version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(),
+      version: document.querySelector('.sb-foot .sb-version')?.textContent?.trim(),
       composer: Boolean(document.querySelector('.composer')),
       environmentBars: document.querySelectorAll('.environment-bar').length
     })`);
@@ -203,20 +203,20 @@ try {
       && state.composer
       && state.environmentBars === 0;
   }, "Initial application shell did not settle");
-  const initial = await evaluate(`({ version: document.querySelector('.sidebar-footer button[title="版本与更新"] span')?.textContent?.trim(), composer: Boolean(document.querySelector('.composer')), environmentBars: document.querySelectorAll('.environment-bar').length })`);
+  const initial = await evaluate(`({ version: document.querySelector('.sb-foot .sb-version')?.textContent?.trim(), composer: Boolean(document.querySelector('.composer')), environmentBars: document.querySelectorAll('.environment-bar').length })`);
   if (initial.version !== expectedVersion || !initial.composer || initial.environmentBars) throw new Error(`Shell mismatch for ${expectedVersion}: ${JSON.stringify(initial)}`);
   await ensureFixtureSessions();
-  const fixtureSessions = await evaluate(`Array.from(document.querySelectorAll('.session-row')).map((node) => ({ text: node.textContent || '', active: node.classList.contains('active') }))`);
+  const fixtureSessions = await evaluate(`Array.from(document.querySelectorAll('.sb-session')).map((node) => ({ text: node.textContent || '', active: node.classList.contains('active') }))`);
   if (fixtureSessions.length < 3 || !fixtureSessions.some((row) => row.text.includes('后台并行队列')) || !fixtureSessions.some((row) => row.text.includes('Plan 与权限交互'))) throw new Error(`Current-version multi-session fixture is incomplete: ${JSON.stringify(fixtureSessions)}`);
 
   // A new task is a persisted local draft. Opening it must not create a CLI
   // session, remove history rows or inherit the previously active lifecycle.
-  await waitFor(() => callFunction("function () { return Array.from(document.querySelectorAll('.session-row.draft')).some((node) => (node.textContent || '').includes('未发送草稿')); }"), "Draft-first row did not appear");
-  const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length");
-  if (!(await clickExactText('.new-task-button', '新建任务'))) throw new Error('New-task button did not open the local draft');
-  await waitFor(() => evaluate("!document.querySelector('.session-row.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.8.1 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
+  await waitFor(() => callFunction("function () { return Array.from(document.querySelectorAll('.sb-session.draft')).some((node) => (node.textContent || '').includes('未发送草稿')); }"), "Draft-first row did not appear");
+  const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.sb-project .sb-session:not(.draft)').length");
+  if (!(await clickText('.sb-nav-row.is-primary', '新建会话'))) throw new Error('New-task button did not open the local draft');
+  await waitFor(() => evaluate("!document.querySelector('.sb-session.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.8.1 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
   const draftState = await evaluate(`({
-    historyCount: document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length,
+    historyCount: document.querySelectorAll('.sb-project .sb-session:not(.draft)').length,
     stop: Boolean(document.querySelector('.send-button.stop')),
     waiting: Boolean(document.querySelector('.composer-operation-notice.waiting')),
     model: document.querySelector('.draft-model-controls select')?.value || ''
@@ -225,10 +225,11 @@ try {
   await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.8.1 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
   await sleep(700);
   await reloadFixture();
-  await waitFor(() => evaluate("Boolean(document.querySelector('.session-row.draft'))"), "Persisted draft row was lost after restart");
-  await evaluate("document.querySelector('.session-row.draft .session-open')?.click()");
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.1 重启后仍存在的草稿'"), `Persisted draft body was not restored after restart: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, rows: Array.from(document.querySelectorAll('.session-row.draft')).map((node) => node.textContent), error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
-  if ((await evaluate("document.querySelectorAll('.session-origin-group.normal .session-row:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
+  try { await waitFor(() => evaluate("Boolean(document.querySelector('.sb-session.draft'))"), "Persisted draft row was lost after restart"); }
+  catch (error) { console.error("Draft restore evidence", JSON.stringify(await evaluate(`(async()=>({drafts:await window.grokDesktop.listDrafts(),projects:await window.grokDesktop.discoverWorkspaces(),visible:document.body.innerText.slice(0,1200)}))()`))); throw error; }
+  await evaluate("document.querySelector('.sb-session.draft .session-open')?.click()");
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.1 重启后仍存在的草稿'"), `Persisted draft body was not restored after restart: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, rows: Array.from(document.querySelectorAll('.sb-session.draft')).map((node) => node.textContent), error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
+  if ((await evaluate("document.querySelectorAll('.sb-project .sb-session:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
 
   // A background running conversation owns its own Stop button, queue and
   // draft. Switching to a waiting foreground conversation must not leak any
@@ -246,14 +247,14 @@ try {
   const requestCards = await evaluate(`({ plan:Array.from(document.querySelectorAll('.codex-plan-request button')).map((node)=>node.textContent.trim()), permission:Array.from(document.querySelectorAll('[aria-label="权限确认"] button')).map((node)=>node.textContent.trim()) })`);
   if (!requestCards.plan.includes('实施计划') || !requestCards.plan.includes('继续规划') || !requestCards.permission.includes('仅本次允许') || !requestCards.permission.includes('拒绝并说明原因')) throw new Error(`Codex-style decision controls mismatch: ${JSON.stringify(requestCards)}`);
   await openFixtureSession('后台并行队列');
-  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '后台会话独立草稿'"), `Background draft was not restored after session switch: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, active: document.querySelector('.session-row.active')?.textContent, error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
+  await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '后台会话独立草稿'"), `Background draft was not restored after session switch: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, active: document.querySelector('.sb-session.active')?.textContent, error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
   const decisionReceipts = [];
   decisionReceipts.push(await exercisePlanAndPermission('实施计划', '仅本次允许'));
   decisionReceipts.push(await exercisePlanAndPermission('继续规划', '仅本次允许'));
   decisionReceipts.push(await exercisePlanAndPermission('取消', '仅本次允许'));
   decisionReceipts.push(await exercisePlanAndPermission('取消', '拒绝并说明原因'));
   const stopReceipt = await exerciseStop();
-  await clickText('.session-row .session-open', '会话生命周期与并发验收');
+  await clickText('.sb-session .session-open', '会话生命周期与并发验收');
   await waitFor(() => evaluate("!document.querySelector('.send-button.stop') && !document.querySelector('.prompt-queue')"), "Idle session inherited background controls");
   await scrollToFindText('.turn-metrics', '1分23秒', 'Completed turn metrics were not reachable');
   const turnMetrics = await evaluate(`Array.from(document.querySelectorAll('.turn-metrics')).map((node) => node.textContent || '').join(' · ')`);
@@ -270,11 +271,10 @@ try {
   if (errorCard.open || !errorCard.summary.includes("工具 Schema 被拒绝") || !errorCard.summary.includes("HTTP 400") || !errorCard.summary.includes("Provider fixture-provider")) throw new Error(`Structured error mismatch: ${JSON.stringify(errorCard)}`);
   if (!errorCard.detail.includes("fixture-trace") || !errorCard.detail.includes("可以这样处理") || !errorCard.detail.includes("Gemini")) throw new Error(`Failure guidance missing: ${JSON.stringify(errorCard)}`);
 
-  await evaluate("document.querySelector('.project-tools-heading')?.click()");
-  await waitFor(() => evaluate("Boolean(document.querySelector('.project-tools nav'))"), "Developer tools did not open");
-  const toolLabels = await evaluate(`Array.from(document.querySelectorAll('.project-tools nav button')).map((node) => node.textContent.trim())`);
-  if (toolLabels.some((value) => value === "文件" || value.includes("变更审核"))) throw new Error(`File/Review still occupy the left tool list: ${JSON.stringify(toolLabels)}`);
-  await clickText('.project-tools nav button', 'Dashboard');
+  // Radix menus open on pointerdown, so reach the dashboard through the public command search.
+  await evaluate("window.dispatchEvent(new Event('grok:command-search'))");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.command-search-input'))"), "Command search did not open for the dashboard");
+  await clickText('[role="option"]', '子智能体看板');
   await waitFor(() => evaluate("Boolean(document.querySelector('.return-to-chat'))"), "Workbench return action is missing");
   await evaluate("document.querySelector('.return-to-chat')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.composer textarea'))"), "Conversation did not return from Dashboard");
@@ -299,7 +299,12 @@ try {
   await waitFor(() => evaluate("Boolean(document.querySelector('.return-to-chat'))"), "File workbench has no return-to-conversation action");
   await evaluate("document.querySelector('.return-to-chat')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.composer textarea'))"), "Conversation did not recover after file workbench");
-  await clickText('.topbar-menu button', '任务中心');
+  // The workspace actions now use Radix menus and the task center is also a
+  // first-class command-search action. Use that stable public navigation path
+  // instead of the retired .topbar-menu button markup.
+  await evaluate("window.dispatchEvent(new Event('grok:command-search'))");
+  await waitFor(() => evaluate("Boolean(document.querySelector('.command-search-input'))"), "Command search did not open for task center");
+  await clickText('[role="option"]', '任务中心');
   await waitFor(() => evaluate("Boolean(document.querySelector('.task-center'))"), "Task center did not open after returning from a file");
   await evaluate("document.querySelector('.task-center > header > button')?.click()");
   await waitFor(() => evaluate("Boolean(document.querySelector('.composer textarea')) && !document.querySelector('.task-center')"), "Conversation did not recover after task center");
@@ -341,7 +346,7 @@ try {
   if (drawer.display === "none" || drawer.containerType !== "inline-size" || drawer.left < -1 || drawer.right > drawer.viewport + 1 || drawer.loading) throw new Error(`Narrow right drawer overflow or lazy-load stall: ${JSON.stringify(drawer)}`);
   await evaluate("document.querySelector('.right-utility-pane > header .icon-button')?.click()");
 
-  await clickText('.sidebar-footer .icon-button', '');
+  await clickText('.sb-foot .ui-icon-btn', '');
   if (!await waitFor(() => evaluate("Boolean(document.querySelector('.settings-dialog'))"), "Settings did not open")) throw new Error("Settings did not open");
   await clickText('.settings-layout > nav button', '常规');
   await waitFor(() => evaluate("document.querySelectorAll('.conversation-reading-settings input[type=range]').length === 2"), "Conversation-only reading controls are missing");
@@ -350,14 +355,16 @@ try {
   await clickText('.settings-layout > nav button', 'Token 活动');
   await waitFor(() => evaluate("document.querySelectorAll('.token-heatmap-grid .token-cell').length === 371"), "Token activity did not render an exact 371-day heatmap");
   const tokenUi = await evaluate(`({ cells: document.querySelectorAll('.token-heatmap-grid .token-cell').length, windows: Array.from(document.querySelectorAll('.token-window-grid article strong')).map((node) => node.textContent.trim()), privacy: document.querySelector('.token-heatmap footer')?.textContent || '' })`);
-  if (tokenUi.cells !== 371 || !tokenUi.windows.includes("最近 24 小时") || !tokenUi.windows.includes("本月") || !tokenUi.privacy.includes("不包含任何提示词")) throw new Error(`Token activity mismatch: ${JSON.stringify(tokenUi)}`);
+  if (tokenUi.cells !== 371 || !tokenUi.windows.includes("最近 24 小时") || !tokenUi.windows.includes("本月") || !tokenUi.privacy.includes("不含提示词")) throw new Error(`Token activity mismatch: ${JSON.stringify(tokenUi)}`);
   await clickText('.settings-layout > nav button', '更新与诊断');
   const updateUi = await evaluate(`({ actions: document.querySelectorAll('.settings-action-list button').length, labels: Array.from(document.querySelectorAll('.settings-action-list button')).map((node) => node.textContent.trim()), resultRegion: document.querySelector('.settings-action-results')?.getAttribute('aria-live') })`);
-  if (updateUi.actions !== 5 || !updateUi.labels.includes('预览并更新 CLI') || updateUi.resultRegion !== "polite") throw new Error(`Update/diagnostic actions mismatch: ${JSON.stringify(updateUi)}`);
+  const requiredUpdateLabels = ['检查应用更新', '检查 Grok CLI 更新', '预览并更新 CLI', '验证当前 CLI', '打开诊断中心', '导出脱敏日志'];
+  const missingUpdateLabels = requiredUpdateLabels.filter((label) => !updateUi.labels.includes(label));
+  if (missingUpdateLabels.length || updateUi.resultRegion !== "polite") throw new Error(`Update/diagnostic actions mismatch: ${JSON.stringify({ ...updateUi, missingUpdateLabels })}`);
   await clickText('.settings-action-list button', '打开诊断中心');
   await waitFor(() => evaluate("Boolean(document.querySelector('.diagnostics-panel'))"), "Settings did not navigate to diagnostics");
   await evaluate("document.querySelector('.diagnostics-panel > header .icon-button')?.click()");
-  await clickText('.sidebar-footer .icon-button', '');
+  await clickText('.sb-foot .ui-icon-btn', '');
   await waitFor(() => evaluate("Boolean(document.querySelector('.settings-dialog'))"), "Settings did not reopen after diagnostics");
   await clickText('.settings-layout > nav button', '账号与提供商');
   await clickText('.settings-action-list button', '管理自定义提供商');

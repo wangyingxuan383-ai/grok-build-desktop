@@ -16,6 +16,21 @@ async function fixture(source: string): Promise<{ root: string; script: string }
 }
 
 describe("runCliMediaProcess", () => {
+  it("ends on an official terminal error without waiting for inactivity or accepting a prior artifact", async () => {
+    const { root, script } = await fixture("console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})); console.log(JSON.stringify({type:'error',message:'Not signed in: credentials expired'})); setInterval(()=>{},1000);");
+    await expect(runCliMediaProcess({executable:process.execPath,args:[script,join(root,'partial.png')],cwd:root,env:process.env,media:'image',signal:new AbortController().signal,idleTimeoutMs:30_000})).rejects.toThrow('Not signed in: credentials expired');
+  });
+  it("does not treat assistant text or nested tool errors as terminal protocol errors", async () => {
+    const { root, script } = await fixture("console.log(JSON.stringify({type:'assistant',message:'Not signed in'})); console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{type:'error',message:'retrying'}})); console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}}));");
+    const path=join(root,'success.png');
+    await expect(runCliMediaProcess({executable:process.execPath,args:[script,path],cwd:root,env:process.env,media:'image',signal:new AbortController().signal})).resolves.toEqual([expect.objectContaining({source:path})]);
+  });
+  it("continues an image conversation's CLI session instead of starting a new one", () => {
+    const args = buildCliMediaArgs("make it blue", "00000000-0000-4000-8000-000000000002", "image_gen,image_edit", true);
+    expect(args).toContain("--resume");
+    expect(args).not.toContain("--session-id");
+    expect(args[args.indexOf("--resume") + 1]).toBe("00000000-0000-4000-8000-000000000002");
+  });
   it("isolates headless media work in an explicit transient CLI session", () => {
     expect(buildCliMediaArgs("draw a cat", "00000000-0000-4000-8000-000000000001", "image_gen")).toEqual([
       "--no-auto-update", "--single", "draw a cat",
@@ -27,7 +42,7 @@ describe("runCliMediaProcess", () => {
   });
 
   it("extracts a concrete artifact from fake streaming-json", async () => {
-    const { root, script } = await fixture("process.stdout.write(JSON.stringify({type:'tool_result',result:{path:process.argv[2]}})+'\\n');");
+    const { root, script } = await fixture("process.stdout.write(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})+'\\n');");
     const output = join(root, "result.png");
     const result = await runCliMediaProcess({
       executable: process.execPath,
@@ -54,7 +69,7 @@ describe("runCliMediaProcess", () => {
   });
 
   it("does not impose a wall-clock ceiling while the CLI keeps reporting progress", async () => {
-    const { root, script } = await fixture("let n=0; const t=setInterval(()=>{ process.stderr.write('progress\\n'); if(++n===4){ clearInterval(t); process.stdout.write(JSON.stringify({type:'tool_result',result:{path:process.argv[2]}})+'\\n'); } },80);");
+    const { root, script } = await fixture("let n=0; const t=setInterval(()=>{ process.stderr.write('progress\\n'); if(++n===4){ clearInterval(t); process.stdout.write(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})+'\\n'); } },80);");
     const output = join(root, "long-result.png");
     await expect(runCliMediaProcess({
       executable: process.execPath,

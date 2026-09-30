@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
 import { useWorkbenchStore, type WorkbenchView } from "../workbench-store";
 import { useWorktreeStore } from "../worktree-store";
@@ -11,15 +11,27 @@ interface Dialogs {
 
 export function WorktreeExplorer({ workspace, dialogs, onOpenConversation }: { workspace: string; dialogs: Dialogs; onOpenConversation?(target: { cwd: string; sessionId: string }): void }): React.JSX.Element {
   const store = useWorktreeStore();
+  const refreshGeneration = useRef(0);
   const refresh = useCallback(async (): Promise<void> => {
+    const generation = ++refreshGeneration.current;
     if (!workspace) return useWorktreeStore.getState().reset();
     useWorktreeStore.getState().setLoading(true);
-    try { useWorktreeStore.getState().setItems(workspace, await window.grokDesktop.listWorktrees(workspace)); }
-    catch (error) { useWorktreeStore.getState().reset(workspace); dialogs.setError(errorMessage(error)); }
-    finally { useWorktreeStore.getState().setLoading(false); }
+    try {
+      const capability = await window.grokDesktop.getGitWorkspaceCapability(workspace);
+      if (generation !== refreshGeneration.current) return;
+      if (!capability.available) {
+        useWorktreeStore.getState().reset(workspace);
+        useWorktreeStore.getState().setUnavailable(capability.message);
+        return;
+      }
+      const items = await window.grokDesktop.listWorktrees(workspace);
+      if (generation === refreshGeneration.current) useWorktreeStore.getState().setItems(workspace, items);
+    }
+    catch (error) { if (generation === refreshGeneration.current) { useWorktreeStore.getState().reset(workspace); dialogs.setError(errorMessage(error)); } }
+    finally { if (generation === refreshGeneration.current) useWorktreeStore.getState().setLoading(false); }
   }, [dialogs, workspace]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); return () => { refreshGeneration.current += 1; }; }, [refresh]);
 
   const create = async (): Promise<void> => {
     const name = await dialogs.askText("输入隔离 Worktree 的显示名称。", "", { title: "创建 Worktree", confirmLabel: "下一步" });
@@ -48,7 +60,8 @@ export function WorktreeExplorer({ workspace, dialogs, onOpenConversation }: { w
 
   return <section className="worktree-explorer" aria-label="Worktree">
     <header><strong>Worktree</strong><span>{store.loading ? "处理中…" : `${store.items.length} 个`}</span></header>
-    <div className="worktree-toolbar"><button className="primary" disabled={!workspace || store.loading} onClick={() => void create()}>＋ 新建</button><button disabled={!workspace || store.loading} onClick={() => void refresh()}>↻ 刷新</button><button disabled={!workspace || store.loading} onClick={() => void gc()}>GC</button></div>
+    <div className="worktree-toolbar"><button className="primary" disabled={!workspace || store.loading || Boolean(store.unavailableReason)} onClick={() => void create()}>＋ 新建</button><button disabled={!workspace || store.loading} onClick={() => void refresh()}>↻ 刷新</button><button disabled={!workspace || store.loading || Boolean(store.unavailableReason)} onClick={() => void gc()}>GC</button></div>
+    {store.unavailableReason && <p className="file-empty">{store.unavailableReason}</p>}
     {!workspace ? <p className="file-empty">请选择工作区</p> : !store.items.length ? <p className="file-empty">{store.loading ? "正在读取 Worktree…" : "尚无隔离 Worktree"}</p> : <div className="worktree-list">{store.items.map((item) => <button key={item.id} className={store.selectedId === item.id ? "selected" : ""} onClick={() => store.setSelected(item.id)}><span className={`worktree-state ${item.state}`} /><div><strong>{item.name}</strong><span>{item.branch || "无分支"} · {stateLabel(item.state)}</span><small>{item.changedFiles} 个未提交变更 · {item.official ? "Grok 原生" : "Git 兼容层"}</small></div></button>)}</div>}
   </section>;
 }
@@ -111,7 +124,7 @@ export function WorktreeWorkbench({ workspace, dialogs, onOpenConversation }: { 
     } catch (error) { dialogs.setError(errorMessage(error)); }
   };
 
-  if (!selected) return <div className="worktree-empty"><h2>隔离 Worktree</h2><p>从左侧新建或选择一个 Worktree。</p></div>;
+  if (!selected) return <div className="worktree-empty"><h2>隔离 Worktree</h2><p>{store.unavailableReason || "从左侧新建或选择一个 Worktree。"}</p></div>;
   const value = store.preview;
   return <div className="worktree-workbench">
     <header><div><h2>{selected.name}</h2><span>{selected.branch || "无分支"} · {selected.official ? "Grok 原生" : "受控 Git 兼容层"}</span></div><div><button onClick={() => void openWorkspace("files")}>打开文件</button><button onClick={() => void openWorkspace("source-control")}>打开 Git</button><button disabled={!selected.sourceSessionId} onClick={() => void openSession()}>打开会话</button><button className="danger-link" disabled={store.loading} onClick={() => void remove()}>删除</button></div></header>
@@ -127,4 +140,4 @@ export function WorktreeWorkbench({ workspace, dialogs, onOpenConversation }: { 
 }
 
 function stateLabel(value: string): string { return ({ ready: "就绪", applying: "应用中", conflicted: "有冲突", orphaned: "未关联", stale: "可清理", missing: "路径缺失", unknown: "未知" } as Record<string, string>)[value] ?? value; }
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+import { errorMessage } from "../error-message";

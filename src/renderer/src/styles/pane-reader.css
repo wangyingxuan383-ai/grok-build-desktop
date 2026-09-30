@@ -1,0 +1,7 @@
+.pane-reader { display:flex; flex-direction:column; flex:1; min-width:0; min-height:0; overflow:hidden; padding:10px; gap:8px; }
+.pane-reader > header { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.pane-reader > header small { overflow-wrap:anywhere; }
+.pane-reader > header span { opacity:.65; font-size:11px; }
+.pane-reader-text { flex:1; min-height:120px; resize:none; width:100%; box-sizing:border-box; white-space:pre; overflow:auto; font-family:Consolas,monospace; font-size:12px; line-height:1.6; }
+.pane-reader-messages { flex:1; min-height:120px; }
+.pane-reader-messages .message-row { min-width:0; padding:8px; }

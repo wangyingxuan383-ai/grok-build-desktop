@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { OnMount } from "@monaco-editor/react";
 import type { EditorDocument, EditorSaveConflict, WorkspaceTreeNode } from "../../../shared/types";
 import { useWorkbenchStore, type EditorTabState } from "../workbench-store";
@@ -21,7 +21,7 @@ interface Dialogs {
   setError(message: string): void;
 }
 
-export function FileExplorer({ workspace, dialogs }: { workspace: string; dialogs: Dialogs }): React.JSX.Element {
+export function FileExplorer({ workspace, dialogs, onPreviewArtifact }: { workspace: string; dialogs: Dialogs; onPreviewArtifact?(path: string): void }): React.JSX.Element {
   const store = useWorkbenchStore();
   const [loading, setLoading] = useState(false);
 
@@ -56,7 +56,10 @@ export function FileExplorer({ workspace, dialogs }: { workspace: string; dialog
     try {
       const result = await window.grokDesktop.openEditorDocument(workspace, node.path);
       if (result.kind === "external") await window.grokDesktop.openPath(result.path);
-      else if (result.document) store.openDocument(result.document);
+      else if (result.document) {
+        store.openDocument(result.document);
+        window.dispatchEvent(new CustomEvent("grok:reveal-file", { detail: { kind: "file", workspace, id: useWorkbenchStore.getState().activeTabKey, title: result.document.relativePath } }));
+      }
     } catch (error) {
       dialogs.setError(errorMessage(error));
     }
@@ -96,6 +99,7 @@ export function FileExplorer({ workspace, dialogs }: { workspace: string; dialog
       <button title="新建目录" disabled={!workspace} onClick={() => void mutate("directory")}><UiIcon name="folder" size={14}/><span className="toolbar-plus">＋</span></button>
       <button title="刷新" disabled={!workspace || loading} onClick={() => { store.resetTree(); void load(); }}><UiIcon name="refresh" size={14}/></button>
       <button title="在资源管理器中显示" disabled={!selectedNode} onClick={() => selectedNode && void window.grokDesktop.revealEditorPath(workspace, selectedNode.path)}><UiIcon name="external" size={14}/></button>
+      <button title="预览产物" disabled={selectedNode?.kind !== "file"} onClick={() => selectedNode?.kind === "file" && onPreviewArtifact?.(selectedNode.path)}>预览</button>
       <button title="重命名" disabled={!selectedNode || selectedNode.kind === "symlink"} onClick={() => void mutate("rename")}><UiIcon name="edit" size={14}/></button>
       <button title="删除" disabled={!selectedNode || selectedNode.kind === "symlink"} onClick={() => void mutate("delete")}><UiIcon name="trash" size={14}/></button>
     </div>
@@ -118,16 +122,20 @@ function TreeRows({ directory, depth, onOpen }: { directory: string; depth: numb
   })}</>;
 }
 
-export function FileWorkbench({ workspace, dialogs, onChatReference }: { workspace: string; dialogs: Dialogs; onChatReference(value: { prompt: string; path?: string }): void }): React.JSX.Element {
+export function FileWorkbench({ workspace, dialogs, onChatReference, boundTabKey }: { workspace: string; dialogs: Dialogs; boundTabKey?: string; onChatReference?(value: { prompt: string; path?: string }): void }): React.JSX.Element {
   const store = useWorkbenchStore();
-  const tab = store.tabs.find((value) => value.key === store.activeTabKey);
+  const workspaceTabs = store.tabs.filter((value) => sameWorkspace(value.document.workspacePath, workspace));
+  const tab = workspaceTabs.find((value) => value.key === (boundTabKey ?? store.activeTabKey));
+  const root = useRef<HTMLElement>(null);
+  const selectedKey = useRef(tab?.key); selectedKey.current = tab?.key;
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const editorInstance = useId();
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 1, end: 1 });
   const [saving, setSaving] = useState(false);
   const [showConflictDiff, setShowConflictDiff] = useState(false);
   const [editing, setEditing] = useState(false);
   const light = document.documentElement.dataset.themeResolved === "light";
-  useEffect(() => { setEditing(false); setShowConflictDiff(false); }, [store.activeTabKey]);
+  useEffect(() => { setEditing(false); setShowConflictDiff(false); }, [tab?.key]);
   useEffect(() => {
     if (!tab || !editorRef.current) return;
     editorRef.current.setPosition(tab.cursor);
@@ -148,7 +156,7 @@ export function FileWorkbench({ workspace, dialogs, onChatReference }: { workspa
         expectedModifiedAt: current.document.modifiedAt,
         overwrite,
       });
-      if (result.document) { store.replaceDocument(result.document); setShowConflictDiff(false); }
+      if (result.document) { store.acceptSave(result.document, current.buffer); setShowConflictDiff(false); }
       else store.setConflict(current.key, result.conflict);
     } catch (error) {
       dialogs.setError(errorMessage(error));
@@ -166,7 +174,7 @@ export function FileWorkbench({ workspace, dialogs, onChatReference }: { workspa
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (store.activeView !== "files" || !tab || !editing || !event.ctrlKey || event.key.toLowerCase() !== "s") return;
+      if (!root.current?.contains(document.activeElement) || !tab || !editing || !event.ctrlKey || event.key.toLowerCase() !== "s") return;
       event.preventDefault();
       void save(tab);
     };
@@ -176,32 +184,35 @@ export function FileWorkbench({ workspace, dialogs, onChatReference }: { workspa
 
   useEffect(() => {
     const onFocus = (): void => {
-      const current = useWorkbenchStore.getState().tabs.find((value) => value.key === useWorkbenchStore.getState().activeTabKey);
+      const current = useWorkbenchStore.getState().tabs.find((value) => value.key === selectedKey.current);
       if (!current) return;
       void window.grokDesktop.openEditorDocument(current.document.workspacePath, current.document.path).then((result) => {
-        if (!result.document || result.document.hash === current.document.hash) return;
-        if (!current.dirty) useWorkbenchStore.getState().replaceDocument(result.document);
-        else useWorkbenchStore.getState().setConflict(current.key, conflictFromExternal(current, result.document!));
+        const latest = useWorkbenchStore.getState().tabs.find(value => value.key === current.key);
+        if (!latest || !result.document || result.document.hash === latest.document.hash || latest.document.hash !== current.document.hash) return;
+        if (!latest.dirty) useWorkbenchStore.getState().replaceDocument(result.document);
+        else useWorkbenchStore.getState().setConflict(current.key, conflictFromExternal(latest, result.document));
       }).catch(() => undefined);
     };
     window.addEventListener("focus", onFocus);
     onFocus();
     return () => window.removeEventListener("focus", onFocus);
-  }, []);
+  }, [tab?.key]);
 
   const mount: OnMount = (editor) => {
     editorRef.current = editor;
-    const current = useWorkbenchStore.getState().tabs.find((value) => value.key === useWorkbenchStore.getState().activeTabKey);
+    const current = useWorkbenchStore.getState().tabs.find((value) => value.key === selectedKey.current);
     if (current) editor.setPosition(current.cursor);
     editor.onDidChangeCursorPosition((event) => {
-      const key = useWorkbenchStore.getState().activeTabKey;
+      const key = selectedKey.current;
       if (key) useWorkbenchStore.getState().updateCursor(key, event.position);
     });
     editor.onDidChangeCursorSelection((event) => setSelection({ start: event.selection.startLineNumber, end: event.selection.endLineNumber }));
-    editor.focus();
+    if (!boundTabKey) editor.focus();
   };
 
   const close = async (current: EditorTabState): Promise<void> => {
+    // The workbench owns the last-view decision and shared save/discard/cancel flow.
+    if (!window.dispatchEvent(new CustomEvent("grok:close-file-view", { cancelable: true, detail: { key: current.key } }))) return;
     if (current.dirty && !await dialogs.askConfirm(`“${current.document.relativePath}”有未保存修改，仍要关闭？`, { title: "关闭编辑器标签", confirmLabel: "不保存并关闭", danger: true })) return;
     store.closeTab(current.key);
   };
@@ -218,15 +229,15 @@ export function FileWorkbench({ workspace, dialogs, onChatReference }: { workspa
     const lines = selection.start === selection.end ? `L${selection.start}` : `L${selection.start}-L${selection.end}`;
     const ref = `@${tab.document.relativePath}${kind === "file" ? "" : `#${lines}`}`;
     const prompt = kind === "explain" ? `请解释 ${ref}` : kind === "modify" ? `请修改 ${ref}：` : ref;
-    onChatReference({ prompt, ...(kind === "file" ? { path: tab.document.path } : {}) });
+    onChatReference?.({ prompt, ...(kind === "file" ? { path: tab.document.path } : {}) });
   };
 
-  return <section className="file-workbench">
-    <div className="editor-tabs" role="tablist">{store.tabs.map((value) => <button key={value.key} className={store.activeTabKey === value.key ? "active" : ""} onClick={() => store.setActiveTab(value.key)} role="tab"><span>{value.dirty ? "● " : ""}{value.document.relativePath}</span><i onClick={(event) => { event.stopPropagation(); void close(value); }}>×</i></button>)}</div>
+  return <section ref={root} className="file-workbench">
+    {!boundTabKey && <div className="editor-tabs" role="tablist">{workspaceTabs.map((value) => <button key={value.key} className={store.activeTabKey === value.key ? "active" : ""} onClick={() => store.setActiveTab(value.key)} role="tab"><span>{value.dirty ? "● " : ""}{value.document.relativePath}</span><i onClick={(event) => { event.stopPropagation(); void close(value); }}>×</i></button>)}</div>}
     {!tab ? <div className="editor-empty"><strong>轻量编辑器</strong><p>从左侧文件树打开文件。支持多标签、编码/换行保持、冲突检测和原子保存。</p></div> : <>
-      <div className="editor-toolbar"><div className="editor-breadcrumbs" title={tab.document.path}>{tab.document.relativePath.split(/[\\/]/).map((part, index, parts) => <span key={`${part}-${index}`}>{part}{index < parts.length - 1 && <i>›</i>}</span>)}</div><small>{editing ? "编辑" : "只读查看"} · {tab.document.encoding.toUpperCase()} · {tab.document.lineEnding.toUpperCase()} · {formatBytes(tab.document.byteLength)}{!tab.document.editable ? ` · ${tab.document.readOnlyReason}` : ""}</small>{editing ? <><button disabled={!tab.dirty || !tab.document.editable || saving} onClick={() => void save(tab)}>{saving ? "保存中…" : "保存"}</button><button onClick={() => setEditing(false)}>结束编辑</button></> : <button className="primary" disabled={!tab.document.editable} onClick={() => setEditing(true)}>编辑文件</button>}<button onClick={() => void window.grokDesktop.revealEditorPath(tab.document.workspacePath, tab.document.path)}>在资源管理器中显示</button><details className="editor-more-actions"><summary>引用…</summary><div><button onClick={() => reference("file")}>添加文件到对话</button><button onClick={() => reference("selection")}>添加选中代码</button><button onClick={() => reference("explain")}>让 Grok 解释</button><button onClick={() => reference("modify")}>让 Grok 修改</button></div></details></div>
+      <div className="editor-toolbar"><div className="editor-breadcrumbs" title={tab.document.path}>{tab.document.relativePath.split(/[\\/]/).map((part, index, parts) => <span key={`${part}-${index}`}>{part}{index < parts.length - 1 && <i>›</i>}</span>)}</div><small>{editing ? "编辑" : "只读查看"} · {tab.document.encoding.toUpperCase()} · {tab.document.lineEnding.toUpperCase()} · {formatBytes(tab.document.byteLength)}{!tab.document.editable ? ` · ${tab.document.readOnlyReason}` : ""}</small>{editing ? <><button disabled={!tab.dirty || !tab.document.editable || saving} onClick={() => void save(tab)}>{saving ? "保存中…" : "保存"}</button><button onClick={() => setEditing(false)}>结束编辑</button></> : <button className="primary" disabled={!tab.document.editable} onClick={() => setEditing(true)}>编辑文件</button>}<button onClick={() => void window.grokDesktop.revealEditorPath(tab.document.workspacePath, tab.document.path)}>在资源管理器中显示</button>{onChatReference && <details className="editor-more-actions"><summary>引用…</summary><div><button onClick={() => reference("file")}>添加文件到对话</button><button onClick={() => reference("selection")}>添加选中代码</button><button onClick={() => reference("explain")}>让 Grok 解释</button><button onClick={() => reference("modify")}>让 Grok 修改</button></div></details>}</div>
       {tab.conflict && <ConflictBar conflict={tab.conflict} onViewDiff={() => setShowConflictDiff((value) => !value)} onReload={() => void reload(tab)} onOverwrite={() => void save(tab, true)} onSaveCopy={() => void saveCopy(tab)} onDismiss={() => { setShowConflictDiff(false); store.setConflict(tab.key); }} />}
-      <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}>{showConflictDiff && tab.conflict?.diskContent !== undefined ? <MonacoDiffEditor original={tab.conflict.diskContent} modified={tab.buffer} language={tab.document.languageId} theme={light ? "light" : "vs-dark"} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, renderSideBySide: true }} /> : <MonacoEditor path={tab.document.path} language={tab.document.languageId} value={tab.buffer} theme={light ? "light" : "vs-dark"} options={{ readOnly: !editing || !tab.document.editable, automaticLayout: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "off", renderWhitespace: "selection", scrollBeyondLastLine: false }} onChange={(value) => { if (editing) store.updateBuffer(tab.key, value ?? ""); }} onMount={mount} />}</Suspense></div>
+      <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}>{showConflictDiff && tab.conflict?.diskContent !== undefined ? <MonacoDiffEditor original={tab.conflict.diskContent} modified={tab.buffer} language={tab.document.languageId} theme={light ? "light" : "vs-dark"} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, renderSideBySide: true }} /> : <MonacoEditor path={`${tab.document.path}?grok_view=${encodeURIComponent(editorInstance)}`} language={tab.document.languageId} value={tab.buffer} theme={light ? "light" : "vs-dark"} options={{ readOnly: !editing || !tab.document.editable, automaticLayout: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "off", renderWhitespace: "selection", scrollBeyondLastLine: false }} onChange={(value) => { if (editing) store.updateBuffer(tab.key, value ?? ""); }} onMount={mount} />}</Suspense></div>
     </>}
   </section>;
 }
@@ -242,5 +253,6 @@ function conflictFromExternal(tab: EditorTabState, disk: EditorDocument): Editor
 function parentPath(value: string): string { const parts = value.replace(/\\/g, "/").split("/"); parts.pop(); return parts.join("/"); }
 function joinRelative(parent: string, name: string): string { return [parent, name].filter(Boolean).join("/"); }
 function copyName(value: string): string { const dot = value.lastIndexOf("."); return dot > value.lastIndexOf("/") ? `${value.slice(0, dot)}.copy${value.slice(dot)}` : `${value}.copy`; }
+function sameWorkspace(left: string, right: string): boolean { const normalize=(value:string)=>value.replace(/\\/g,"/").replace(/\/$/,"");const a=normalize(left),b=normalize(right);return typeof navigator!=="undefined"&&navigator.platform.toLowerCase().startsWith("win")?a.toLocaleLowerCase()===b.toLocaleLowerCase():a===b; }
 function formatBytes(value: number): string { return value >= 1024 * 1024 ? `${(value / 1024 / 1024).toFixed(1)} MiB` : value >= 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${value} B`; }
-function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+import { errorMessage } from "../error-message";

@@ -1,0 +1,54 @@
+import {build} from "vite";
+import react from "@vitejs/plugin-react";
+import {mkdir,writeFile} from "node:fs/promises";
+import {spawn} from "node:child_process";
+import {resolve} from "node:path";
+import {createRequire} from "node:module";
+const require=createRequire(import.meta.url),output=resolve("out/artifact-preview");
+await mkdir(output,{recursive:true});
+await build({configFile:false,define:{"process.env.NODE_ENV":JSON.stringify("production")},plugins:[react()],build:{emptyOutDir:false,outDir:output,lib:{entry:resolve("scripts/fixtures/artifact-preview.tsx"),name:"ArtifactFixture",formats:["es"],fileName:()=>"fixture.js"}}});
+await writeFile(resolve(output,"index.html"),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="grok-build-desktop.css"><div id="root"></div><script type="module" src="fixture.js"></script>');
+await writeFile(resolve(output,"main.cjs"),String.raw`
+const {app,BrowserWindow,protocol}=require("electron");
+protocol.registerSchemesAsPrivileged([{scheme:"grok-media",privileges:{standard:true,secure:true,supportFetchAPI:true}}]);const path=require("node:path");
+app.setPath("userData",path.join(__dirname,"profile"));
+const wait=()=>new Promise(r=>setTimeout(r,140));const assert=(v,m)=>{if(!v)throw Error(m)};
+app.whenReady().then(async()=>{
+ protocol.handle("grok-media",()=>new Response(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jV9sAAAAASUVORK5CYII=","base64"),{headers:{"content-type":"image/png"}}));
+ const win=new BrowserWindow({show:false,width:1366,height:768,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
+ const run=s=>win.webContents.executeJavaScript(s,true);
+ try{
+  await win.loadFile(path.join(__dirname,"index.html"));await wait();win.webContents.debugger.attach("1.3");
+  const click=async(selector)=>{const p=await run('(()=>{const r=document.querySelector('+JSON.stringify(selector)+').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()');for(const type of ["mousePressed","mouseReleased"])await win.webContents.debugger.sendCommand("Input.dispatchMouseEvent",{type,...p,button:"left",clickCount:1});await wait()};
+  await click(".generated-image-button");
+  assert(await run('!!document.querySelector(".artifact-preview-pane") && !document.querySelector(".image-lightbox")'),"image did not open right pane");
+  assert(await run('document.querySelector(".artifact-preview-body img").naturalWidth>0'),"original image failed decoding");
+  await click(".artifact-preview-pane [aria-haspopup=dialog]");
+  assert(await run('!!document.querySelector("[role=dialog]") && document.querySelectorAll(".artifact-preview-body img").length===1'),"expanded view duplicated original image");
+  for(const type of ["keyDown","keyUp"])await win.webContents.debugger.sendCommand("Input.dispatchKeyEvent",{type,key:"Escape",code:"Escape"});await wait();
+  assert(await run('!document.querySelector("[role=dialog]") && document.activeElement.textContent==="扩大"'),"Escape did not restore expand focus");
+  await run('Array.from(document.querySelectorAll(".artifact-preview-actions button")).find(x=>x.textContent==="返回来源会话").click()');
+  assert(await run('fixture.state().parents[0]==="parent|D:/fixture"'),"source identity changed");
+  await run('fixture.file("old.txt")');await wait();await run('fixture.file("new.txt")');await wait();
+  await run('fixture.resolve("new.txt","NEW_RESULT");fixture.resolve("old.txt","STALE_RESULT")');await wait();
+  assert(await run('document.body.textContent.includes("NEW_RESULT")&&!document.body.textContent.includes("STALE_RESULT")'),"old response overwrote new artifact");
+  await run('Array.from(document.querySelectorAll(".artifact-preview-actions button")).find(x=>x.textContent==="固定为标签").click()');
+  assert(await run('fixture.state().pins[0]==="D:/fixture|new.txt"'),"pin used wrong file");
+  await run('fixture.file("missing.txt")');await wait();await run('fixture.fail("missing.txt")');await wait();
+  assert(await run('document.body.textContent.includes("文件不存在")&&!document.body.textContent.includes("NEW_RESULT")'),"failed load retained previous content");
+  win.webContents.setZoomFactor(1.5);await wait();
+  assert(await run('(()=>{const r=document.querySelector("[aria-label=关闭产物预览]").getBoundingClientRect();return r.right<=innerWidth&&r.left>=0})()'),"close control clipped at 150%");
+  await run('fixture.media()');await wait();
+  await run('Array.from(document.querySelectorAll(".artifact-preview-actions button")).find(x=>x.textContent==="固定为标签").click()');await wait();
+  assert(await run('!!document.querySelector(".pinned-media") && document.querySelector(".pinned-media img").getAttribute("src").includes("session=parent") && fixture.state().pins[1].startsWith("grok-preview:")'),"media pin lost source identity or failed to open");
+  await run('window.addEventListener("grok:artifact-source",e=>window.returnedSource=e.detail)');
+  await run('Array.from(document.querySelectorAll(".pinned-media button")).find(x=>x.textContent==="返回来源会话").click()');
+  assert(await run('returnedSource.sessionId==="parent"&&returnedSource.cwd==="D:/fixture"'),"media return targeted another conversation");
+  console.log("ARTIFACT_PREVIEW_PASSED media sidebar, single original, expand/Esc/focus, source/pin identity, stale/error reads, zoom");
+  app.exit(0);
+ }catch(error){console.error(error.stack);app.exit(1)}
+});
+`);
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+const child=spawn(require("electron"),[resolve(output,"main.cjs")],{windowsHide:true,stdio:"inherit",env});
+const timer=setTimeout(()=>child.kill(),60000);child.on("exit",code=>{clearTimeout(timer);process.exitCode=code??1});

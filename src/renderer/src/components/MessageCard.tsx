@@ -1,12 +1,14 @@
+import { scopedMediaUrl } from "../../../shared/media-scope";
 import { McpElicitationCard } from "./McpElicitationCard";
 import { isExpiredInteractionError } from "./interaction-utils";
-import { lazy, memo, Suspense, useEffect, useState } from "react";
+import { lazy, memo, Suspense, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import type { EditorDocument, EditorOpenResult, NavigationIntent, TurnFailure } from "../../../shared/types";
+import type { EditorDocument, EditorOpenResult, NavigationIntent, ToolCallState, TurnFailure } from "../../../shared/types";
 import type { UiMessage } from "../store";
 import { summarizeTurnFailure } from "../../../shared/turn-failure";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 import { useWorkbenchStore } from "../workbench-store";
+import { MediaPreviewContext } from "../artifact-preview";
 
 const DiffEditor = lazy(async () => {
   (await import("../monaco")).configureMonaco();
@@ -14,14 +16,14 @@ const DiffEditor = lazy(async () => {
   return { default: module.DiffEditor };
 });
 
-export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, showThinking, expandTools, onResolved, onRetry, onNavigate, onDiagnose }: { message: UiMessage; sessionId: string; navigationRoot?: string; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onDiagnose?: (failure: TurnFailure) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
+export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, allowFileNavigation = true, showThinking, expandTools, onResolved, onRetry, onNavigate, onDiagnose }: { message: UiMessage; sessionId: string; navigationRoot?: string; allowFileNavigation?: boolean; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onDiagnose?: (failure: TurnFailure) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
   // Resolved interactions remain in the durable conversation projection as an
   // audit event, but their full decision surface must disappear immediately.
   // Keeping a disabled Plan/permission/question card on screen made a
   // successful response look pending and invited duplicate clicks.
   if (isResolvedInteraction(message)) return null;
   if (message.kind === "thought" && !showThinking) return <div className="thinking-placeholder"><span /> 思考过程</div>;
-  if (message.kind === "user") return <UserMessageCard message={message} onRetry={onRetry} />;
+  if (message.kind === "user") return <UserMessageCard message={message} sessionId={sessionId} onRetry={onRetry} />;
   if (message.kind === "interjection") return <div className="message-row interjection"><div className="bubble interjection-bubble"><small>插入当前回合</small><LazyMarkdownView text={message.text} /></div></div>;
   if (message.kind === "assistant") return <div className="message-row assistant"><div className="assistant-body"><LazyMarkdownView text={message.text} /></div></div>;
   if (message.kind === "thought") return <div className="thought-card"><LazyMarkdownView text={message.text} /></div>;
@@ -31,11 +33,11 @@ export const MessageCard = memo(function MessageCard({ message, sessionId, navig
     return <div className="retry-state-card"><span className="process-dot running" /><strong>上游请求正在重试</strong><span>{[count, wait, message.reason].filter(Boolean).join(" · ")}</span></div>;
   }
   if (message.kind === "error") return <ErrorCard text={message.text} failure={message.failure} onDiagnose={onDiagnose} />;
-  if (message.kind === "media") return <GeneratedMediaGallery messages={[message]} />;
+  if (message.kind === "media") return <GeneratedMediaGallery messages={[message]} sessionId={sessionId} />;
   if (message.kind === "recovery") return <div className={`history-recovery-card ${message.status}`}><strong>{message.status === "recovered" ? "历史内容已恢复" : "历史内容无法可靠恢复"}</strong><span>{message.text}</span></div>;
   if (message.kind === "recap") return <details className="session-recap-card"><summary>会话回顾</summary><LazyMarkdownView text={message.text}/></details>;
   if (message.kind === "compact") return <div className={`compact-status-card ${message.status}`}><strong>{message.status === "started" ? "正在压缩上下文" : message.status === "completed" ? "上下文压缩完成" : message.status === "cancelled" ? "上下文压缩已取消" : "上下文压缩失败"}</strong>{message.text && <span>{message.text}</span>}</div>;
-  if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} onNavigate={onNavigate} />;
+  if (message.kind === "tool") return <ToolCard message={message} open={expandTools} sessionId={sessionId} navigationRoot={navigationRoot} allowFileNavigation={allowFileNavigation} onNavigate={onNavigate} />;
   if (message.kind === "permission") return <PermissionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "question") return <QuestionCard message={message} sessionId={sessionId} onResolved={onResolved} />;
   if (message.kind === "mcp-elicitation") return <McpElicitationCard message={message} sessionId={sessionId} onResolved={onResolved} />;
@@ -48,7 +50,7 @@ export function isResolvedInteraction(message: UiMessage): boolean {
     && message.resolved === true;
 }
 
-export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<UiMessage, { kind: "media" }>> }): React.JSX.Element {
+export function GeneratedMediaGallery({ messages, sessionId }: { sessionId?: string; messages: Array<Extract<UiMessage, { kind: "media" }>> }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? messages : messages.slice(0, 4);
   const images = messages.filter((message) => message.media === "image").length;
@@ -56,34 +58,36 @@ export function GeneratedMediaGallery({ messages }: { messages: Array<Extract<Ui
   const label = [images ? `${images} 张图片` : "", videos ? `${videos} 个视频` : ""].filter(Boolean).join("、");
   return <div className={`media-card result-media media-gallery ${messages.length === 1 ? "single" : "multiple"}`}>
     <header><strong>{messages.length === 1 ? messages[0]?.media === "image" ? "生成图片" : "生成视频" : `媒体结果 · ${label}`}</strong><span>最终结果</span></header>
-    <div className="media-result-grid">{visible.map((message) => <GeneratedMediaItem key={message.id} message={message} />)}</div>
+    <div className="media-result-grid">{visible.map((message) => <GeneratedMediaItem key={message.id} message={message} sessionId={sessionId} />)}</div>
     {messages.length > 4 && <button type="button" className="media-gallery-toggle" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{expanded ? "收起媒体结果" : `再显示 ${messages.length - 4} 项`}</button>}
   </div>;
 }
 
-function GeneratedMediaItem({ message }: { message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
+function GeneratedMediaItem({ message, sessionId }: { sessionId?: string; message: Extract<UiMessage, { kind: "media" }> }): React.JSX.Element {
   const [preview, setPreview] = useState(false);
-  const src = message.isData ? `data:${message.mimeType || "image/png"};base64,${message.source}` : toFileUrl(message.source);
+  const previewMedia = useContext(MediaPreviewContext);
+  const openPreview = (): void => { if(sessionId && previewMedia?.({kind:"media",sessionId,messageId:message.id,source:message.source,media:message.media,isData:message.isData,mimeType:message.mimeType}))return;setPreview(true); };
+  const src = message.isData ? `data:${message.mimeType || "image/png"};base64,${message.source}` : scopedMediaUrl(toFileUrl(message.source),sessionId);
   const thumbnailSrc = message.isData ? src : toThumbnailUrl(src);
   const [displaySrc, setDisplaySrc] = useState(thumbnailSrc);
   const [unavailable, setUnavailable] = useState(!src);
   useEffect(() => { setDisplaySrc(thumbnailSrc); setUnavailable(!src); setPreview(false); }, [src, thumbnailSrc]);
-  const pathActions = !message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>;
+  const pathActions = !message.isData && <button onClick={() => void window.grokDesktop.openMedia(src)}>打开原文件</button>;
   return <div className="media-result-item">
     {unavailable
       ? <div className="media-unavailable"><strong>{message.media === "image" ? "图片文件不可用" : "视频文件不可用"}</strong><span>历史缓存可能已被清理或原文件已移动。不会再显示损坏的图片占位。</span></div>
       : message.media === "image"
-        ? <button className="generated-image-button" onClick={() => setPreview(true)}><img src={displaySrc} alt="Grok 生成图片" onLoad={() => setUnavailable(false)} onError={() => displaySrc !== src ? setDisplaySrc(src) : setUnavailable(true)} /></button>
+        ? <button className="generated-image-button" onClick={openPreview}><img src={displaySrc} alt="Grok 生成图片" onLoad={() => setUnavailable(false)} onError={() => displaySrc !== src ? setDisplaySrc(src) : setUnavailable(true)} /></button>
         : <video src={src} controls onError={() => setUnavailable(true)} />}
     <div className="media-inline-actions">
       {!unavailable && message.media === "image" && <><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button></>}
       {pathActions}
     </div>
-    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openMedia(message.source)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
+    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openMedia(src)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
   </div>;
 }
 
-function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { kind: "user" }>; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void }): React.JSX.Element {
+function UserMessageCard({ message, onRetry, sessionId }: { sessionId?: string; message: Extract<UiMessage, { kind: "user" }>; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void }): React.JSX.Element {
   const [preview, setPreview] = useState<{ src: string; name: string }>();
   const attachments = message.attachments ?? [];
   const images = attachments.filter((attachment) => attachment.kind === "image");
@@ -91,7 +95,7 @@ function UserMessageCard({ message, onRetry }: { message: Extract<UiMessage, { k
   return <div className="message-row user">
     <div className="bubble user-bubble">
       {images.length > 0 && <div className={`user-attachment-grid count-${Math.min(4, images.length)}`}>{images.map((attachment) => {
-        const src = attachment.source ? (attachment.isData ? `data:${attachment.mimeType || "image/png"};base64,${attachment.source}` : toFileUrl(attachment.source)) : "";
+        const src = attachment.source ? (attachment.isData ? `data:${attachment.mimeType || "image/png"};base64,${attachment.source}` : scopedMediaUrl(toFileUrl(attachment.source),sessionId)) : "";
         return <UserImageAttachmentPreview key={attachment.id} attachment={attachment} src={src} thumbnailSrc={attachment.isData ? src : toThumbnailUrl(src)} onPreview={() => setPreview({ src, name: attachment.name })}/>;
       })}</div>}
       {files.length > 0 && <div className="user-file-previews">{files.map((attachment) => <div className="user-file-preview" key={attachment.id}><span aria-hidden="true">{attachment.kind === "folder" ? "▣" : "▤"}</span><span><strong>{attachment.name}</strong><small>{attachment.availability === "missing" ? "源文件不可用" : formatBytes(attachment.size)}</small></span></div>)}</div>}
@@ -126,7 +130,7 @@ function UserImageAttachmentPreview({ attachment, src, thumbnailSrc, onPreview }
   </div>;
 }
 
-function ToolCard({ message, open, sessionId, navigationRoot, onNavigate }: { message: Extract<UiMessage, { kind: "tool" }>; open: boolean; sessionId: string; navigationRoot?: string; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element {
+function ToolCard({ message, open, sessionId, navigationRoot, allowFileNavigation = true, onNavigate }: { message: Extract<UiMessage, { kind: "tool" }>; open: boolean; sessionId: string; navigationRoot?: string; allowFileNavigation?: boolean; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element {
   const tool = message.tool;
   const hasDiff = typeof tool.oldText === "string" && typeof tool.newText === "string";
   const [expanded, setExpanded] = useState(open);
@@ -156,9 +160,9 @@ function ToolCard({ message, open, sessionId, navigationRoot, onNavigate }: { me
     } catch (error) { setNavigationError(error instanceof Error ? error.message : String(error)); }
   };
   return <details className={`tool-card ${tool.status}`} open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-    <summary><span className="tool-icon">{tool.kind === "computer_use" ? "◉" : "›_"}</span><span>{tool.title}</span>{typeof tool.readOnly === "boolean" && <span className="tool-access" title="由 Grok Build CLI 声明的工具访问性质">{tool.readOnly ? "只读" : "可写"}</span>}<span className="tool-status">{statusLabel(tool.status)}</span></summary>
+    <summary><span className="tool-icon">{tool.source === "computer-host" && tool.computerEvidence !== "unknown" || tool.serverName?.toLowerCase() === "grok_desktop_computer" || tool.toolName?.toLowerCase().startsWith("grok_desktop_computer__") ? "◉" : "›_"}</span><span>{tool.title}</span>{tool.computerEvidence && <span className="tool-access">{computerEvidenceLabel(tool.computerEvidence)}</span>}{typeof tool.readOnly === "boolean" && <span className="tool-access" title="由 Grok Build CLI 声明的工具访问性质">{tool.readOnly ? "只读" : "可写"}</span>}<span className="tool-status">{statusLabel(tool.status)}</span></summary>
     {expanded && <div className="tool-detail">
-      {locations.length > 0 && <div className="tool-locations">{locations.map((location) => <button key={`${location.path}:${location.line ?? 1}`} title={location.path} onClick={() => void openLocation(location.path, location.line)}>在编辑器打开 {shortLocation(location.path, location.line)}</button>)}</div>}
+      {locations.length > 0 && <div className="tool-locations">{locations.map((location) => <button key={`${location.path}:${location.line ?? 1}`} disabled={!allowFileNavigation} title={allowFileNavigation ? location.path : "子会话执行目录尚未核验，暂不跳转文件"} onClick={() => void openLocation(location.path, location.line)}>在编辑器打开 {shortLocation(location.path, location.line)}</button>)}</div>}
       {navigationError && <div className="error-text">{navigationError}</div>}
       {tool.command && <pre className="command">{tool.command}</pre>}{tool.output && <pre className="output">{tool.output}</pre>}{tool.error && <div className="error-text">{tool.error}</div>}
       {images.map((image, index) => <img className="computer-screenshot" key={index} src={`data:${image.mimeType};base64,${image.data}`} alt="Computer Use 窗口截图" />)}
@@ -325,6 +329,7 @@ export function redactErrorText(value: string): string {
 }
 
 function statusLabel(status: string): string { return status === "completed" ? "完成" : status === "failed" ? "失败" : status === "in_progress" ? "运行中" : "等待"; }
+function computerEvidenceLabel(value: NonNullable<ToolCallState["computerEvidence"]>): string { return ({ attempted: "Computer 尝试", observed: "Computer 观察", operated: "Computer 已操作", controlled: "Computer 控制状态变更", failed: "Computer 失败", unknown: "Computer 状态未知" })[value]; }
 function permissionLabel(kind?: string): string { return kind === "allow_always" ? "始终允许" : kind === "allow_once" ? "仅本次允许" : /reject|deny/.test(kind || "") ? "拒绝" : "确认"; }
 function localizedPermissionName(name?: string, kind?: string): string {
   if (/^(?:yes|allow|proceed)/i.test(name || "") || /allow/.test(kind || "")) return permissionLabel(kind || "allow_once");

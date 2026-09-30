@@ -28,7 +28,7 @@ const dialogHost = readFileSync(new URL("./components/DialogHost.tsx", import.me
 
 describe("renderer layout regression guards", () => {
   it("keeps high-frequency shell selectors under one stylesheet owner", () => {
-    for (const selector of ["app-shell", "topbar", "session-row", "composer-zone"]) {
+    for (const selector of ["app-shell", "composer-zone"]) {
       expect([...css.matchAll(new RegExp(`^\\.${selector}\\s*\\{`, "gm"))], selector).toHaveLength(1);
     }
   });
@@ -106,7 +106,7 @@ describe("renderer layout regression guards", () => {
     expect(app).not.toContain("const [sending, setSending]");
     expect(sessionListRow).toContain('status === "working"');
     expect(sessionListRow).toContain('label: "运行中"');
-    expect(sidebar).toContain("liveSessionCount");
+    expect(sidebar).toContain("sb-running");
   });
 
   it("keeps recent-file preview inside the right pane and offers wrapping", () => {

@@ -3,3 +3,7 @@
 @import "./styles/shell.css";
 @import "./styles/workbenches.css";
 @import "./styles/conversation.css";
+@import "./styles/interactions.css";
+@import "./styles/ui.css";
+@import "./styles/frame.css";
+.media-output-path { overflow-wrap: anywhere; user-select: text; font-size: 12px; }

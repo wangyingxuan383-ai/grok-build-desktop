@@ -58,8 +58,8 @@ export function CliUpdateControls(): React.JSX.Element {
     </select></label>
     <div className="button-row">
       <button disabled={locked} onClick={() => void run("update")}>{state.recovery ? "重新预览并升级 CLI" : "预览并更新 CLI"}</button>
+      <button disabled={locked} onClick={() => void run("verify")}>验证当前 CLI</button>
       {state.recovery && <>
-      <button disabled={locked} onClick={() => void run("verify")}>重新验证当前 CLI</button>
       <button disabled={locked} onClick={() => void run("rollback")}>回滚到 {state.recovery.previousVersion}</button>
     </>}</div>
     {state.recovery && <p>上次目标 {state.recovery.targetVersion}；回滚点 {state.recovery.previousVersion} 为本次连续升级前版本，不是固定版本。</p>}

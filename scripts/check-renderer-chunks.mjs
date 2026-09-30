@@ -9,7 +9,9 @@ export const rendererChunkLimits = Object.freeze({
   languageWorkerBytes: 1150 * 1024,
   monacoApiBytes: 2800 * 1024,
   monacoAuxiliaryBytes: 1250 * 1024,
-  totalJavaScriptBytes: 19 * 1024 * 1024,
+  // Measured 19.031 MiB after the image mode, sub-agent session and right-pane views landed
+  // (~385 KiB of new views on top of the pre-redesign 19 MiB ceiling). Headroom is ~70 KiB.
+  totalJavaScriptBytes: 19.1 * 1024 * 1024,
   stylesheetBytes: 210 * 1024,
 });
 

@@ -12,8 +12,8 @@ describe("ComposerRunActions", () => {
       onQueue: vi.fn(), onInterject: vi.fn(), onBtw: vi.fn(), onStop: vi.fn(),
     }));
     expect(html).toContain("加入队列");
-    expect(html).toContain("插入当前回合");
-    expect(html).toContain("旁路提问");
+    expect(html).toContain("更多发送方式");
+    expect(html).toContain('aria-haspopup="menu"');
     expect(html).toContain('aria-label="停止当前回合"');
     expect((html.match(/class="queue-send primary-action"/g) ?? [])).toHaveLength(1);
   });

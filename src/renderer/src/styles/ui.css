@@ -1,0 +1,127 @@
+/*
+ * Shared UI primitives. Everything here reads only from tokens.css so a
+ * theme change (built-in or custom) restyles every component at once.
+ * Radius steps down with nesting: card 12 -> control 8 -> menu row 6.
+ */
+body { font-family: var(--font-sans); font-size: var(--text-base); line-height: 1.5; color: var(--color-fg); }
+.ui-spin { animation: ui-spin 1s linear infinite; }
+@keyframes ui-spin { to { transform: rotate(360deg); } }
+
+/* ---- Buttons ---- */
+.ui-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg);
+  background: transparent; color: var(--color-fg);
+  font: inherit; font-size: var(--text-caption); line-height: 1; white-space: nowrap; cursor: pointer;
+  transition: background-color .12s, border-color .12s, opacity .12s;
+}
+.ui-btn-sm { height: var(--control-sm); padding: 0 8px; }
+.ui-btn-md { height: var(--control-md); padding: 0 10px; }
+.ui-btn-lg { height: var(--control-lg); padding: 0 14px; font-size: var(--text-base); }
+.ui-btn:hover:not(:disabled) { background: var(--color-hover); }
+.ui-btn:disabled { opacity: .45; cursor: default; }
+.ui-btn-primary { background: var(--color-primary); border-color: transparent; color: var(--color-primary-fg); font-weight: 600; }
+.ui-btn-primary:hover:not(:disabled) { background: var(--color-primary); opacity: .88; }
+.ui-btn-ghost { border-color: transparent; color: var(--color-fg-subtle); }
+.ui-btn-ghost:hover:not(:disabled) { color: var(--color-fg); }
+.ui-btn-danger { color: var(--color-danger); border-color: color-mix(in srgb, var(--color-danger) 45%, transparent); }
+.ui-btn-danger:hover:not(:disabled) { background: var(--color-danger-soft); }
+.ui-btn-link { height: auto; padding: 0; border: 0; color: var(--color-accent); }
+.ui-btn-link:hover:not(:disabled) { background: none; text-decoration: underline; }
+.ui-btn-label { overflow: hidden; text-overflow: ellipsis; }
+
+.ui-icon-btn {
+  display: inline-grid; place-items: center; flex: none; padding: 0;
+  border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtle); cursor: pointer;
+}
+.ui-icon-btn-sm { width: var(--control-sm); height: var(--control-sm); }
+.ui-icon-btn-md { width: var(--control-md); height: var(--control-md); }
+.ui-icon-btn-lg { width: var(--control-lg); height: var(--control-lg); }
+.ui-icon-btn:hover:not(:disabled) { background: var(--color-hover); color: var(--color-fg); }
+.ui-icon-btn.is-active { background: var(--color-selected); color: var(--color-fg); }
+.ui-icon-btn:disabled { opacity: .4; cursor: default; }
+
+/* ---- Badge / Kbd / Empty ---- */
+.ui-badge { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: var(--radius-md); font-size: var(--text-xs); font-weight: 600; background: var(--color-selected); color: var(--color-fg-subtle); white-space: nowrap; }
+.ui-badge-accent { background: var(--color-accent-soft); color: var(--color-accent); }
+.ui-badge-success { background: var(--color-success-soft); color: var(--color-success); }
+.ui-badge-warning { background: var(--color-warning-soft); color: var(--color-warning); }
+.ui-badge-danger { background: var(--color-danger-soft); color: var(--color-danger); }
+.ui-kbd { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-fg-subtlest); }
+.ui-empty { display: grid; justify-items: center; gap: 6px; padding: 32px 16px; text-align: center; color: var(--color-fg-subtle); }
+.ui-empty strong { color: var(--color-fg); font-weight: 600; }
+.ui-empty p { margin: 0; max-width: 34em; font-size: var(--text-caption); }
+
+/* ---- Segmented control ---- */
+.ui-seg { display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 2px; padding: 3px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-hover); }
+.ui-seg button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 26px; padding: 0 10px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-fg-subtle); font: inherit; font-size: var(--text-caption); cursor: pointer; white-space: nowrap; }
+.ui-seg button:hover { color: var(--color-fg); }
+.ui-seg button[aria-pressed="true"] { background: var(--color-frame); color: var(--color-fg); font-weight: 600; box-shadow: 0 0 0 1px var(--color-border), 0 1px 2px #00000040; }
+.ui-seg-sm button { height: 22px; padding: 0 8px; font-size: var(--text-sm); }
+
+/* ---- Form fields ---- */
+.ui-input, .ui-select, .ui-textarea {
+  width: 100%; min-width: 0; height: var(--control-lg); padding: 0 10px;
+  border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg);
+  background: var(--color-input); color: var(--color-fg); font: inherit; font-size: var(--text-base);
+}
+.ui-textarea { height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; }
+.ui-input::placeholder, .ui-textarea::placeholder { color: var(--color-fg-subtlest); }
+.ui-input:hover, .ui-select:hover, .ui-textarea:hover { border-color: color-mix(in srgb, var(--color-border-strong) 60%, var(--color-fg-subtle)); }
+.ui-input:focus-visible, .ui-select:focus-visible, .ui-textarea:focus-visible { outline: none; border-color: var(--color-border-focus); }
+.ui-field { display: grid; gap: 6px; font-size: var(--text-caption); color: var(--color-fg-subtle); }
+.ui-field > span:first-child { color: var(--color-fg); font-weight: 500; }
+
+/* ---- Overlays: menu / popover / tooltip / dialog ---- */
+.ui-menu, .ui-popover {
+  z-index: 1100; min-width: 200px; max-width: min(360px, calc(100vw - 16px));
+  max-height: var(--radix-dropdown-menu-content-available-height, calc(100vh - 24px)); overflow: auto;
+  padding: 4px; border-radius: var(--radius-lg); background: var(--color-popover); color: var(--color-fg);
+  box-shadow: var(--shadow-overlay);
+}
+.ui-popover { padding: 12px; border-radius: var(--radius-xl); }
+.ui-menu-item {
+  display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 8px; margin-bottom: 2px;
+  border-radius: var(--radius-md); outline: none; cursor: default; font-size: var(--text-caption); user-select: none;
+}
+.ui-menu-item:last-child { margin-bottom: 0; }
+.ui-menu-item > span:not(.ui-menu-tail) { flex: 1; overflow-wrap: anywhere; }
+.ui-menu-item small { display: block; color: var(--color-fg-subtle); font-size: var(--text-xs); }
+.ui-menu-item[data-highlighted], .ui-menu-item[data-state="open"] { background: var(--color-hover); }
+.ui-menu-item[data-disabled] { opacity: .45; }
+.ui-menu-tail { margin-left: auto; color: var(--color-fg-subtle); font-size: var(--text-xs); }
+.ui-danger { color: var(--color-danger); }
+.ui-menu-sep { height: 1px; margin: 4px 6px; background: var(--color-border); }
+
+.ui-tooltip { z-index: 1200; max-width: 320px; padding: 5px 8px; border-radius: var(--radius-md); background: var(--color-popover); color: var(--color-fg); box-shadow: var(--shadow-overlay); font-size: var(--text-sm); }
+
+.ui-dialog-overlay { position: fixed; inset: 0; z-index: 1000; background: #0000006e; }
+.ui-dialog {
+  position: fixed; left: 50%; top: 16%; transform: translateX(-50%); z-index: 1001;
+  width: min(560px, calc(100vw - 32px)); max-height: 76vh; overflow: auto; padding: 20px;
+  border-radius: var(--radius-2xl); background: var(--color-popover); color: var(--color-fg); box-shadow: var(--shadow-overlay);
+}
+.ui-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.ui-dialog h2 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.ui-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+:where(button, input, textarea, select, [tabindex]):focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ---- Sub-agent card (inline in the conversation) ---- */
+.sa-list { display: grid; gap: 8px; margin: 10px 0; }
+.sa-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-xl); background: var(--color-card); }
+.sa-card > header { display: flex; align-items: center; gap: 10px; }
+.sa-mark { display: grid; place-items: center; flex: none; width: 28px; height: 28px; border-radius: var(--radius-lg); background: var(--color-selected); color: var(--color-fg-subtle); }
+.sa-card.running .sa-mark { background: var(--color-accent-soft); color: var(--color-accent); }
+.sa-card.failed .sa-mark { background: var(--color-danger-soft); color: var(--color-danger); }
+.sa-head { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.sa-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-base); font-weight: 600; }
+.sa-badges { display: flex; flex-wrap: wrap; gap: 4px; }
+.sa-metrics { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--color-fg-subtlest); font-size: var(--text-sm); }
+.sa-result { color: var(--color-fg-subtle); font-size: var(--text-caption); }
+.sa-result p { display: -webkit-box; margin: 0; overflow: hidden; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.sa-result.expanded { max-height: 360px; overflow: auto; color: var(--color-fg); }
+.sa-toggle { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.sa-toggle:hover { text-decoration: underline; }
+.sa-waiting { margin: 0; color: var(--color-fg-subtlest); font-size: var(--text-caption); }
