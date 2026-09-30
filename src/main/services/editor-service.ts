@@ -24,7 +24,12 @@ export class EditorService {
     if (requestedPath.includes("\0")) throw new Error("路径包含无效字符");
     // Explicit absolute file links may be viewed without changing the project.
     // Relative traversal and in-project junction escapes retain the old policy.
-    const outside = isAbsolute(requestedPath) && !isPathInside(root, resolve(requestedPath));
+    const requested = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(root, requestedPath);
+    const canonical = await realpath(requested).catch(() => undefined);
+    // The original workspace spelling can be a Windows 8.3 alias. A request syntactically
+    // inside that spelling must still go through the junction boundary check.
+    const insideSpelling = isPathInside(resolve(workspacePath), requested) || isPathInside(root, requested);
+    const outside = isAbsolute(requestedPath) && !insideSpelling && Boolean(canonical && !isPathInside(root, canonical));
     const resolved = outside
       ? { root, path: await realpath(requestedPath), relativePath: requestedPath }
       : await resolveExistingWorkspacePath(root, requestedPath, false);

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import iconv from "iconv-lite";
@@ -7,6 +7,16 @@ import { EditorService } from "./editor-service";
 import { WorkspaceTreeService } from "./workspace-tree-service";
 
 describe("workspace tree and editor services", () => {
+  it("keeps an aliased workspace editable and rejects an in-project junction escape", async () => {
+    const root=await mkdtemp(join(tmpdir(),"grok-editor-alias-"));
+    const workspace=join(root,"workspace"), outside=join(root,"outside"), alias=join(root,"alias");
+    await mkdir(workspace);await mkdir(outside);await writeFile(join(workspace,"inside.txt"),"inside");await writeFile(join(outside,"outside.txt"),"outside");
+    await symlink(workspace,alias,process.platform==="win32"?"junction":"dir");
+    await symlink(outside,join(workspace,"escape"),process.platform==="win32"?"junction":"dir");
+    const service=new EditorService();
+    expect((await service.open(alias,join(alias,"inside.txt"))).document).toMatchObject({editable:true,relativePath:"inside.txt"});
+    await expect(service.open(alias,join(alias,"escape","outside.txt"))).rejects.toThrow("超出当前工作区");
+  });
   it("opens explicitly selected absolute outside files read-only while writes remain scoped", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-view-outside-"));
     const workspace = join(root, "project");
@@ -15,7 +25,7 @@ describe("workspace tree and editor services", () => {
     await writeFile(path, "outside log");
     const service = new EditorService();
     const result = await service.open(workspace, path);
-    expect(result.document).toMatchObject({ editable: false, content: "outside log", workspacePath: workspace });
+    expect(result.document).toMatchObject({ editable: false, content: "outside log", workspacePath: await realpath(workspace) });
     await expect(service.save({workspacePath: workspace,path,content:"changed",encoding:"utf8",lineEnding:"lf",expectedHash:result.document!.hash,expectedModifiedAt:result.document!.modifiedAt})).rejects.toThrow("超出当前工作区");
     await expect(service.open(workspace, "../log.txt")).rejects.toThrow("超出当前工作区");
     expect(await readFile(path, "utf8")).toBe("outside log");

@@ -225,7 +225,8 @@ try {
   await evaluate(`(() => { const input=document.querySelector('.composer textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'0.8.1 重启后仍存在的草稿'); input.dispatchEvent(new Event('input',{bubbles:true})); return input.value; })()`);
   await sleep(700);
   await reloadFixture();
-  await waitFor(() => evaluate("Boolean(document.querySelector('.sb-session.draft'))"), "Persisted draft row was lost after restart");
+  try { await waitFor(() => evaluate("Boolean(document.querySelector('.sb-session.draft'))"), "Persisted draft row was lost after restart"); }
+  catch (error) { console.error("Draft restore evidence", JSON.stringify(await evaluate(`(async()=>({drafts:await window.grokDesktop.listDrafts(),projects:await window.grokDesktop.discoverWorkspaces(),visible:document.body.innerText.slice(0,1200)}))()`))); throw error; }
   await evaluate("document.querySelector('.sb-session.draft .session-open')?.click()");
   await waitFor(() => evaluate("document.querySelector('.composer textarea')?.value === '0.8.1 重启后仍存在的草稿'"), `Persisted draft body was not restored after restart: ${JSON.stringify(await evaluate(`({ value: document.querySelector('.composer textarea')?.value, rows: Array.from(document.querySelectorAll('.sb-session.draft')).map((node) => node.textContent), error: document.querySelector('.error-toast')?.textContent || '' })`))}`);
   if ((await evaluate("document.querySelectorAll('.sb-project .sb-session:not(.draft)').length")) !== historyCountBeforeDraft) throw new Error('Restoring a local draft created or removed a CLI session');
