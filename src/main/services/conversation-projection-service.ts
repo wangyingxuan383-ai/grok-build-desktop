@@ -1,4 +1,5 @@
 import { createReadStream } from "node:fs";
+import { inspectNativeSession } from "./native-session-history";
 import { copyFile, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -114,6 +115,16 @@ export class ConversationProjectionService {
     await this.append(event.sessionId, enforceEventLimit(sanitizeEvent(event), this.options.maxEventBytes ?? 2 * 1024 * 1024));
   }
 
+  /** Inspect child messages without reconciling permissions, interrupting queues or migrating history. */
+  async inspect(sessionId: string): Promise<ConversationProjection | undefined> {
+    return this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
+      const loaded = await this.restoreRecordsWithoutLock(sessionId, false);
+      if (!loaded.records.length) return undefined;
+      return { version: 2, sessionId, updatedAt: loaded.snapshot?.updatedAt ?? new Date().toISOString(),
+        events: visibleProjectionEvents(sessionId, loaded.records, loaded.truncatedEventCount) };
+    }));
+  }
+
   async restore(sessionId: string): Promise<ConversationProjection | undefined> {
     await this.flush(sessionId);
     return this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
@@ -227,8 +238,13 @@ export class ConversationProjectionService {
     }));
   }
 
+  /** Reads the native file without persisting a projection or resuming the session. */
+  async inspectNative(sessionId: string, cwd: string): Promise<ConversationProjection | undefined> {
+    return inspectNativeSession(this.sessionsRoot, cwd, sessionId);
+  }
+
   /**
-   * One-time, read-only recovery for pre-0.6.16 conversations whose ACP replay
+   * One-time recovery for pre-0.6.16 conversations whose ACP replay
    * has metrics but no visible assistant blocks. Only the strict
    * user_message -> agent_message sequence is accepted; ambiguous orphan
    * chunks are deliberately not assigned to a turn.
@@ -408,12 +424,12 @@ export class ConversationProjectionService {
     }
   }
 
-  private async restoreRecordsWithoutLock(sessionId: string): Promise<LoadedProjectionRecords> {
+  private async restoreRecordsWithoutLock(sessionId: string, hydrateState = true): Promise<LoadedProjectionRecords> {
     const { snapshotPath, recoveryPath, journalPath } = this.paths(sessionId);
     const snapshotLimit = this.options.maxSnapshotFileBytes ?? MAX_SNAPSHOT_FILE_BYTES;
     const snapshot = await readProjectionSnapshot(snapshotPath, sessionId, snapshotLimit)
       ?? await readProjectionSnapshot(recoveryPath, sessionId, snapshotLimit);
-    if (snapshot) {
+    if (snapshot && hydrateState) {
       const memory = this.states.get(sessionId);
       this.states.set(sessionId, {
         runtime: memory?.runtime ?? snapshot.runtime,

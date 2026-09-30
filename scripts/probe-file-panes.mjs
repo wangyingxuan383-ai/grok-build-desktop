@@ -1,0 +1,32 @@
+import {build} from "vite";
+import react from "@vitejs/plugin-react";
+import {mkdir,writeFile} from "node:fs/promises";
+import {spawn} from "node:child_process";
+import {resolve} from "node:path";
+import {createRequire} from "node:module";
+const require=createRequire(import.meta.url),output=resolve("out/file-panes-probe");await mkdir(output,{recursive:true});
+await build({configFile:false,define:{"process.env.NODE_ENV":JSON.stringify("production")},plugins:[react()],build:{emptyOutDir:false,outDir:output,lib:{entry:resolve("scripts/fixtures/file-panes.tsx"),name:"ImagesFixture",formats:["es"],fileName:()=>"fixture.js"}}});
+await writeFile(resolve(output,"index.html"),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="grok-build-desktop.css"><div id="root"></div><script type="module" src="fixture.js"></script>');
+await writeFile(resolve(output,"main.cjs"),String.raw`
+const {app,BrowserWindow}=require("electron"),path=require("node:path");app.setPath("userData",path.join(__dirname,"profile"));
+const wait=()=>new Promise(r=>setTimeout(r,100)),assert=(v,m)=>{if(!v)throw Error(m)};
+app.whenReady().then(async()=>{const win=new BrowserWindow({show:false,width:1366,height:768,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}}),run=s=>win.webContents.executeJavaScript(s,true);try{
+ await win.loadFile(path.join(__dirname,"index.html"));win.webContents.debugger.attach("1.3");await wait();
+ const until=async(s)=>{for(let i=0;i<50;i++){if(await run(s))return;await wait()}throw Error("timeout: "+s)};
+ const click=async(label)=>{const point=await run('(()=>{const b=Array.from(document.querySelectorAll("button")).find(b=>b.textContent.trim()==='+JSON.stringify(label)+');if(!b)throw Error("missing button");b.scrollIntoView();const r=b.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()');for(const type of ["mousePressed","mouseReleased"])await win.webContents.debugger.sendCommand("Input.dispatchMouseEvent",{type,...point,button:"left",clickCount:1});await wait()};
+ const type=async(text)=>{await run('document.querySelector("textarea").focus()');await win.webContents.debugger.sendCommand("Input.insertText",{text});await wait()};
+ await until('document.querySelectorAll(".monaco-editor").length===2');
+ const clickAt=async(selector,index=0)=>{const r=await run('(()=>{const e=document.querySelectorAll('+JSON.stringify(selector)+')['+index+'];const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()');await win.webContents.debugger.sendCommand("Input.dispatchMouseEvent",{type:"mousePressed",button:"left",clickCount:1,...r});await win.webContents.debugger.sendCommand("Input.dispatchMouseEvent",{type:"mouseReleased",button:"left",clickCount:1,...r})};
+ await clickAt(".editor-toolbar .primary",0);await clickAt(".monaco-editor .view-lines",0);
+ await win.webContents.debugger.sendCommand("Input.insertText",{text:"左侧修改"});
+ await win.webContents.debugger.sendCommand("Input.dispatchKeyEvent",{type:"keyDown",key:"s",code:"KeyS",modifiers:2,windowsVirtualKeyCode:83});
+ await win.webContents.debugger.sendCommand("Input.dispatchKeyEvent",{type:"keyUp",key:"s",code:"KeyS",modifiers:2,windowsVirtualKeyCode:83});
+ await until('fixture.state().saves.length===1');
+ assert(await run('fixture.state().saves[0].path.endsWith("a.txt") && fixture.state().saves[0].content.includes("左侧修改") && fixture.state().active.endsWith("b.txt") && fixture.state().tabs[1].buffer==="b"'),"background editor saved or changed the wrong target");
+ await run("fixture.duplicates()");await wait();await run("fixture.closeDuplicate()");await wait();
+ await clickAt(".monaco-editor .view-lines",0);await win.webContents.debugger.sendCommand("Input.insertText",{text:"关闭副本后继续"});
+ assert(await run('fixture.state().tabs[0].buffer.includes("关闭副本后继续")'),"closing a duplicate disposed the surviving editor model");
+ console.log("FILE_PANES_PASSED real Monaco input, focused Ctrl+S, independent target, global selection unchanged");app.exit(0);
+ }catch(error){console.error(error.stack);app.exit(1)}});
+`);
+const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;const child=spawn(require("electron"),[resolve(output,"main.cjs")],{windowsHide:true,stdio:"inherit",env});const timer=setTimeout(()=>child.kill(),60000);child.on("exit",code=>{clearTimeout(timer);process.exitCode=code??1});

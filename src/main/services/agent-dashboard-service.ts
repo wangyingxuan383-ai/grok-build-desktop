@@ -128,9 +128,16 @@ export class AgentDashboardService {
   }
 
   async cancellationTarget(nodeId: string): Promise<{ sessionId: string; nativeSubagentId: string } | undefined> {
-    const record = (await this.store.get()).records[nodeId];
+    const record = await this.subagentRecord(nodeId);
     if (!record?.nativeSubagentId || record.nativeSubagentId.startsWith("unidentified-")) return undefined;
     return { sessionId: record.sessionId, nativeSubagentId: record.nativeSubagentId };
+  }
+
+  async subagentRecord(nodeId: string): Promise<DashboardRecord | undefined> {
+    const records = (await this.store.get()).records;
+    const parsed = /^session:([^:]+):subagent:([^:]+)$/.exec(nodeId);
+    const record = records[nodeId] ?? (parsed ? Object.values(records).find(value => value.sessionId === parsed[1] && value.parentId && (value.nativeSubagentId === parsed[2] || value.childSessionId === parsed[2])) : undefined);
+    return record?.parentId ? record : undefined;
   }
 
   async clear(nodeId?: string): Promise<void> {
@@ -158,10 +165,10 @@ function updateSubagent(records: Record<string, DashboardRecord>, root: Dashboar
   current.worktreeId = textValue(update.worktree_id ?? update.worktreeId) ?? current.worktreeId;
   if (current.worktreeId || update.isolation === "worktree") current.isolation = "worktree";
   current.title = textValue(update.description ?? update.subagent_type ?? update.role) || current.title;
-  current.agentId = textValue(update.agent_id ?? update.agent ?? update.subagent_type);
-  current.personaId = textValue(update.persona_id ?? update.persona);
-  current.modelId = textValue(update.model_id ?? update.model);
-  current.effort = normalizeEffort(update.effort);
+  current.agentId = textValue(update.agent_id ?? update.agent ?? update.subagent_type) ?? current.agentId;
+  current.personaId = textValue(update.persona_id ?? update.persona) ?? current.personaId;
+  current.modelId = textValue(update.model_id ?? update.model) ?? current.modelId;
+  current.effort = normalizeEffort(update.effort) ?? current.effort;
   const eventName = String(update.sessionUpdate ?? update.type ?? "").toLowerCase();
   const terminalStatus = String(update.status ?? "").toLowerCase();
   const stopped = ["cancelled", "canceled", "stopped", "aborted"].includes(terminalStatus);

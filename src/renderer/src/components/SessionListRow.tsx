@@ -1,12 +1,21 @@
-import { memo, useLayoutEffect, useRef } from "react";
+import { memo } from "react";
 import type { SessionSummary } from "../../../shared/types";
 import { sessionSourceLabel } from "../session-groups";
+import { ActionMenu, ActionContextMenu, type UiAction } from "./ui/ActionMenu";
+import { useAppStore } from "../store";
 import { UiIcon } from "../ui-icons";
 
+/**
+ * One session in the sidebar tree. The row is a single open target; the "more"
+ * button shares the meta slot (meta fades out while it is shown) so hovering
+ * never changes the row height or moves the trigger the menu is anchored to.
+ */
 export const SessionListRow = memo(function SessionListRow(props: {
   session: SessionSummary;
   active: boolean;
   menuOpen: boolean;
+  /** Nested under a parent session (fork / worktree / sub-agent). */
+  child?: boolean;
   onOpen(): void;
   onMenu(open: boolean): void;
   onPin(): void;
@@ -18,57 +27,35 @@ export const SessionListRow = memo(function SessionListRow(props: {
   const { session } = props;
   const sourceLabel = sessionSourceLabel(session);
   const status = sessionStatusPresentation(session.status);
-  const menuRef = useRef<HTMLDetailsElement>(null);
-  const pendingFocus = useRef<number | null>(null);
-  useLayoutEffect(() => {
-    if (props.menuOpen && pendingFocus.current !== null) {
-      menuRef.current?.querySelectorAll<HTMLButtonElement>(".session-action-menu button:not(:disabled)")[pendingFocus.current]?.focus();
-      pendingFocus.current = null;
-    }
-  }, [props.menuOpen]);
-  const run = (event: React.MouseEvent<HTMLButtonElement>, action: () => void): void => {
-    event.stopPropagation();
-    props.onMenu(false);
-    action();
-  };
-  const navigateMenu = (event: React.KeyboardEvent<HTMLElement>): void => {
-    const details = event.currentTarget.closest("details") ?? (event.currentTarget instanceof HTMLDetailsElement ? event.currentTarget : null);
-    if (event.key === "Escape") {
-      event.preventDefault();
-      props.onMenu(false);
-      details?.querySelector<HTMLElement>("summary")?.focus();
-      return;
-    }
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-    const buttons = Array.from(details?.querySelectorAll<HTMLButtonElement>(".session-action-menu button:not(:disabled)") ?? []);
-    if (!buttons.length) return;
-    event.preventDefault();
-    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowDown" ? (current + 1 + buttons.length) % buttons.length : current < 0 ? buttons.length - 1 : (current - 1 + buttons.length) % buttons.length;
-    if (props.menuOpen) buttons[index]?.focus();
-    else { pendingFocus.current = index; props.onMenu(true); }
-  };
-  return <div className={`session-row ${session.archived ? "archived" : ""} ${props.active ? "active" : ""}`}>
-    <button className="session-open" type="button" onClick={props.onOpen} aria-current={props.active ? "page" : undefined} aria-label={`${session.title}，${status.label || "空闲"}`}>
-      <span className={`status-dot ${session.status}`} aria-hidden="true" />
-      {session.pinned && <span className="pin-mark" aria-label="已置顶"><UiIcon name="pin" size={11}/></span>}
-      <span className="session-copy">
-        <strong>{session.title}{sourceLabel && <em className={`session-source-badge ${session.originKind}`}>{sourceLabel}</em>}</strong>
-        {session.preview && session.preview !== session.title && <small className="session-preview" title={session.preview}>{session.preview}</small>}
-        <span>{status.label && <><i className={`session-status-label ${status.tone}`}>{status.label}</i> · </>}{relativeTime(session.updatedAt)} · {session.messageCount} 条消息{session.archived ? " · 已归档" : ""}</span>
-      </span>
-    </button>
-    <details ref={menuRef} className="session-actions" data-session-id={session.id} open={props.menuOpen} onKeyDown={navigateMenu}>
-      <summary title="更多操作" aria-label={`${session.title}的更多操作`} aria-expanded={props.menuOpen} onClick={(event) => { event.preventDefault(); props.onMenu(!props.menuOpen); }}><UiIcon name="more" size={15}/></summary>
-      <div className="session-action-menu" role="menu">
-        <button role="menuitem" onClick={(event) => run(event, props.onPin)}><UiIcon name="pin"/>{session.pinned ? "取消置顶" : "置顶"}</button>
-        <button role="menuitem" onClick={(event) => run(event, props.onArchive)}><UiIcon name="archive"/>{session.archived ? "取消归档" : "归档"}</button>
-        <button role="menuitem" onClick={(event) => run(event, props.onExport)}><UiIcon name="download"/>导出 Markdown</button>
-        <button role="menuitem" onClick={(event) => run(event, props.onRename)}><UiIcon name="edit"/>重命名</button>
-        <button role="menuitem" className="danger-link" onClick={(event) => run(event, props.onDelete)}><UiIcon name="trash"/>删除</button>
+  const actions: UiAction[] = [
+    { id: "pin", label: session.pinned ? "取消置顶" : "置顶", icon: <UiIcon name="pin" />, run: props.onPin },
+    { id: "rename", label: "重命名", icon: <UiIcon name="edit" />, run: props.onRename },
+    { id: "archive", label: session.archived ? "取消归档" : "归档", icon: <UiIcon name="archive" />, run: props.onArchive },
+    { id: "export", label: "导出 Markdown", icon: <UiIcon name="download" />, run: props.onExport },
+    { id: "delete", label: "删除", icon: <UiIcon name="trash" />, danger: true, run: props.onDelete },
+  ];
+  const onError = useAppStore((state) => state.setError);
+  const meta = status.label || relativeTime(session.updatedAt);
+  return (
+    <ActionContextMenu actions={actions} onError={onError}>
+      <div className={`sb-session${props.active ? " active" : ""}${session.archived ? " archived" : ""}${props.child ? " child" : ""}`} data-menu-open={props.menuOpen || undefined}>
+        <button className="session-open" type="button" onClick={props.onOpen} aria-current={props.active ? "page" : undefined} aria-label={`${session.title}，${status.label || "空闲"}`}>
+          {props.child ? <UiIcon name="bot" size={13} /> : <span className={`status-dot ${session.status}`} aria-hidden="true" />}
+          <span className="sb-session-title" title={session.preview && session.preview !== session.title ? `${session.title}\n${session.preview}` : session.title}>{session.title}</span>
+          {session.pinned && <UiIcon name="pin" size={11} className="sb-pin" aria-label="已置顶" />}
+          {sourceLabel && <em className={`sb-session-source ${session.originKind}`}>{sourceLabel}</em>}
+          <span className={`sb-session-meta ${status.tone}`}>{meta}</span>
+        </button>
+        <ActionMenu
+          actions={actions}
+          open={props.menuOpen}
+          onOpenChange={props.onMenu}
+          onError={onError}
+          trigger={<button type="button" className="sb-session-more" data-session-id={session.id} aria-label={`${session.title}的更多操作`}><UiIcon name="more" size={15} /></button>}
+        />
       </div>
-    </details>
-  </div>;
+    </ActionContextMenu>
+  );
 });
 
 export function sessionStatusPresentation(status: SessionSummary["status"]): { label: string; tone: string } {
@@ -80,12 +67,14 @@ export function sessionStatusPresentation(status: SessionSummary["status"]): { l
   return { label: "", tone: "idle" };
 }
 
-function relativeTime(value: string): string {
+/** Compact age for a dense list ("刚刚", "5 分", "2 小时", "3 天"). */
+export function relativeTime(value: string): string {
   const time = Date.parse(value);
-  if (!Number.isFinite(time)) return "未知时间";
+  if (!Number.isFinite(time)) return "";
   const delta = Date.now() - time;
   if (delta < 60_000) return "刚刚";
-  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分钟前`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前`;
-  return `${Math.floor(delta / 86_400_000)} 天前`;
+  if (delta < 3_600_000) return `${Math.floor(delta / 60_000)} 分`;
+  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时`;
+  if (delta < 30 * 86_400_000) return `${Math.floor(delta / 86_400_000)} 天`;
+  return `${Math.floor(delta / (30 * 86_400_000))} 月`;
 }

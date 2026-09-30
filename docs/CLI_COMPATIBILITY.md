@@ -1,5 +1,31 @@
 # Grok CLI Compatibility
 
+## 2026-09-29 用户五项反馈修复（17:35 本机已替换）
+
+见 [五项回归根因、验证与未确认项](FIVE_REGRESSIONS_2026-09-29.md)。空图像草稿 IPC、工作区外只读打开、1.0.x 原生读取兼容、媒体终止错误及登录/重连诊断已修复；143 项受影响回归及打包真实 IPC/鼠标键盘验证通过；0.9.6 / five-regressions-2026-09-29 已替换，旧二进制保留。真实登录与历史会话重连未宣称恢复。
+
+2026-09-29 packaged reliability acceptance uses an isolated native-history directory and explicitly rejects real CLI deletion in offline smoke mode. The observed failure-to-Desktop-cleanup flow proves local cleanup retains the native source; it does not prove the official delete contract. No current CLI/model capability or version changed. Browser integration and viewport persistence checks are Desktop evidence only.
+
+2026-09-28 image workspace: CLI generation retains the existing single-run image_gen route; reference editing selects image_edit based on the recorded historical official tool source, not a live 1.0.40 acceptance. No automatic Provider fallback is performed; Provider editing remains unavailable without a confirmed adapter contract. Independent Provider generation does not start a coding CLI session. Offline persistence/UI tests and packaged startup/PTY/SQLite checks do not prove actual model generation, reference fidelity, Computer or subagent behavior. No CLI upgrade occurred.
+
+2026-09-28 MCP selection: the local official source snapshot (recorded above/below as 4247f661689354b831191f11eeeac8424993fe3d, package 1.0.38) shows server_status.tools is reserved/nullable. Desktop therefore fetches x.ai/mcp/list through the exact active adapter with sessionId and cache:true, consumes only sessionMcpResolved:true and ready/enabled session.tools, excludes disabled/ambiguous identities, and strips server configuration from the renderer response. No global extension-session choice, cache:false catalog synchronization, direct mcp/call or CLI-command fallback is used. Notifications invalidate connection evidence; in-flight responses cannot revive an invalidated snapshot. Selected sends and queue/interjection handoffs refetch and validate before transport. This is a model-use request, not a permission grant or invocation evidence. 12 focused offline regressions and isolated renderer interaction passed; live acceptance of this selector against selected 1.0.40 and model tool choice remains pending. CLI was not changed.
+
+2026-09-27 child viewer: Desktop reads the dashboard's persisted childSessionId, then an existing child projection or a unique native updates.jsonl. It never substitutes the parent ID, resumes a CLI process, or reconciles pending permissions merely to view history. Missing or ambiguous records return summary-only; child execution-root file navigation remains disabled until verified. Offline service and renderer tests passed, but this is not live acceptance of the selected CLI's child-history completeness or message/resume contracts. CLI was not upgraded.
+
+2026-09-25 review follow-up: capability outcomes merge partial ACP notifications by tool-call ID. Transcript replay is excluded from current-connection evidence, and session reset clears prior evidence. Computer start/pause/resume/stop are control changes; only Host-confirmed activation contributes an operation step (Plan observation does not). This is offline-verified adapter behavior, not a new live CLI acceptance result.
+
+## 2026-09-25 subagent capability evidence correction
+
+- Desktop's capability response is scoped to the live ACP connection and carries the selected CLI executable name, path fingerprint, CLI version, binary SHA-256 when readable, and whether initialize returned. The absolute local path is not exposed to the model.
+- `spawn_subagent`, `get_command_or_subagent_output`, and `send_subagent_message` are marked observed only from structured runtime tool identity; the last call outcome is reported separately. Display titles do not count as CLI evidence.
+- `resume_from` requires an observed structured `spawn_subagent` call. The snapshot reports `x.ai/subagent/cancel` as handshake-advertised; the existing cancel API still returns errors to its caller, while this capability snapshot does not persist cancel receipts. The `x.ai/subagent/message` extension remains unmapped; queue, immediate-send and wake semantics are unknown unless the selected CLI declares and is tested against them.
+- CLI-native spawning and lifecycle remain authoritative. This does not establish model selection, child identity isolation, or complete task success.
+
+## 2026-09-21 selected CLI 1.0.40
+
+The selected managed binary is now **1.0.40 (eb1a2256660d)** after the authorized proxy update. Its path/version/SHA-256-bound production core ACP check passed; Desktop plugin/MCP/pre_tool_use Hook discovery also passed. Added setup-notification diagnostics, unresolved MCP status handling, and missing-plugin-Hook reload. This does not expand the offline fixture allowlist or establish real model/updatedInput/child-identity acceptance. Exact hash and source/version boundaries: [alignment evidence](CLI_1_0_40_ALIGNMENT_2026-09-21.md). Historical “current CLI” statements below are superseded.
+
+
 ## 2026-09-18 new-machine boundary (Unreleased)
 
 The default managed CLI was read as 1.0.30; the Desktop-selected path, provider and live contracts have not been accepted on this computer. Desktop tool authority now depends on documented PreToolUse sessionId/subagentType and updatedInput semantics. MCP rejects missing/reused/mismatched parent proofs even if a hook fails open. Offline SDK/HTTP tests do not extend the runtime compatibility gate. See [implementation evidence and live checks](DESKTOP_CAPABILITIES_IMPLEMENTATION_2026-09-18.md). Versions below refer to the prior computer.

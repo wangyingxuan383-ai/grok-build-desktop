@@ -354,10 +354,11 @@ export function normalizeMcpList(value: unknown): McpServerSummary[] {
     const session = asRecord(row.session);
     const toolsRaw = Array.isArray(row.tools) ? row.tools : Array.isArray(session.tools) ? session.tools : [];
     const tools = toolsRaw.map(asRecord).map((tool) => ({ name: asString(tool.displayName || tool.name), description: asString(tool.description) || undefined }));
+    const status = asString(row.status || session.status);
     return {
       name: asString(row.displayName || row.name), source: asString(row.source) || "local",
       enabled: row.enabled === undefined ? session.enabled !== false : row.enabled !== false,
-      status: asString(row.status || session.status) || undefined,
+      status: root.sessionMcpResolved === false && (!status || status === "unavailable") ? "initializing" : status || undefined,
       toolCount: asNumber(row.toolCount) || tools.length, tools,
       configSource: asString(row.configSource || row.sourceLabel) || undefined,
       oauth: Boolean(session.authRequired || row.authRequired),

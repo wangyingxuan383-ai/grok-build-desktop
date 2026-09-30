@@ -38,12 +38,14 @@ interface PendingHost { resolve(value: unknown): void; reject(error: Error): voi
 interface Lease { enabled: boolean; requested?: boolean; discovered?: boolean; authorize?: (tool: string, input: Record<string, unknown>) => Record<string, unknown>; id: string; token: string; sessionId: string; server: McpServer; transport: StreamableHTTPServerTransport }
 interface PendingPermission { request: ComputerAppPermissionRequest; resolve?(approved: boolean): void; onDecision?(approved: boolean): void | Promise<void> }
 interface PendingRisk { request: ComputerRiskConfirmation; resolve(approved: boolean): void }
+interface ComputerSessionPolicy { enabled: boolean; confirm?: (request: unknown, signal?: AbortSignal) => Promise<boolean>; signal?: AbortSignal }
 
 export class ComputerUseService {
   private readonly settings: JsonStore<ComputerUseSettings>;
   private readonly auditPath: string;
   private readonly leases = new Map<string, Lease>();
-  private readonly sessionPolicies = new Map<string, { enabled: boolean; confirm?: (request: unknown) => Promise<boolean>; signal?: AbortSignal }>();
+  private readonly sessionPolicies = new Map<string, ComputerSessionPolicy>();
+  private readonly bridgeWaits = new Map<AbortController, string>();
   private readonly tasks = new Map<string, ComputerTaskState>();
   private readonly onceAllowed = new Set<string>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
@@ -130,7 +132,8 @@ export class ComputerUseService {
   }
 
   private readonly abortCleanups = new Map<string, () => void>();
-  configureSession(sessionId: string, policy: { enabled: boolean; confirm?: (request: unknown) => Promise<boolean>; signal?: AbortSignal }): void {
+  configureSession(sessionId: string, policy: ComputerSessionPolicy): () => void {
+    const previous = this.sessionPolicies.get(sessionId);
     this.abortCleanups.get(sessionId)?.(); this.abortCleanups.delete(sessionId);
     this.sessionPolicies.set(sessionId, policy);
     if (policy.signal) {
@@ -140,6 +143,11 @@ export class ComputerUseService {
       if (policy.signal.aborted) stop();
     }
     if (!policy.enabled) void this.settleSession(sessionId, "stopped", "当前执行配置已关闭 Computer Use");
+    return () => {
+      if (this.sessionPolicies.get(sessionId) !== policy) return;
+      if (previous) this.configureSession(sessionId, previous);
+      else { this.abortCleanups.get(sessionId)?.(); this.abortCleanups.delete(sessionId); this.sessionPolicies.delete(sessionId); }
+    };
   }
 
   private startQueue: Promise<unknown> = Promise.resolve();
@@ -201,6 +209,7 @@ export class ComputerUseService {
   async stop(sessionId: string): Promise<ComputerTaskState> { const task = this.requiredTask(sessionId); await this.settleSession(sessionId, "stopped", "用户已停止 Computer Use"); return { ...task }; }
 
   async settleSession(sessionId: string, status: "completed" | "stopped" | "error", text: string): Promise<void> {
+    this.invalidateBridgeWaits(sessionId);
     const task = this.tasks.get(sessionId); if (!task || ["completed", "stopped", "error"].includes(task.status)) return;
     for (const [id, pending] of this.pendingPermissions) if (pending.request.sessionId === sessionId) { this.pendingPermissions.delete(id); await pending.onDecision?.(false); pending.resolve?.(false); }
     for (const [id, pending] of this.pendingRisks) if (pending.request.sessionId === sessionId) { this.pendingRisks.delete(id); pending.resolve(false); }
@@ -340,7 +349,7 @@ export class ComputerUseService {
       if (action === "wait") {
         this.announce(task, "正在等待界面稳定…", action);
         await this.getHost().call("wait", { milliseconds: input.milliseconds });
-        const state = await this.observe(task, {}, "等待完成，画面已更新"); task.stepCount += 1; task.lastAction = action; task.updatedAt = new Date().toISOString(); this.publish(task);
+        const state = await this.observe(task, {}, "等待完成，画面已更新"); task.lastAction = action; task.updatedAt = new Date().toISOString(); this.publish(task);
         await this.audit(task, action, true); return buildComputerStateResult(state, task);
       }
       if (action === "activate_window") {
@@ -386,7 +395,7 @@ export class ComputerUseService {
     const pending = Array.from(this.pendingPermissions.values()).find((value) => value.request.sessionId === sessionId && value.request.app.id === appId);
     if (!pending) throw new Error("应用授权请求丢失");
     const bridge = this.sessionPolicies.get(sessionId)?.confirm;
-    if (bridge) await this.respondPermission(pending.request.requestId, await bridge({ category: "app-access", app: pending.request.app.name }) ? "once" : "deny");
+    if (bridge) await this.respondPermission(pending.request.requestId, await this.bridgeConfirmation(sessionId, { category: "app-access", app: pending.request.app.name }) ? "once" : "deny");
     const approved = bridge ? this.requiredTask(sessionId).status === "running" : await new Promise<boolean>((resolve) => { pending.resolve = resolve; });
     if (!approved) throw new Error("用户拒绝控制该应用");
     return this.requiredTask(sessionId);
@@ -403,7 +412,11 @@ export class ComputerUseService {
       await this.assertEnabled(task.sessionId);
       const observationOnly = this.getMode(task.sessionId) === "plan";
       task.status = "running"; task.startedAt ||= new Date().toISOString(); task.manualInterventionRequired = false; task.message = observationOnly ? "Plan 模式：正在只读观察窗口…" : `正在接管 ${task.appName || "目标应用"}…`; task.updatedAt = new Date().toISOString(); this.publish(task);
-      if (!observationOnly) await this.getHost().call("activate_window", { windowId: window.id });
+      if (!observationOnly) {
+        await this.getHost().call("activate_window", { windowId: window.id });
+        task.stepCount += 1;
+        task.lastAction = "activate_window";
+      }
       task.lastState = await this.observe(task, {}, observationOnly ? "Plan 模式：仅观察，不修改窗口" : "已进入 Computer Use，Grok 正在观察画面"); return { ...task };
     } catch (error) {
       if (!["completed", "stopped", "error"].includes(task.status)) {
@@ -428,8 +441,9 @@ export class ComputerUseService {
     task.status = "awaiting-risk-confirmation"; task.message = `等待你确认高影响操作：${summary}`; task.updatedAt = new Date().toISOString(); this.publish(task);
     const bridge = this.sessionPolicies.get(task.sessionId)?.confirm;
     if (!bridge) this.emit(request, "risk");
-    const approved = bridge ? await bridge({ category, summary, action }) : await new Promise<boolean>((resolve) => this.pendingRisks.set(request.requestId, { request, resolve }));
+    const approved = bridge ? await this.bridgeConfirmation(task.sessionId, { category, summary, action }) : await new Promise<boolean>((resolve) => this.pendingRisks.set(request.requestId, { request, resolve }));
     this.sessionPolicies.get(task.sessionId)?.signal?.throwIfAborted();
+    if (this.tasks.get(task.sessionId) !== task || task.status !== "awaiting-risk-confirmation") throw new Error("确认已失效，请重新观察目标窗口");
     task.status = approved ? "running" : "stopped"; task.message = approved ? "高影响操作已确认，正在执行…" : "用户已取消高影响操作"; task.updatedAt = new Date().toISOString(); this.publish(task); if (!approved) throw new Error("用户拒绝高影响操作");
   }
 
@@ -478,16 +492,36 @@ export class ComputerUseService {
 
   private async isAllowed(sessionId: string, appId: string): Promise<boolean> { const settings = await this.settings.get(); return settings.alwaysAllowedAppIds.includes(appId) || this.onceAllowed.has(`${sessionId}:${appId}`.toLocaleLowerCase()); }
   private requiredTask(sessionId: string): ComputerTaskState { const task = this.tasks.get(sessionId); if (!task) throw new Error("当前会话没有 Computer Use 任务"); return task; }
-  private stopWith(task: ComputerTaskState, text: string): void { task.status = "stopped"; task.message = text; task.pointer = undefined; task.manualInterventionRequired = false; task.updatedAt = new Date().toISOString(); task.lastState = undefined; this.onceAllowed.delete(`${task.sessionId}:${task.appId}`.toLocaleLowerCase()); this.publish(task); void this.stopHostIfIdle(); }
+  private stopWith(task: ComputerTaskState, text: string): void { this.invalidateBridgeWaits(task.sessionId); task.status = "stopped"; task.message = text; task.pointer = undefined; task.manualInterventionRequired = false; task.updatedAt = new Date().toISOString(); task.lastState = undefined; this.onceAllowed.delete(`${task.sessionId}:${task.appId}`.toLocaleLowerCase()); this.publish(task); void this.stopHostIfIdle(); }
   private publish(task: ComputerTaskState): void { this.emit({ ...task }, "state"); }
   private async stopHostIfIdle(): Promise<void> { if (Array.from(this.tasks.values()).some((task) => ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status))) return; await this.host?.dispose(); this.host = undefined; }
   private async audit(task: ComputerTaskState, action: ComputerActionName, outcome: boolean | "unknown"): Promise<void> { await mkdir(dirname(this.auditPath), { recursive: true }); await appendFile(this.auditPath, `${JSON.stringify({ at: new Date().toISOString(), sessionId: task.sessionId, appId: task.appId, action, ok: typeof outcome === "boolean" ? outcome : null, outcome })}\n`, "utf8"); }
   private getHost(): ComputerHostClient { return this.host ??= new ComputerHostClient(this.helperPath, this.log, () => this.handleHostExit()); }
   private handleHostExit(): void {
+    this.invalidateBridgeWaits();
     for (const pending of this.pendingPermissions.values()) { pending.resolve?.(false); pending.onDecision?.(false); } this.pendingPermissions.clear();
     for (const pending of this.pendingRisks.values()) pending.resolve(false); this.pendingRisks.clear();
     for (const task of this.tasks.values()) if (["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(task.status)) { task.status = "error"; task.message = "Computer Host 意外退出"; task.updatedAt = new Date().toISOString(); task.lastState = undefined; this.publish(task); }
     this.host = undefined;
+  }
+
+  private invalidateBridgeWaits(sessionId?: string): void {
+    for (const [controller, owner] of this.bridgeWaits) if (!sessionId || owner === sessionId) controller.abort(new Error("Computer 确认已失效，请重新观察目标窗口"));
+  }
+
+  private async bridgeConfirmation(sessionId: string, request: unknown): Promise<boolean> {
+    const policy = this.sessionPolicies.get(sessionId);
+    if (!policy?.confirm) throw new Error("确认通道已关闭");
+    const controller = new AbortController(); this.bridgeWaits.set(controller, sessionId);
+    const signal = policy.signal ? AbortSignal.any([controller.signal, policy.signal]) : controller.signal;
+    let onAbort!: () => void;
+    try {
+      signal.throwIfAborted();
+      return await Promise.race([policy.confirm({ ...(request as Record<string, unknown>), source: "computer" }, signal), new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal.reason); signal.addEventListener("abort", onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      })]);
+    } finally { if (onAbort) signal.removeEventListener("abort", onAbort); this.bridgeWaits.delete(controller); }
   }
 
   private httpReady?: Promise<void>;

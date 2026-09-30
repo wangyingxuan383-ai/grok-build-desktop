@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Grok Build Desktop · UI 重设计原型</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+  <symbol id="i-new" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a2 2 0 0 1 3 3L12 15l-4 1 1-4Z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-load" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/></symbol>
+  <symbol id="i-retry" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></symbol>
+  <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+  <symbol id="i-images" viewBox="0 0 24 24"><path d="M18 22H4a2 2 0 0 1-2-2V6"/><path d="m22 13-1.296-1.296a2.41 2.41 0 0 0-3.408 0L11 18"/><circle cx="12" cy="8" r="2"/><rect width="16" height="16" x="6" y="2" rx="2"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+</svg>
+
+<div class="mock-bar">
+  <strong>UI 重设计原型</strong>
+  <button data-screen="code" aria-pressed="true">① 编程 · 会话与子智能体</button>
+  <button data-screen="image">② 图像 · 会话</button>
+  <button data-screen="gallery">③ 图像 · 图库</button>
+  <button data-screen="settings">④ 设置 · 账号</button>
+  <span class="spacer"></span>
+  <button id="theme">切换深/浅色</button>
+</div>
+
+<!-- ① 编程模式：会话 + 行内子智能体 + 右侧子会话 -->
+<section class="screen on" id="code">
+  <aside class="sidebar">
+    <div class="mode-switch"><button aria-pressed="true"><i data-i="code"></i>编程</button><button><i data-i="image"></i>图像</button></div>
+    <button class="nav-row primary"><i data-i="new"></i>新建会话<span class="kbd">Ctrl N</span></button>
+    <button class="nav-row"><i data-i="search"></i>搜索<span class="kbd">Ctrl K</span></button>
+    <button class="nav-row"><i data-i="clock"></i>定时任务<span class="count">3</span></button>
+    <button class="nav-row"><i data-i="grid"></i>技能与扩展</button>
+    <div class="side-section" style="flex:1">
+      <div class="side-section-head">项目<span class="act"><i data-i="plus" class="sm"></i></span></div>
+      <div class="side-scroll">
+        <button class="project"><i data-i="down" class="sm"></i><i data-i="folder" class="sm"></i><strong>grok-build-desktop</strong></button>
+        <button class="session"><span class="dot run"></span><span class="t">修复登录兼容门禁</span><span class="meta">运行中</span></button>
+        <button class="session active"><span class="dot ok"></span><span class="t">审查 renderer 样式与组件</span><span class="meta">2 分钟</span></button>
+        <button class="session child"><i data-i="bot" class="sm"></i><span class="t">审查 CSS token 使用</span><span class="dot run"></span></button>
+        <button class="session child"><i data-i="bot" class="sm"></i><span class="t">审查组件复用</span><span class="dot ok"></span></button>
+        <button class="session"><span class="dot wait"></span><span class="t">图像生成失败排查</span><span class="meta">待确认</span></button>
+        <button class="session muted"><span class="dot" style="background:transparent"></span><span class="t">定时：每日依赖审计</span><span class="meta">昨天</span></button>
+        <button class="session muted"><i data-i="archive" class="sm"></i><span class="t">已归档 4</span></button>
+        <button class="project"><i data-i="right" class="sm"></i><i data-i="folder" class="sm"></i><strong>grok zhuo</strong><span class="count" style="margin-left:auto;font-size:var(--text-xs)">12</span></button>
+        <button class="project"><i data-i="right" class="sm"></i><i data-i="folder" class="sm"></i><strong>guagua-bill</strong><span class="count" style="margin-left:auto;font-size:var(--text-xs)">3</span></button>
+        <div class="side-section-head" style="margin-top:10px">其他来源</div>
+        <button class="project"><i data-i="right" class="sm"></i><span>Codex 会话</span><span style="margin-left:auto;font-size:var(--text-xs)" class="subtlest">18</span></button>
+        <button class="project"><i data-i="right" class="sm"></i><span>Claude 会话</span><span style="margin-left:auto;font-size:var(--text-xs)" class="subtlest">4</span></button>
+      </div>
+    </div>
+    <div class="side-foot"><span class="avatar">W</span><span class="who"><b>wangyingxuan</b><span>SuperGrok · 本周已用 62%</span></span><span class="usage-ring"></span><button class="icon-btn"><i data-i="gear"></i></button></div>
+  </aside>
+
+  <div class="app">
+    <main class="frame">
+      <div class="header">
+        <div class="title"><span>审查 renderer 样式与组件</span><i data-i="down" class="sm subtle"></i></div>
+        <button class="chip"><i data-i="folder" class="sm"></i>grok-build-desktop</button>
+        <button class="chip"><i data-i="branch" class="sm"></i>main</button>
+        <span class="grow"></span>
+        <button class="chip diffstat"><span class="a">+128</span><span class="r">−40</span></button>
+        <button class="icon-btn" title="终端"><i data-i="term"></i></button>
+        <button class="btn">在 VS Code 中打开</button>
+        <button class="icon-btn on" title="侧窗格"><i data-i="panel"></i></button>
+        <button class="icon-btn"><i data-i="more"></i></button>
+      </div>
+      <div class="scroll">
+        <div class="thread">
+          <div class="msg-user">检查 renderer 里的样式 token 用法，派两个子智能体分别审查 CSS 和组件复用，最后汇总成改造建议。</div>
+          <div class="msg-assistant">
+            <button class="work-head"><i data-i="right" class="sm"></i>已处理 <span class="sep">·</span> 14 步 <span class="sep">·</span> 2 分 08 秒 <span class="sep">·</span> 读取 9 个文件、搜索 3 次</button>
+            <p>先快速扫描了样式入口，发现 token 只覆盖约 20% 的颜色。下面分两路并行审查：</p>
+
+            <div class="agent-card running">
+              <div class="agent-head">
+                <span class="agent-avatar" style="background:var(--agent-1)"><i data-i="bot"></i></span>
+                <span class="agent-main"><b>审查 CSS token 使用</b><span>Explore · grok-4.3 · 后台运行</span></span>
+                <span class="status run"><i data-i="load" class="sm spin"></i>运行中 48 秒</span>
+                <button class="btn ghost"><i data-i="stop" class="sm"></i>停止</button>
+                <button class="btn">打开会话<i data-i="open" class="sm"></i></button>
+              </div>
+              <div class="agent-live"><i data-i="file" class="sm"></i>正在读取 <span class="path">styles/base.css</span><span class="subtlest">· 6 次工具调用</span></div>
+            </div>
+
+            <div class="agent-card">
+              <div class="agent-head">
+                <span class="agent-avatar" style="background:var(--agent-2)"><i data-i="bot"></i></span>
+                <span class="agent-main"><b>审查组件复用</b><span>Explore · grok-4.3</span></span>
+                <span class="status ok"><i data-i="check" class="sm"></i>完成</span>
+                <button class="icon-btn"><i data-i="down" class="sm"></i></button>
+                <button class="btn">打开会话<i data-i="open" class="sm"></i></button>
+              </div>
+              <div class="agent-body">
+                <div><div class="label">任务</div><div class="box">列出 components/ 下重复实现的按钮、输入框、菜单，给出可合并的公共组件清单。</div></div>
+                <div><div class="label">结果</div><div class="box">发现 <b>4 类</b>重复实现：原生 <code class="inline">&lt;button className="primary"&gt;</code> 散落 186 处；3 套下拉菜单；2 套确认对话框……建议先抽出 Button、Select、Dialog。</div></div>
+                <div class="agent-foot"><span>1 分 12 秒</span><span>18 次工具</span><span>4 回合</span><span>42K Token</span><span class="grow"></span><button class="btn ghost">继续追问此智能体</button></div>
+              </div>
+            </div>
+
+            <h3>汇总建议</h3>
+            <ul>
+              <li>统一到语义 token：<code class="inline">--color-card</code>、<code class="inline">--color-popover</code> 等，替换 153 处硬编码颜色。</li>
+              <li>建立 Button / Input / Select / Dialog 基础组件，页面只组合不再手写样式。</li>
+              <li>圆角按嵌套逐级递减：外框 12 → 控件 8 → 菜单行 6。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="composer-zone">
+        <div class="composer">
+          <div class="ph">继续追问，输入 / 使用命令，@ 引用文件</div>
+          <div class="row">
+            <button class="icon-btn" title="附件与能力"><i data-i="plus"></i></button>
+            <button class="icon-btn" title="引用"><i data-i="at"></i></button>
+            <button class="picker tag"><i data-i="monitor" class="sm"></i>Computer</button>
+            <span class="grow"></span>
+            <button class="picker">grok-4.3<i data-i="down" class="sm"></i></button>
+            <button class="picker">推理 高<i data-i="down" class="sm"></i></button>
+            <button class="picker">Agent<i data-i="down" class="sm"></i></button>
+            <span class="ctx-ring" title="上下文 34%"></span>
+            <button class="send"><i data-i="up"></i></button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="side-pane">
+      <div class="pane-tabs">
+        <button class="pane-tab on"><i data-i="bot" class="sm"></i><span>审查 CSS token 使用</span><span class="x"><i data-i="x" class="sm"></i></span></button>
+        <button class="pane-tab"><i data-i="file" class="sm"></i><span>base.css</span><span class="x"><i data-i="x" class="sm"></i></span></button>
+        <button class="pane-tab"><i data-i="branch" class="sm"></i><span>改动</span></button>
+        <span style="flex:1"></span>
+        <button class="icon-btn"><i data-i="more"></i></button>
+      </div>
+      <div class="child-head">
+        <div class="l1"><span class="agent-avatar" style="background:var(--agent-1);width:22px;height:22px"><i data-i="bot" class="sm"></i></span><b>审查 CSS token 使用</b><span class="status run"><i data-i="load" class="sm spin"></i>运行中</span></div>
+        <div class="l2"><span>子智能体 · Explore</span><span>grok-4.3</span><span>6 次工具 · 11K Token</span><a href="#">来自「审查 renderer 样式与组件」↗</a></div>
+      </div>
+      <div class="scroll">
+        <div class="thread">
+          <div class="msg-user" style="max-width:92%">统计 src/renderer/src/styles 下所有硬编码颜色和 px 字号，按文件列出，并指出哪些可以映射到现有 token。</div>
+          <div class="msg-assistant">
+            <button class="work-head"><i data-i="down" class="sm"></i>正在处理 <span class="sep">·</span> 6 步</button>
+            <div class="work-steps">
+              <div class="step"><i data-i="search" class="sm"></i><b>搜索</b><span class="path">#[0-9a-f]{6} · styles/</span></div>
+              <div class="step"><i data-i="file" class="sm"></i><b>读取</b><span class="path">styles/tokens.css</span></div>
+              <div class="step"><i data-i="file" class="sm"></i><b>读取</b><span class="path">styles/shell.css</span></div>
+              <div class="step"><i data-i="load" class="sm spin"></i><b>读取</b><span class="path">styles/base.css</span></div>
+            </div>
+            <p>tokens.css 只定义了 25 个变量，shell.css 中 41 处颜色直接写死；正在检查 base.css……</p>
+          </div>
+        </div>
+      </div>
+      <div class="readonly-foot"><i data-i="bot" class="sm"></i>子智能体会话 · 只读实时查看<span class="grow"></span><button class="btn ghost"><i data-i="stop" class="sm"></i>停止</button></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ② 图像模式：一个会话 = 一串多轮生成 -->
+<section class="screen" id="image">
+  <aside class="sidebar">
+    <div class="mode-switch"><button><i data-i="code"></i>编程</button><button aria-pressed="true"><i data-i="image"></i>图像</button></div>
+    <button class="nav-row primary"><i data-i="new"></i>新建图像<span class="kbd">Ctrl N</span></button>
+    <button class="nav-row"><i data-i="images"></i>图库<span class="count">46</span></button>
+    <button class="nav-row"><i data-i="search"></i>搜索<span class="kbd">Ctrl K</span></button>
+    <div class="side-section" style="flex:1">
+      <div class="side-section-head">最近</div>
+      <div class="side-scroll">
+        <button class="img-row active"><span class="img-thumb a1"></span><span class="t"><b>雨夜赛博朋克街道</b><span>3 轮 · 刚刚</span></span></button>
+        <button class="img-row"><span class="img-thumb a4"></span><span class="t"><b>猫咪水彩头像</b><span>5 轮 · 1 小时前</span></span></button>
+        <button class="img-row"><span class="img-thumb a5"></span><span class="t"><b>耳机产品海报</b><span>2 轮 · 昨天</span></span></button>
+        <button class="img-row"><span class="img-thumb a8"></span><span class="t"><b>日落海岸插画</b><span>1 轮 · 3 天前</span></span></button>
+        <button class="img-row"><span class="img-thumb a6"></span><span class="t"><b>绿色能源图标组</b><span>4 轮 · 上周</span></span></button>
+      </div>
+    </div>
+    <button class="nav-row" style="font-size:var(--text-sm)"><i data-i="folder" class="sm"></i>保存到 图片\Grok Images<i data-i="right" class="sm" style="margin-left:auto"></i></button>
+    <div class="side-foot"><span class="avatar">W</span><span class="who"><b>wangyingxuan</b><span>SuperGrok · 本周已用 62%</span></span><button class="icon-btn"><i data-i="gear"></i></button></div>
+  </aside>
+  <div class="app">
+    <main class="frame">
+      <div class="header">
+        <div class="title"><span>雨夜赛博朋克街道</span><i data-i="down" class="sm subtle"></i></div>
+        <span class="chip">独立会话 · 保留上下文</span>
+        <span class="grow"></span>
+        <button class="btn ghost"><i data-i="folder" class="sm"></i>打开文件夹</button>
+        <button class="icon-btn"><i data-i="more"></i></button>
+      </div>
+      <div class="scroll">
+        <div class="thread">
+          <div class="msg-user">雨夜的赛博朋克城市街道，霓虹招牌倒映在积水里，电影感构图<div class="subtlest" style="font-size:var(--text-sm);margin-top:4px">16:9 · 2 张</div></div>
+          <div class="result">
+            <div class="result-grid two">
+              <div class="art a1 show"><div class="tools"><button title="下载"><i data-i="dl" class="sm"></i></button><button title="复制"><i data-i="copy" class="sm"></i></button><button title="删除"><i data-i="trash" class="sm"></i></button></div><button class="edit-btn"><i data-i="wand" class="sm"></i>以此继续修改</button></div>
+              <div class="art a3"></div>
+            </div>
+            <div class="result-meta"><span>Grok CLI · image_gen · 38 秒</span><span class="grow"></span><button class="btn ghost"><i data-i="retry" class="sm"></i>再来一组</button></div>
+          </div>
+
+          <div class="msg-user"><div class="refs"><span class="mini-ref a1"></span></div>把主色调换成蓝紫色，天上加几辆飞行汽车</div>
+          <div class="fail-card">
+            <i data-i="alert" class="lg" style="color:var(--color-danger);margin-top:2px"></i>
+            <div class="grow"><b>生成失败：账号登录已过期</b><span>官方服务返回 401，需要重新登录后重试。本次没有产生图片；登录后可直接重试，原描述和参考图保留。</span>
+              <div class="acts"><button class="btn primary">重新登录</button><button class="btn"><i data-i="retry" class="sm"></i>重试</button><button class="btn ghost"><i data-i="trash" class="sm"></i>删除这条记录</button></div>
+            </div>
+          </div>
+
+          <div class="msg-user"><div class="refs"><span class="mini-ref a1"></span></div>把主色调换成蓝紫色，天上加几辆飞行汽车</div>
+          <div class="result">
+            <div class="result-grid one"><div class="art a3"></div></div>
+            <div class="result-meta"><span>Grok CLI · image_edit · 基于上一张 · 52 秒</span><span class="grow"></span><button class="btn ghost"><i data-i="dl" class="sm"></i>保存原图</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="composer-zone">
+        <div class="composer">
+          <div class="refs" style="display:flex;gap:6px;margin-bottom:8px"><span class="mini-ref a3" style="width:36px;height:36px"></span></div>
+          <div class="ph">描述想要的修改，或开始一个新画面…</div>
+          <div class="row">
+            <button class="icon-btn" title="添加参考图"><i data-i="plus"></i></button>
+            <button class="picker tag">16:9<i data-i="down" class="sm"></i></button>
+            <button class="picker tag">1 张<i data-i="down" class="sm"></i></button>
+            <span class="grow"></span>
+            <button class="picker">Grok CLI<i data-i="down" class="sm"></i></button>
+            <button class="send text"><i data-i="up" class="sm"></i>生成</button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<!-- ③ 图像模式：图库是独立页面 -->
+<section class="screen" id="gallery">
+  <aside class="sidebar">
+    <div class="mode-switch"><button><i data-i="code"></i>编程</button><button aria-pressed="true"><i data-i="image"></i>图像</button></div>
+    <button class="nav-row primary"><i data-i="new"></i>新建图像<span class="kbd">Ctrl N</span></button>
+    <button class="nav-row" style="background:var(--color-selected);color:var(--color-fg)"><i data-i="images"></i>图库<span class="count">46</span></button>
+    <button class="nav-row"><i data-i="search"></i>搜索<span class="kbd">Ctrl K</span></button>
+    <div class="side-section" style="flex:1">
+      <div class="side-section-head">最近</div>
+      <div class="side-scroll">
+        <button class="img-row"><span class="img-thumb a1"></span><span class="t"><b>雨夜赛博朋克街道</b><span>3 轮 · 刚刚</span></span></button>
+        <button class="img-row"><span class="img-thumb a4"></span><span class="t"><b>猫咪水彩头像</b><span>5 轮 · 1 小时前</span></span></button>
+        <button class="img-row"><span class="img-thumb a5"></span><span class="t"><b>耳机产品海报</b><span>2 轮 · 昨天</span></span></button>
+        <button class="img-row"><span class="img-thumb a8"></span><span class="t"><b>日落海岸插画</b><span>1 轮 · 3 天前</span></span></button>
+      </div>
+    </div>
+    <div class="side-foot"><span class="avatar">W</span><span class="who"><b>wangyingxuan</b><span>SuperGrok · 本周已用 62%</span></span><button class="icon-btn"><i data-i="gear"></i></button></div>
+  </aside>
+  <div class="app">
+    <main class="frame" style="position:relative">
+      <div class="header"><div class="title"><span>图库</span></div><span class="subtle" style="font-size:var(--text-sm)">46 张 · 仅显示成功生成的图片</span><span class="grow"></span><button class="btn ghost"><i data-i="folder" class="sm"></i>打开保存目录</button></div>
+      <div class="gallery-bar">
+        <div class="seg"><button aria-pressed="true">全部</button><button>图像会话</button><button>代码产物</button></div>
+        <div class="seg"><button aria-pressed="true">最新</button><button>最早</button></div>
+        <span style="flex:1"></span>
+        <div class="search"><i data-i="search" class="sm"></i>按描述搜索</div>
+        <button class="btn">选择</button>
+      </div>
+      <div class="scroll">
+        <div class="masonry">
+          <div class="tile sel show"><div class="art a1"></div><span class="check"><i data-i="check" class="sm"></i></span><div class="cap">雨夜的赛博朋克城市街道…<small>雨夜赛博朋克街道 · 刚刚</small></div></div>
+          <div class="tile"><div class="art sq a4"></div><span class="check"></span></div>
+          <div class="tile sel"><div class="art pt a5"></div><span class="check"><i data-i="check" class="sm"></i></span></div>
+          <div class="tile"><div class="art a8"></div><span class="check"></span></div>
+          <div class="tile"><div class="art tall a7"></div><span class="check"></span></div>
+          <div class="tile"><div class="art a3"></div><span class="check"></span></div>
+          <div class="tile"><div class="art sq a6"></div><span class="check"></span></div>
+          <div class="tile sel"><div class="art sq a2"></div><span class="check"><i data-i="check" class="sm"></i></span></div>
+          <div class="tile"><div class="art pt a4"></div><span class="check"></span></div>
+          <div class="tile"><div class="art a6"></div><span class="check"></span></div>
+          <div class="tile"><div class="art sq a7"></div><span class="check"></span></div>
+          <div class="tile"><div class="art a2"></div><span class="check"></span></div>
+        </div>
+      </div>
+      <div class="select-bar">已选 3 张<button class="btn ghost"><i data-i="dl" class="sm"></i>导出</button><button class="btn ghost"><i data-i="wand" class="sm"></i>作为参考图新建</button><button class="btn danger"><i data-i="trash" class="sm"></i>删除</button><button class="icon-btn"><i data-i="x" class="sm"></i></button></div>
+    </main>
+  </div>
+</section>
+
+<!-- ④ 设置：整页层 + 左侧导航；账号不再受 CLI 兼容门禁阻塞 -->
+<section class="screen" id="settings">
+  <div class="app" style="padding-left:var(--frame-gap)">
+    <main class="frame">
+      <div class="settings">
+        <nav class="settings-nav">
+          <button class="nav-row back"><i data-i="back"></i>返回</button>
+          <button class="nav-row"><i data-i="gear"></i>通用</button>
+          <button class="nav-row"><i data-i="palette"></i>外观</button>
+          <button class="nav-row on"><i data-i="user"></i>账号与用量</button>
+          <button class="nav-row"><i data-i="cpu"></i>模型与提供商</button>
+          <button class="nav-row"><i data-i="clock"></i>定时任务</button>
+          <button class="nav-row"><i data-i="grid"></i>技能与扩展</button>
+          <button class="nav-row"><i data-i="monitor"></i>Computer Use</button>
+          <button class="nav-row"><i data-i="term"></i>Grok CLI</button>
+          <button class="nav-row"><i data-i="alert"></i>诊断</button>
+        </nav>
+        <div class="settings-body"><div class="inner">
+          <h1>账号与用量</h1>
+          <div>
+            <h2>已登录账号</h2>
+            <div class="group">
+              <div class="group-row"><span class="avatar">W</span><span class="grow"><b>wangyingxuan383@…</b><span>SuperGrok · 设备码登录 · 2 小时前验证</span></span><span class="badge ok">当前</span><button class="icon-btn"><i data-i="more"></i></button></div>
+              <div class="group-row"><span class="avatar" style="background:linear-gradient(135deg,#465,#233)">K</span><span class="grow"><b>工作 API Key</b><span>xAI API Key · 按量计费</span></span><button class="btn">切换</button><button class="icon-btn"><i data-i="more"></i></button></div>
+              <div class="group-row"><span class="grow"><b>添加账号</b><span>使用官方浏览器/设备码登录，或粘贴 xAI API Key</span></span><button class="btn">API Key</button><button class="btn primary">登录新账号</button></div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="device"><span class="code">090D-6B12</span><span class="grow" style="flex:1;line-height:1.45"><b>在浏览器中确认登录</b><br><span class="subtle" style="font-size:var(--text-sm)">已打开 accounts.x.ai/device，输入左侧代码并授权。剩余 4:31</span></span><button class="btn ghost"><i data-i="copy" class="sm"></i>复制</button><button class="btn">取消</button></div>
+          </div>
+          <div>
+            <h2>本周用量</h2>
+            <div class="group">
+              <div class="group-row"><span class="grow"><b>Grok Build</b><span>62% · 周一 08:00 重置</span><div class="meter"><i style="width:62%"></i></div></span></div>
+              <div class="group-row"><span class="grow"><b>图像生成</b><span>18%</span><div class="meter"><i style="width:18%"></i></div></span><button class="btn ghost">官方用量页<i data-i="open" class="sm"></i></button></div>
+            </div>
+          </div>
+          <div class="hint"><i data-i="term" class="sm" style="margin-top:3px"></i><span>Grok CLI 1.0.40 · 基础握手通过。登录、切换账号由官方 CLI 完成，<b>不再因兼容性检查被拒绝或回滚</b>；只有握手失败时才会影响新建会话，并给出可执行的修复按钮。</span></div>
+        </div></div>
+      </div>
+    </main>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll("i[data-i]").forEach((el) => {
+    el.outerHTML = `<svg class="i ${el.className}" aria-hidden="true"><use href="#i-${el.dataset.i}"/></svg>`;
+  });
+  document.querySelectorAll("[data-screen]").forEach((button) => button.addEventListener("click", () => {
+    document.querySelectorAll("[data-screen]").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("on", s.id === button.dataset.screen));
+  }));
+  document.getElementById("theme").addEventListener("click", () => {
+    const root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+  });
+  const initial = new URLSearchParams(location.search);
+  if (initial.get("theme")) document.documentElement.dataset.theme = initial.get("theme");
+  if (initial.get("screen")) document.querySelector(`[data-screen="${initial.get("screen")}"]`)?.click();
+</script>
+</body>
+</html>

@@ -113,6 +113,14 @@ export class AutomationService {
   async update(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> {
     await this.definitionTransaction(id, async () => {
     const current = await this.readTask(id);
+    const workspaceKey = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    const workspaceChanged = Boolean(patch.workspace && workspaceKey(patch.workspace) !== workspaceKey(current.workspace));
+    if (current.projectRemoved) patch = { ...patch, projectRemoved: true };
+    if (current.projectRemoved && patch.enabled && !workspaceChanged) throw new Error("项目删除操作已暂停此任务，请先重新绑定工作区；当前会话任务请重新创建");
+    if (current.projectRemoved && workspaceChanged) {
+      if (current.destination === "current-session") throw new Error("原会话已删除，请重新创建当前会话任务");
+      patch = { ...patch, projectRemoved: false };
+    }
     if (current.destination === "current-session") {
       if ((patch.targetSessionId !== undefined && patch.targetSessionId !== current.targetSessionId) || (patch.destination !== undefined && patch.destination !== current.destination) || (patch.executionProfileId !== undefined && patch.executionProfileId !== current.executionProfileId) || (patch.contextPolicy !== undefined && patch.contextPolicy !== "reuse") || (patch.profile && Object.entries(patch.profile).some(([key, value]) => value !== current.profile[key as keyof typeof current.profile]))) throw new Error("当前会话任务保留绑定时的执行配置；更改配置请重新创建任务");
     }
@@ -143,7 +151,8 @@ export class AutomationService {
   async pause(id: string, paused: boolean): Promise<AutomationTask[]> { return this.update(id, { enabled: !paused }); }
 
   async runNow(id: string): Promise<AutomationRunRecord> {
-    await this.readTask(id);
+    const task = await this.readTask(id);
+    if (task.projectRemoved) throw new Error("关联项目已删除，请先重新绑定工作区");
     const run: AutomationRunRecord = { id: crypto.randomUUID(), taskId: id, status: "queued", scheduledAt: this.now().toISOString() };
     await this.writeRun(run); this.options.onChanged?.({ taskId: id, run });
     if (this.options.launchWorker) await this.options.launchWorker(id, run.id);
@@ -181,8 +190,29 @@ export class AutomationService {
     });
   }
 
+  async setRunSession(runId: string, sessionId: string): Promise<void> {
+    const run = await readJson<AutomationRunRecord>(this.runPath(runId));
+    if (run.status !== "running") return;
+    await this.writeRun({ ...run, sessionId });
+  }
+
   private definitionTransaction<T>(id: string, action: () => Promise<T>): Promise<T> {
     return withCrossProcessFileLock(join(this.root, "definition-locks", `${safeId(id)}.lock`), action);
+  }
+
+  /** Hold the same cross-process leases used by Workers while removing bindings. */
+  async withIdleTasks<T>(ids: string[], action: () => Promise<T>): Promise<T> {
+    const leases: AutomationLease[] = [];
+    try {
+      for (const id of [...new Set(ids)].sort()) {
+        const lease = await this.acquire(id, `project-removal-${crypto.randomUUID()}`);
+        if (!lease) throw new Error("关联定时任务正在运行，未删除项目；请等待本次运行结束");
+        leases.push(lease);
+      }
+      return await action();
+    } finally {
+      for (const lease of leases.reverse()) await lease.release().catch(error => this.log.log(`项目移除锁清理失败：${sanitizeError(error)}`));
+    }
   }
 
   async clearSession(id: string, cleanup: (task: AutomationTask) => Promise<void>): Promise<AutomationTask[]> {
@@ -224,12 +254,12 @@ export class AutomationService {
     for (const task of await this.readStoredTasks()) await this.scheduler.unregister(task.id).catch((error) => this.log.log(`删除计划任务失败：${sanitizeError(error)}`));
   }
 
-  async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; signal: AbortSignal; confirm(toolCall: unknown, force?: boolean): Promise<boolean> }) => Promise<{ sessionId?: string }>, ready?: (task: AutomationTask) => boolean): Promise<AutomationRunRecord> {
+  async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; signal: AbortSignal; waitUntilReady(): Promise<void>; confirm(toolCall: unknown, force?: boolean, requestSignal?: AbortSignal): Promise<boolean> }) => Promise<{ sessionId?: string }>, ready?: (task: AutomationTask) => boolean): Promise<AutomationRunRecord> {
     let task = await this.readTask(taskId); const id = runId && runId !== "scheduled" ? runId : crypto.randomUUID();
     let run: AutomationRunRecord = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => ({ id, taskId, status: "queued", scheduledAt: this.now().toISOString() }));
     if (run.taskId !== taskId) throw new Error("运行不属于指定任务");
     if (["completed", "failed", "cancelled", "skipped"].includes(run.status)) return run;
-    if (!task.enabled) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "任务已暂停" }; await this.writeRun(run); return run; }
+    if (!task.enabled || task.projectRemoved) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: task.projectRemoved ? "关联项目已删除，请重新绑定工作区" : "任务已暂停" }; await this.writeRun(run); return run; }
     if (runId === "scheduled" && !await this.admitCalendarOccurrence(taskId)) {
       return { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "本次唤醒不对应新的日历执行时间" };
     }
@@ -256,15 +286,25 @@ export class AutomationService {
       await this.writeRun(run);
       slot = await this.acquireGlobalSlot(id, controller.signal, ready ? async () => {
         task = await this.readTask(taskId);
-        return !task.enabled || ready(task);
+        return !task.enabled || Boolean(task.projectRemoved) || ready(task);
       } : undefined);
       const beforeStart = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
       if (beforeStart.status === "cancelled" || controller.signal.aborted) return beforeStart;
       task = await this.readTask(taskId);
-      if (!task.enabled) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "任务已暂停" }; await this.writeRun(run); return run; }
+      if (!task.enabled || task.projectRemoved) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: task.projectRemoved ? "关联项目已删除，请重新绑定工作区" : "任务已暂停" }; await this.writeRun(run); return run; }
       run = { ...run, definitionRevision: task.revision, status: "running", startedAt: this.now().toISOString() }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
       prompt = this.cipher.decrypt(task.encryptedPrompt);
-      const result = await executor({ task: stripPrompt(task), prompt, runId: id, signal: controller.signal, confirm: (toolCall, force) => this.confirmHighImpact(taskId, id, toolCall, force, controller.signal) });
+      const result = await executor({ task: stripPrompt(task), prompt, runId: id, signal: controller.signal,
+        waitUntilReady: async () => {
+          await slot?.release(); slot = undefined;
+          run = { ...run, status: "queued" }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
+          slot = await this.acquireGlobalSlot(id, controller.signal, () => !ready || ready(stripPrompt(task)));
+          controller.signal.throwIfAborted();
+          const currentTask = await this.readTask(taskId);
+          if (!currentTask.enabled || currentTask.revision !== task.revision) throw new Error("等待期间任务配置已改变，请按新配置重新运行");
+          run = { ...run, status: "running" }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
+        },
+        confirm: (toolCall, force, requestSignal) => this.confirmHighImpact(taskId, id, toolCall, force, requestSignal ? AbortSignal.any([controller.signal, requestSignal]) : controller.signal) });
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("任务已取消");
       if (result.sessionId) await this.setExecutionSession(taskId, result.sessionId, task.revision);
       const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
@@ -294,7 +334,7 @@ export class AutomationService {
   private async admitCalendarOccurrence(taskId: string): Promise<boolean> {
     return this.definitionTransaction(taskId, async () => {
       const task = await this.readTask(taskId);
-      if (!task.enabled) return false;
+      if (!task.enabled || task.projectRemoved) return false;
       if (task.schedule.kind !== "daily" && task.schedule.kind !== "weekly") return true;
       const now = this.now();
       const due = latestCalendarOccurrence(task.schedule, now, task.timeZone!);
@@ -343,18 +383,43 @@ export class AutomationService {
   }
 
   private async confirmHighImpact(taskId: string, runId: string, toolCall: unknown, force = false, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return false;
     const risk = classifyScheduledRisk(toolCall); if (!risk && !force) return true;
     const policy = await this.getPolicy(); const id = crypto.randomUUID(); const expiresAt = new Date(this.now().getTime() + policy.confirmationTimeoutMinutes * 60_000).toISOString();
     const pending: PendingFile = { public: { id, taskId, runId, category: risk?.category ?? "tool-permission", summary: force && !risk ? "任务需要工具权限确认" : "高影响操作等待确认", expiresAt }, encryptedSummary: this.cipher.encrypt(risk?.summary ?? JSON.stringify(toolCall ?? {}).slice(0, 500)) };
-    await mkdir(this.pendingRoot, { recursive: true }); await atomicJson(join(this.pendingRoot, `${id}.json`), pending);
-    const waitingRun = await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined);
-    if (waitingRun && !["completed", "failed", "cancelled", "skipped"].includes(waitingRun.status)) { waitingRun.status = "awaiting-confirmation"; await this.writeRun(waitingRun); this.options.onChanged?.({ taskId, run: waitingRun, pending: { ...pending.public } }); }
-    else this.options.onChanged?.({ taskId, pending: { ...pending.public } });
+    if ((toolCall as { source?: string } | null)?.source === "computer") pending.public.source = "computer";
+    await this.updateConfirmationState(runId, pending);
     let decision: boolean | undefined;
-    while (!signal?.aborted && this.now().getTime() < new Date(expiresAt).getTime()) { const current = await readJson<PendingFile>(join(this.pendingRoot, `${id}.json`)); if (current.decision !== undefined) { decision = current.decision; break; } await delay(this.options.pendingPollMs ?? 1_000); }
-    const latestRun = waitingRun ? await readJson<AutomationRunRecord>(this.runPath(runId)) : undefined;
-    if (latestRun?.status === "awaiting-confirmation" && !signal?.aborted) { latestRun.status = "running"; await this.writeRun(latestRun); this.options.onChanged?.({ taskId, run: latestRun }); }
-    await rm(join(this.pendingRoot, `${id}.json`), { force: true }); return decision === true && !signal?.aborted && latestRun?.status === "running";
+    try {
+      while (!signal?.aborted && this.now().getTime() < Date.parse(expiresAt)) {
+        const current = await readJson<PendingFile>(join(this.pendingRoot, `${id}.json`)).catch(() => undefined);
+        if (!current || current.decision !== undefined) { decision = current?.decision; break; }
+        await delay(this.options.pendingPollMs ?? 1_000);
+      }
+    } finally {
+      await this.updateConfirmationState(runId, pending, true);
+    }
+    const latestRun = await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined);
+    return decision === true && !signal?.aborted && Boolean(latestRun && ["running", "awaiting-confirmation"].includes(latestRun.status));
+  }
+
+  private async updateConfirmationState(runId: string, pending: PendingFile, remove = false): Promise<void> {
+    // Creation and cleanup share the run transaction: an old Host wait cannot
+    // reset the status of a newer or concurrent permission request.
+    const run = await withCrossProcessFileLock(join(this.root, "run-transactions", `${safeId(runId)}.lock`), async () => {
+      await mkdir(this.pendingRoot, { recursive: true });
+      const path = join(this.pendingRoot, `${pending.public.id}.json`);
+      const current = await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined);
+      const active = current && ["running", "awaiting-confirmation"].includes(current.status);
+      if (remove || !active) await rm(path, { force: true });
+      else await atomicJson(path, pending);
+      if (!active) return current;
+      const requests = await Promise.all((await readdir(this.pendingRoot)).filter(name => name.endsWith(".json")).map(name => readJson<PendingFile>(join(this.pendingRoot, name)).catch(() => undefined)));
+      current.status = requests.some(value => value?.public.runId === runId && value.decision === undefined && Date.parse(value.public.expiresAt) > this.now().getTime()) ? "awaiting-confirmation" : "running";
+      await atomicJson(this.runPath(runId), current);
+      return current;
+    });
+    this.options.onChanged?.({ taskId: pending.public.taskId, run, ...(!remove && run?.status === "awaiting-confirmation" ? { pending: { ...pending.public } } : {}) });
   }
 
   private async register(task: StoredAutomationTask): Promise<void> {

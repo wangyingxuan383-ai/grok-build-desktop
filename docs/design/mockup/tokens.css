@@ -1,0 +1,128 @@
+/*
+ * Grok Build Desktop — proposed design tokens (UI redesign 2026-09-29).
+ * Semantic surface ladder and type scale adapted from ZCode DESIGN.md (Apache-2.0).
+ * This file is the single source of truth for the mockup and the target for
+ * src/renderer/src/styles/tokens.css in the implementation.
+ */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Structure surfaces: window → frame → card → popover */
+  --color-window: #121212;          /* app window + sidebar */
+  --color-frame: #191919;           /* main conversation frame / side pane */
+  --color-card: #212121;            /* user bubble, tool rows, cards */
+  --color-card-selected: #282828;
+  --color-popover: #242424;         /* menus, dialogs */
+  --color-input: #1d1d1d;
+  --color-hover: rgba(255, 255, 255, 0.05);
+  --color-selected: rgba(255, 255, 255, 0.085);
+
+  /* Borders */
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.14);
+  --color-border-focus: rgba(120, 170, 255, 0.55);
+
+  /* Text */
+  --color-fg: #ececec;
+  --color-fg-subtle: #a1a1a1;
+  --color-fg-subtlest: #6b6b6b;
+  --color-fg-inverse: #121212;
+
+  /* Actions */
+  --color-primary: #f2f2f2;          /* monochrome primary, Grok brand */
+  --color-primary-fg: #121212;
+  --color-accent: #6ea8fe;           /* links, focus, running state */
+  --color-accent-soft: rgba(110, 168, 254, 0.12);
+
+  /* Semantic states */
+  --color-success: #4cc38a;
+  --color-success-soft: rgba(76, 195, 138, 0.12);
+  --color-warning: #e5b454;
+  --color-warning-soft: rgba(229, 180, 84, 0.12);
+  --color-danger: #f06a6a;
+  --color-danger-soft: rgba(240, 106, 106, 0.12);
+
+  /* Diff */
+  --color-diff-added: #4cc38a;
+  --color-diff-removed: #f06a6a;
+
+  /* Agent avatar palette (identity only, never status) */
+  --agent-1: #8b7cf6;
+  --agent-2: #36b8c9;
+  --agent-3: #e08a3c;
+  --agent-4: #d45fa0;
+
+  --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--color-border);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --color-window: #f3f3f2;
+  --color-frame: #ffffff;
+  --color-card: #f5f5f4;
+  --color-card-selected: #ececea;
+  --color-popover: #ffffff;
+  --color-input: #ffffff;
+  --color-hover: rgba(0, 0, 0, 0.04);
+  --color-selected: rgba(0, 0, 0, 0.07);
+  --color-border: rgba(0, 0, 0, 0.09);
+  --color-border-strong: rgba(0, 0, 0, 0.16);
+  --color-border-focus: rgba(40, 110, 230, 0.5);
+  --color-fg: #1c1c1c;
+  --color-fg-subtle: #5f5f5f;
+  --color-fg-subtlest: #9a9a9a;
+  --color-fg-inverse: #ffffff;
+  --color-primary: #1c1c1c;
+  --color-primary-fg: #ffffff;
+  --color-accent: #2a6fdb;
+  --color-accent-soft: rgba(42, 111, 219, 0.1);
+  --color-success: #1f8a5b;
+  --color-success-soft: rgba(31, 138, 91, 0.1);
+  --color-warning: #9a6a0c;
+  --color-warning-soft: rgba(154, 106, 12, 0.1);
+  --color-danger: #c53b3b;
+  --color-danger-soft: rgba(197, 59, 59, 0.08);
+  --shadow-overlay: 0 8px 28px rgba(0, 0, 0, 0.12), 0 0 0 1px var(--color-border);
+}
+
+:root {
+  /* Typography: only --ui-font-size changes with the user's font setting */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  --ui-font-size: 14px;
+  --text-xl: calc(var(--ui-font-size) + 4px);   /* h1 reading headings */
+  --text-lg: calc(var(--ui-font-size) + 2px);   /* h2, page titles */
+  --text-base: var(--ui-font-size);             /* body, controls, titles */
+  --text-caption: calc(var(--ui-font-size) - 1px);
+  --text-sm: calc(var(--ui-font-size) - 2px);   /* secondary copy, tooltips */
+  --text-xs: calc(var(--ui-font-size) - 4px);   /* badges, counters */
+
+  /* Spacing: 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Radius ladder: first rounded container xl, nested steps down */
+  --radius-2xl: 16px;   /* composer shell, dialogs, toasts */
+  --radius-xl: 12px;    /* frames, cards */
+  --radius-lg: 8px;     /* controls, menus */
+  --radius-md: 6px;     /* menu rows, nested controls */
+  --radius-sm: 4px;
+
+  /* Control heights */
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-lg: 32px;
+  --control-xl: 36px;
+
+  /* Layout */
+  --sidebar-width: 264px;
+  --frame-gap: 6px;
+  --header-height: 44px;
+  --reading-width: 760px;
+  --side-pane-width: 440px;
+}

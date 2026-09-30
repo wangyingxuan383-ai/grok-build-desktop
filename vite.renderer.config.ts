@@ -7,5 +7,12 @@ export default defineConfig({
   base: "./",
   plugins: [react()],
   resolve: { alias: { "@renderer": resolve("src/renderer/src"), "@shared": resolve("src/shared") } },
-  build: { outDir: resolve("out/renderer"), emptyOutDir: true, target: "chrome150" },
+  build: {
+    outDir: resolve("out/renderer"), emptyOutDir: true, target: "chrome150",
+    rolldownOptions: { output: { codeSplitting: { groups: [{
+      // Stable shared runtime; feature chunks retain their own lazy boundaries.
+      name: "react-runtime",
+      test: /[\\/]node_modules[\\/](?:react|react-dom|scheduler)[\\/]/,
+    }] } } },
+  },
 });

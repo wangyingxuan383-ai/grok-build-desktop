@@ -1,5 +1,100 @@
 # Feature Matrix
 
+## v0.10.0 发布范围
+
+工作台／图像模式、只读子会话、Token Worker/SQLite、账号兼容解耦及可靠性修复纳入 v0.10.0。详见 [发布说明](releases/v0.10.0.md) 和 [最新修复证据](CLAUDE_REVIEW_FIXES_2026-10-01.md)。实现、离线／打包证据与真实模型验收继续分开；下方各日期状态为历史记录。
+
+## 2026-09-29 用户五项反馈修复（17:35 本机已替换）
+
+见 [五项回归根因、验证与未确认项](FIVE_REGRESSIONS_2026-09-29.md)。空图像草稿 IPC、工作区外只读打开、1.0.x 原生读取兼容、媒体终止错误及登录/重连诊断已修复；143 项受影响回归及打包真实 IPC/鼠标键盘验证通过；0.9.6 / five-regressions-2026-09-29 已替换，旧二进制保留。真实登录与历史会话重连未宣称恢复。
+
+## 最新状态：2026-09-29 12:23 本机已替换
+
+本轮实现与所列离线验收已交付桌面，版本 0.9.6 / ui-delivery-2026-09-29。主窗口正常启动；旧程序及 817 文件完整数据备份均保留。最终 ASAR：9737EA404C180C4713457051760CD19B2EF9667474ACB3396A98129C5A98BFA5。详见 [交付结果、证据与剩余边界](UI_DELIVERY_2026-09-29.md)。
+
+下方“未替换”均为各次增量当时状态；本次没有公开发布、升级 CLI 或运行真实模型。真实 CLI/模型和原生对话框验收仍单列，不能以页面探针代替。
+
+## 当前交付入口：2026-09-29 页面收尾
+
+见 [桌面改造交付与验收边界](UI_DELIVERY_2026-09-29.md)。19 个业务入口已补导航/布局检查，修复 Memory 空查询 IPC 拒绝与普通文件夹 Git/Worktree 错误反馈，隔离测试不再混入真实客户端项目索引。实现、离线/打包证据和真实模型验收分列；下方旧清单不能单独作为最新待办。
+
+## 2026-09-29 未发布：持久阅读位置与候选包可靠性验收
+
+窗格阅读位置已改为有版本、有容量限制的本地布局记录，重载恢复通过；新增 2 项定向回归。目录候选包通过真实 Renderer 鼠标操作的菜单稳定、归档/恢复/重载、删除取消、CLI 失败后的显式 Desktop 清理及失效标签右键关闭；原始隔离 CLI 历史保留。测试明确禁止真实 CLI 删除，不是官方删除合同验收。
+
+原生 Electron 浏览器探针已验证实际下载文件、目标站点 cookie/localStorage 清理及另一主机的数据保留；确认答案和保存路径由夹具提供，原生对话框鼠标验收仍待做。最新候选包 app.asar SHA-256：7A1F0131E832857328E2A11B7072C447516A9F4C87BAFAE9B1DA37974191DB53，包内容及原分块预算通过（246 JS / 19455.5 KiB）。桌面安装目录仍未替换；无发布、CLI 升级或真实模型调用。
+
+本条覆盖下方旧记录中“跨重启位置未实现”和上述具体链路未验证的状态，其余未完成边界保留。详情见 [实施记录](RELIABILITY_IMPLEMENTATION_2026-09-27.md)。全页面矩阵和当前 CLI 实机合同仍未全部完成。
+
+## 2026-09-28 收口验证
+
+修复加载后 Hook 顺序白屏、保存回执覆盖新输入；文件窗格独立编辑/焦点快捷键、媒体固定标签/返回来源、原图恢复/引用、显式代码图片参考已接通。47 项不同定向用例及相关隔离交互通过；最终目录包已验证 ASAR SQLite Worker、原生 PTY 和图像草稿/模式/重载，浅深主题截图已复核。分块预算通过（246 JS，19454.5 KiB）。候选包 app.asar SHA-256：772150A2EDE8C17061B99898E5EDD4BB63E159AF0B26907EF0F7E750BF1476BE。未替换桌面、未公开发布、未调用真实模型。
+
+完整阶段 UI 矩阵和当前 CLI 实机合同仍未全部完成，不能宣称全部计划完成。剩余边界、Token 迁移与旧版回退限制见实施记录 docs/RELIABILITY_IMPLEMENTATION_2026-09-27.md 顶部；下方记录为各次增量当时状态。
+
+## 2026-09-28 集中实施（验收进行中）
+
+独立图像模式已接持久会话/任务/草稿/图库与图片根目录；Provider 无需编程 CLI，代码模式媒体入口保留。非焦点媒体使用显式所属会话句柄校验。Token 生产存储使用 SQLite Worker，保留 JSON 备份和原口径；终端过滤应用注入变量，浏览器下载有保存/状态，当前站点数据清理需明确确认。42 项定向回归、隔离图像交互、构建统计 Worker 探针通过；最新窗格扩展/主题及完整打包链路验收继续进行。未替换桌面，未验证真实模型。
+
+## 2026-09-28 分屏历史刷新与滚动
+
+离线/原生只读会话支持主动刷新，加载保留旧内容，失败显式说明并可重试；重复请求按钮禁用。修复会话切换时滚动回顶，按窗格及对象保留当前进程内的位置。隔离 Electron 的 DOM 视口恢复、鼠标刷新/失败重试与既有晚到/错误身份回归通过；类型及 Renderer 构建/原预算通过。源码完成未替换；跨重启、真实滚轮与阶段打包验收仍待做。
+
+## 2026-09-28 原生历史只读回退
+
+无 Desktop 投影时支持按所属项目读取原生 updates.jsonl，不恢复执行；读取前后验证对象归属，拒绝歧义目录和会话路径越界，忽略身份不符的事件。共用子会话消息/工具解析，最多前 8 MiB / 2000 个事件，显示来源及截断/异常提示。16 项相关回归及隔离 Renderer 展示验证通过，构建与既有预算通过。源码完成，未替换桌面；完整原生转录、分页及当前 CLI 实机合同尚未验证。
+
+## 2026-09-28 离线分屏历史
+
+通过新只读接口加载已有 Desktop 投影，核验当前项目身份并复查迁移/删除，不启动 CLI、不更改队列/已读状态；无副本时明确提示。离线历史迟到响应/错误身份和不足 10 条消息边界已覆盖。文件/差异位置在当前进程内按窗格+目标保存，文件恢复已验证；会话列表位置接线未完成实际滚动验收。未替换桌面，无投影的 CLI 原生历史读取和完整独立窗格仍未完成。
+
+## 2026-09-28 分屏阅读
+
+非焦点 Git 差异按工作区和文件独立读取，不再复用全局同名文件差异；旧响应不能覆盖新目标。文件与已加载会话不再做固定字符/消息数截断，会话按可视范围渲染；计划/确认只读，媒体/附件明确激活所属会话查看。隔离阅读和工作台焦点/草稿/关闭回归通过。仍不是全部窗格独立编辑或发送；未加载历史、非焦点媒体、滚动恢复及完整实机验收待做，尚未替换桌面。
+
+## 2026-09-28 编程媒体项目副本
+
+媒体面板可指定项目内相对目录，图片默认 generated/images、视频默认 generated/videos。固定提交时项目，独立文件名不覆盖；项目副本与会话媒体预览分开，删除会话保留项目文件。保存失败提示另存、不自动重新生成；空产物和取消迟到结果不报成功。9 项定向回归及隔离交互通过；尚未替换桌面。原图项目副本可以从文件树找回，但媒体任务仍是原有内存状态，统一持久产物索引/跨重启任务详情和独立图像模式未完成。
+
+## 2026-09-28 MCP 选择增量
+
+会话绑定 MCP 工具选择已接通输入区、草稿、持久队列与发送/插话。按本地官方源码通过当前适配器的 x.ai/mcp/list 读取已解析会话、就绪服务和启用工具，不用全局配置或数量推断可用；发送时重新读取核验，连接变化后要求重选。12 项定向回归及隔离鼠标/键盘验证通过，尚未替换桌面。当前 CLI 实机入口与真实模型工具选择仍未验收；没有完整证据时展示原因。下方“尚未开放”属于前次记录。
+
+## 2026-09-27 可靠性增量状态
+
+产物预览：当前代码会话图片和文件树预览优先进入右侧，支持扩大/返回、已读取文件固定标签、另存；按真实来源隔离异步结果。隔离交互及媒体来源边界验证通过。媒体持久标签、完整打包链路和全格式流式加载待做；本次未替换桌面。
+
+命令与能力：当前 CLI 命令、Skills、Computer 请求及编程生图参数入口已整合到输入区搜索；CLI 命令选择保留草稿，媒体提交有重复/目标切换保护。MCP 工具选择尚未开放，不能用全局配置清单代替会话连接证据；项目输出位置与独立图像模式待做。
+
+子智能体：右侧状态、看板子节点及只读子会话标签已接线；按真实 childSessionId 读取，缺失时显示摘要，不恢复执行。21 项相关回归和隔离页面验证通过，真实 CLI 子记录完整性、子 Worktree 文件跳转及原生跟进操作仍未验收。本次后续源码未再次替换桌面。
+
+菜单、归档、工作台标签关闭和项目删除逻辑已更新。服务定向测试及隔离 Renderer 交互通过；打包应用验收、各窗格完整上下文、图像模式尚未完成。证据和遗留项见 [实施记录](RELIABILITY_IMPLEMENTATION_2026-09-27.md)。
+
+## 2026-09-25 review follow-up (source only)
+
+Focused regressions cover partial ACP terminal updates, native subagent partial outcomes, replay exclusion/reset, more than 20,000 retained Token turns with filtering/deduplication, and Computer wait/control/Plan-versus-Agent activation evidence. Token detail retention is time-based (400 days), with no count-based discard. These changes are not included in the currently installed Desktop build. Live-model/GUI evidence and the renderer chunk-budget issue remain open.
+
+## 2026-09-25 usage and capability evidence correction (unreleased)
+
+| Capability | Evidence | Boundary |
+|---|---|---|
+| Computer Use activity grouping | Focused store/ACP regressions: exact `grok_desktop_computer` identity, canonical tool name, Host operation evidence, failed call and title-only historical items | Selection or a title is not execution evidence; zero-step idle state is omitted. Real GUI/LLM use remains unverified. |
+| Subagent activity grouping | Focused store and capability regressions require the structured native operation name; per-connection result outcome is retained | CLI remains the native scheduler. `x.ai/subagent/message` is not mapped unless the current handshake and behavior are proven. |
+| Token totals | Focused regression for missing explicit total, reasoning fields, duplicate notifications and exact source | Missing total remains uncovered; input/output/reasoning/cache fields are not added to invent it. |
+| Token dates, filtering and migration | Asia/Shanghai midnight and filtered heatmap regressions; old UTC rollup migration and anonymous deletion rollup checks | Old anonymous totals remain marked legacy UTC; active filters intentionally exclude unidentifiable deleted-session aggregates. |
+| CLI-bound capability evidence | Current ACP connection supplies selected CLI path fingerprint, version, executable SHA-256 and initialize-response observation | This is process identity and protocol evidence, not proof that a model chose a tool or completed a task. |
+| Official usage/reset | Official account quota response plus Grok usage-page link; the [official FAQ](https://docs.x.ai/grok/faq) documents weekly reset timing and the Usage page | Public docs describe scheduled resets and usage visibility; no validated manual-reset contract or reset credit is exposed here. |
+
+## 2026-09-25 UI workbench increment (unreleased)
+
+PTY and isolated browser have local native smoke evidence. Artifact reads have targeted boundary/size tests and an isolated HTML UI check. Four-pane placement exists; independent file/review panes and full-page acceptance remain incomplete. See [UI evidence and remaining work](ZCODE_UI_REDESIGN.md).
+
+
+## 2026-09-21 post-release fixes (unreleased)
+
+v0.9.6 was published on September 20. Current work fixes revision cleanup, late-busy slot yielding, Host confirmation cancellation and overlapping confirmations; adds conversation confirmation controls and timezone editing. CLI 1.0.40 core ACP and plugin Hook discovery passed. Hook discovery is not proof of LLM invocation or parent/child isolation. See [current evidence](CLI_1_0_40_ALIGNMENT_2026-09-21.md). Sections below retain their implementation-time status.
+
+
 ## 2026-09-18 unreleased Desktop capabilities
 
 Persistent scheduling adds session-scoped MCP CRUD, frozen configuration, transactional runtime state, timezone/anchor calculation and current-session relay. Computer adds server-side enable gating, durable scheduled confirmations and a Windows logon desktop mutex. Desktop MCP requires parent hook proof; missing proof fails closed. Native subagent identity/cancellation and Agent frontmatter preservation have offline coverage. Actual CLI/model/Scheduler acceptance remains pending: see [implementation evidence](DESKTOP_CAPABILITIES_IMPLEMENTATION_2026-09-18.md).
@@ -505,7 +600,7 @@ The existing offline gate remains green (874 passed, 9 live skipped), but the cu
 |---|---|---|
 | Structured failures | Focused/source verified | Evidence-based classifications, scoped Provider/gateway observations, trace/retry/schema facts, class-specific diagnosis and expandable redacted error details. Concurrent CLI processes cannot borrow one another's failure record, and arbitrary gateway exceptions never cross the loopback response boundary; the detailed redacted diagnostic remains main-process-only. |
 | Non-Git Agent changes | Focused/UI verified | Real tool-call before/after snapshots provide last-turn/session review without Git staging/commit/branch controls; missing baselines are stated rather than fabricated. |
-| Token activity | Focused/UI verified | Exact Provider/CLI usage only, per-turn metrics, 24h/today/7d/30d/month rollups, coverage counts and a 371-day/53-week heatmap. Session detail deletion and 13-month anonymous retention are enforced. |
+| Token activity | Focused/UI verified; 2026-09-25 correction | Explicit provider/CLI total only; missing totals remain uncovered, and source is retained per turn. Calendar days use the system time zone. Cards and heatmap share model/provider/workspace filters. Deleted-session anonymous totals stay outside filtered detail statistics; v1 UTC rollups remain separately marked. Session detail deletion and 13-month retention remain enforced. |
 | Storage/cleanup integrity | Focused verified | JsonStore mutation queues prevent lost updates; workspace/session deletion removes all associated local projections while unrelated running sessions remain alive. |
 | Retry and streaming | Focused/source verified | ACP retry lifecycle is visible, Prompt budget expiry cancels the real turn, and growing final text remains plain until one completed Markdown render. |
 | Computer Use action integrity | Native/focused verified | Per-action MCP schemas, punctuation-aware key mapping, window-bounded pointer/drag, horizontal wheel and unknown-outcome timeout handling supplement the existing same-integrity safety boundary. |

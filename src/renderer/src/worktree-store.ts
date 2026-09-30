@@ -7,6 +7,8 @@ interface WorktreeState {
   selectedId: string;
   preview?: WorktreeApplyPreview;
   loading: boolean;
+  unavailableReason?: string;
+  setUnavailable(reason: string): void;
   setItems(workspace: string, items: GrokWorktreeSummary[]): void;
   setSelected(id: string): void;
   setPreview(preview?: WorktreeApplyPreview): void;
@@ -19,9 +21,10 @@ export const useWorktreeStore = create<WorktreeState>((set) => ({
   items: [],
   selectedId: "",
   loading: false,
-  setItems: (workspace, items) => set((state) => ({ workspace, items, selectedId: items.some((item) => item.id === state.selectedId) ? state.selectedId : items[0]?.id ?? "", preview: items.some((item) => item.id === state.selectedId) ? state.preview : undefined })),
+  setItems: (workspace, items) => set((state) => ({ workspace, items, unavailableReason: undefined, selectedId: items.some((item) => item.id === state.selectedId) ? state.selectedId : items[0]?.id ?? "", preview: items.some((item) => item.id === state.selectedId) ? state.preview : undefined })),
+  setUnavailable: (unavailableReason) => set({ unavailableReason }),
   setSelected: (selectedId) => set({ selectedId, preview: undefined }),
   setPreview: (preview) => set({ preview }),
   setLoading: (loading) => set({ loading }),
-  reset: (workspace = "") => set({ workspace, items: [], selectedId: "", preview: undefined, loading: false }),
+  reset: (workspace = "") => set({ workspace, items: [], selectedId: "", preview: undefined, loading: false, unavailableReason: undefined }),
 }));

@@ -1,3 +1,4 @@
+import { PanelSurface } from "./ui/PanelSurface";
 import { useEffect, useState } from "react";
 import type { OnboardingState, SystemCompatibilityReport } from "../../../shared/types";
 
@@ -24,7 +25,7 @@ export function OnboardingPanel({ state, onState, onClose, onAccounts, onWorkspa
   const cli = report?.items.find((item) => item.id === "cli");
   const computer = report?.items.find((item) => item.id === "computer");
 
-  return <div className="modal-backdrop onboarding-backdrop"><section className="control-panel onboarding-panel" role="dialog" aria-modal="true">
+  return <PanelSurface className="modal-backdrop onboarding-backdrop"><section className="control-panel onboarding-panel" role="dialog" aria-modal="true">
     <header><div><h2>首次设置</h2><p>稍后可在“帮助 → 重新运行首次设置”中再次打开。</p></div><button className="icon-button" onClick={skip}>×</button></header>
     <nav className="onboarding-steps">{STEPS.map((name, index) => <button key={name} className={index === step ? "active" : index < step ? "done" : ""} onClick={() => void move(index)}><span>{index + 1}</span>{name}</button>)}</nav>
     <div className="panel-scroll onboarding-content">
@@ -36,7 +37,7 @@ export function OnboardingPanel({ state, onState, onClose, onAccounts, onWorkspa
       {step === 5 && <><h3>准备完成</h3><p>核心会话、扩展和 Computer Use 会按实际 CLI 能力逐项启用。未知版本不会仅因版本号被拒绝。</p><DiagnosticSummary report={report}/></>}
     </div>
     <footer className="button-row"><button onClick={skip}>暂时跳过</button><span className="spacer"/><button disabled={step === 0} onClick={() => void move(step - 1)}>上一步</button>{step < STEPS.length - 1 ? <button className="primary" onClick={() => void move(step + 1)}>下一步</button> : <button className="primary" onClick={complete}>完成设置</button>}</footer>
-  </section></div>;
+  </section></PanelSurface>;
 }
 
 function DiagnosticSummary({ report }: { report?: SystemCompatibilityReport }): React.JSX.Element {

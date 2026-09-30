@@ -15,12 +15,12 @@ export const DEFAULT_THEME: ThemeSettings = {
   mode: "dark",
   customBase: "dark",
   colors: {
-    background: "#0d0f12",
-    surface: "#171a1f",
-    text: "#e7e9ec",
-    muted: "#9299a3",
-    accent: "#45a9df",
-    border: "#292e35",
+    background: "#121212",
+    surface: "#191919",
+    text: "#ececec",
+    muted: "#a1a1a1",
+    accent: "#6ea8fe",
+    border: "#2a2a2a",
   },
   background: {
     enabled: false,

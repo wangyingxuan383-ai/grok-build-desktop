@@ -1,5 +1,13 @@
 # Third-Party Notices
 
+## v0.10.0 interface references and dependencies
+
+- **ZCode** (`zai-org/ZCode`, Apache-2.0), reference commit `872ad960de7ec172591f7e1952f7849229f94521`: interaction and workspace organization reference. Components and styles are independently authored; ZCode source, backend, accounts and branding are not redistributed. See docs/ZCODE_UI_REDESIGN.md.
+- **Radix UI**: accessible menu, context-menu, dialog, tooltip, popover and tabs primitives, MIT.
+- **lucide-react** (1.48.0): interface icon components, ISC; original notices are preserved with the dependency and release license inventory.
+- **xterm.js**, fit addon and **node-pty**: manual terminal rendering and process I/O, under their dependency licenses; node-pty Windows prebuilds are included in the packaged application.
+- Codex and Claude desktop interfaces are interaction references only; no proprietary runtime or private application source is included.
+
 ## v0.2.0 implementation references
 
 - **[CPA Manager Plus](https://github.com/seakee/CPA-Manager-Plus)** (`seakee/CPA-Manager-Plus`, MIT): xAI/Grok billing endpoint request and response-shape compatibility reference. No credentials, branding, or UI code are copied.

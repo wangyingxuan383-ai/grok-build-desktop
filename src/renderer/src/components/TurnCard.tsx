@@ -3,6 +3,7 @@ import type { NavigationIntent, TurnFailure, TurnOutcome } from "../../../shared
 import type { UiChatTurn, UiMessage } from "../store";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 import { GeneratedMediaGallery, MessageCard } from "./MessageCard";
+import { SubagentCard } from "./SubagentCard";
 
 export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot, showThinking, expandTools, onResolved, onDiagnose, onRetry, onNavigate, onOpenReview, onFork }: {
   turn: UiChatTurn;
@@ -34,7 +35,9 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
     window.addEventListener("grok:collapse-processes", collapse);
     return () => window.removeEventListener("grok:collapse-processes", collapse);
   }, [sessionId, storageKey, turn.running]);
-  const groups = useMemo(() => turn.groups.map((group) => ({ ...group, items: showThinking ? group.items : collapseHiddenThoughts(group.items) })).filter((group) => group.items.length), [showThinking, turn.groups]);
+  // Sub-agents are results the reader asked for, so they sit in the turn body instead of the folded process list.
+  const subagents = useMemo(() => turn.groups.flatMap((group) => group.items).filter(isSubagentLifecycle), [turn.groups]);
+  const groups = useMemo(() => turn.groups.map((group) => ({ ...group, items: (showThinking ? group.items : collapseHiddenThoughts(group.items)).filter((message) => !isSubagentLifecycle(message)) })).filter((group) => group.items.length), [showThinking, turn.groups]);
   const hasActivity = groups.length > 0;
   const mediaResults = turn.trailing.filter((message): message is Extract<UiMessage, { kind: "media" }> => message.kind === "media");
   const nonMediaTrailing = turn.trailing.filter((message) => message.kind !== "media");
@@ -51,9 +54,10 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
         <div className="activity-items">{group.items.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onResolved={onResolved} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}</div>
       </details>)}</div>
     </details>}
+    {subagents.length > 0 && <div className="sa-list">{subagents.map((message) => <SubagentCard key={message.id} tool={message.tool} sessionId={sessionId} />)}</div>}
     {turn.pending.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onResolved={onResolved} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
     {turn.final && <div className="final-answer"><div className="final-answer-toolbar"><span>{turn.running ? "正在生成" : "最终回答"}</span><div><button title="复制最终回答" onClick={() => void navigator.clipboard.writeText(turn.final!.text)}>复制</button>{onFork && <button title="从当前任务末尾创建真实分叉" onClick={onFork}>从这里分叉</button>}</div></div>{turn.running ? <pre className="streaming-answer">{turn.final.text}</pre> : <LazyMarkdownView text={turn.final.text} />}{turn.presentation && <TurnMetrics presentation={turn.presentation}/>}</div>}
-    {mediaResults.length > 0 && <GeneratedMediaGallery messages={mediaResults} />}
+    {mediaResults.length > 0 && <GeneratedMediaGallery messages={mediaResults} sessionId={sessionId} />}
     {nonMediaTrailing.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
     {/* Never leave timing/token metrics floating without a visible result.
         Partial/failed historical turns explicitly explain why no body exists. */}
@@ -100,6 +104,10 @@ function outcomeLabel(outcome?: TurnOutcome): string {
   return outcome === "failed" ? "已失败" : outcome === "cancelled" ? "已取消" : outcome === "interrupted" ? "已中断" : "";
 }
 
+function isSubagentLifecycle(message: UiMessage): message is Extract<UiMessage, { kind: "tool" }> {
+  return message.kind === "tool" && (message.tool.kind === "subagent" || message.tool.source === "subagent-lifecycle");
+}
+
 function collapseHiddenThoughts(items: UiMessage[]): UiMessage[] {
   const nonThoughts = items.filter((message) => message.kind !== "thought");
   const thoughts = items.filter((message) => message.kind === "thought");
@@ -135,8 +143,22 @@ function summaryText(turn: UiChatTurn): string {
   if (turn.summary.files) parts.push(`${turn.summary.files} 文件`);
   if (turn.summary.additions || turn.summary.deletions) parts.push(`+${turn.summary.additions} -${turn.summary.deletions}`);
   if (turn.summary.commands) parts.push(`${turn.summary.commands} 命令`);
-  const computer = turn.groups.find((group) => group.kind === "computer")?.count ?? 0;
-  if (computer) parts.push(`${computer} Computer Use`);
+  const computerItems = turn.groups.find((group) => group.kind === "computer")?.items ?? [];
+  const host = computerItems.find((item): item is Extract<UiMessage, { kind: "tool" }> => item.kind === "tool" && item.tool.source === "computer-host");
+  const hostSteps = /(?:^|\s)(\d+)\s*步/.exec(host?.tool.output ?? "")?.[1];
+  const operated = computerItems.filter((item) => item.kind === "tool" && item.tool.source !== "computer-host" && item.tool.computerEvidence === "operated").length;
+  const attempted = computerItems.filter((item) => item.kind === "tool" && item.tool.computerEvidence === "attempted").length;
+  const observed = computerItems.filter((item) => item.kind === "tool" && item.tool.computerEvidence === "observed").length;
+  const computerFailed = computerItems.filter((item) => item.kind === "tool" && item.tool.computerEvidence === "failed").length;
+  const controlled = computerItems.filter((item) => item.kind === "tool" && item.tool.computerEvidence === "controlled").length;
+  if (Number(hostSteps) > 0) parts.push(`Computer Use ${hostSteps} 步`);
+  else if (operated) parts.push(`${operated} 次 Computer Use 操作`);
+  else if (attempted) parts.push(`${attempted} 次 Computer Use 尝试`);
+  else if (observed) parts.push(`${observed} 次 Computer Use 观察`);
+  else if (computerFailed) parts.push(`${computerFailed} 次 Computer Use 失败`);
+  else if (controlled) parts.push(`${controlled} 次 Computer 控制状态变更`);
+  else if (computerItems.length) parts.push(`${computerItems.length} 次 Computer Use 调用，操作结果未知`);
+  const computer = computerItems.length;
   const other = Math.max(0, turn.summary.tools - turn.summary.files - turn.summary.commands - turn.summary.subagents - computer);
   if (other) parts.push(`${other} 工具`);
   if (turn.summary.subagents) parts.push(`${turn.summary.subagents} 子 Agent`);

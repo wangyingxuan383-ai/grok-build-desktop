@@ -4,7 +4,64 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildComputerStateResult, computerPointerForAction, ComputerUseService, describeComputerAction, inferComputerRisk, isBlockedComputerTarget, isComputerHostTimeout, isComputerManualInterventionError, mapScreenshotCoordinates, normalizeComputerState, shouldConfirmComputerRisk, shouldRequestComputerAppPermission } from "./computer-use-service";
 
+it("does not count MCP wait observations as Host application operations", async () => {
+  const task = { sessionId: "s", status: "running", stepCount: 0, lastState: { stateId: "before" } };
+  const hostActions: string[] = [];
+  const service = Object.assign(Object.create(ComputerUseService.prototype), {
+    leases: new Map([["lease", { sessionId: "s", enabled: true, authorize: (_name: string, input: unknown) => input }]]),
+    sessionPolicies: new Map(), tasks: new Map([["s", task]]),
+    settings: { get: async () => ({ enabled: true }) }, getMode: () => "agent",
+    getHost: () => ({ call: async (action: string) => { hostActions.push(action); } }),
+    observe: async () => { task.lastState = { stateId: "after" }; return task.lastState; },
+    announce: () => undefined, publish: () => undefined, audit: async () => undefined,
+  });
+  const result = await service.mcpCall("lease", "wait", { stateId: "before", milliseconds: 1 });
+  expect(result.isError).not.toBe(true);
+  expect(hostActions).toEqual(["wait"]);
+  expect(task).toMatchObject({ stepCount: 0, lastAction: "wait", lastState: { stateId: "after" } });
+});
+
+it.each(["plan", "agent"])("counts only actual Host activation when starting in %s mode", async (mode) => {
+  const task = { sessionId: "s", status: "idle", stepCount: 0 };
+  const actions: string[] = [];
+  const service = Object.assign(Object.create(ComputerUseService.prototype), {
+    assertEnabled: async () => undefined, getMode: () => mode, publish: () => undefined,
+    getHost: () => ({ call: async (action: string) => { actions.push(action); } }),
+    observe: async () => ({ stateId: "observed" }),
+  });
+  await service.activateTask(task, { id: "fixture" });
+  expect(actions).toEqual(mode === "plan" ? [] : ["activate_window"]);
+  expect(task.stepCount).toBe(mode === "plan" ? 0 : 1);
+});
+
 describe("Computer Use safety policy", () => {
+  it("invalidates a bridged risk confirmation when the Host exits", async () => {
+    const root = await mkdtemp(join(tmpdir(), "computer-bridge-exit-"));
+    const service = new ComputerUseService(root, "fixture", "fixture", { log: async () => undefined } as never, () => "agent", () => undefined);
+    let approve!: (value: boolean) => void; let requestSignal: AbortSignal | undefined;
+    const task = { sessionId: "s", status: "running", appId: "fixture", stepCount: 0 };
+    (service as any).tasks.set("s", task);
+    service.configureSession("s", { enabled: true, confirm: (_request, signal) => { requestSignal = signal; return new Promise(resolve => { approve = resolve; }); } });
+    try {
+      const waiting = (service as any).confirmRisk(task, "delete", "Delete fixture", "click") as Promise<void>;
+      const rejected = expect(waiting).rejects.toThrow("确认已失效");
+      (service as any).handleHostExit();
+      expect(requestSignal?.aborted).toBe(true);
+      approve(true); await rejected;
+      expect(task.status).toBe("error");
+    } finally { await service.dispose(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("restores the exact Computer policy after a scheduled turn", async () => {
+    const root = await mkdtemp(join(tmpdir(), "computer-restore-"));
+    const service = new ComputerUseService(root, "fixture", "fixture", { log: async () => undefined } as never, () => "auto", () => undefined);
+    try {
+      service.configureSession("s", { enabled: false });
+      const restore = service.configureSession("s", { enabled: true });
+      restore();
+      await expect(service.start({ sessionId: "s", appId: "fixture" })).rejects.toThrow("未允许");
+    } finally { await service.dispose(); await rm(root, { recursive: true, force: true }); }
+  });
   it("is accepted and available-by-default while preserving the user's enable toggle", async () => {
     const root = await mkdtemp(join(tmpdir(), "computer-settings-"));
     const service = new ComputerUseService(root, "missing-helper", "missing-plugin", { log: async () => undefined } as never, () => "agent", () => undefined);

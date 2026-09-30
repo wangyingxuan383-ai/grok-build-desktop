@@ -17,7 +17,7 @@ const asarPath = join(resourcesRoot, "app.asar");
 if (!existsSync(asarPath) || statSync(asarPath).size < 1_000_000) throw new Error(`Application ASAR is missing or truncated: ${asarPath}`);
 
 const files = new Set(listPackage(asarPath).map((entry) => entry.replaceAll("\\", "/").replace(/^\//, "")));
-const requiredAsarEntries = ["package.json", "out/main/index.js", "out/preload/index.cjs", "out/renderer/index.html"];
+const requiredAsarEntries = ["package.json", "out/main/index.js", "out/main/token-activity-worker.js", "out/preload/index.cjs", "out/renderer/index.html"];
 for (const entry of requiredAsarEntries) if (!files.has(entry)) throw new Error(`Application ASAR is missing: ${entry}`);
 const extractAsar = (entry) => extractFile(asarPath, entry.split("/").join(sep));
 

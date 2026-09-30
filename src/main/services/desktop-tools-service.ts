@@ -10,7 +10,7 @@ export interface DesktopToolContext { sessionId: string; cwd: string }
 export interface DesktopToolBackend {
   mode(sessionId: string): SessionMode | undefined;
   list(): Promise<AutomationTask[]>;
-  create(context: DesktopToolContext, input: { name: string; prompt: string; schedule: AutomationTaskInput["schedule"]; destination: "standalone" | "current-session"; timeZone?: string; contextPolicy?: "reuse" | "fresh" }): Promise<AutomationTask>;
+  create(context: DesktopToolContext, input: { name: string; prompt: string; schedule: AutomationTaskInput["schedule"]; destination: "standalone" | "current-session"; timeZone?: string; contextPolicy?: "reuse" | "fresh"; computerEnabled?: boolean }): Promise<AutomationTask>;
   update(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]>;
   remove(id: string): Promise<AutomationTask[]>;
   runs(id: string): Promise<AutomationRunRecord[]>;
@@ -40,8 +40,8 @@ export class DesktopToolsService {
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID(), enableJsonResponse: true });
     const schemas: Record<string, Record<string, z.ZodTypeAny>> = {
       capabilities: {}, automation_list: {},
-      automation_create: { name: z.string().min(1).max(512), prompt: z.string().min(1).max(100_000), schedule, destination: z.enum(["standalone", "current-session"]), contextPolicy: z.enum(["reuse", "fresh"]).optional().describe("Standalone: reuse or fresh; current-session requires reuse."), timeZone: z.string().max(100).optional(), futureIntent: z.literal(true) },
-      automation_update: { id, name: z.string().min(1).max(512).optional(), prompt: z.string().min(1).max(100_000).optional(), schedule: schedule.optional(), contextPolicy: z.enum(["reuse", "fresh"]).optional(), timeZone: z.string().max(100).optional(), enabled: z.boolean().optional() },
+      automation_create: { name: z.string().min(1).max(512), prompt: z.string().min(1).max(100_000), schedule, destination: z.enum(["standalone", "current-session"]), contextPolicy: z.enum(["reuse", "fresh"]).optional().describe("Standalone: reuse or fresh; current-session requires reuse."), timeZone: z.string().max(100).optional(), computerEnabled: z.boolean().optional().describe("Default false. Set true when the requested future work needs desktop control; retain the session's Agent/Auto mode."), futureIntent: z.literal(true) },
+      automation_update: { id, name: z.string().min(1).max(512).optional(), prompt: z.string().min(1).max(100_000).optional(), schedule: schedule.optional(), contextPolicy: z.enum(["reuse", "fresh"]).optional(), timeZone: z.string().max(100).optional(), enabled: z.boolean().optional(), computerEnabled: z.boolean().optional() },
       automation_pause: { id, paused: z.boolean() }, automation_delete: { id }, automation_runs: { id }, automation_cancel_run: { id, runId: id },
     };
     const descriptions: Record<string, string> = {
@@ -78,8 +78,15 @@ export class DesktopToolsService {
       switch (name) {
         case "capabilities": result = await this.backend.capabilities(context.sessionId); break;
         case "automation_list": result = tasks; break;
-        case "automation_create": result = await this.backend.create(context, input as Parameters<DesktopToolBackend["create"]>[1]); break;
-        case "automation_update": { const { id: taskId, ...patch } = input; result = (await this.backend.update(String(taskId), patch)).find(task => task.id === taskId); break; }
+        case "automation_create": {
+          const { name: taskName, prompt, schedule: taskSchedule, destination, contextPolicy, timeZone, computerEnabled } = input;
+          result = await this.backend.create(context, { name: taskName, prompt, schedule: taskSchedule, destination, contextPolicy, timeZone, computerEnabled } as Parameters<DesktopToolBackend["create"]>[1]); break;
+        }
+        case "automation_update": {
+          const { id: taskId, computerEnabled, ...patch } = input;
+          const task = tasks.find(task => task.id === taskId)!;
+          result = (await this.backend.update(String(taskId), { ...patch, ...(typeof computerEnabled === "boolean" ? { profile: { ...task.profile, computerEnabled } } : {}) })).find(task => task.id === taskId); break;
+        }
         case "automation_pause": result = (await this.backend.update(String(input.id), { enabled: !input.paused })).find(task => task.id === input.id); break;
         case "automation_delete": await this.backend.remove(String(input.id)); result = { deleted: true, id: input.id }; break;
         case "automation_runs": result = await this.backend.runs(String(input.id)); break;

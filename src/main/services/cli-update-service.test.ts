@@ -83,6 +83,16 @@ function createUpdateHarness(root: string, options: { failTarget?: boolean; fail
 }
 
 describe("CliUpdateService", () => {
+  it("verifies an externally updated current binary without downloading it again", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-external-verify-")); roots.push(root);
+    const { service, runtime, updates } = createUpdateHarness(root);
+    const preview = await service.preview("try-new", "verify");
+    const result = await service.apply({ targetVersion: preview.targetVersion, expectedCurrentVersion: preview.fromVersion, action: "verify", policy: "try-new", confirmationToken: preview.confirmationToken });
+    expect(result.status).toBe("updated"); expect(updates).toEqual([]);
+    expect(runtime.probe).toHaveBeenCalledOnce(); expect(await service.isRuntimeVersionAllowed(preview.targetVersion)).toBe(true);
+    // `grok version --json` appends the build hash; the approval must still match.
+    expect(await service.isRuntimeVersionAllowed(`${preview.targetVersion} (eb1a2256660d)`)).toBe(true);
+  });
   it("caps an installer at five minutes and retains redacted diagnostics on timeout", async () => {
     expect(CLI_UPDATE_TIMEOUT_MS).toBe(300_000);
     const error = await runProcessTree(process.execPath, ["-e", "console.error('range transfer stalled; XAI_API_KEY=xai-private-test-credential');setInterval(()=>{},1000)"], process.env, 1_500).catch((value: Error) => value);

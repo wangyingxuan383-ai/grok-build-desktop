@@ -15,6 +15,81 @@ function input(patch: Partial<AutomationTaskInput> = {}): AutomationTaskInput { 
 async function fixture(options: Partial<ConstructorParameters<typeof AutomationService>[2]> = {}) { const root = await mkdtemp(join(tmpdir(), "grok-automation-")); roots.push(root); const scheduler = new FakeScheduler(); const launched = vi.fn(async () => undefined); const service = new AutomationService(root, new LogService(join(root, "app.log")), { executable: "D:\\应用 目录\\Grok Build Desktop.exe", cipher: new FakeCipher(), scheduler, launchWorker: launched, ...options }); return { root, scheduler, launched, service }; }
 
 describe("AutomationService", () => {
+  it("holds project-removal leases against another Worker and releases them after failure", async () => {
+    const { root, service } = await fixture();
+    const task = await service.createOne(input());
+    const worker = new AutomationService(root, new LogService(join(root, "worker.log")), { executable: "fixture.exe", cipher: new FakeCipher(), scheduler: new FakeScheduler() });
+    const execute = vi.fn(async () => ({}));
+    await expect(service.withIdleTasks([task.id], async () => {
+      const skipped = await worker.execute(task.id, "during-removal", execute);
+      expect(skipped.status).toBe("skipped");
+      expect(execute).not.toHaveBeenCalled();
+      throw Error("fixture failed before deletion");
+    })).rejects.toThrow("fixture failed");
+    expect((await worker.execute(task.id, "after-removal-failure", execute)).status).toBe("completed");
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("does not begin project removal while a Worker owns a task", async () => {
+    const { service } = await fixture();
+    const task = await service.createOne(input());
+    let finish!: () => void;
+    const running = service.execute(task.id, "already-running", async () => { await new Promise<void>(resolve => { finish = resolve; }); return {}; });
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    const remove = vi.fn(async () => undefined);
+    try { await expect(service.withIdleTasks([task.id], remove)).rejects.toThrow("正在运行"); expect(remove).not.toHaveBeenCalled(); }
+    finally { finish(); await running; }
+  });
+  it("releases the execution slot when the bound session becomes busy after admission", async () => {
+    const { service } = await fixture({ globalSlotPollMs: 5 });
+    await service.updatePolicy({ maxConcurrentRuns: 1 });
+    const first = await service.createOne(input()); const second = await service.createOne(input({ name: "independent" }));
+    let ready = true; let waiting = false;
+    const one = service.execute(first.id, "late-busy", async ({ waitUntilReady }) => {
+      ready = false; waiting = true; await waitUntilReady(); return {};
+    }, () => ready);
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    const two = await service.execute(second.id, "independent", async () => { ready = true; return {}; });
+    expect(two.status).toBe("completed"); expect((await one).status).toBe("completed");
+  });
+
+  it("rejects a scoped Computer confirmation after Host cancellation without cancelling the whole run", async () => {
+    const { service } = await fixture({ pendingPollMs: 5 }); const task = await service.createOne(input());
+    const request = new AbortController(); let decision: boolean | undefined;
+    const execution = service.execute(task.id, "host-exit", async ({ confirm }) => {
+      decision = await confirm({ source: "computer", category: "delete" }, true, request.signal); return {};
+    });
+    await vi.waitFor(async () => expect(await service.pending()).toHaveLength(1));
+    const pending = (await service.pending())[0]!; request.abort();
+    expect((await execution).status).toBe("completed"); expect(decision).toBe(false);
+    expect(await service.pending()).toHaveLength(0);
+    await expect(service.respondPending(pending.id, true)).rejects.toThrow();
+  });
+
+  it("keeps a concurrent confirmation actionable after an older Host wait aborts", async () => {
+    const { service } = await fixture({ pendingPollMs: 5 }); const task = await service.createOne(input());
+    const request = new AbortController(); let firstDone = false;
+    const execution = service.execute(task.id, "overlapping-confirmations", async ({ confirm }) => {
+      const first = confirm({ source: "computer", action: "delete old" }, true, request.signal).then(value => { expect(value).toBe(false); firstDone = true; });
+      await vi.waitFor(async () => expect(await service.pending()).toHaveLength(1));
+      const second = confirm({ action: "publish new" }, true);
+      await vi.waitFor(async () => expect(await service.pending()).toHaveLength(2));
+      request.abort(); await first;
+      expect((await service.listRuns(task.id))[0]?.status).toBe("awaiting-confirmation");
+      const pending = await service.pending(); expect(pending).toHaveLength(1);
+      await service.respondPending(pending[0]!.id, true); expect(await second).toBe(true);
+      return {};
+    });
+    expect((await execution).status).toBe("completed"); expect(firstDone).toBe(true);
+  });
+
+  it("does not clear a newer revision's runtime mapping", async () => {
+    const { service } = await fixture(); const task = await service.createOne(input());
+    await service.update(task.id, { name: "edited" }); const current = (await service.list())[0]!;
+    await service.setExecutionSession(task.id, "new-session", current.revision);
+    await service.setExecutionSession(task.id, undefined, task.revision);
+    expect((await service.list())[0]!.sessionId).toBe("new-session");
+  });
   it("decodes UTF-8, UTF-16 and CP936/GB18030 scheduler output", () => {
     const message = "错误: 系统找不到指定的文件。";
     expect(decodeWindowsCommandOutput(Buffer.from(message, "utf8"))).toBe(message);
@@ -298,4 +373,13 @@ it("rejects a late confirmation after a different process cancels the run", asyn
   await vi.waitFor(async () => expect(await gui.pending()).toHaveLength(1)); const [pending] = await gui.pending();
   await gui.cancelRun("late-confirm"); await expect(gui.respondPending(pending!.id, true)).rejects.toThrow();
   expect((await running).status).toBe("cancelled");
+});
+
+it("blocks removed-project automations until an independent task is rebound",async()=>{
+ const {service}=await fixture();const task=await service.createOne(input());await service.update(task.id,{enabled:false,projectRemoved:true});
+ await service.update(task.id,{projectRemoved:false});expect((await service.list()).find(t=>t.id===task.id)?.projectRemoved).toBe(true);
+ await expect(service.update(task.id,{workspace:"d:/中文 工作区/",enabled:true})).rejects.toThrow("重新绑定");
+ await expect(service.pause(task.id,false)).rejects.toThrow("重新绑定");await expect(service.runNow(task.id)).rejects.toThrow("重新绑定");
+ const executor=vi.fn(async()=>({}));expect((await service.execute(task.id,"removed-project",executor)).status).toBe("skipped");expect(executor).not.toHaveBeenCalled();
+ await service.update(task.id,{workspace:"D:\\rebound",enabled:true});expect((await service.list()).find(t=>t.id===task.id)?.projectRemoved).toBe(false);
 });

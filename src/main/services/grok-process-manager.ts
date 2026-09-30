@@ -650,7 +650,9 @@ export class GrokProcessManager {
     const parsedCliVersion = parseVersion(cliVersion);
     if (!parsedCliVersion) throw new Error("无法识别 Grok CLI 版本，未启动会话。请检查 CLI 路径后重试版本检测。");
     if (!await this.acceptCliRuntimeVersion(parsedCliVersion.join("."))) {
-      throw new Error(`Grok CLI ${parsedCliVersion.join(".")} 尚未通过此 Desktop 安装的兼容门禁；已在创建 ACP 会话前失败关闭`);
+      // An unverified version is a warning, not a wall: the ACP handshake below is the real compatibility
+      // check, and it fails with a concrete reason if this CLI genuinely cannot be driven.
+      await this.log.log(`Grok CLI ${parsedCliVersion.join(".")} 尚未经过此 Desktop 的兼容验证；仍尝试启动，握手失败时会报告具体原因。`).catch(() => undefined);
     }
     const effortFlag = await detectEffortFlag(cliPath, env);
     const ownership = resumeSessionId && this.sessionLockRoot ? await acquireProcessResource(this.sessionLockPath(resumeSessionId), 1500) : undefined;

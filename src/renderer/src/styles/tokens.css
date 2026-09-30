@@ -1,29 +1,125 @@
+/*
+ * Design tokens. Surface ladder, type scale and radius nesting follow the
+ * approach documented in ZCode's DESIGN.md (Apache-2.0).
+ *
+ * The values below are the dark defaults used for the very first paint.
+ * `theme.ts` (themeCssVariables) overwrites the colour tokens inline on <html>
+ * from the user's theme seed, so custom themes flow through the same names.
+ *
+ * New UI must use the `--color-*`, `--text-*`, `--radius-*` and `--space-*`
+ * tokens. The short legacy names (--bg, --panel, --text, ...) remain only so
+ * pages that have not been migrated yet keep rendering with the new palette.
+ */
 :root {
   color-scheme: dark;
-  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  --bg: #0d0f12;
-  --main: #0f1115;
-  --panel: #13161a;
-  --panel-2: #181c21;
-  --panel-3: #20252b;
-  --input-bg: #0b0d10;
-  --elevated: #1b1f24;
-  --button-bg: #22272e;
-  --hover: #282e35;
-  --chip-bg: #20242a;
-  --border: #292e35;
-  --border-strong: #3b424b;
-  --muted: #9299a3;
-  --text: #e7e9ec;
-  --text-secondary: #b7bec6;
-  --text-strong: #f3f5f7;
-  --accent: #45a9df;
-  --accent-2: #247cae;
-  --accent-soft: #17232b;
-  --surface-translucent: #171a1fd8;
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  font-family: var(--font-sans);
+  background: var(--color-window);
+  color: var(--color-fg);
+
+  /* Surface ladder: window -> frame -> card -> popover */
+  --color-window: #121212;
+  --color-frame: #191919;
+  --color-card: #212121;
+  --color-card-selected: #292929;
+  --color-popover: #252525;
+  --color-input: #1d1d1d;
+  --color-hover: color-mix(in srgb, var(--color-fg) 6%, transparent);
+  --color-selected: color-mix(in srgb, var(--color-fg) 10%, transparent);
+
+  --color-border: #2a2a2a;
+  --color-border-strong: #3a3a3a;
+  --color-border-focus: color-mix(in srgb, var(--color-accent) 70%, transparent);
+
+  --color-fg: #ececec;
+  --color-fg-subtle: #a1a1a1;
+  --color-fg-subtlest: #6f6f6f;
+
+  --color-primary: #f2f2f2;
+  --color-primary-fg: #121212;
+  --color-accent: #6ea8fe;
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 14%, transparent);
+
+  --color-success: #4cc38a;
+  --color-warning: #e5b454;
+  --color-danger: #f06a6a;
+  --color-success-soft: color-mix(in srgb, var(--color-success) 14%, transparent);
+  --color-warning-soft: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  --color-danger-soft: color-mix(in srgb, var(--color-danger) 12%, transparent);
+
+  --color-diff-added: var(--color-success);
+  --color-diff-removed: var(--color-danger);
+
+  --agent-1: #8b7cf6;
+  --agent-2: #36b8c9;
+  --agent-3: #e08a3c;
+  --agent-4: #d45fa0;
+
+  --shadow-overlay: 0 10px 30px #00000073, 0 0 0 1px var(--color-border);
+
+  /* Typography: only --ui-font-size scales with the user's text-size setting. */
+  --ui-font-size: 14px;
+  --text-xl: calc(var(--ui-font-size) + 4px);
+  --text-lg: calc(var(--ui-font-size) + 2px);
+  --text-base: var(--ui-font-size);
+  --text-caption: calc(var(--ui-font-size) - 1px);
+  --text-sm: calc(var(--ui-font-size) - 2px);
+  --text-xs: calc(var(--ui-font-size) - 4px);
+
+  /* Spacing: 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Radius steps down as containers nest: card 12 -> control 8 -> row 6 -> 4 */
+  --radius-2xl: 16px;
+  --radius-xl: 12px;
+  --radius-lg: 8px;
+  --radius-md: 6px;
+  --radius-sm: 4px;
+
+  --control-sm: 24px;
+  --control-md: 28px;
+  --control-lg: 32px;
+  --control-xl: 36px;
+
+  --frame-gap: 6px;
+  --header-height: 44px;
+  --reading-width: 760px;
+
+  /* Legacy names, resolved from the ladder above (see note at the top). */
+  --bg: var(--color-window);
+  --main: var(--color-frame);
+  --panel: var(--color-frame);
+  --panel-2: var(--color-card);
+  --panel-3: var(--color-card-selected);
+  --input-bg: var(--color-input);
+  --elevated: var(--color-popover);
+  --button-bg: var(--color-card);
+  --hover: var(--color-card-selected);
+  --chip-bg: var(--color-card);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --muted: var(--color-fg-subtle);
+  --text: var(--color-fg);
+  --text-secondary: color-mix(in srgb, var(--color-fg) 78%, var(--color-fg-subtle));
+  --text-strong: #ffffff;
+  --accent: var(--color-accent);
+  --accent-2: color-mix(in srgb, var(--color-accent) 82%, #000);
+  --accent-soft: var(--color-accent-soft);
+  --surface-translucent: color-mix(in srgb, var(--color-frame) 86%, transparent);
   --shadow: #00000088;
+  --danger: var(--color-danger);
+  --success: var(--color-success);
+  --warning: var(--color-warning);
+  --radius-control: var(--radius-lg);
+  --radius-card: var(--radius-xl);
+  --control-height: var(--control-lg);
+
   --background-opacity: .32;
   --background-blur: 0px;
   --background-dim: .42;
@@ -31,14 +127,4 @@
   --background-fit: cover;
   --background-position: center;
   --theme-background-image: none;
-  --danger: #ef6c72;
-  --success: #56c596;
-  --warning: #e7b75d;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --radius-control: 8px;
-  --radius-card: 12px;
-  --control-height: 32px;
 }

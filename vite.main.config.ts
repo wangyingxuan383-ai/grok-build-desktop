@@ -19,7 +19,7 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: profile === "local",
     target: "node24",
-    lib: { entry: resolve("src/main/index.ts"), formats: ["es"], fileName: () => "index.js" },
-    rollupOptions: { external: ["electron", "iconv-lite", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
+    lib: { entry: {index:resolve("src/main/index.ts"),"token-activity-worker":resolve("src/main/token-activity-worker.ts")}, formats: ["es"], fileName: (_format,name) => `${name}.js` },
+    rollupOptions: { external: ["electron", "iconv-lite", "node-pty", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
   },
 });

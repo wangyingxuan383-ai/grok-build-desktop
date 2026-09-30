@@ -28,6 +28,13 @@ export class MediaAccessService {
     this.store = new JsonStore(join(userDataPath, "media-access.json"), { version: 1, records: {} });
   }
 
+  async listGeneratedImages(excludedSessions:ReadonlySet<string>,limit=100):Promise<MediaAccessHandle[]> {
+    const records=Object.values((await this.store.get()).records);
+    return records.filter(record=>record.media==="image"&&record.cacheKind!=="attachment"&&!record.sessionId.startsWith("image-")&&!excludedSessions.has(record.sessionId)&&!this.expired(record))
+      .sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,Math.max(0,Math.min(100,limit)))
+      .map(({id,sessionId,media,mimeType,name,url})=>({id,sessionId,media,mimeType,name,url}));
+  }
+
   async register(sessionId: string, path: string, media: MediaCreationKind, mimeType: string, name?: string): Promise<MediaAccessHandle> {
     return this.registerFromRoot(sessionId, path, media, mimeType, name, "media");
   }

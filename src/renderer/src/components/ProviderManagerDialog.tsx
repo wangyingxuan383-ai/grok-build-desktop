@@ -1,3 +1,4 @@
+import { PanelSurface } from "./ui/PanelSurface";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityApplicationDraft, CapabilityApplicationSelection, CustomProviderInput, CustomProviderProfile, ProviderCapabilityVerification, ProviderCompatibilityFlavor, ProviderConnectionDraft, ProviderDraftProbeResult, ProviderImageTransport, ProviderModelCandidate, ProviderModelDefinition, ProviderProtocol, ProviderProxyMode, ProviderReasoningMode, ProviderScanJob, ProviderScanProgress, ProviderSchemaProfile, ProviderUpstreamProtocol, ReasoningEffort } from "../../../shared/types";
 import { DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS, PROVIDER_REASONING_EFFORTS, providerReasoningEfforts } from "../../../shared/provider-model-capabilities";
@@ -228,7 +229,7 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
     finally { setBusy(""); }
   };
 
-  return <div className="modal-backdrop provider-manager-backdrop" onMouseDown={onClose}><section className="provider-manager" role="dialog" aria-modal="true" aria-label="自定义提供商管理" onMouseDown={(event) => event.stopPropagation()}>
+  return <PanelSurface className="modal-backdrop provider-manager-backdrop" onMouseDown={onClose}><section className="provider-manager" role="dialog" aria-modal="true" aria-label="自定义提供商管理" onMouseDown={(event) => event.stopPropagation()}>
     <header><div><h2>自定义提供商</h2><span>连接、模型发现与 CLI 配置</span></div><button className="icon-button" aria-label="关闭提供商管理" onClick={onClose}><UiIcon name="close"/></button></header>
     <div className="provider-manager-layout">
       <aside className="provider-manager-list"><label><UiIcon name="search"/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索提供商"/></label><div className="provider-preset-menu"><strong>添加提供商</strong><div><button onClick={() => startCreate("openai-chat")}>OpenAI 兼容</button><button onClick={() => startCreate("responses")}>Responses</button><button onClick={() => startCreate("anthropic")}>Anthropic</button><button onClick={() => startCreate("gemini-compatible")}>Gemini 兼容</button><button onClick={() => startCreate("ollama")}>Ollama</button><button onClick={() => startCreate("gateway")}>普通网关</button></div></div><nav>{visibleProviders.map((provider) => <button className={provider.id === selectedId && !draft ? "active" : ""} key={provider.id} onClick={() => { setSelectedId(provider.id); setDraft(undefined); }}><span className={`provider-health ${provider.hasCredential ? "ready" : "missing"}`}/><span><strong>{provider.name}</strong><small>{protocolLabel(provider.protocol)} · {provider.models.length} 个模型</small></span>{!provider.owned && <em>外部</em>}</button>)}</nav></aside>
@@ -275,7 +276,7 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
       }}/><span><strong>{change.label}</strong><small>{change.before ? `${change.before} → ` : ""}{change.after}</small><em>{evidenceSourceLabel(change.evidenceSource)}{change.checkedAt ? ` · ${new Date(change.checkedAt).toLocaleString()}` : ""}{change.expired ? " · 已过期" : ""}</em></span></label>)}</div>
       <footer><button onClick={() => setApplication(undefined)}>取消</button><button className="primary" disabled={application.expired || !applicationSelection.size || Boolean(busy)} onClick={() => void applyApplication()}>应用所选 {applicationSelection.size} 项</button></footer>
     </section></div>}
-  </section></div>;
+  </section></PanelSurface>;
 }
 
 function ProviderDraftEditor({ draft, setDraft, candidates, setCandidates, visibleCandidates, selectedCandidates, setSelectedCandidates, modelSearch, setModelSearch, probe, busy, onProbe, onDiscover, onImport, onSave, onCancel }: {

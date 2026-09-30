@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { BackgroundTaskSummary, CliRuntimeUpdate, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
+import type { AgentDashboardNode, BackgroundTaskSummary, CliRuntimeUpdate, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
 import { canOpenRecentFileDiff } from "../session-ui-guards";
 import type { UiChatTurn } from "../store";
 import { UiIcon, type UiIconName } from "../ui-icons";
 import { LazyMarkdownView } from "./LazyMarkdownView";
+import { useWorkbenchStore } from "../workbench-store";
+import { statusText } from "../agent-status";
 
 export type RightUtilityTool = "launcher" | "document" | "files" | "tasks" | "session";
 export type RightTool = "review" | "agent-changes" | RightUtilityTool;
@@ -40,7 +42,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, run
     {tool === "launcher" ? <ToolLauncher cwd={cwd} onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
     {tool === "document" && <DocumentTool turn={turn} onExpand={onExpandResult}/>}
     {tool === "files" && <FilesTool cwd={cwd} sessionId={sessionId} paths={paths} onNavigate={onNavigate} onError={onError}/>}
-    {tool === "tasks" && <TasksTool sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError}/>}
+    {tool === "tasks" && <TasksTool cwd={cwd} sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError}/>}
     {tool === "session" && <SessionTool sessionId={sessionId} onError={onError}/>}
   </aside>;
 }
@@ -107,7 +109,7 @@ function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string
   </div>;
 }
 
-function TasksTool({ sessionId, queue, runtimeUpdates, sessionStatus, onError }: { sessionId?: string; queue: PromptQueueEntry[]; runtimeUpdates: CliRuntimeUpdate[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
+function TasksTool({ cwd, sessionId, queue, runtimeUpdates, sessionStatus, onError }: { cwd: string; sessionId?: string; queue: PromptQueueEntry[]; runtimeUpdates: CliRuntimeUpdate[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
   const [tasks, setTasks] = useState<BackgroundTaskSummary[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -116,7 +118,31 @@ function TasksTool({ sessionId, queue, runtimeUpdates, sessionStatus, onError }:
     const timer = window.setInterval(refresh, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [onError, sessionId]);
-  return <div className="right-tool-scroll tasks-tool"><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{runtimeUpdates.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{runtimeUpdates.length}</span></header>{runtimeUpdates.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
+  return <div className="right-tool-scroll tasks-tool"><SubagentList workspace={cwd} parentSessionId={sessionId}/><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{runtimeUpdates.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{runtimeUpdates.length}</span></header>{runtimeUpdates.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
+}
+
+function SubagentList({workspace, parentSessionId}: {workspace: string; parentSessionId?: string}) {
+  const [nodes, setNodes] = useState<AgentDashboardNode[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setNodes([]); setError("");
+    if (!workspace || !parentSessionId) return;
+    const refresh = async () => {
+      try {
+        const snapshot = await window.grokDesktop.getAgentDashboard({workspacePath: workspace});
+        if (!cancelled) {
+          setNodes(snapshot.roots.filter(root => root.sessionId === parentSessionId).flatMap(root => root.children).filter(node => Boolean(node.nativeSubagentId || node.childSessionId)));
+          setError("");
+        }
+      } catch (reason) { if (!cancelled) setError(message(reason)); }
+      finally { if (!cancelled) timer = setTimeout(refresh, 3000); }
+    };
+    void refresh();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [workspace, parentSessionId]);
+  return <section className="subagent-list"><header><strong>子智能体</strong><span>{nodes.length}</span></header>{error && <p role="alert">{error}</p>}{nodes.map(node => <article key={node.id}><div><strong>{node.title}</strong><small>{statusText(node.status)} · {node.latestAction || "暂无动作记录"}</small>{node.summary && <p>{node.summary}</p>}<button disabled={node.id.startsWith("task:")} title={node.id.startsWith("task:") ? "仅提供后台摘要，尚无独立子会话记录" : "只读查看，不启动执行"} onClick={() => useWorkbenchStore.getState().setActiveSubagent(node.id)}>{node.childSessionId ? "查看子会话" : "查看摘要"}</button></div></article>)}{!nodes.length && !error && <p className="right-tool-empty">当前会话没有已记录的子智能体。</p>}</section>;
 }
 
 export function reviewSurfaceForCapability(available?: boolean): "review" | "agent-changes" | undefined {
@@ -165,7 +191,7 @@ function SessionTool({ sessionId, onError }: { sessionId?: string; onError(messa
       {!sessionId ? <p className="right-tool-empty">当前没有活动会话。</p> : info?.supported === false ? <p className="right-tool-empty">当前 CLI 不支持 session/info；不会用全局默认值猜测旧会话配置。</p> : <dl className="session-detail-list"><dt>会话 ID</dt><dd title={info?.sessionId}>{info?.sessionId || "—"}</dd><dt>标题</dt><dd>{info?.title || "未命名"}</dd><dt>工作目录</dt><dd title={info?.cwd}>{info?.cwd || "—"}</dd><dt>Agent</dt><dd>{info?.agentName || "CLI 未返回"}</dd><dt>模型</dt><dd>{info?.modelId || "—"}{info?.resolvedModelId && info.resolvedModelId !== info.modelId ? ` → ${info.resolvedModelId}` : ""}</dd><dt>模式</dt><dd>{info?.mode || "CLI 未返回"}</dd><dt>思考档位</dt><dd>{info?.effort || "CLI 默认/未返回"}</dd><dt>Sandbox</dt><dd>{info?.sandbox || "CLI 未返回"}</dd></dl>}
     </section>
     <section><header><strong>Context</strong><span>{contextPercent === undefined ? "CLI 未返回" : `${contextPercent.toFixed(1)}%`}</span></header>{contextPercent === undefined ? <p className="right-tool-empty">上下文窗口与会话累计 Token 是不同概念；这里只显示 CLI 返回的当前上下文占用。</p> : <><div className="quota-progress"><i style={{ width: `${contextPercent}%` }}/></div><dl className="session-detail-list"><dt>当前占用</dt><dd>{formatOptionalTokens(info?.contextUsedTokens)}</dd><dt>模型窗口</dt><dd>{formatOptionalTokens(info?.contextWindowTokens)}</dd><dt>剩余</dt><dd>{formatOptionalTokens(info?.contextFreeTokens)}</dd><dt>系统提示</dt><dd>{formatOptionalTokens(info?.systemPromptTokens)}</dd><dt>工具定义</dt><dd>{info?.toolDefinitionsCount === undefined ? "未返回" : `${info.toolDefinitionsCount} 个 · ${formatOptionalTokens(info.toolDefinitionsTokens)}`}</dd><dt>消息/工具调用</dt><dd>{info?.messageCount === undefined && info?.toolCallCount === undefined ? "未返回" : `${info?.messageCount ?? 0} / ${info?.toolCallCount ?? 0}`}</dd><dt>已压缩</dt><dd>{info?.compactionCount === undefined ? "未返回" : `${info.compactionCount} 次`}</dd><dt>CLI 当前阈值</dt><dd>{info?.autoCompactThresholdPercent === undefined ? "未返回" : `${info.autoCompactThresholdPercent}%`}</dd></dl></>}<label className="field"><span>自动压缩策略</span><select value={compactionPolicy.mode} onChange={(event) => setCompaction(event.target.value as "inherit" | "custom")} disabled={!sessionId}><option value="inherit">继承 CLI</option><option value="custom">会话自定义</option></select></label>{compactionPolicy.mode === "custom" && <label className="field"><span>阈值 {compactionPolicy.thresholdPercent ?? 85}%</span><input type="range" min={60} max={95} step={1} value={compactionPolicy.thresholdPercent ?? 85} onChange={(event) => setCompaction("custom", Number(event.target.value))}/></label>}<p className="settings-note">自定义阈值通过此会话专属 CLI 环境生效，不修改全局配置；更改后需重新连接会话。</p><button onClick={compact} disabled={!sessionId || compacting}>{compacting ? "压缩中…" : "立即压缩"}</button>{compactMessage && <p className="settings-note" aria-live="polite">{compactMessage}</p>}</section>
-    <section><header><strong>Usage Limit</strong><span>{usage?.supported === false ? "不支持" : usage?.usageIsIncomplete ? "统计可能不完整" : "CLI 精确值"}</span></header>{usage?.supported === false ? <p className="right-tool-empty">当前 CLI 未提供 session/usage；不会推算 Token 或费用。</p> : <><dl className="session-detail-list"><dt>输入</dt><dd>{formatOptionalTokens(usage?.inputTokens)}</dd><dt>输出</dt><dd>{formatOptionalTokens(usage?.outputTokens)}</dd><dt>缓存读取</dt><dd>{formatOptionalTokens(usage?.cachedReadTokens)}</dd><dt>推理</dt><dd>{formatOptionalTokens(usage?.reasoningTokens)}</dd><dt>总计</dt><dd>{formatOptionalTokens(usage?.totalTokens)}</dd><dt>模型调用</dt><dd>{usage?.modelCalls === undefined ? "未返回" : usage.modelCalls.toLocaleString()}</dd><dt>API 耗时</dt><dd>{usage?.apiDurationMs === undefined ? "未返回" : `${(usage.apiDurationMs / 1000).toFixed(1)} 秒`}</dd><dt>费用</dt><dd>{usage?.costUsd === undefined ? "未返回/不可信" : `${usage.costIsPartial ? "部分 " : ""}$${usage.costUsd.toFixed(6)}`}</dd><dt>周期额度</dt><dd>{usage?.limitPercent === undefined ? "见账号额度" : `${usage.limitPercent.toFixed(1)}%`}</dd><dt>重置时间</dt><dd>{usage?.resetAt ? new Date(usage.resetAt).toLocaleString() : "见账号额度"}</dd></dl>{usage?.usageIsIncomplete && <p className="settings-note">存在仍在运行或未结算的子 Agent，本次会话用量可能低估；费用不会被当作完整账单。</p>}</>}</section>
+    <section><header><strong>当前会话累计用量（CLI）</strong><span>{usage?.supported === false ? "不支持" : usage?.usageIsIncomplete ? "统计可能不完整" : "CLI 上报"}</span></header>{usage?.supported === false ? <p className="right-tool-empty">当前 CLI 未提供 session/usage；不会推算 Token 或费用。</p> : <><p className="settings-note">这是当前 CLI 进程报告的会话累计数据；与本机逐回合历史、账号订阅额度是不同口径。</p><dl className="session-detail-list"><dt>输入</dt><dd>{formatOptionalTokens(usage?.inputTokens)}</dd><dt>输出</dt><dd>{formatOptionalTokens(usage?.outputTokens)}</dd><dt>缓存读取</dt><dd>{formatOptionalTokens(usage?.cachedReadTokens)}</dd><dt>推理</dt><dd>{formatOptionalTokens(usage?.reasoningTokens)}</dd><dt>总计</dt><dd>{formatOptionalTokens(usage?.totalTokens)}</dd><dt>模型调用</dt><dd>{usage?.modelCalls === undefined ? "未返回" : usage.modelCalls.toLocaleString()}</dd><dt>API 耗时</dt><dd>{usage?.apiDurationMs === undefined ? "未返回" : `${(usage.apiDurationMs / 1000).toFixed(1)} 秒`}</dd><dt>费用</dt><dd>{usage?.costUsd === undefined ? "未返回/不可信" : `${usage.costIsPartial ? "部分 " : ""}$${usage.costUsd.toFixed(6)}`}</dd><dt>周期额度</dt><dd>{usage?.limitPercent === undefined ? "见账号额度" : `${usage.limitPercent.toFixed(1)}%`}</dd><dt>重置时间</dt><dd>{usage?.resetAt ? new Date(usage.resetAt).toLocaleString() : "见账号额度"}</dd></dl>{usage?.usageIsIncomplete && <p className="settings-note">存在仍在运行或未结算的子 Agent，本次会话用量可能低估；费用不会被当作完整账单。</p>}</>}</section>
   </div>;
 }
 

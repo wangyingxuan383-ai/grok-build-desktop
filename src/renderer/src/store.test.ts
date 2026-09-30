@@ -35,13 +35,13 @@ describe("session event reducer", () => {
     expect(state.views.session.hydrationMessage).toBeUndefined();
   });
 
-  it("settles a subagent when its parent turn completes", () => {
+  it("does not settle a background subagent when its parent turn completes", () => {
     let state = baseState();
     state = apply(state, { type: "subagent", sessionId: "session", update: { sessionUpdate: "subagent_spawned", subagent_id: "child-1" } });
     expect(state.views.session.messages[0].tool).toMatchObject({ kind: "subagent", status: "in_progress" });
 
     state = apply(state, { type: "turn-completed", sessionId: "session" });
-    expect(state.views.session.messages[0].tool).toMatchObject({ kind: "subagent", status: "completed" });
+    expect(state.views.session.messages[0].tool).toMatchObject({ kind: "subagent", status: "in_progress" });
   });
 
   it("does not create an unmatchable pending card for an id-less spawn", () => {
@@ -81,6 +81,18 @@ describe("session event reducer", () => {
     expect(state.views.session.messages[0].tool).toMatchObject({ title: "审核实现", kind: "subagent", status: "completed" });
     expect(state.views.session.messages[0].tool.output).toContain("审核完成");
     expect(buildChatTurns(state.views.session.messages).at(0)?.summary.subagents).toBe(1);
+  });
+
+  it("joins native and child identities and ignores late non-terminal progress", () => {
+    let state = baseState();
+    for (const update of [
+      {sessionUpdate:"subagent_spawned",subagent_id:"native"},
+      {sessionUpdate:"subagent_progress",subagent_id:"native",child_session_id:"child"},
+      {sessionUpdate:"subagent_finished",child_session_id:"child",status:"completed",output:"done"},
+      {sessionUpdate:"subagent_progress",subagent_id:"native"},
+    ]) state=apply(state,{type:"subagent",sessionId:"session",update});
+    expect(state.views.session.messages).toHaveLength(1);
+    expect(state.views.session.messages[0].tool).toMatchObject({status:"completed",rawInput:{child_session_id:"child",subagent_id:"native",output:"done"}});
   });
 
   it("treats the server queue broadcast as the complete authoritative queue", () => {
@@ -353,5 +365,57 @@ describe("Codex-style turn grouping", () => {
   it("binds persisted timing to the matching client user message", () => {
     const [turn] = buildChatTurns([{ id: "message-1", clientMessageId: "message-1", kind: "user", text: "hello" }], "working", [{ turnId: "turn-1", clientMessageId: "message-1", ordinal: 4, startedAt: "2026-07-22T00:00:00.000Z" }]);
     expect(turn?.presentation?.turnId).toBe("turn-1");
+  });
+
+  it("does not infer Computer Use or subagents from titles in current or historical turns", () => {
+    const [turn] = buildChatTurns([
+      { id: "u", kind: "user", text: "review the tool" },
+      { id: "read", kind: "tool", tool: { toolCallId: "read", title: "Read computer-use-service.ts", kind: "read", status: "completed" } },
+      { id: "task", kind: "tool", tool: { toolCallId: "task", title: "Review Computer Use changes", kind: "other", status: "completed" } },
+      { id: "agent-title", kind: "tool", tool: { toolCallId: "agent-title", title: "subagent review task", kind: "other", status: "completed" } },
+    ]);
+    expect(turn?.groups.find((group) => group.kind === "computer")).toBeUndefined();
+    expect(turn?.groups.find((group) => group.kind === "subagents")).toBeUndefined();
+    expect(turn?.groups.find((group) => group.kind === "files")?.items.map((item) => item.id)).toContain("read");
+    expect(turn?.groups.find((group) => group.kind === "other")?.items.map((item) => item.id)).toEqual(expect.arrayContaining(["task", "agent-title"]));
+  });
+
+  it("classifies Computer Use only from the exact MCP identity or Host evidence", () => {
+    const [turn] = buildChatTurns([
+      { id: "u", kind: "user", text: "operate the window" },
+      { id: "mcp", kind: "tool", tool: { toolCallId: "mcp", title: "click", kind: "mcp", toolName: "click", serverName: "grok_desktop_computer", source: "mcp", computerEvidence: "operated", status: "completed" } },
+      { id: "host", kind: "tool", tool: { toolCallId: "host", title: "Computer Use · Notepad", kind: "computer_use", source: "computer-host", computerEvidence: "operated", output: "2 步 · 已完成", status: "completed" } },
+      { id: "unknown-host", kind: "tool", tool: { toolCallId: "unknown-host", title: "Computer Use initial state", kind: "computer_use", source: "computer-host", computerEvidence: "unknown", status: "completed" } },
+      { id: "unverified-kind", kind: "tool", tool: { toolCallId: "unverified-kind", title: "computer_use", kind: "computer_use", status: "completed" } },
+    ]);
+    expect(turn?.groups.find((group) => group.kind === "computer")?.items.map((item) => item.id)).toEqual(["mcp", "host"]);
+    expect(turn?.groups.find((group) => group.kind === "other")?.items.map((item) => item.id)).toContain("unverified-kind");
+  });
+
+  it("does not create a Computer Use activity card for a zero-step idle state", () => {
+    const state = baseState();
+    state.views.session.messages.push({ id: "u", kind: "user", text: "inspect a file" });
+    const after = apply(state, { type: "computer-state", sessionId: "session", state: { sessionId: "session", status: "completed", stepCount: 0, updatedAt: "2026-09-25T00:00:00.000Z" } });
+    expect(after.views.session.messages).toHaveLength(1);
+  });
+
+  it("keeps a running Host observation distinct from an application operation", () => {
+    const state = baseState();
+    state.views.session.messages.push({ id: "u", kind: "user", text: "observe" });
+    const after = apply(state, { type: "computer-state", sessionId: "session", state: {
+      sessionId: "session", status: "running", stepCount: 0, lastAction: "wait", updatedAt: "now",
+      lastState: { stateId: "observed", window: { title: "Fixture", dpi: 96 }, elements: [] } as never,
+    } });
+    expect((after.views.session.messages.at(-1) as any).tool.computerEvidence).toBe("observed");
+  });
+
+  it("recognizes native subagent tools by structured tool name, never by display title", () => {
+    const [turn] = buildChatTurns([
+      { id: "u", kind: "user", text: "delegate" },
+      { id: "spawn", kind: "tool", tool: { toolCallId: "spawn", title: "Run task", toolName: "spawn_subagent", status: "completed" } },
+      { id: "fake", kind: "tool", tool: { toolCallId: "fake", title: "spawn_subagent discussion", kind: "other", status: "completed" } },
+    ]);
+    expect(turn?.groups.find((group) => group.kind === "subagents")?.items.map((item) => item.id)).toEqual(["spawn"]);
+    expect(turn?.groups.find((group) => group.kind === "other")?.items.map((item) => item.id)).toContain("fake");
   });
 });

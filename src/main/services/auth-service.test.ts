@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountProfile, AppSettings, LoginState } from "../../shared/types";
 import type { AccountVault } from "./account-vault";
-import { AuthService, recoverAuthTransactionArtifacts, terminateProcessTree, type AuthServiceOptions } from "./auth-service";
+import { AuthService, formatDeviceLoginFailure, recoverAuthTransactionArtifacts, terminateProcessTree, type AuthServiceOptions } from "./auth-service";
 import type { LogService } from "./log-service";
 import { DEFAULT_THEME } from "./theme-service";
 
@@ -130,6 +130,12 @@ afterEach(async () => {
 });
 
 describe("AuthService lifecycle", () => {
+  it("identifies upstream subscription exchange failures without retaining a stale device code", () => {
+    const message = formatDeviceLoginFailure(1, "To sign in user_code=TEST-CODE\u001b[90m\nToken exchange error: Could not verify your subscription right now. Please retry.");
+    expect(message).toContain("尚未完成令牌交换");
+    expect(message).not.toContain("TEST-CODE");
+    expect(message).not.toContain("90m");
+  });
   it("lets the app open exactly one browser when the CLI supports --no-browser", async () => {
     const newRaw = authJson("new", "new-token");
     const openExternal = vi.fn(async () => undefined);
@@ -216,7 +222,7 @@ describe("AuthService lifecycle", () => {
     expect(result.error).not.toContain("oauth2/device/code");
   });
 
-  it("keeps a genuine verification URL available when login later exits", async () => {
+  it("clears the expired verification URL when login later exits", async () => {
     const harness = await createHarness(authJson("old", "old-token"), {
       spawnLogin: spawnLoginScript(`
         process.stdout.write("Open https://auth.example.test/device?user_code=ABCD-EFGH\\n");
@@ -227,12 +233,12 @@ describe("AuthService lifecycle", () => {
 
     const result = await harness.service.loginDevice();
 
-    expect(result.url).toBe("https://auth.example.test/device?user_code=ABCD-EFGH");
-    expect(result.code).toBe("ABCD-EFGH");
+    expect(result.url).toBeUndefined();
+    expect(result.code).toBeUndefined();
     expect(result.error).toContain("authorization cancelled");
   });
 
-  it("rolls back an imported OAuth account when post-login verification fails", async () => {
+  it("keeps a freshly issued OAuth account when the advisory post-login verification fails", async () => {
     const oldRaw = authJson("old", "old-token");
     const newRaw = authJson("new", "new-token");
     const harness = await createHarness(oldRaw, {
@@ -245,11 +251,12 @@ describe("AuthService lifecycle", () => {
     const result = await harness.service.loginDevice();
 
     expect(result.running).toBe(false);
-    expect(result.error).toContain("probe failed");
-    expect(await readFile(harness.authPath, "utf8")).toBe(oldRaw);
-    expect(harness.vault.activeId).toBe("oauth-old");
-    expect(harness.vault.removed).toContain("oauth-new");
-    expect(harness.vault.entries.get("oauth-old")?.payload.authJson).toBe(oldRaw);
+    expect(result.error).toBeUndefined();
+    expect(result.message).toContain("登录成功");
+    expect(result.message).toContain("probe failed");
+    expect(await readFile(harness.authPath, "utf8")).toBe(newRaw);
+    expect(harness.vault.activeId).toBe("oauth-new");
+    expect(harness.vault.removed).not.toContain("oauth-new");
   });
 
   it("times out a device login, terminates it, and always clears running", async () => {
@@ -315,6 +322,21 @@ describe("AuthService lifecycle", () => {
 });
 
 describe("AuthService account transactions", () => {
+  it("keeps an added API key and reports network/handshake errors as advisory", async () => {
+    const harness = await createHarness(authJson("old", "old-token"), { verifyActive: async () => { throw Error("ACP unavailable"); } });
+    await harness.service.addApiKey("new", "fixture-key");
+    expect(harness.vault.activeId).toBe("api-1");
+    expect(harness.service.getLoginState()).toMatchObject({ running:false, message:expect.stringContaining("ACP unavailable") });
+    expect(harness.service.getLoginState().error).toBeUndefined();
+  });
+  it("keeps the selected OAuth account when the optional connectivity check fails", async () => {
+    const harness = await createHarness(authJson("old", "old-token"), { verifyActive: async () => { throw Error("network down"); } });
+    const profile = await harness.vault.importAuthJson(authJson("next", "next-token"), false);
+    await harness.service.switchAccount(profile.id);
+    expect(harness.vault.activeId).toBe(profile.id);
+    expect(await readFile(harness.authPath,"utf8")).toBe(authJson("next", "next-token"));
+    expect(harness.service.getLoginState().message).toContain("network down");
+  });
   it("uses a newer matching canonical OAuth credential for automation", async () => {
     const staleRaw = authJson("old", "stale-refresh-token");
     const currentRaw = authJson("old", "current-refresh-token");
@@ -453,13 +475,6 @@ describe.skipIf(process.platform !== "win32")("Windows process-tree termination"
       if (descendantPid && processExists(descendantPid)) await execFileAsync("taskkill", ["/PID", String(descendantPid), "/T", "/F"]).catch(() => undefined);
     }
   }, 30_000);
-});
-
-it("blocks auxiliary authentication ACP probes while CLI validation is deferred", async () => {
-  const gate = vi.fn(async () => { throw Error("CLI retained but unverified"); });
-  const harness = await createHarness(undefined, { verifyActive: undefined, assertCliRuntimeAllowed: gate });
-  await expect(harness.service.verifyActive()).rejects.toThrow("CLI retained but unverified");
-  expect(gate).toHaveBeenCalledTimes(1);
 });
 
 async function createHarness(oldRaw: string | undefined, options: AuthServiceOptions = {}): Promise<{

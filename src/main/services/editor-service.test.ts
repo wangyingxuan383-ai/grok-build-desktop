@@ -7,6 +7,19 @@ import { EditorService } from "./editor-service";
 import { WorkspaceTreeService } from "./workspace-tree-service";
 
 describe("workspace tree and editor services", () => {
+  it("opens explicitly selected absolute outside files read-only while writes remain scoped", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-view-outside-"));
+    const workspace = join(root, "project");
+    await mkdir(workspace);
+    const path = join(root, "log.txt");
+    await writeFile(path, "outside log");
+    const service = new EditorService();
+    const result = await service.open(workspace, path);
+    expect(result.document).toMatchObject({ editable: false, content: "outside log", workspacePath: workspace });
+    await expect(service.save({workspacePath: workspace,path,content:"changed",encoding:"utf8",lineEnding:"lf",expectedHash:result.document!.hash,expectedModifiedAt:result.document!.modifiedAt})).rejects.toThrow("超出当前工作区");
+    await expect(service.open(workspace, "../log.txt")).rejects.toThrow("超出当前工作区");
+    expect(await readFile(path, "utf8")).toBe("outside log");
+  });
   it("lists one lazy directory level and hides ignored/build/hidden entries by default", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok editor tree "));
     await mkdir(join(root, "src"));

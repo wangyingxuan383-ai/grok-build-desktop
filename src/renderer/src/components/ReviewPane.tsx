@@ -237,4 +237,4 @@ function ReviewFileDetail({ file, index, kind, busy, cwd, sessionId, onNavigate,
 function scopeLabel(kind: ScopeKind): string { return ({ unstaged: "Unstaged", staged: "Staged", commit: "Commit", branch: "Branch", "last-turn": "Last turn" })[kind]; }
 function statusGlyph(kind: GitReviewFile["kind"]): string { return ({ added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", untracked: "U", conflicted: "!", unknown: "?" })[kind]; }
 function statusLabel(kind: GitReviewFile["kind"]): string { return ({ added: "新增", modified: "修改", deleted: "删除", renamed: "重命名", copied: "复制", untracked: "未跟踪", conflicted: "冲突", unknown: "未知" })[kind]; }
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+import { errorMessage } from "../error-message";

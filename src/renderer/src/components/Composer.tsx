@@ -1,6 +1,7 @@
+import { ActionMenu } from "./ui/ActionMenu";
 import { memo, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Attachment, ComposerCapabilitySelection, ComputerTaskState, ModelInfo, NewTaskDraft, PromptQueueEntry, ReasoningEffort, SessionMode, SkillSummary, WorkspaceFileCandidate } from "../../../shared/types";
+import type { Attachment, CommandInfo, McpToolSelection, SessionMcpToolSnapshot, ComposerCapabilitySelection, ComputerTaskState, ModelInfo, NewTaskDraft, PromptQueueEntry, ReasoningEffort, SessionMode, SkillSummary, WorkspaceFileCandidate } from "../../../shared/types";
 import { normalizeSkillCommand } from "../../../shared/composer-capability";
 import { effortControlState } from "../model-capabilities";
 import type { ReviewCommentDraft } from "../review-comments";
@@ -51,12 +52,14 @@ export function Composer(props: {
   computerTask: ComputerTaskState | null;
   onCapability(value: ComposerCapabilitySelection): void;
   onComputer(): void;
+  onImage?(): void;
   onClearCapability(): void;
   onManageExtensions(): void;
   onHistory(direction: -1 | 1): void;
   onControlSettled(): void;
 }): React.JSX.Element {
   const [addOpen, setAddOpen] = useState(false);
+  useEffect(()=>setAddOpen(false), [props.sessionId]);
   const composingRef = useRef(false);
   const tokenTotal = props.view?.meta.totalTokens ?? 0;
   const selectedModel = props.view?.models.find((value) => value.modelId === props.view?.currentModelId);
@@ -66,8 +69,8 @@ export function Composer(props: {
     ? `${formatTokens(tokenTotal)} / ${formatTokens(declaredWindow)}`
     : `${formatTokens(tokenTotal)} / ?`;
   return <div className="composer-zone">{props.notice && <div className="composer-operation-notice" role="status"><span>{props.notice}</span><button type="button" aria-label="关闭提示" title="关闭提示" onClick={props.onDismissNotice}>×</button></div>}{props.view?.status === "needs-user" && <div className="composer-operation-notice waiting" role="status">请先处理当前计划、权限或问题卡片，然后再发送消息。</div>}{props.view?.queue.length ? <PromptQueueBar sessionId={props.sessionId} entries={props.view.queue} /> : null}{props.reviewComments.length > 0 && <div className="review-comment-drafts"><span>审核批注草稿</span>{props.reviewComments.map((comment) => <button key={comment.id} title={comment.body} onClick={() => props.onRemoveReviewComment(comment.id)}><code>{comment.path}:L{comment.line}</code><span>{comment.body}</span><b>×</b></button>)}</div>}{props.commandMatches.length > 0 && <div className="slash-menu">{props.commandMatches.map((command) => <button key={command.name} onClick={() => props.onCommand(command.name)}><strong>/{command.name.replace(/^\//, "")}</strong><span>{command.description}</span></button>)}</div>}{props.fileMatches.length > 0 && <div className="slash-menu file-menu">{props.fileMatches.map((file) => <button key={file.path} onClick={() => props.onFile(file)}><strong>@{file.name}</strong><span>{file.relativePath}</span></button>)}</div>}
-    {addOpen && createPortal(<AddPalette onClose={() => { setAddOpen(false); props.onControlSettled(); }} onFiles={() => { setAddOpen(false); props.onAdd(); }} onFolders={() => { setAddOpen(false); props.onAddFolders(); }} onWorkspaceFile={() => { setAddOpen(false); props.onFileMenu(); }} onComputer={() => { setAddOpen(false); props.onComputer(); }} onSkill={(skill) => { setAddOpen(false); props.onCapability({ kind: "skill", label: skill.name, command: normalizeSkillCommand(skill.command), source: skill.source }); props.onControlSettled(); }} onManageExtensions={() => { setAddOpen(false); props.onManageExtensions(); }} />, document.getElementById("overlay-root")!)}
-    <div className="composer">{(props.attachments.length > 0 || props.capability) && <div className="attachment-row">{props.capability && <span className={`capability-chip ${props.capability.kind}`}>{props.capability.kind === "computer" ? "◉" : "✦"} @{props.capability.label}<small>仅本次消息</small><button title="移除能力" onClick={props.onClearCapability}>×</button></span>}{props.attachments.map((attachment) => {
+    {addOpen && createPortal(<AddPalette sessionId={props.sessionId} onMcp={selection=>{setAddOpen(false);props.onCapability({kind:"mcp",label:`${selection.serverName} / ${selection.toolName}`,command:"",selection,source:selection.serverName});props.onControlSettled()}} commands={props.view?.commands ?? []} onCommand={name=>{setAddOpen(false);props.onCommand(name)}} onImage={props.onImage ? ()=>{setAddOpen(false);props.onImage?.()} : undefined} onClose={() => { setAddOpen(false); props.onControlSettled(); }} onFiles={() => { setAddOpen(false); props.onAdd(); }} onFolders={() => { setAddOpen(false); props.onAddFolders(); }} onWorkspaceFile={() => { setAddOpen(false); props.onFileMenu(); }} onComputer={() => { setAddOpen(false); props.onComputer(); }} onSkill={(skill) => { setAddOpen(false); props.onCapability({ kind: "skill", label: skill.name, command: normalizeSkillCommand(skill.command), source: skill.source }); props.onControlSettled(); }} onManageExtensions={() => { setAddOpen(false); props.onManageExtensions(); }} />, document.getElementById("overlay-root")!)}
+    <div className="composer">{(props.attachments.length > 0 || props.capability) && <div className="attachment-row">{props.capability && <span className={`capability-chip ${props.capability.kind}`}>{props.capability.kind === "computer" ? "◉" : "✦"} {props.capability.kind === "mcp" ? "MCP · " : "@"}{props.capability.label}<small>仅本次消息</small><button title="移除能力" onClick={props.onClearCapability}>×</button></span>}{props.attachments.map((attachment) => {
       const textDraft = attachment.kind === "file" && attachment.mimeType?.startsWith("text/plain") && Boolean(attachment.draftText || attachment.data);
       const preview = attachment.previewText || (attachment.data ? textAttachmentPreview(attachment.data) : "本地文本草稿");
       return <span className={attachment.kind === "image" ? "composer-image-chip" : textDraft ? "composer-text-chip" : ""} key={attachment.id}>{attachment.kind === "image" ? <img src={attachment.data ? `data:${attachment.mimeType || "image/png"};base64,${attachment.data}` : attachment.path ? localFileUrl(attachment.path) : ""} alt="" /> : attachment.kind === "folder" ? "▰" : "▤"}<span>{attachment.name}{textDraft && <small>{attachment.size?.toLocaleString()} 字节 · {preview}</small>}</span>{textDraft && <button title="恢复为输入框正文" onClick={() => props.onRestoreText(attachment)}>恢复正文</button>}<button title={`移除 ${attachment.name}`} onClick={() => props.onRemove(attachment.id)}>×</button></span>;
@@ -76,7 +79,7 @@ export function Composer(props: {
           compositionend and strand composingRef, killing Enter for good. Typing
           and drafting stay available; only submission is gated, and it says so. */}
       <textarea ref={props.inputRef} value={props.text} aria-keyshortcuts="Enter Control+Enter" onChange={(event) => props.setText(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onPaste={(event) => { const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/")); if (images.length) { event.preventDefault(); props.onPaste(images); return; } const text = event.clipboardData.getData("text/plain"); if (text.length > 12_000) { event.preventDefault(); props.onPasteText(text); } }} onKeyDown={(event) => { if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) { event.preventDefault(); props.onHistory(event.key === "ArrowUp" ? -1 : 1); } else if (event.key === "Enter" && event.ctrlKey && !event.nativeEvent.isComposing && !composingRef.current) { event.preventDefault(); if (props.controlsDisabled) props.onBlockedSubmit(); else if (props.busy) props.onInterject(); else props.onSend(); } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && !composingRef.current && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (props.controlsDisabled) props.onBlockedSubmit(); else props.onSend(); } }} placeholder={props.controlsDisabled ? "可以继续输入；请先处理当前计划、权限或问题再发送…" : props.busy ? "继续输入；Enter 排队，Ctrl+Enter 插入当前回合…" : "给 Grok 发送消息…"} />
-      <div className="composer-toolbar"><div className="toolbar-left"><button className="icon-button add-button" title="添加文件或能力" aria-expanded={addOpen} aria-haspopup="dialog" disabled={props.controlsDisabled} onClick={() => setAddOpen(!addOpen)}><UiIcon name="plus"/></button>{props.text.length > 0 && <button className="composer-text-convert" title="将当前正文转换为 .txt 附件" onClick={props.onConvertText}>转为附件</button>}<TokenDonut percent={percent} label={tokenLabel} title={declaredWindow ? undefined : "该模型未上报上下文上限；应用不会伪造 512K 上限"} />{props.view ? <ModelControls sessionId={props.sessionId} view={props.view} disabled={props.modelControlsDisabled ?? (props.controlsDisabled || props.busy)} onSettled={props.onControlSettled} /> : props.draft && props.onDraftChange ? <DraftModelControls draft={props.draft} models={props.draftModels ?? []} loading={props.draftModelsLoading === true} disabled={props.modelControlsDisabled ?? props.controlsDisabled} onRefresh={props.onRefreshDraftModels} onChange={props.onDraftChange} /> : null}</div>{props.busy ? <ComposerRunActions canSubmit={!props.controlsDisabled && Boolean(props.text.trim() || props.attachments.length || props.reviewComments.length)} canAskAside={!props.controlsDisabled && Boolean(props.text.trim())} btwAvailable={Boolean(props.btwAvailable && props.onBtw)} onQueue={props.onSend} onInterject={props.onInterject} onBtw={props.onBtw} onStop={props.onStop}/> : <button className="send-button" title="发送" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}><UiIcon name="send"/></button>}</div>
+      <div className="composer-toolbar"><div className="toolbar-left"><button className="icon-button add-button" title="添加文件或能力" aria-expanded={addOpen} aria-haspopup="dialog" disabled={props.controlsDisabled} onClick={() => setAddOpen(!addOpen)}><UiIcon name="plus"/></button>{props.text.length > 0 && <button className="composer-text-convert" title="将当前正文转换为 .txt 附件" onClick={props.onConvertText}>转为附件</button>}<TokenDonut percent={percent} label={tokenLabel} title={declaredWindow ? undefined : "该模型未上报上下文上限；应用不会伪造 512K 上限"} />{props.view ? <ModelControls sessionId={props.sessionId} view={props.view} disabled={props.modelControlsDisabled ?? (props.controlsDisabled || props.busy)} onSettled={props.onControlSettled} /> : props.draft && props.onDraftChange ? <DraftModelControls draft={props.draft} models={props.draftModels ?? []} loading={props.draftModelsLoading === true} disabled={props.modelControlsDisabled ?? props.controlsDisabled} onRefresh={props.onRefreshDraftModels} onChange={props.onDraftChange} /> : null}</div>{props.busy ? <ComposerRunActions canSubmit={!props.controlsDisabled && Boolean(props.text.trim() || props.attachments.length || props.reviewComments.length)} canAskAside={!props.controlsDisabled && !props.capability && Boolean(props.text.trim())} btwAvailable={Boolean(props.btwAvailable && props.onBtw)} onQueue={props.onSend} onInterject={props.onInterject} onBtw={props.onBtw} onStop={props.onStop}/> : <button className="send-button" title="发送" disabled={props.controlsDisabled || (!props.text.trim() && !props.attachments.length && !props.reviewComments.length)} onClick={props.onSend}><UiIcon name="send"/></button>}</div>
     </div>
   </div>;
 }
@@ -90,34 +93,12 @@ export const ComposerRunActions = memo(function ComposerRunActions(props: {
   onBtw?(): void;
   onStop(): void;
 }): React.JSX.Element {
-  const detailsRef = useRef<HTMLDetailsElement>(null);
-  useEffect(() => {
-    const closeOutside = (event: PointerEvent): void => {
-      if (event.target instanceof Node && !detailsRef.current?.contains(event.target)) detailsRef.current?.removeAttribute("open");
-    };
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && detailsRef.current?.open) {
-        event.preventDefault();
-        detailsRef.current.removeAttribute("open");
-        detailsRef.current.querySelector<HTMLElement>("summary")?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", closeOutside);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => { document.removeEventListener("pointerdown", closeOutside); window.removeEventListener("keydown", closeOnEscape); };
-  }, []);
-  const closeMenu = (event: React.MouseEvent<HTMLButtonElement>): void => {
-    event.currentTarget.closest("details")?.removeAttribute("open");
-  };
   return <div className="busy-send-actions" aria-label="当前回合操作">
     <button className="queue-send primary-action" disabled={!props.canSubmit} onClick={props.onQueue}>加入队列</button>
-    <details className="composer-secondary-actions" ref={detailsRef}>
-      <summary aria-label="更多发送方式" title="更多发送方式"><UiIcon name="chevron-down" size={13}/></summary>
-      <div role="menu">
-        <button role="menuitem" disabled={!props.canSubmit} onClick={(event) => { closeMenu(event); props.onInterject(); }}><strong>插入当前回合</strong><span>Ctrl+Enter · 让正在运行的回合立即看到</span></button>
-        {props.btwAvailable && props.onBtw && <button role="menuitem" disabled={!props.canAskAside} onClick={(event) => { closeMenu(event); props.onBtw?.(); }}><strong>旁路提问</strong><span>不打断当前回合，单独获取简短回答</span></button>}
-      </div>
-    </details>
+    <ActionMenu trigger={<button className="icon-button" aria-label="更多发送方式"><UiIcon name="chevron-down" size={13}/></button>} actions={[
+      { id: "interject", label: "插入当前回合", shortcut: "Ctrl+Enter", disabled: !props.canSubmit, run: props.onInterject },
+      ...(props.btwAvailable && props.onBtw ? [{ id: "aside", label: "旁路提问", disabled: !props.canAskAside, run: props.onBtw }] : []),
+    ]}/>
     <button className="send-button stop" title="停止当前回合" aria-label="停止当前回合" onClick={props.onStop}><UiIcon name="stop"/></button>
   </div>;
 });
@@ -146,11 +127,34 @@ function PromptQueueBar({ sessionId, entries }: { sessionId: string; entries: Pr
   return <div className="prompt-queue"><button className="prompt-queue-summary" onClick={() => setExpanded(!expanded)}><span>≡</span><strong>{queuedCount ? `${queuedCount} 条等待发送` : `${activeCount} 条正在发送`}</strong>{queuedCount > 0 && activeCount > 0 && <small>另有 {activeCount} 条正在发送</small>}<small>{expanded ? "收起" : "展开管理"}</small></button>{notice && <p className="queue-operation-notice" role="status">{notice}</p>}{expanded && <div className="prompt-queue-list">{entries.map((entry, index) => { const editable = entry.state === "queued"; const stateLabel = entry.state === "interjecting" ? "正在请求插入当前回合" : entry.state === "send-now" ? "已请求停止当前回合，随后立即发送" : entry.state === "interjected" ? "旧版立即发送状态" : entry.state === "sending" || entry.state === "accepted" ? "正在发送 · 不可撤回" : "已排队 · 可编辑或撤回"; return <div key={entry.id} className={editable ? "queued" : "committed"}>{editing === entry.id ? <input autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setEditing(undefined); if (event.key === "Enter" && text.trim()) void run(async () => { const receipt = await window.grokDesktop.editQueuedPrompt(sessionId, entry.id, text.trim()); setEditing(undefined); return receipt; }); }} /> : <span><b>{index + 1}</b>{entry.text}<small>{stateLabel}</small></span>}<button disabled={!editable || index === 0} title="上移" onClick={() => void run(() => window.grokDesktop.reorderQueuedPrompt(sessionId, entry.id, index - 1))}>↑</button><button disabled={!editable || index === entries.length - 1} title="下移" onClick={() => void run(() => window.grokDesktop.reorderQueuedPrompt(sessionId, entry.id, index + 1))}>↓</button><button disabled={!editable} title={editable ? "尝试插入当前回合；若 CLI 无法注入则置顶为下一回合" : "该消息已经提交"} onClick={() => void run(() => window.grokDesktop.interjectQueuedPrompt(sessionId, entry.id))}>插话</button><button disabled={!editable} title={editable ? "编辑" : "已提交消息不能编辑"} onClick={() => { setEditing(entry.id); setText(entry.text); }}>✎</button>{editable ? <button title="撤回尚未提交的消息" onClick={() => void run(() => window.grokDesktop.removeQueuedPrompt(sessionId, entry.id))}>×</button> : <span className="queue-committed-lock" title="已提交，不能撤回">已提交</span>}</div>; })}{queuedCount > 0 && <button className="clear-queue" onClick={() => void run(() => window.grokDesktop.clearPromptQueue(sessionId))}>撤回全部未提交消息</button>}</div>}</div>;
 }
 
-function AddPalette({ onClose, onFiles, onFolders, onWorkspaceFile, onComputer, onSkill, onManageExtensions }: { onClose(): void; onFiles(): void; onFolders(): void; onWorkspaceFile(): void; onComputer(): void; onSkill(skill: SkillSummary): void; onManageExtensions(): void }): React.JSX.Element {
+export function AddPalette({ sessionId, onMcp, commands, onCommand, onImage, onClose, onFiles, onFolders, onWorkspaceFile, onComputer, onSkill, onManageExtensions }: { sessionId?: string; onMcp?(selection: McpToolSelection): void; commands: CommandInfo[]; onCommand(name: string): void; onImage?(): void; onClose(): void; onFiles(): void; onFolders(): void; onWorkspaceFile(): void; onComputer(): void; onSkill(skill: SkillSummary): void; onManageExtensions(): void }): React.JSX.Element {
+  const [query,setQuery]=useState("");
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
+
+  const [mcp, setMcp] = useState<SessionMcpToolSnapshot>();
+  const [mcpError, setMcpError] = useState("");
+  const [mcpRefresh, setMcpRefresh] = useState(0);
+  useEffect(() => {
+    setMcp(undefined); setMcpError("");
+    if (!sessionId || !onMcp) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async (): Promise<void> => {
+      try {
+        const value = await window.grokDesktop.getSessionMcpTools(sessionId);
+        if (value.sessionId !== sessionId) throw Error("工具列表的会话身份不匹配");
+        if (!cancelled) { setMcp(value); setMcpError(""); }
+      } catch (error) {
+        if (!cancelled) { setMcp(undefined); setMcpError(errorMessage(error)); }
+      } finally {
+        if (!cancelled) timer = setTimeout(() => void refresh(), 3000);
+      }
+    };
+    void refresh();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [sessionId, Boolean(onMcp), mcpRefresh]);
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -158,8 +162,9 @@ function AddPalette({ onClose, onFiles, onFolders, onWorkspaceFile, onComputer, 
     const previousOverflow = document.body.style.overflow;
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     document.body.style.overflow = "hidden";
-    void window.grokDesktop.listSkills().then(setSkills).catch((value) => setError(errorMessage(value))).finally(() => setLoading(false));
-    window.setTimeout(() => panelRef.current?.querySelector<HTMLButtonElement>("button[data-palette-item]")?.focus(), 0);
+    let cancelled = false;
+    void window.grokDesktop.listSkills().then(value=>{if(!cancelled)setSkills(value)}).catch(value=>{if(!cancelled)setError(errorMessage(value))}).finally(()=>{if(!cancelled)setLoading(false)});
+    const focusTimer = window.setTimeout(() => panelRef.current?.querySelector<HTMLInputElement>("input")?.focus(), 0);
     const key = (event: KeyboardEvent): void => {
       if (event.key === "Escape") { event.preventDefault(); closeRef.current(); return; }
       // The global overlay trap keys off `hasBlockingOverlay`, which does not
@@ -178,18 +183,20 @@ function AddPalette({ onClose, onFiles, onFolders, onWorkspaceFile, onComputer, 
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     };
     window.addEventListener("keydown", key);
-    return () => { window.removeEventListener("keydown", key); document.body.style.overflow = previousOverflow; window.setTimeout(() => previousFocus?.focus(), 0); };
+    return () => { cancelled = true; clearTimeout(focusTimer); window.removeEventListener("keydown", key); document.body.style.overflow = previousOverflow; window.setTimeout(() => previousFocus?.focus(), 0); };
   }, []);
   const move = (event: React.KeyboardEvent, direction: -1 | 1): void => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
-    const buttons = Array.from(panelRef.current?.querySelectorAll<HTMLButtonElement>("button[data-palette-item]") ?? []);
+    const buttons = Array.from(panelRef.current?.querySelectorAll<HTMLButtonElement>("button[data-palette-item]:not([disabled])") ?? []);
     if (!buttons.length) return;
     const focusedIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
-    const next = ((focusedIndex >= 0 ? focusedIndex : activeIndex) + direction + buttons.length) % buttons.length;
-    setActiveIndex(next); buttons[next]?.focus();
+    const next = ((focusedIndex >= 0 ? focusedIndex : direction === 1 ? -1 : 0) + direction + buttons.length) % buttons.length;
+    buttons[next]?.focus();
   };
   const handleKeyDown = (event: React.KeyboardEvent): void => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.target instanceof HTMLInputElement && !["ArrowDown","ArrowUp"].includes(event.key)) return;
     if (event.key === "Enter") {
       const target = event.target instanceof HTMLElement ? event.target.closest<HTMLButtonElement>("button[data-palette-item]") : null;
       if (target) { event.preventDefault(); target.click(); }
@@ -197,8 +204,8 @@ function AddPalette({ onClose, onFiles, onFolders, onWorkspaceFile, onComputer, 
     }
     move(event, event.key === "ArrowUp" ? -1 : 1);
   };
-  const item = (icon: string, title: string, description: string, action: () => void, badge?: string): React.JSX.Element => <button data-palette-item onFocus={(event) => { const rows = Array.from(panelRef.current?.querySelectorAll("button[data-palette-item]") ?? []); setActiveIndex(rows.indexOf(event.currentTarget)); }} onClick={action}><i>{icon}</i><span><strong>{title}</strong><small>{description}</small></span>{badge && <em>{badge}</em>}</button>;
-  return <div className="add-palette-backdrop" onMouseDown={onClose}><section ref={panelRef} className="add-palette" role="dialog" aria-modal="true" aria-label="添加文件、能力或 Skill" onMouseDown={(event) => event.stopPropagation()} onKeyDown={handleKeyDown}><header><strong>添加</strong><button onClick={onClose}>×</button></header><div className="add-palette-scroll"><h3>添加</h3>{item("▤", "文件和图片", "选择一个或多个文件，支持常见图片格式", onFiles)}{item("▰", "文件夹", "仅引用文件夹路径，不会预先递归读取", onFolders)}{item("@", "工作区文件", "按文件名搜索并引用当前项目中的文件", onWorkspaceFile)}<h3>能力</h3>{item("◉", "控制电脑", "为本次消息启用 Computer Use，执行时再选择目标", onComputer, "实验性")}<h3>插件 Skills</h3>{loading ? <p className="palette-status">正在加载已启用 Skills…</p> : error ? <p className="palette-status warning-text">Skills 暂不可用：{error}</p> : skills.length ? skills.map((skill) => <button data-palette-item key={`${skill.source}-${skill.command}`} onClick={() => onSkill(skill)}><i>✦</i><span><strong>{skill.name}</strong><small>{skill.description || skill.command}</small></span><em>{skill.source || "插件"}</em></button>) : <p className="palette-status">当前没有已启用的插件 Skill。</p>}</div><footer><button onClick={onManageExtensions}>管理扩展和 Skills</button><span>↑↓ 选择 · Enter 使用 · Esc 关闭</span></footer></section></div>;
+  const item = (icon: string, title: string, description: string, action: () => void, badge?: string, disabled = false): React.JSX.Element | null => !`${title} ${description}`.toLowerCase().includes(query.trim().toLowerCase()) ? null : <button data-palette-item key={title} disabled={disabled} onClick={action}><i>{icon}</i><span><strong>{title}</strong><small>{description}</small></span>{badge && <em>{badge}</em>}</button>;
+  return <div className="add-palette-backdrop" onMouseDown={onClose}><section ref={panelRef} className="add-palette" role="dialog" aria-modal="true" aria-label="添加文件、能力或 Skill" onMouseDown={(event) => event.stopPropagation()} onKeyDown={handleKeyDown}><header><strong>命令与能力</strong><button onClick={onClose}>×</button></header><div className="add-palette-scroll"><input className="capability-search" aria-label="搜索命令、附件、能力和 Skills" placeholder="搜索命令、文件、能力或 Skill…" value={query} onChange={event=>setQuery(event.target.value)}/><h3>添加</h3>{item("▤", "文件和图片", "选择一个或多个文件，支持常见图片格式", onFiles)}{item("▰", "文件夹", "仅引用文件夹路径，不会预先递归读取", onFolders)}{item("@", "工作区文件", "按文件名搜索并引用当前项目中的文件", onWorkspaceFile)}<h3>能力</h3>{item("◉", "控制电脑", "本次请求使用 Computer Use，仍受当前会话权限限制", onComputer, "实验性")}{item("▧", "生成图片", onImage ? "打开参数设置；结果附回当前代码会话，可另存至项目" : "请先打开一个 Grok 会话，再为该会话生成图片", onImage ?? (()=>undefined), "媒体任务", !onImage)}<h3>当前 CLI 命令</h3>{commands.length ? commands.map(command=>item("/", normalizeSkillCommand(command.name), [command.description,command.inputHint && "参数："+command.inputHint].filter(Boolean).join(" · ") || "填入草稿，确认后发送", ()=>onCommand(command.name), "CLI")) : <p className="palette-status">当前会话尚未上报命令；不会使用其他会话的列表。</p>}<h3>当前会话 MCP 工具</h3>{!sessionId || !onMcp ? <p className="palette-status">打开已连接的 Grok 会话后，可查看它实际上报的工具。</p> : <><button aria-label="刷新 MCP 工具" onClick={()=>setMcpRefresh(value=>value+1)}>刷新工具</button>{mcpError ? <p className="palette-status warning-text" role="status">MCP 工具暂不可用：{mcpError}</p> : !mcp || mcp.sessionId !== sessionId ? <p className="palette-status">正在读取当前连接…</p> : <>{mcp.tools.map(({selection,description})=>item("◇", selection.serverName+" / "+selection.toolName, description || "请求模型使用此工具；仍受当前权限限制", ()=>onMcp(selection), "MCP"))}<p className="palette-status">{mcp.notice}</p></>}</>}<h3>插件 Skills</h3>{loading ? <p className="palette-status">正在加载已启用 Skills…</p> : error ? <p className="palette-status warning-text">Skills 暂不可用：{error}</p> : skills.length ? skills.filter(skill=>`${skill.name} ${skill.description} ${skill.command}`.toLowerCase().includes(query.trim().toLowerCase())).map((skill) => <button data-palette-item key={`${skill.source}-${skill.command}`} onClick={() => onSkill(skill)}><i>✦</i><span><strong>{skill.name}</strong><small>{skill.description || skill.command}</small></span><em>{skill.source || "插件"}</em></button>) : <p className="palette-status">当前没有已启用的插件 Skill。</p>}</div><footer><button onClick={onManageExtensions}>管理扩展和 Skills</button><span>CLI 命令填入草稿；能力选择仅本次生效，不代表已调用 · Esc 关闭</span></footer></section></div>;
 }
 
 function ModelControls({ sessionId, view, disabled, onSettled }: { sessionId: string; view: NonNullable<ReturnType<typeof useAppStore.getState>["views"][string]>; disabled: boolean; onSettled(): void }): React.JSX.Element {
@@ -227,7 +234,7 @@ function TokenDonut({ percent, label, title }: { percent: number; label: string;
 }
 
 
-function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+import { errorMessage } from "../error-message";
 function formatTokens(value: number): string { return value >= 1_000_000 ? `${(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${Math.round(value / 1_000)}K` : String(value); }
 function localFileUrl(path: string): string { return `grok-media://local/?path=${encodeURIComponent(path.replace(/^\\\\\?\\/, ""))}`; }
 function decodeTextAttachment(data: string): string {

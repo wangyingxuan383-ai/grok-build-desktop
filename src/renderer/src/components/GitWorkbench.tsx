@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitCommitDetails, GitCommitSummary, GitFileChange, GitRepositoryStatus } from "../../../shared/types";
 import { useGitStore, type GitSelection } from "../git-store";
 import { useWorkbenchStore } from "../workbench-store";
@@ -17,25 +17,36 @@ interface Dialogs {
 
 export function GitExplorer({ workspace, dialogs }: { workspace: string; dialogs: Dialogs }): React.JSX.Element {
   const git = useGitStore();
+  const refreshGeneration = useRef(0);
 
   const refresh = useCallback(async (): Promise<void> => {
+    const generation = ++refreshGeneration.current;
     if (!workspace) return useGitStore.getState().reset();
     useGitStore.getState().setLoading(true);
     try {
+      const capability = await window.grokDesktop.getGitWorkspaceCapability(workspace);
+      if (generation !== refreshGeneration.current) return;
+      if (!capability.available) {
+        useGitStore.getState().reset(workspace);
+        if (capability.reason !== "not-repository") dialogs.setError(capability.message);
+        return;
+      }
       const [trust, status] = await Promise.all([
         window.grokDesktop.getGitRepositoryTrust(workspace),
         window.grokDesktop.getGitStatus(workspace),
       ]);
+      if (generation !== refreshGeneration.current) return;
       useGitStore.getState().setRepository(workspace, trust, status);
     } catch (error) {
+      if (generation !== refreshGeneration.current) return;
       useGitStore.getState().reset(workspace);
       dialogs.setError(errorMessage(error));
     } finally {
-      useGitStore.getState().setLoading(false);
+      if (generation === refreshGeneration.current) useGitStore.getState().setLoading(false);
     }
   }, [dialogs, workspace]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void refresh(); return () => { refreshGeneration.current += 1; }; }, [refresh]);
 
   const trustRepository = async (): Promise<void> => {
     if (!git.trust) return;
@@ -98,6 +109,7 @@ export function GitWorkbench({ workspace, dialogs }: { workspace: string; dialog
   useEffect(() => {
     if (!workspace || !git.selection) return git.setDiff(undefined);
     let cancelled = false;
+    git.setDiff(undefined);
     void window.grokDesktop.getGitDiff(workspace, git.selection.staged, git.selection.path).then((value) => { if (!cancelled) git.setDiff(value); }).catch((error) => { if (!cancelled) dialogs.setError(errorMessage(error)); });
     return () => { cancelled = true; };
   }, [dialogs, git.selection?.path, git.selection?.staged, workspace]);
@@ -231,6 +243,4 @@ function languageFromPath(path: string): string {
   return ({ ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", css: "css", scss: "scss", html: "html", md: "markdown", py: "python", ps1: "powershell", sh: "shell", toml: "ini", yaml: "yaml", yml: "yaml" } as Record<string, string>)[extension ?? ""] ?? "plaintext";
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import { errorMessage } from "../error-message";

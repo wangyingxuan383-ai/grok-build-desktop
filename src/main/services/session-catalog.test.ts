@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -151,4 +151,16 @@ describe("SessionCatalog", () => {
     const title = JSON.parse(await readFile(join(appData, "session-metadata.json"), "utf8")).renames.session as string;
     expect([...title]).toHaveLength(100);
   });
+});
+
+it("dismisses a Desktop reference without deleting CLI history, including across restart", async () => {
+ const root=await mkdtemp(join(tmpdir(),"grok-dismiss-"));
+ try {
+  const cwd=join(root,"project"),grokHome=join(root,"grok"),dir=join(grokHome,"sessions",encodeURIComponent(cwd),"session-123");
+  await mkdir(dir,{recursive:true});const summary=JSON.stringify({generated_title:"Keep CLI data"});await writeFile(join(dir,"summary.json"),summary);
+  const catalog=new SessionCatalog(root,grokHome);await catalog.dismiss("session-123");
+  expect(await readFile(join(dir,"summary.json"),"utf8")).toBe(summary);
+  expect(await new SessionCatalog(root,grokHome).list(cwd)).toEqual([]);
+  expect(await catalog.list(cwd,"",new Map(),true)).toHaveLength(1);
+ } finally {await rm(root,{recursive:true,force:true})}
 });

@@ -8,6 +8,7 @@ import { JsonStore } from "./json-store";
 import { resolveProjectIdentity } from "./project-identity";
 
 interface WorkspaceMetadata {
+  removed?: Record<string, string>;
   /** Values remain paths so old path-keyed metadata migrates without data loss. */
   pinned: Record<string, string>;
   hidden?: Record<string, string | { cwd: string; hiddenAt: string }>;
@@ -77,6 +78,7 @@ export class WorkspaceCatalog {
     const hiddenIds = new Set(hiddenIdentities.map((value) => value.id));
     const rows = new Map<string, MutableWorkspace>();
     for (const { observation, identity } of resolvedObservations) {
+      if (metadata.removed?.[identity.id]) continue;
       const current = rows.get(identity.id) ?? {
         projectId: identity.id,
         cwd: identity.canonicalPath,
@@ -135,6 +137,19 @@ export class WorkspaceCatalog {
     return filterRows(result, includeHidden);
   }
 
+  async removeEntry(cwd: string): Promise<void> {
+    const identity = await resolveProjectIdentity(cwd);
+    await this.metadata.mutate(data => {
+      data.removed ??= {}; data.removed[identity.id] = identity.displayPath;
+      delete data.pinned[identity.id]; if (data.hidden) delete data.hidden[identity.id];
+    });
+    this.cache = undefined;
+  }
+  async restoreEntry(cwd: string): Promise<void> {
+    const identity = await resolveProjectIdentity(cwd);
+    await this.metadata.mutate(data => { if (data.removed) delete data.removed[identity.id]; });
+    this.cache = undefined;
+  }
   async pin(cwd: string, pinned: boolean, settings: AppSettings): Promise<WorkspaceSummary[]> {
     const identity = await resolveProjectIdentity(cwd);
     await this.metadata.mutate((data) => {
