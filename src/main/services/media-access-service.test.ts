@@ -10,6 +10,16 @@ afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recur
 async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "grok-media-access-")); roots.push(value); return value; }
 
 describe("MediaAccessService", () => {
+  it("code gallery excludes attachments, image-mode and deleting owners without exposing paths",async()=>{
+    const userData=await root(),service=new MediaAccessService(userData);
+    for(const id of ["code","deleting","image-gallery"]){
+      const directory=join(userData,"session-media",sessionCacheKey(id));await mkdir(directory,{recursive:true});const path=join(directory,"image.png");await writeFile(path,"fixture");await service.register(id,path,"image","image/png");
+    }
+    const attachments=join(userData,"session-attachments",sessionCacheKey("code"));await mkdir(attachments,{recursive:true});const attachment=join(attachments,"reference.png");await writeFile(attachment,"fixture");await service.registerAttachment("code",attachment,"image/png");
+    const rows=await service.listGeneratedImages(new Set(["deleting"]));
+    expect(rows).toHaveLength(1);expect(rows[0]?.sessionId).toBe("code");expect(rows[0]).not.toHaveProperty("path");
+    expect(await service.listGeneratedImages(new Set(),0)).toEqual([]);
+  });
   it("rejects empty and malformed session identities before deriving cache paths", async () => {
     const userData = await root();
     const service = new MediaAccessService(userData);

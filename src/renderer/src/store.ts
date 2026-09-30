@@ -434,11 +434,10 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       break;
     }
     case "turn-completed":
-      // Some Grok CLI builds omit subagent_finished during replay or when a
-      // subagent is folded into its parent turn. A completed parent turn is
-      // authoritative: no child from that turn can still be running.
+      // Parent completion settles only its own synchronous tool calls. Background children
+      // remain running until their independent lifecycle delivers a terminal outcome.
       next.messages = next.messages.map((message) => {
-        if (message.kind === "tool" && (message.tool.status === "in_progress" || message.tool.status === "pending")) return { ...message, tool: { ...message.tool, status: "completed" as const } };
+        if (message.kind === "tool" && message.tool.source !== "subagent-lifecycle" && (message.tool.status === "in_progress" || message.tool.status === "pending")) return { ...message, tool: { ...message.tool, status: "completed" as const } };
         if (message.kind === "permission" || message.kind === "question" || message.kind === "mcp-elicitation" || (message.kind === "plan" && message.interactive)) return { ...message, resolved: true };
         return message;
       });
@@ -460,9 +459,17 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       // without the original spawn event. A stable child id is therefore
       // sufficient to create or update the same visible card.
       if (!identity) break;
-      const id = `subagent-${identity}`;
-      const existing = next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === id);
+      const nativeId = firstSubagentText(event.update.subagent_id, event.update.subagentId);
+      const childId = firstSubagentText(event.update.child_session_id, event.update.childSessionId);
+      const matches = (message: UiMessage): boolean => {
+        if (message.kind !== "tool" || message.tool.source !== "subagent-lifecycle") return false;
+        const raw = message.tool.rawInput as Record<string, unknown> | undefined;
+        return message.tool.toolCallId === `subagent-${identity}` || Boolean(nativeId && firstSubagentText(raw?.subagent_id, raw?.subagentId) === nativeId) || Boolean(childId && firstSubagentText(raw?.child_session_id, raw?.childSessionId) === childId);
+      };
+      const existing = next.messages.findIndex(matches);
       const previous = existing >= 0 ? (next.messages[existing] as Extract<UiMessage, { kind: "tool" }>).tool : undefined;
+      const id = previous?.toolCallId ?? `subagent-${identity}`;
+      if (updateType !== "subagent_finished" && (previous?.rawInput as Record<string, unknown> | undefined)?.sessionUpdate === "subagent_finished") break;
       const finished = updateType === "subagent_finished";
       const failed = finished && !["", "completed", "success", "succeeded"].includes(String(event.update.status ?? "").toLowerCase());
       const title = firstSubagentText(event.update.description, event.update.subagent_type, event.update.role, previous?.title) ?? "子 Agent";
@@ -472,12 +479,13 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         toolCallId: id,
         title,
         kind: "subagent",
+        source: "subagent-lifecycle",
         status: failed ? "failed" : finished ? "completed" : "in_progress",
         rawInput: { ...(typeof previous?.rawInput === "object" && previous.rawInput ? previous.rawInput as Record<string, unknown> : {}), ...event.update },
         output,
         ...(failed ? { error: firstSubagentText(event.update.error, event.update.output, event.update.status) ?? "子 Agent 失败" } : { error: undefined }),
       };
-      if (existing >= 0) next.messages[existing] = { id, kind: "tool", tool };
+      if (existing >= 0) { next.messages[existing] = { id, kind: "tool", tool }; next.messages = next.messages.filter((message, index) => index === existing || !matches(message)); }
       else next.messages.push({ id, kind: "tool", tool });
       break;
     }
@@ -489,11 +497,14 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       const existing = next.messages.findIndex((message) => message.kind === "tool" && message.tool.toolCallId === id);
       const inProgress = ["running", "paused", "awaiting-app-permission", "awaiting-risk-confirmation"].includes(event.state.status);
       const failed = event.state.status === "error";
+      if (event.state.stepCount === 0 && !event.state.lastState && !inProgress && !failed) break;
       const state = event.state.lastState;
       const tool: ToolCallState = {
         toolCallId: id,
         title: `Computer Use · ${event.state.appName || "Windows 应用"}`,
         kind: "computer_use",
+        source: "computer-host",
+        computerEvidence: failed ? "failed" : event.state.stepCount > 0 ? "operated" : event.state.lastState ? "observed" : inProgress ? "attempted" : "unknown",
         status: failed ? "failed" : inProgress ? "in_progress" : "completed",
         output: `${event.state.stepCount} 步 · ${event.state.message || event.state.status}`,
         error: failed ? event.state.message : undefined,
@@ -627,12 +638,28 @@ function actionRequestId(message: Extract<UiMessage, { kind: "permission" | "que
 function classifyActivity(message: UiMessage): UiTurnActivityGroup["kind"] {
   if (message.kind === "thought" || message.kind === "retry" || message.kind === "interjection" || message.kind === "assistant" || message.kind === "plan" || message.kind === "permission" || message.kind === "question" || message.kind === "mcp-elicitation") return "progress";
   if (message.kind !== "tool") return "other";
-  const value = `${message.tool.kind || ""} ${message.tool.title}`.toLowerCase();
-  if (/sub.?agent/.test(value)) return "subagents";
-  if (/computer[_ -]?use/.test(value)) return "computer";
+  if (isSubagentTool(message.tool)) return "subagents";
+  if (isComputerTool(message.tool)) return "computer";
+  // Keep existing file/command hints for presentation; only Computer Use and
+  // subagent classification require trusted structured identity above.
+  const value = `${message.tool.kind || ""} ${message.tool.toolName || ""} ${message.tool.title}`.toLowerCase();
   if (/read|edit|write|delete|file|search|glob|grep|diff|patch/.test(value)) return "files";
-  if (/command|terminal|execute|shell|bash|powershell|cmd|task|process/.test(value)) return "commands";
+  if (/\b(?:command|terminal|execute|shell|bash|powershell|cmd|process)\b/.test(value)) return "commands";
   return "other";
+}
+
+function isComputerTool(tool: ToolCallState): boolean {
+  const name = tool.toolName?.toLowerCase() ?? "";
+  if (tool.source === "computer-host") return tool.computerEvidence !== undefined && tool.computerEvidence !== "unknown";
+  return tool.serverName?.toLowerCase() === "grok_desktop_computer"
+    || name.startsWith("grok_desktop_computer__");
+}
+
+function isSubagentTool(tool: ToolCallState): boolean {
+  const name = tool.toolName?.toLowerCase() ?? "";
+  return tool.kind === "subagent"
+    || tool.source === "subagent-lifecycle"
+    || ["spawn_subagent", "get_command_or_subagent_output", "send_subagent_message"].includes(name);
 }
 
 function isFileWriteTool(tool: ToolCallState): boolean {

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
-import { dirname, extname } from "node:path";
+import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
+import { dirname, extname, isAbsolute, resolve } from "node:path";
 import iconv from "iconv-lite";
 import type { EditorDocument, EditorEncoding, EditorLineEnding, EditorOpenResult, EditorSaveConflict, EditorSaveInput, EditorSaveResult } from "../../shared/types";
-import { rejectSymbolicLink, resolveExistingWorkspacePath, resolveNewWorkspacePath } from "./workspace-path-policy";
+import { isPathInside, rejectSymbolicLink, resolveExistingWorkspacePath, resolveNewWorkspacePath, resolveWorkspaceRoot } from "./workspace-path-policy";
 
 const DEFAULT_EDITABLE_LIMIT = 5 * 1024 * 1024;
 const DEFAULT_READABLE_LIMIT = 20 * 1024 * 1024;
@@ -20,7 +20,14 @@ export class EditorService {
   }
 
   async open(workspacePath: string, requestedPath: string): Promise<EditorOpenResult> {
-    const resolved = await resolveExistingWorkspacePath(workspacePath, requestedPath, false);
+    const root = await resolveWorkspaceRoot(workspacePath);
+    if (requestedPath.includes("\0")) throw new Error("路径包含无效字符");
+    // Explicit absolute file links may be viewed without changing the project.
+    // Relative traversal and in-project junction escapes retain the old policy.
+    const outside = isAbsolute(requestedPath) && !isPathInside(root, resolve(requestedPath));
+    const resolved = outside
+      ? { root, path: await realpath(requestedPath), relativePath: requestedPath }
+      : await resolveExistingWorkspacePath(root, requestedPath, false);
     await rejectSymbolicLink(resolved.path);
     const info = await stat(resolved.path);
     if (!info.isFile()) throw new Error("请求的路径不是文件");
@@ -33,6 +40,7 @@ export class EditorService {
     };
     try {
       const document = await readDocument(resolved.root, resolved.path, resolved.relativePath, this.editableLimit);
+      if (outside) { document.editable = false; document.readOnlyReason = "工作区外文件；只读查看"; }
       return { kind: "document", document, path: resolved.path, relativePath: resolved.relativePath, byteLength: document.byteLength };
     } catch (error) {
       // A binary file is not an error the user can act on inside the editor.

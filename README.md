@@ -10,6 +10,10 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 
 ## 功能
 
+- 编程／图像模式、独立图像会话与图库、参考图及单张/批量删除；编程生图也可保存项目副本。
+- 共享嵌套菜单和命令搜索，右侧产物与只读子智能体会话、项目归档/隐藏及标签管理。
+- 手动终端、隔离浏览器与本机产物预览；Token Worker/SQLite 汇总与系统时区筛选。
+
 - OAuth / API Key 配置档与 Windows DPAPI 加密，多账号切换。
 - Grok 会话新建、恢复、搜索、置顶、导出与后台通知。
 - Codex 风格的回合、多层执行过程折叠、Markdown/GFM、公式、Mermaid、Diff 和媒体。

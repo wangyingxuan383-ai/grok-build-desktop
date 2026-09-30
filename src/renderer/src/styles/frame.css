@@ -1,0 +1,191 @@
+/*
+ * Application frame: window -> sidebar + framed panes.
+ *
+ * Structure (see AppShell.tsx / App.tsx):
+ *   .app-shell            window surface (--color-window)
+ *     .sidebar            navigation + project tree, sits directly on the window
+ *     .workspace-shell    padded row of framed panes
+ *       .main-pane        conversation / page frame
+ *       <right pane>      optional second frame (tools, previews, sub-agent sessions)
+ *
+ * Frames are separated by --frame-gap and carry their own border and radius,
+ * so depth comes from surface contrast and borders, not from shadows.
+ */
+
+/* ---- Workspace row and frames ---- */
+.workspace-shell { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; gap: var(--frame-gap); padding: var(--frame-gap) var(--frame-gap) var(--frame-gap) 0; overflow: hidden; background: transparent; }
+.app-shell.sidebar-collapsed .workspace-shell { padding-left: var(--frame-gap); }
+.main-pane, .right-utility-pane, .review-pane, .artifact-preview-pane, .agent-change-pane {
+  background: var(--color-frame); border: 1px solid var(--color-border); border-radius: var(--radius-xl); overflow: hidden;
+}
+.right-utility-pane, .review-pane, .artifact-preview-pane, .agent-change-pane { border-left-width: 1px; }
+.workbench-page-host { background: var(--color-frame); }
+.conversation-wrap { background: var(--color-frame); }
+
+/* ---- Sidebar ---- */
+.sidebar { flex: 0 0 var(--sidebar-width); width: var(--sidebar-width); min-height: 0; display: flex; flex-direction: column; padding: 8px 6px 8px 10px; border: 0; background: transparent; color: var(--color-fg); }
+.app-shell.sidebar-collapsed .sidebar { display: none; }
+.sb-top { padding: 2px 2px 10px; }
+.sb-mode { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+
+.sb-nav { display: grid; gap: 1px; padding-bottom: 6px; }
+.sb-nav-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 8px;
+  border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtle);
+  font: inherit; font-size: var(--text-base); text-align: left; cursor: pointer;
+}
+.sb-nav-row:hover:not(:disabled) { background: var(--color-hover); color: var(--color-fg); }
+.sb-nav-row:disabled { opacity: .5; cursor: default; }
+.sb-nav-row.is-primary { color: var(--color-fg); font-weight: 600; }
+.sb-nav-row kbd { margin-left: auto; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-fg-subtlest); }
+.sb-nav-tail { margin-left: auto; color: var(--color-fg-subtlest); }
+
+.sb-section-head { display: flex; align-items: center; justify-content: space-between; height: 28px; padding: 0 2px 0 8px; margin-top: 8px; color: var(--color-fg-subtlest); font-size: var(--text-sm); }
+.sb-other-head { margin-top: 14px; }
+.sb-search { display: flex; align-items: center; gap: 6px; height: 28px; margin: 0 2px 4px; padding: 0 8px; border-radius: var(--radius-lg); color: var(--color-fg-subtlest); }
+.sb-search:focus-within { background: var(--color-hover); }
+.sb-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--color-fg); font: inherit; font-size: var(--text-caption); }
+.sb-search input::placeholder { color: var(--color-fg-subtlest); }
+.sb-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -4px 0 0; padding: 0 4px 8px 0; }
+.sb-hint { padding: 8px; color: var(--color-fg-subtlest); font-size: var(--text-sm); }
+
+.sb-project { margin-bottom: 2px; }
+.sb-project-head { position: relative; display: flex; align-items: center; }
+.sb-project-toggle {
+  display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+  border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtle); font: inherit; font-size: var(--text-caption); text-align: left; cursor: pointer;
+}
+.sb-project-toggle:hover { background: var(--color-hover); }
+.sb-project.active .sb-project-name { color: var(--color-fg); }
+.sb-project-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-fg); font-weight: 500; }
+.sb-project.missing .sb-project-name { color: var(--color-fg-subtle); text-decoration: line-through; text-decoration-color: var(--color-fg-subtlest); }
+.sb-project-count { margin-left: auto; font-size: var(--text-xs); color: var(--color-fg-subtlest); }
+.sb-project-more { position: absolute; right: 2px; display: grid; opacity: 0; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-md); background: var(--color-frame); color: var(--color-fg-subtle); cursor: pointer; }
+.sb-project-head:hover .sb-project-more, .sb-project-more[data-state="open"], .sb-project-more:focus-visible { opacity: 1; }
+.sb-project-head:hover .sb-project-count, .sb-project-head:has(.sb-project-more[data-state="open"]) .sb-project-count { visibility: hidden; }
+.sb-project-more:hover { color: var(--color-fg); background: var(--color-card-selected); }
+.sb-running { width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); flex: none; }
+.sb-missing { font-style: normal; font-size: var(--text-xs); color: var(--color-warning); }
+.sb-pin { color: var(--color-fg-subtlest); flex: none; }
+.sb-project-body { padding-bottom: 4px; }
+.sb-link { margin: 2px 8px 6px 30px; border: 0; background: none; color: var(--color-accent); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.sb-more-projects { width: 100%; height: 28px; margin-top: 2px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtlest); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.sb-more-projects:hover { background: var(--color-hover); color: var(--color-fg-subtle); }
+
+/* ---- Session rows ---- */
+.sb-session { position: relative; display: flex; align-items: center; }
+.sb-session .session-open {
+  display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; height: 30px; min-height: 30px; padding: 0 8px 0 30px;
+  border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg); font: inherit; font-size: var(--text-caption); text-align: left; cursor: pointer;
+}
+.sb-session .session-open > svg:first-child { margin-left: -1px; color: var(--color-fg-subtle); }
+.sb-session .session-open:hover { background: var(--color-hover); }
+.sb-session.active .session-open { background: var(--color-selected); }
+.sb-session.child .session-open { padding-left: 46px; color: var(--color-fg-subtle); }
+.sb-session.child::before { content: ""; position: absolute; left: 36px; top: 0; bottom: 50%; width: 7px; border-left: 1px solid var(--color-border-strong); border-bottom: 1px solid var(--color-border-strong); border-bottom-left-radius: 4px; pointer-events: none; }
+.sb-session.archived .session-open, .sb-session.external .session-open { color: var(--color-fg-subtle); }
+.sb-session.external .session-open { padding-left: 12px; }
+.sb-session-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-session-source { flex: none; font-style: normal; font-size: var(--text-xs); color: var(--color-fg-subtlest); border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0 4px; }
+.sb-session-meta { flex: none; font-size: var(--text-xs); color: var(--color-fg-subtlest); }
+.sb-session-meta.running { color: var(--color-accent); }
+.sb-session-meta.waiting, .sb-session-meta.queued { color: var(--color-warning); }
+.sb-session-meta.failed { color: var(--color-danger); }
+.sb-session-meta.complete { color: var(--color-success); }
+.sb-session-more { position: absolute; right: 2px; display: grid; opacity: 0; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius-md); background: var(--color-card-selected); color: var(--color-fg-subtle); cursor: pointer; }
+.sb-session:hover .sb-session-more, .sb-session:focus-within .sb-session-more, .sb-session-more[data-state="open"], .sb-session[data-menu-open] .sb-session-more { opacity: 1; }
+.sb-session-more:hover { color: var(--color-fg); }
+/* Meta and the "more" button share one slot, so hovering never shifts the title or the menu anchor. */
+.sb-session:hover .sb-session-meta, .sb-session:focus-within .sb-session-meta, .sb-session[data-menu-open] .sb-session-meta { visibility: hidden; }
+.sb-mark { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; font-size: 10px; font-weight: 700; flex: none; }
+.sb-mark.codex { background: var(--color-selected); color: var(--color-fg); }
+.sb-mark.claude { background: color-mix(in srgb, #d69b72 22%, transparent); color: #d69b72; }
+
+.status-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+.status-dot.working { background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.status-dot.needs-user { background: var(--color-warning); }
+.status-dot.queued { background: var(--color-fg-subtlest); }
+.status-dot.unread { background: var(--color-success); }
+.status-dot.error { background: var(--color-danger); }
+.status-dot.cold { border: 1px dashed var(--color-fg-subtlest); }
+.sb-session.child .status-dot { display: none; }
+
+.sb-subhead { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 8px 0 10px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtlest); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; }
+.sb-subhead span { margin-left: auto; font-size: var(--text-xs); }
+.sb-subhead:hover { background: var(--color-hover); color: var(--color-fg-subtle); }
+.sb-subhead.wide { padding-left: 8px; }
+.sb-archived { margin-top: 2px; padding-left: 20px; }
+.sb-archived .session-open { padding-left: 10px; }
+.sb-check { display: flex; align-items: center; gap: 6px; padding: 2px 10px; color: var(--color-fg-subtlest); font-size: var(--text-sm); }
+.sb-explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.sb-back { display: flex; align-items: center; gap: 4px; height: 28px; margin-bottom: 4px; padding: 0 6px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtle); font: inherit; font-size: var(--text-caption); cursor: pointer; }
+.sb-back:hover { background: var(--color-hover); color: var(--color-fg); }
+
+.sb-foot { display: flex; align-items: center; gap: 2px; margin-top: 6px; padding: 6px 2px 0; border-top: 1px solid var(--color-border); }
+.sb-account { display: flex; align-items: center; gap: 9px; flex: 1; min-width: 0; height: 36px; padding: 0 6px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg); font: inherit; font-size: var(--text-caption); font-weight: 500; text-align: left; cursor: pointer; }
+.sb-account:hover, .sb-version:hover { background: var(--color-hover); }
+.sb-account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-version { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtlest); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.avatar { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; border: 1px solid var(--color-border-strong); background: var(--color-card); color: var(--color-fg); font-size: var(--text-xs); font-weight: 700; }
+
+/* ---- Header ---- */
+.topbar { flex: 0 0 var(--header-height); height: var(--header-height); display: flex; align-items: center; gap: 6px; padding: 0 10px 0 8px; border-bottom: 1px solid var(--color-border); background: transparent; }
+.tb-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 0 1 auto; padding-left: 4px; }
+.tb-title-btn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg); font: inherit; cursor: pointer; }
+.tb-title-btn:hover { background: var(--color-hover); }
+.tb-title-btn strong, .tb-title-text { font-size: var(--text-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34vw; }
+.tb-context { font-size: var(--text-sm); color: var(--color-fg-subtlest); white-space: nowrap; }
+.tb-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 220px; padding: 0 8px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: transparent; color: var(--color-fg-subtle); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+.tb-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-chip:hover { background: var(--color-hover); color: var(--color-fg); }
+.tb-spacer { flex: 1 1 auto; }
+.connection { width: 7px; height: 7px; margin: 0 6px; border-radius: 50%; background: var(--color-success); flex: none; }
+.connection.working { background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.open-location-feedback { font-size: var(--text-sm); color: var(--color-fg-subtle); }
+.open-location-feedback.error { color: var(--color-danger); }
+
+/* ---- Content deck: workspaces live in the sidebar, so the deck shows no workspace row,
+        and a pane's tab strip only appears once it holds more than one view. ---- */
+.workspace-tabs { display: none !important; }
+.workspace-deck { background: transparent; }
+.workbench-pane { border: 0; background: transparent; }
+.workbench-pane.focused { border-color: transparent; }
+.pane-tabs.single { display: none; }
+.pane-tabs { height: 36px; padding: 0 6px; gap: 2px; border-bottom: 1px solid var(--color-border); background: transparent; }
+
+/* ---- Sidebar resize handle (AppShell) ---- */
+.sidebar-resizer { position: absolute; left: calc(var(--sidebar-width, 264px) - 3px); top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 20; touch-action: none; }
+.sidebar-resizer:hover, .sidebar-resizer:focus-visible { background: var(--color-accent); opacity: .4; }
+
+/* ---- Right pane: a second frame beside the conversation (tools, previews, sub-agent sessions) ---- */
+.right-utility-pane { position: relative; flex: 0 0 auto; width: clamp(360px, 36vw, 640px); min-width: 340px; max-width: 760px; box-shadow: none; background: var(--color-frame); }
+.right-utility-pane > header { flex: 0 0 var(--header-height); height: var(--header-height); padding: 0 8px 0 14px; border-bottom: 1px solid var(--color-border); }
+.right-utility-pane > header strong { font-size: var(--text-base); font-weight: 600; color: var(--color-fg); }
+.right-utility-pane > header span { font-size: var(--text-sm); color: var(--color-fg-subtlest); }
+.right-tool-launcher { align-content: start; padding: 12px; gap: 4px; }
+.right-tool-launcher > p { margin: 0 0 8px; padding: 0 4px; font-size: var(--text-sm); color: var(--color-fg-subtlest); }
+.right-tool-launcher > button { min-height: 52px; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius-xl); background: transparent; color: var(--color-fg-subtle); }
+.right-tool-launcher > button:hover { border-color: var(--color-border); background: var(--color-hover); color: var(--color-fg); }
+.right-tool-launcher strong { font-size: var(--text-base); font-weight: 600; color: var(--color-fg); }
+.right-tool-launcher small { font-size: var(--text-sm); color: var(--color-fg-subtlest); }
+.right-utility-tabs { padding: 6px 8px; }
+.right-tool-scroll > section { border-radius: var(--radius-xl); background: var(--color-card); }
+
+/* ---- Full-page panels (settings, accounts, tasks, extensions...) ----
+   The header already names the page and offers the way back, so the page is the frame itself:
+   no breadcrumb row, and no second bordered card inside the pane. */
+.page-breadcrumb { display: none; }
+.workbench-page-host { background: var(--color-frame); }
+.workbench-page-surface { padding: 0; }
+.workbench-page-surface > section { max-width: none; width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.workbench-page-surface .settings-dialog { width: 100%; height: 100%; max-width: none; }
+.settings-dialog > header { padding: 0 14px 0 24px; }
+.settings-layout > nav { background: transparent; padding: 12px; }
+.settings-content { max-width: 860px; }
+/* One primary action style everywhere: monochrome fill; blue is reserved for focus, links and running state. */
+button.primary, .settings-dialog > footer button.primary, .request-card-actions button.primary, .extension-tab button.primary, .memory-toolbar button.primary, .definition-toolbar button.primary {
+  background: var(--color-primary); border-color: transparent; color: var(--color-primary-fg); font-weight: 600;
+}
+button.primary:hover:not(:disabled) { opacity: .88; }
+input[type="range"] { accent-color: var(--color-fg-subtle); }
+.workbench-page-surface > section:not(.settings-dialog) { max-width: 1040px; margin: 0 auto; }

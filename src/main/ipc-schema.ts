@@ -14,6 +14,21 @@ const isAbsoluteWindowsPath = (value: string): boolean => win32.isAbsolute(value
 type Rule = (args: unknown[]) => void;
 
 const RULES: Record<string, Rule> = {
+  "workspace-artifact:pick":args=>absoluteFilesystemPathArg(args,0,"产物工作区"),
+  "workspace-artifact:save":args=>{absoluteFilesystemPathArg(args,0,"产物工作区");absoluteFilesystemPathArg(args,1,"产物路径")},
+  "workspace-artifact:read":args=>{absoluteFilesystemPathArg(args,0,"产物工作区");absoluteFilesystemPathArg(args,1,"产物路径")},
+  "workspace-browser:list":noArgs,
+  "workspace-browser:create":args=>stringArg(args,0,8192),
+  "workspace-browser:navigate":args=>{idArg(args,0);stringArg(args,1,8192)},
+  "workspace-browser:command":args=>{idArg(args,0);enumArg(args,1,["back","forward","reload","stop"])},
+  "workspace-browser:bounds":args=>{idArg(args,0);const bounds=strictRecordArg(args,1,["x","y","width","height","visible"]);for(const key of ["x","y","width","height"])if(typeof bounds[key]!=="number"||!Number.isFinite(bounds[key])||(bounds[key] as number)<0||(bounds[key] as number)>20000)throw Error("浏览器尺寸无效");if(typeof bounds.visible!=="boolean")throw Error("浏览器显示状态无效")},
+  "workspace-browser:close":args=>idArg(args,0),
+  "workspace-browser:clear-site":args=>idArg(args,0),
+  "workspace-terminal:list":args=>absoluteFilesystemPathArg(args,0,"终端工作区"),
+  "workspace-terminal:create":args=>absoluteFilesystemPathArg(args,0,"终端工作区"),
+  "workspace-terminal:write":args=>{idArg(args,0);stringArg(args,1,65536)},
+  "workspace-terminal:resize":args=>{idArg(args,0);for(const value of args.slice(1))if(!Number.isInteger(value)||(value as number)<2||(value as number)>500)throw Error("终端尺寸无效")},
+  "workspace-terminal:close":args=>idArg(args,0),
   "app:bootstrap": noArgs,
   "app:build-info": noArgs,
   "onboarding:get": noArgs,
@@ -36,6 +51,8 @@ const RULES: Record<string, Rule> = {
   "workspace:discover": (args) => optionalBooleanArg(args, 0),
   "workspace:pin": (args) => { pathArg(args, 0); booleanArg(args, 1); },
   "workspace:hidden:list": noArgs,
+  "workspace:remove:preview": (args) => { pathArg(args, 0); },
+  "workspace:remove": (args) => { pathArg(args, 0); },
   "workspace:hidden:set": (args) => { pathArg(args, 0); booleanArg(args, 1); },
   "workspace:rebind-sessions": (args) => { pathArg(args, 0); absoluteFilesystemPathArg(args, 1, "新工作区"); },
   "workspace:search-files": (args) => { pathArg(args, 0); stringArg(args, 1, 16_384); optionalIntegerArg(args, 2, 1, 10_000); },
@@ -91,7 +108,7 @@ const RULES: Record<string, Rule> = {
   "memory:layout": (args) => pathArg(args, 0),
   "memory:settings:get": (args) => pathArg(args, 0),
   "memory:settings:update": (args) => { pathArg(args, 0); objectArg(args, 1); optionalIdArg(args, 2); },
-  "memory:list": (args) => { pathArg(args, 0); optionalStringArg(args, 1, 16_384); },
+  "memory:list": (args) => { pathArg(args, 0); if (args[1] !== undefined) stringArgAllowEmpty(args, 1, 16_384); },
   "memory:save": (args) => memorySaveArg(args, 0),
   "memory:remember:preview": (args) => { pathArg(args, 0); enumArg(args, 1, ["global", "workspace"]); stringArg(args, 2, 2 * 1024 * 1024); },
   "memory:remember": (args) => { objectArg(args, 0); tokenArg(args, 1); booleanArg(args, 2); optionalIdArg(args, 3); },
@@ -121,6 +138,7 @@ const RULES: Record<string, Rule> = {
   "profiles:delete": (args) => { pathArg(args, 0); idArg(args, 1); booleanArg(args, 2); },
   "profiles:assignment": (args) => idArg(args, 0),
   "dashboard:get": (args) => objectArg(args, 0),
+  "dashboard:conversation": (args) => idArg(args, 0),
   "dashboard:stop": (args) => idArg(args, 0),
   "dashboard:clear": (args) => optionalIdArg(args, 0),
   "attachment:inspect-privacy": (args) => { pathArg(args, 0); attachmentArrayArg(args, 1); },
@@ -172,6 +190,7 @@ const RULES: Record<string, Rule> = {
   },
   "session:create": (args) => sessionLaunchArg(args, 0),
   "session:preview": (args) => { pathArg(args, 0); idArg(args, 1); },
+  "session:inspect": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:open": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:info": (args) => idArg(args, 0),
   "session:usage": (args) => idArg(args, 0),
@@ -192,6 +211,7 @@ const RULES: Record<string, Rule> = {
   "session:mode": (args) => { idArg(args, 0); enumArg(args, 1, ["agent", "plan", "auto"]); },
   "session:effort": (args) => { idArg(args, 0); enumArg(args, 1, ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"]); },
   "session:model": (args) => { idArg(args, 0); idArg(args, 1); },
+  "session:mcp-tools": (args) => idArg(args, 0),
   "session:send": (args) => promptArgs(args),
   "session:enqueue": (args) => promptArgs(args),
   "session:interject": (args) => promptArgs(args),
@@ -212,6 +232,17 @@ const RULES: Record<string, Rule> = {
   "inbox:mark-read": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "inbox:clear": noArgs,
   "media:start": (args) => mediaCreationArg(args, 0),
+  "images:list":noArgs,
+  "images:code-artifacts":noArgs,
+  "images:create":noArgs,
+  "images:draft":args=>{idArg(args,0);stringArgAllowEmpty(args,1,2*1024*1024)},
+  "images:root":noArgs,
+  "images:delete":args=>{idArg(args,0);optionalBooleanArg(args,1)},
+  "images:rename":args=>{idArg(args,0);stringArg(args,1,200)},
+  "images:delete-job":args=>{idArg(args,0);idArg(args,1);booleanArg(args,2)},
+  "images:delete-artifact":args=>{idArg(args,0);idArg(args,1);idArg(args,2);booleanArg(args,3)},
+  "images:original":args=>{idArg(args,0);idArg(args,1);idArg(args,2)},
+  "images:submit":args=>{const input=strictRecordArg(args,0,["conversationId","requestId","request","referenceSources"]);requiredRecordString(input,"conversationId",512);requiredRecordString(input,"requestId",512);recordStringArray(input,"referenceSources",8,4096,true);if(!input.request||typeof input.request!=="object")throw Error("图片请求无效");mediaCreationArg([{...input.request,sessionId:input.conversationId}],0)},
   "media:get": (args) => idArg(args, 0),
   "media:cancel": (args) => idArg(args, 0),
   "plan:respond": (args) => { idArg(args, 0); requestIdArg(args, 1, true); enumArg(args, 2, ["approved", "rejected", "cancelled"]); if (args[3] !== undefined) stringArgAllowEmpty(args, 3, 64 * 1024); if (args[4] !== undefined) enumArg(args, 4, ["agent", "auto"]); },
@@ -495,6 +526,14 @@ function promptArgs(args: unknown[]): void {
   if (args[3] !== undefined) idArg(args, 3);
   if (args[4] !== undefined) idArg(args, 4);
   if (args[5] !== undefined) idArg(args, 5);
+  if (args[6] !== undefined) {
+    const record = strictRecordArg(args, 6, ["sessionId", "serverName", "toolName", "generation"]);
+    for (const field of ["sessionId", "serverName", "toolName", "generation"]) {
+      const value = requiredRecordString(record, field, field === "sessionId" ? 512 : 1024);
+      if (/[\x00-\x1f\x7f]/.test(value)) throw new Error("IPC MCP 工具身份包含控制字符");
+    }
+    if (record.sessionId !== args[0]) throw new Error("IPC MCP 工具不属于目标会话");
+  }
 }
 
 function strictRecordArg(args: unknown[], index: number, allowed: readonly string[]): Record<string, unknown> {
@@ -818,7 +857,7 @@ function automationPolicyArg(args: unknown[], index: number): void {
   optionalRecordBoolean(value, "notifyOnFailure");
 }
 function mediaCreationArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["kind", "prompt", "aspectRatio", "duration", "resolution", "voice", "sessionId", "route", "providerId", "modelId", "referencePaths"]);
+  const value = strictRecordArg(args, index, ["kind", "prompt", "aspectRatio", "duration", "resolution", "voice", "sessionId", "route", "providerId", "modelId", "referencePaths", "projectOutputDirectory"]);
   requiredRecordEnum(value, "kind", ["image", "video"]);
   requiredRecordString(value, "prompt", 2 * 1024 * 1024);
   requiredRecordEnum(value, "aspectRatio", ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"]);
@@ -830,6 +869,7 @@ function mediaCreationArg(args: unknown[], index: number): void {
   optionalRecordString(value, "providerId", 512);
   optionalRecordString(value, "modelId", 512);
   recordStringArray(value, "referencePaths", 16, 32_767, true);
+  optionalRecordString(value, "projectOutputDirectory", 4096);
 }
 function computerStartArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["sessionId", "appId", "windowId"]);

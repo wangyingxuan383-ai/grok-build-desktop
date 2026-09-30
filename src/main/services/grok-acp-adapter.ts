@@ -1,6 +1,8 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
+import { SessionMcpTools } from "./session-mcp-tools";
 import { EventEmitter } from "node:events";
+import { createReadStream } from "node:fs";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -43,6 +45,7 @@ import {
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 import { classifyTurnFailure } from "../../shared/turn-failure";
 import { normalizeBoundedToolPayload } from "./bounded-tool-payload";
+import { ensureDesktopHookReady } from "./desktop-hook-readiness";
 import { isCurrentSessionPlanFile, shouldBlockCommand } from "./plan-gate";
 import { resolveModeAfterResume, selectAllowPermissionOption, shouldAutoApproveToolPermissions } from "./permission-policy";
 import { TerminalService, type TerminalCreateParams } from "./terminal-service";
@@ -257,6 +260,7 @@ interface AdapterOptions extends SessionProcessOptions {
 }
 
 export interface UserPromptPresentation {
+  toolSelection?: import("../../shared/types").McpToolSelection;
   clientMessageId?: string;
   attachments?: UserMessageAttachmentPreview[];
   /** Stable identity for a Desktop-owned queue row once it is submitted. */
@@ -296,16 +300,16 @@ export interface AcpClientCapabilities {
  * Grok Build 1.0.4 introduced an image-aware in-process `read_file`. When an
  * ACP host advertises `readTextFile`, the CLI delegates every read to that
  * text-only callback and an image can be decoded as UTF-8 before the model
- * sees it. For the source-audited 1.0.4–1.0.13 range we therefore retain write
- * interception but let the CLI own reads. Unknown/unverified versions keep the
- * older handshake instead of silently dropping a capability.
+ * sees it. Let 1.0.x from 1.0.4 own reads; the later 1.0.38 source still selects
+ * LocalFs when this optional host capability is absent. A patch upgrade must
+ * not restore text-only delegation (and reject external plugin Skill paths).
+ * Unknown major/minor versions retain the older handshake pending review.
  */
 export function buildAcpClientCapabilities(cliVersion?: string): AcpClientCapabilities {
   const parsed = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(cliVersion ?? "");
   const imageAware = parsed?.[1] === "1"
     && Number(parsed[2]) === 0
-    && Number(parsed[3]) >= 4
-    && Number(parsed[3]) <= 13;
+    && Number(parsed[3]) >= 4;
   return {
     fs: imageAware ? { writeTextFile: true } : { readTextFile: true, writeTextFile: true },
     terminal: true,
@@ -413,6 +417,36 @@ export class GrokAcpAdapter extends EventEmitter {
   models: ModelInfo[] = [];
   commands: CommandInfo[] = [];
   registeredTools: string[] = [];
+  private readonly sessionMcpTools = new SessionMcpTools();
+  mcpTools() { return this.sessionMcpTools.snapshot(this.sessionId); }
+  private mcpDiscovery?: Promise<import("../../shared/types").SessionMcpToolSnapshot>;
+  discoverMcpTools(): Promise<import("../../shared/types").SessionMcpToolSnapshot> {
+    if (this.mcpDiscovery) return this.mcpDiscovery;
+    const sessionId = this.sessionId;
+    if (!sessionId || this.disposed) return Promise.reject(new Error("当前会话未连接，无法读取 MCP 工具"));
+    const revision = this.sessionMcpTools.revision;
+    const pending = (async () => {
+      try {
+        const response = unwrapExtResult(await this.extension("x.ai/mcp/list", { cache: true }, 5_000));
+        if (this.disposed || this.sessionId !== sessionId || !this.sessionMcpTools.acceptList(sessionId, response, revision))
+          throw new Error("MCP 连接状态在读取期间发生变化，请重新选择工具");
+        return this.mcpTools();
+      } catch (error) {
+        if (this.sessionMcpTools.revision === revision) this.sessionMcpTools.reset();
+        throw error;
+      }
+    })();
+    this.mcpDiscovery = pending;
+    void pending.finally(() => { if (this.mcpDiscovery === pending) this.mcpDiscovery = undefined; }).catch(() => undefined);
+    return pending;
+  }
+  private async validateMcpSelection(selection?: import("../../shared/types").McpToolSelection): Promise<void> {
+    if (!selection) return;
+    // Fail old identities before a round trip; refresh before the actual handoff.
+    this.sessionMcpTools.assert(this.sessionId, selection);
+    await this.discoverMcpTools();
+    this.sessionMcpTools.assert(this.sessionId, selection);
+  }
   currentModelId = "";
   mode: SessionMode;
   planActive = false;
@@ -422,6 +456,8 @@ export class GrokAcpAdapter extends EventEmitter {
   needsUser = false;
   readonly extensionLeaseId?: string;
   runtimeHandshake?: CliRuntimeHandshake;
+  private cliIdentityPromise?: Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }>;
+  private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status">>();
   lastCloseReceipt?: SessionCloseReceipt;
 
   get cwd(): string { return this.options.cwd; }
@@ -493,6 +529,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
+    this.sessionMcpTools.reset();
     // Bind a resumed adapter before initialize.  Grok may publish MCP/session
     // notifications while session/resume is still in flight; leaving the id
     // empty made those events ambiguous and, in multi-session runs, allowed a
@@ -595,6 +632,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.process.stdin.on("error", (error) => void this.options.log.log(`[grok stdin] ${error.message}`));
     this.process.on("error", (error) => this.failAll(error));
     this.process.on("exit", (code) => {
+      this.sessionMcpTools.reset();
       const activeTurnId = this.activeTurn?.turnId;
       const terminalOutcome: TurnOutcome = this.cancelRequested ? "cancelled" : "interrupted";
       this.working = false;
@@ -660,6 +698,12 @@ export class GrokAcpAdapter extends EventEmitter {
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
         ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
       }));
+    }
+    if (this.options.sessionMcpServers?.some(server => (server as { name?: string })?.name === "grok_desktop")) {
+      try {
+        const loaded = await ensureDesktopHookReady(this.sessionId, (method, params) => this.extension(method, params));
+        await this.options.log.log(loaded ? "Desktop 调用身份 Hook 已加载；工具执行仍须逐次证明" : "Desktop 调用身份 Hook 未加载；Desktop 工具仍保持拒绝执行");
+      } catch { await this.options.log.log("当前 CLI 无法确认 Desktop 身份 Hook；Desktop 工具仍保持拒绝执行"); }
     }
     if (resumeSessionId) this.currentEffort = await readPersistedEffort(this.options.cwd, this.sessionId) ?? this.currentEffort;
     // Persisted sessions store the upstream route id, not the local provider
@@ -785,6 +829,18 @@ export class GrokAcpAdapter extends EventEmitter {
     }
   }
 
+  /** Fingerprints the binary that owns this live ACP connection without exposing a user path to the model. */
+  cliIdentity(): Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }> {
+    if (!this.cliIdentityPromise) {
+      const cliPath = this.options.cliPath;
+      const pathFingerprint = createHash("sha256").update(cliPath.toLocaleLowerCase()).digest("hex");
+      this.cliIdentityPromise = hashFile(cliPath).then((sha256) => ({
+        executableName: basename(cliPath), pathFingerprint, ...(this.options.cliVersion ? { version: this.options.cliVersion } : {}), ...(sha256 ? { sha256 } : {}),
+      }));
+    }
+    return this.cliIdentityPromise;
+  }
+
   /**
    * Rename through the official session authority when the attached CLI
    * implements x.ai/session/rename. Older builds remain a supported local-only
@@ -902,6 +958,7 @@ export class GrokAcpAdapter extends EventEmitter {
           if (data) prompt.push({ type: "image", data, mimeType: attachment.mimeType || mimeForPath(attachment.path || attachment.name) });
         }
       }
+      if (presentation.toolSelection) await this.validateMcpSelection(presentation.toolSelection);
       const result = await this.request(
         acpMethods.agent.session.prompt,
         {
@@ -982,7 +1039,8 @@ export class GrokAcpAdapter extends EventEmitter {
     // so it remains truthfully editable/removable and can safely survive a
     // Desktop restart. The transition to `sending` below is the durable point
     // after which it must no longer be replayed or withdrawn.
-    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, clientMessageId, attachmentPreviews: presentation.attachments, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: "queued" };
+    if (presentation.toolSelection) await this.validateMcpSelection(presentation.toolSelection);
+    const entry: PromptQueueEntry = { id, sessionId: this.sessionId, toolSelection:presentation.toolSelection, clientMessageId, attachmentPreviews: presentation.attachments, text, position: this.promptQueue.length, createdAt: new Date().toISOString(), state: "queued" };
     this.ownedQueuedPromptIds.add(id);
     this.promptQueue = sendNow ? [entry, ...this.promptQueue] : [...this.promptQueue, entry];
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
@@ -1016,6 +1074,7 @@ export class GrokAcpAdapter extends EventEmitter {
     const id = crypto.randomUUID();
     const clientMessageId = presentation.clientMessageId || id;
     const content = await buildPromptBlocks(text, attachments);
+    if (presentation.toolSelection) await this.validateMcpSelection(presentation.toolSelection);
     this.pendingInterjections.set(id, { text, clientMessageId, attachments: presentation.attachments, source: "local" });
     try {
       unwrapExtResult(await this.extension("x.ai/interject", { text, interjectionId: id, content }, INTERJECTION_ACK_TIMEOUT_MS));
@@ -1111,6 +1170,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
     try {
       const content = await buildPromptBlocks(nextText, attachmentsFromQueuePreview(entry.attachmentPreviews));
+      if (entry.toolSelection) await this.validateMcpSelection(entry.toolSelection);
       unwrapExtResult(await this.extension("x.ai/interject", { text: nextText, interjectionId: id, content }, INTERJECTION_ACK_TIMEOUT_MS));
       this.pendingInterjections.delete(id);
       this.ownedQueuedPromptIds.delete(id);
@@ -1457,6 +1517,7 @@ export class GrokAcpAdapter extends EventEmitter {
 
   async dispose(timeoutMs = 5_000): Promise<void> {
     this.disposed = true;
+    this.sessionMcpTools?.reset();
     this.clearFirstEventWatchdog();
     if (this.restoredQueueTimer) clearTimeout(this.restoredQueueTimer);
     this.restoredQueueTimer = undefined;
@@ -1527,7 +1588,8 @@ export class GrokAcpAdapter extends EventEmitter {
         // 1.0 also uses the generic JSON-RPC text "Internal error" while the
         // actionable upstream HTTP message lives in `error.data`; prefer that
         // bounded detail without discarding the original code/data payload.
-        const error = Object.assign(new Error(jsonRpcErrorMessage(errorObject)), { code: errorObject.code, data: errorObject.data, rpcMessage: errorObject.message });
+        const detail = jsonRpcErrorMessage(errorObject);
+        const error = Object.assign(new Error(errorObject.code === -32602 ? `${pending.method}: ${detail}` : detail), { code: errorObject.code, data: errorObject.data, rpcMessage: errorObject.message });
         pending.reject(error);
       } else pending.resolve(message.result);
       return;
@@ -1659,7 +1721,9 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private handleToolCall(update: any): void {
     const toolCallId = String(update.toolCallId || update.id || crypto.randomUUID());
-    const status = normalizeToolStatus(update.status);
+    const identities = this.toolIdentities ??= new Map();
+    const previous = identities.get(toolCallId);
+    const status = update.status === undefined && previous ? previous.status : normalizeToolStatus(update.status);
     const diff = extractAcpToolDiff(update);
     const locations = Array.isArray(update.locations) && update.locations.length
       ? update.locations
@@ -1667,13 +1731,23 @@ export class GrokAcpAdapter extends EventEmitter {
     const boundedContent = update.content === undefined ? undefined : normalizeBoundedToolPayload(update.content, { maxBytes: 2 * 1_024 * 1_024 });
     const rawStructuredContent = update.structuredContent ?? update.structured_content;
     const boundedStructuredContent = rawStructuredContent === undefined ? undefined : normalizeBoundedToolPayload(rawStructuredContent, { maxBytes: 256 * 1_024 });
+    const meta = recordValue(update._meta) ?? recordValue(update.meta);
+    const toolMeta = recordValue(meta?.["x.ai/tool"]) ?? recordValue(meta?.tool);
+    const rawInput = recordValue(update.rawInput) ?? recordValue(update.raw_input) ?? recordValue(previous?.rawInput);
+    const toolName = firstNonEmptyString(update.toolName, update.tool_name, update.name, toolMeta?.name, toolMeta?.toolName, rawInput?.name, previous?.toolName);
+    const serverName = firstNonEmptyString(update.serverName, update.server_name, toolMeta?.serverName, toolMeta?.server_name, toolMeta?.server, previous?.serverName);
+    const computerEvidence = computerToolEvidence({ toolName, serverName, status });
     const tool: ToolCallState = {
       toolCallId,
       title: update.title || update.rawInput?.name || "工具调用",
       ...(update.kind !== undefined ? { kind: update.kind } : {}),
+      ...(toolName ? { toolName } : {}),
+      ...(serverName ? { serverName } : {}),
+      source: serverName || String(update.kind ?? "").toLowerCase() === "mcp" || toolName?.toLowerCase().startsWith("grok_desktop_computer__") ? "mcp" : previous?.source ?? "cli",
+      ...(computerEvidence ? { computerEvidence } : {}),
       ...(normalizeToolReadOnly(update) !== undefined ? { readOnly: normalizeToolReadOnly(update) } : {}),
       status,
-      ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
+      ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : update.raw_input !== undefined ? { rawInput: update.raw_input } : previous?.rawInput !== undefined ? { rawInput: previous.rawInput } : {}),
       ...(boundedContent !== undefined ? { content: Array.isArray(boundedContent.value) ? boundedContent.value : [boundedContent.value], contentTruncated: boundedContent.truncated } : {}),
       ...(boundedStructuredContent !== undefined ? { structuredContent: boundedStructuredContent.value, structuredContentTruncated: boundedStructuredContent.truncated } : {}),
       ...(locations !== undefined ? { locations } : {}),
@@ -1684,6 +1758,8 @@ export class GrokAcpAdapter extends EventEmitter {
       ...((update.error?.message || update.error) ? { error: update.error?.message || update.error } : {}),
       ...((update.truncated === true || boundedContent?.truncated || boundedStructuredContent?.truncated) ? { truncated: true } : {}),
     };
+    identities.set(toolCallId, { toolName, serverName, source: tool.source, rawInput: tool.rawInput, status });
+    if (status === "completed" || status === "failed") identities.delete(toolCallId);
     if (isMediaTool(update)) this.mediaToolIds.add(toolCallId);
     if (this.mediaToolIds.has(toolCallId)) this.emitGeneratedMedia(update);
     for (const item of Array.isArray(update.content) ? update.content : []) this.emitMediaFromContent(item?.type === "content" ? item.content : item);
@@ -2279,6 +2355,15 @@ export class GrokAcpAdapter extends EventEmitter {
           this.respondOk(id);
           return;
         }
+        case "x.ai/session/setup":
+        case "_x.ai/session/setup":
+          // Setup is a notification, not an invokable extension. It can arrive
+          // before session/new returns its ID; keep it out of another chat's state.
+          if (params.method === "session/new" && typeof params.phase === "string" && /^[a-z_]{1,64}$/.test(params.phase)) {
+            await this.options.log.log(`CLI session/new setup: ${params.phase}`);
+          }
+          this.respondOk(id);
+          return;
         case "x.ai/monitor_event":
         case "_x.ai/monitor_event":
           this.emitRuntimeUpdate("monitor", "monitor_event", firstNonEmptyString(params.title, params.message, params.status));
@@ -2317,6 +2402,7 @@ export class GrokAcpAdapter extends EventEmitter {
         case "_x.ai/mcp_servers_changed":
           {
           const targetSessionId = firstNonEmptyString(params.sessionId, params.session_id) ?? this.sessionId;
+          this.sessionMcpTools?.observe(this.sessionId,method,params);
           this.emitRuntimeUpdate(
             "mcp",
             method.replace(/^_?x\.ai\//, ""),
@@ -2499,7 +2585,7 @@ export class GrokAcpAdapter extends EventEmitter {
         entry.text,
         attachmentsFromQueuePreview(entry.attachmentPreviews),
         INTERACTIVE_PROMPT_TIMEOUT_MS,
-        { clientMessageId: entry.clientMessageId ?? entry.id, attachments: entry.attachmentPreviews, promptId: entry.id, sendNow: false },
+        { clientMessageId: entry.clientMessageId ?? entry.id, attachments: entry.attachmentPreviews, promptId: entry.id, sendNow: false, toolSelection:entry.toolSelection },
       );
     } catch {
       // prompt() already emitted the structured failure and committed the
@@ -2709,6 +2795,30 @@ function normalizeToolStatus(status: unknown): ToolCallState["status"] {
   return "pending";
 }
 
+function hashFile(path: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", (chunk: Buffer) => hash.update(chunk));
+    stream.once("error", () => resolve(undefined));
+    stream.once("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+function computerToolEvidence(input: { toolName?: string; serverName?: string; status: ToolCallState["status"] }): ToolCallState["computerEvidence"] | undefined {
+  const name = input.toolName?.toLowerCase() ?? "";
+  const server = input.serverName?.toLowerCase() ?? "";
+  const prefix = "grok_desktop_computer__";
+  const canonicalName = name.startsWith(prefix) ? name.slice(prefix.length) : name;
+  if (server !== "grok_desktop_computer" && !name.startsWith(prefix)) return undefined;
+  if (input.status === "failed") return "failed";
+  if (input.status === "pending" || input.status === "in_progress") return "attempted";
+  if (["list_apps", "list_windows", "get_window_state", "wait"].includes(canonicalName)) return "observed";
+  if (["start", "pause", "resume", "stop"].includes(canonicalName)) return "controlled";
+  if (["launch_app", "activate_window", "click", "double_click", "perform_secondary_action", "scroll", "press_key", "type_text", "set_value", "drag"].includes(canonicalName)) return "operated";
+  return "unknown";
+}
+
 function normalizeReasoningEffort(value: unknown): ReasoningEffort | undefined {
   return typeof value === "string" && (REASONING_EFFORTS as readonly string[]).includes(value)
     ? value as ReasoningEffort
@@ -2760,6 +2870,7 @@ export function normalizePromptQueue(value: unknown, sessionId: string, previous
       sessionId,
       clientMessageId: typeof row.clientMessageId === "string" ? row.clientMessageId : typeof row.client_message_id === "string" ? row.client_message_id : prior?.clientMessageId,
       attachmentPreviews: prior?.attachmentPreviews,
+      toolSelection: prior?.toolSelection,
       text: String(row.text ?? row.prompt ?? row.content ?? ""),
       position: typeof row.position === "number" ? row.position : index,
       createdAt: typeof row.createdAt === "string" ? row.createdAt : typeof row.created_at === "string" ? row.created_at : prior?.createdAt ?? new Date().toISOString(),
@@ -3464,7 +3575,7 @@ function httpStatusFromFailure(message: string, data: unknown): number | undefin
 /** Prefer actionable bounded JSON-RPC data over Grok Build's generic wrapper. */
 function jsonRpcErrorMessage(error: { message?: string; data?: unknown }): string {
   const wrapper = typeof error.message === "string" ? error.message.trim() : "";
-  if (wrapper && !/^(?:internal error|acp 请求失败)$/i.test(wrapper)) return wrapper.slice(0, 8_000);
+  if (wrapper && !/^(?:internal error|invalid params|invalid request|acp 请求失败)$/i.test(wrapper)) return wrapper.slice(0, 8_000);
   let data = error.data;
   if (typeof data === "string") {
     const text = data.trim();

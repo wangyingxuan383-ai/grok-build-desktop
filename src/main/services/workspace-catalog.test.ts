@@ -59,3 +59,12 @@ describe("workspace catalog", () => {
     expect(await catalog.setHidden(project, false, settings)).toHaveLength(1);
   });
 });
+
+it("suppresses removed projects even when external history remains and allows explicit re-add",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"grok-project-removal-"));roots.push(root);const project=join(root,"project");await mkdir(project);
+ const catalog=new WorkspaceCatalog(root,{listAll:async()=>[{cwd:project,id:"external"}]} as never,{listAll:async()=>[]} as never,join(root,"grok"));
+ const settings={recentWorkspaces:[project],activeWorkspace:project} as AppSettings;
+ expect(await catalog.discover(settings,true)).toHaveLength(1);
+ await catalog.removeEntry(project);expect(await catalog.discover(settings,true,true)).toEqual([]);
+ await catalog.restoreEntry(project);expect(await catalog.discover(settings,true)).toHaveLength(1);
+});

@@ -12,12 +12,18 @@ export interface CliMediaProcessInput {
   /** Stops only a silent/stalled process. null disables inactivity recovery. */
   idleTimeoutMs?: number | null;
   windowsVerbatimArguments?: boolean;
+  /** Reference images passed to the tool; never accepted as generated results. */
+  excludeSources?: readonly string[];
   onSpawn?(child: ChildProcessWithoutNullStreams): void;
   onProgress?(): void;
 }
 
-export function buildCliMediaArgs(prompt: string, transientSessionId: string, toolList: string): string[] {
-  return ["--no-auto-update", "--single", prompt, "--session-id", transientSessionId, "--output-format", "streaming-json", "--always-approve", "--tools", toolList];
+/**
+ * `resume` continues an existing CLI session (an image conversation's later turns) instead of
+ * starting the one named by `sessionId`, so the model keeps the earlier prompts and results.
+ */
+export function buildCliMediaArgs(prompt: string, sessionId: string, toolList: string, resume = false): string[] {
+  return ["--no-auto-update", "--single", prompt, resume ? "--resume" : "--session-id", sessionId, "--output-format", "streaming-json", "--always-approve", "--tools", toolList];
 }
 
 /**
@@ -36,9 +42,11 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   });
   input.onSpawn?.(child);
   const artifacts: MediaArtifact[] = [];
+  const toolIdentities = new Map<string, string>();
   let pending = "";
   let stderr = "";
   let timedOut = false;
+  let terminalError: string | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
   const idleTimeoutMs = input.idleTimeoutMs === undefined ? 600_000 : input.idleTimeoutMs;
   // Process startup (especially a packaged Node/Electron child) can take
@@ -57,7 +65,17 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     idleTimer.unref?.();
   };
   const collectLine = (line: string): void => {
-    for (const artifact of mediaArtifactsFromStreamingLine(line, input.media, input.cwd)) {
+    // The official headless emitter's top-level error is terminal. Do not
+    // infer failure from assistant text or a recoverable tool_result.
+    try {
+      const event = JSON.parse(line);
+      if (event?.type === "error" && typeof event.message === "string" && event.message.trim()) {
+        terminalError ??= event.message.trim().slice(0, 8_000);
+        if (!child.killed) child.kill();
+        return;
+      }
+    } catch { /* Non-JSON progress is not a protocol error. */ }
+    for (const artifact of mediaArtifactsFromStreamingLine(line, input.media, input.cwd, { exclude: input.excludeSources, toolIdentities })) {
       if (!artifacts.some((value) => value.source === artifact.source)) artifacts.push(artifact);
     }
   };
@@ -88,10 +106,11 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   try {
     const exitCode = await new Promise<number | null>((resolveExit, reject) => {
       child.once("error", reject);
-      child.once("exit", resolveExit);
+      child.once("close", resolveExit);
     });
     if (pending.trim()) collectLine(pending);
     if (input.signal.aborted) throw abortReason(input.signal);
+    if (terminalError) throw new Error(terminalError);
     if (timedOut) throw new Error(`媒体任务连续 ${Math.ceil((idleTimeoutMs ?? 0) / 1000)} 秒没有输出`);
     if (exitCode !== 0) throw new Error(mediaCliFailureMessage(stderr) || `Grok CLI 媒体任务退出（${String(exitCode)}）`);
     if (!artifacts.length) throw new Error(mediaCliFailureMessage(stderr) || "Grok CLI 已结束，但 streaming-json 中没有可识别的媒体产物");

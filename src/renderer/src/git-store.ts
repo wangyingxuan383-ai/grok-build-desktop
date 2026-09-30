@@ -25,7 +25,11 @@ interface GitWorkbenchState {
 export const useGitStore = create<GitWorkbenchState>((set) => ({
   workspace: "",
   loading: false,
-  setRepository: (workspace, trust, status) => set({ workspace, trust, status, selection: undefined, diff: undefined }),
+  setRepository: (workspace, trust, status) => set((state) => {
+    const sameWorkspace = normalizePath(state.workspace) === normalizePath(workspace);
+    const selection = sameWorkspace && state.selection && status?.changes.some((change) => change.path === state.selection?.path && (state.selection.staged ? change.staged : change.workingTree)) ? state.selection : undefined;
+    return { workspace, trust, status, selection, diff: undefined };
+  }),
   setStatus: (status) => set((state) => {
     const selection = state.selection && status?.changes.some((change) => change.path === state.selection?.path && (state.selection.staged ? change.staged : change.workingTree)) ? state.selection : undefined;
     return { status, selection, diff: selection ? state.diff : undefined };
@@ -36,3 +40,5 @@ export const useGitStore = create<GitWorkbenchState>((set) => ({
   setLoading: (loading) => set({ loading }),
   reset: (workspace = "") => set({ workspace, status: undefined, trust: undefined, selection: undefined, diff: undefined, loading: false }),
 }));
+
+function normalizePath(value: string): string { return typeof navigator !== "undefined" && navigator.platform.toLowerCase().startsWith("win") ? value.toLocaleLowerCase() : value; }

@@ -6,6 +6,14 @@ import { buildAcpClientCapabilities, buildGrokAgentArgs, buildPromptText, buildS
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
+  it("preserves Invalid params details and the failed RPC method", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const reject = vi.fn();
+    adapter.pending = new Map([[7, {method:"session/load", reject}]]);
+    await adapter.onLine(JSON.stringify({jsonrpc:"2.0",id:7,error:{code:-32602,message:"Invalid params",data:{message:"Session not found in requested cwd"}}}));
+    expect(reject.mock.calls[0]![0].message).toBe("session/load: Session not found in requested cwd");
+    expect(reject.mock.calls[0]![0].code).toBe(-32602);
+  });
   it("translates logical private extensions to their ACP wire names exactly once", () => {
     expect(wireExtensionMethod("x.ai/session/info")).toBe("_x.ai/session/info");
     expect(wireExtensionMethod("_x.ai/queue/remove")).toBe("_x.ai/queue/remove");
@@ -34,13 +42,15 @@ describe("Grok ACP process arguments", () => {
     });
   });
 
-  it("lets source-verified 1.0.4-1.0.13 own image-aware reads without weakening unknown versions", () => {
+  it("keeps native image and plugin reads across 1.0.x patch upgrades", () => {
     expect(buildAcpClientCapabilities("grok 1.0.3 (old)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.4 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.5 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.6 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.13 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
-    expect(buildAcpClientCapabilities("grok 1.0.14 (future)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.14 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.40 (installed)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 2.0.0 (unknown)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities()).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
   });
 
@@ -1479,6 +1489,7 @@ describe("forward lifecycle compatibility", () => {
       restoredQueueIds: new Set(),
       restoredQueueSeenIds: new Set(),
       pendingQueueOperations: new Map(),
+      mediaToolIds: new Set(),
       queueRevision: 0,
       working: false,
       models: [],
@@ -1496,6 +1507,31 @@ describe("forward lifecycle compatibility", () => {
       params: Record<string, unknown>;
     }>;
   }
+
+  it("merges partial capability updates and separates control from application operations", () => {
+    const { adapter, events } = lifecycleAdapter();
+    for (const status of ["completed", "failed"]) {
+      adapter.handleSessionUpdate({ sessionUpdate: "tool_call", toolCallId: status, toolName: "click", serverName: "grok_desktop_computer", status: "in_progress" });
+      adapter.handleSessionUpdate({ sessionUpdate: "tool_call_update", toolCallId: status, content: [] });
+      expect(events.at(-1).tool).toMatchObject({ status: "in_progress", computerEvidence: "attempted" });
+      adapter.handleSessionUpdate({ sessionUpdate: "tool_call_update", toolCallId: status, status });
+      expect(events.at(-1).tool).toMatchObject({ toolName: "click", serverName: "grok_desktop_computer", source: "mcp", computerEvidence: status === "failed" ? "failed" : "operated" });
+    }
+    for (const name of ["start", "pause", "resume", "stop", "wait"]) {
+      adapter.handleSessionUpdate({ sessionUpdate: "tool_call", toolCallId: name, name, serverName: "grok_desktop_computer", status: "completed" });
+      expect(events.at(-1).tool.computerEvidence).toBe(name === "wait" ? "observed" : "controlled");
+    }
+  });
+
+  it("preserves explicit Computer MCP identity and reports successful, failed, and title-only evidence distinctly", () => {
+    const { adapter, events } = lifecycleAdapter();
+    adapter.handleSessionUpdate({ sessionUpdate: "tool_call", toolCallId: "computer-ok", title: "Click the button", name: "click", serverName: "grok_desktop_computer", kind: "mcp", status: "completed", rawInput: { x: 10, y: 12 } });
+    adapter.handleSessionUpdate({ sessionUpdate: "tool_call", toolCallId: "computer-failed", title: "Computer Use failed", toolName: "grok_desktop_computer__type_text", status: "failed", error: "Host rejected action" });
+    adapter.handleSessionUpdate({ sessionUpdate: "tool_call", toolCallId: "title-only", title: "Computer Use: inspect source", kind: "read", status: "completed" });
+    expect(events[0].tool).toMatchObject({ toolName: "click", serverName: "grok_desktop_computer", source: "mcp", computerEvidence: "operated" });
+    expect(events[1].tool).toMatchObject({ toolName: "grok_desktop_computer__type_text", source: "mcp", computerEvidence: "failed" });
+    expect(events[2].tool).not.toHaveProperty("computerEvidence");
+  });
 
   it("replays the sanitized 0.2.118 lifecycle fixture, including completion-before-background", async () => {
     const { adapter, events } = lifecycleAdapter();

@@ -196,7 +196,7 @@ function reloadLabel(value: DefinitionReloadResult): string { return value.strat
 function csv(value: string): string[] | undefined { const values = value.split(",").map((item) => item.trim()).filter(Boolean); return values.length ? values : undefined; }
 function agentTemplate(name: string): string { return `---\nname: ${JSON.stringify(name)}\ndescription: "请填写 Agent 说明"\nprompt_mode: extend\nmodel: inherit\npermission_mode: default\nagents_md: true\n---\n\n请在此填写 Agent 指令。\n`; }
 function personaTemplate(name: string): string { return `# ${name} persona\ndescription = "请填写 Persona 说明"\ninstructions = """\n请在此填写 Persona 指令。\n"""\ndefault_isolation = "none"\n`; }
-function errorMessage(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+import { errorMessage } from "../error-message";
 
 export function patchAgentFrontmatter(raw: string, key: string, value: string | boolean | string[] | undefined): string {
   const opening = /^(?:\uFEFF)?---[ \t]*\r?\n/.exec(raw);

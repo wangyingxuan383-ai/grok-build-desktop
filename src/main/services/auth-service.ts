@@ -39,7 +39,6 @@ interface SpawnLoginOptions {
 }
 
 export interface AuthServiceOptions {
-  assertCliRuntimeAllowed?: (cliPath: string, env: NodeJS.ProcessEnv) => Promise<void>;
   authPath?: string;
   loginTimeoutMs?: number;
   resolveCli?: (configured: string) => Promise<string | undefined>;
@@ -66,7 +65,6 @@ export class AuthService {
   private readonly killProcessTree: (child: ChildProcessWithoutNullStreams) => Promise<void>;
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly verifyOverride?: () => Promise<void>;
-  private readonly assertCliRuntimeAllowed?: AuthServiceOptions["assertCliRuntimeAllowed"];
   private readonly detectNoBrowser: (cliPath: string, env: NodeJS.ProcessEnv) => Promise<boolean>;
   private operationTail: Promise<void> = Promise.resolve();
   private recoveryPromise?: Promise<void>;
@@ -90,7 +88,6 @@ export class AuthService {
     this.killProcessTree = options.terminateProcessTree ?? ((child) => terminateProcessTree(child));
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
     this.verifyOverride = options.verifyActive;
-    this.assertCliRuntimeAllowed = options.assertCliRuntimeAllowed;
     this.detectNoBrowser = options.supportsNoBrowser ?? supportsNoBrowser;
   }
 
@@ -182,7 +179,6 @@ export class AuthService {
     const cliPath = await this.resolveCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI");
     const active = await this.vault.active();
-    await this.assertCliRuntimeAllowed?.(cliPath, buildCliEnv(settings, active?.payload.apiKey));
     const { stdout } = await execFileAsync(cliPath, ["--no-auto-update", "models"], {
       env: buildCliEnv(settings, active?.payload.apiKey),
       timeout: 30_000,
@@ -261,8 +257,11 @@ export class AuthService {
       if (!raw.trim()) throw new Error("登录完成但 OAuth 凭据文件为空");
       const imported = await this.vault.importAuthJson(raw, true);
       importedId = imported.id;
-      await this.verifyActive();
-      this.updateLogin({ ...this.loginState, running: false, message: "登录成功", error: undefined });
+      // The official CLI already exchanged the device code and exited 0, so the
+      // credential is valid. The follow-up connectivity check is advisory: a
+      // failure (network, an unverified CLI build, ...) must never discard the
+      // freshly issued token or restore the previous one over it.
+      await this.reportAccountConnectivity("登录成功");
       return this.getLoginState();
     } catch (error) {
       if (child) await this.terminateLogin(child).catch((killError) => this.log.log(`Failed to terminate device login: ${errorMessage(killError)}`));
@@ -274,10 +273,8 @@ export class AuthService {
       const baseMessage = this.disposed ? "设备码登录已取消" : error instanceof DeviceLoginTimeoutError ? error.message : errorMessage(error);
       const message = rollbackError ? `${baseMessage}；恢复原账号失败：${errorMessage(rollbackError)}` : baseMessage;
       await this.log.log(`Device login failed: ${message}${combined ? `: ${combined}` : ""}`);
-      const verificationUrl = extractDeviceVerificationUrl(combined);
       this.updateLogin({
         running: false,
-        ...(verificationUrl ? { url: verificationUrl, code: this.loginState.code } : {}),
         error: message,
         message,
       });
@@ -301,7 +298,7 @@ export class AuthService {
     try {
       profile = await this.vault.addApiKey(label, apiKey.trim());
       await rm(this.authPath, { force: true });
-      await this.verifyActive();
+      await this.reportAccountConnectivity("账号已添加");
       return this.vault.list();
     } catch (error) {
       await this.restoreAuthSnapshot(snapshot, profile?.id);
@@ -320,7 +317,7 @@ export class AuthService {
       if (target.payload.kind === "oauth" && target.payload.authJson) await this.atomicWriteAuth(target.payload.authJson);
       else await rm(this.authPath, { force: true });
       await this.vault.setActive(accountId);
-      await this.verifyActive();
+      await this.reportAccountConnectivity("账号已切换");
       return this.vault.list();
     } catch (error) {
       await this.restoreAuthSnapshot(snapshot);
@@ -338,6 +335,13 @@ export class AuthService {
     if (active) await this.vault.remove(active.profile.id);
     await rm(this.authPath, { force: true });
     this.updateLogin({ running: false, message: "已退出登录" });
+  }
+
+  /** Credential writes are transactional; optional CLI connectivity is a separate, advisory result. */
+  private async reportAccountConnectivity(message: string): Promise<void> {
+    const warning = await this.verifyActive().then(() => undefined, (error: unknown) => errorMessage(error));
+    if (warning) await this.log.log(`Account connectivity warning: ${warning}`).catch(() => undefined);
+    this.updateLogin({ running: false, message: warning ? `${message}；连通性检查未通过：${warning}` : message });
   }
 
   private async captureAuthSnapshot(syncCurrentOAuth: boolean): Promise<AuthSnapshot> {
@@ -416,7 +420,7 @@ export class AuthService {
   }
 }
 
-const ANSI_ESCAPE = /\x1B(?:[@-_]|\[[0-?]*[ -/]*[@-~])/g;
+const ANSI_ESCAPE = /\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g;
 
 /** OAuth token/device endpoints are API endpoints, not pages a user should open. */
 export function extractDeviceVerificationUrl(output: string): string | undefined {
@@ -436,6 +440,9 @@ export function extractDeviceVerificationUrl(output: string): string | undefined
 export function formatDeviceLoginFailure(code: number | null, output: string): string {
   const clean = output.replace(ANSI_ESCAPE, "").replace(/\s+/g, " ").trim();
   const prefix = `登录失败（代码 ${String(code)}）`;
+  if (/Token exchange error:.*Could not verify your subscription/i.test(clean)) {
+    return `${prefix}：官方登录服务暂时无法验证订阅，尚未完成令牌交换。原账号已保留；请确认浏览器账号和订阅状态后重新发起登录。此设备码已结束，请勿继续使用。`;
+  }
   if (/os error 10061|actively refused|积极拒绝|tcp connect error|tunnel error/i.test(clean)) {
     return `${prefix}：登录服务连接被拒绝。请确认设置中的 HTTP/HTTPS 代理正在运行，或暂时清空代理后重试`;
   }

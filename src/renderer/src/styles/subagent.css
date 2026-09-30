@@ -1,0 +1,15 @@
+/* Sub-agent session: laid out like a conversation, hosted in the right pane or the content area. */
+.sa-session { display: flex; flex-direction: column; min-height: 0; height: 100%; min-width: 0; }
+.sa-session-head { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-height: var(--header-height); padding: 0 8px 0 14px; border-bottom: 1px solid var(--color-border); }
+.sa-session-title { flex: 1; min-width: 0; display: grid; }
+.sa-session-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-base); font-weight: 600; }
+.sa-session-title span { font-size: var(--text-sm); color: var(--color-fg-subtlest); }
+.sa-session-tools { display: flex; align-items: center; gap: 2px; }
+.sa-session-facts { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 8px 14px; border-bottom: 1px solid var(--color-border); color: var(--color-fg-subtlest); font-size: var(--text-sm); }
+.sa-session-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 16px 24px; }
+.sa-session.page .sa-session-body { width: 100%; max-width: 860px; margin: 0 auto; }
+.sa-session-note { margin: 0 0 12px; padding: 8px 10px; border-radius: var(--radius-lg); background: var(--color-card); color: var(--color-fg-subtle); font-size: var(--text-caption); }
+.sa-session-note.danger { background: var(--color-danger-soft); color: var(--color-danger); }
+.sa-session-foot { flex: 0 0 auto; padding: 8px 14px; border-top: 1px solid var(--color-border); color: var(--color-fg-subtlest); font-size: var(--text-sm); }
+.subagent-list article > div { min-width: 0; width: 100%; }
+.subagent-list small, .subagent-list p { overflow-wrap: anywhere; }

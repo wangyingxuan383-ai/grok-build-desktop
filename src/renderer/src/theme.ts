@@ -2,8 +2,8 @@ import type { ThemeColors, ThemeSettings } from "../../shared/types";
 
 const THEME_CACHE_KEY = "grok-build-desktop.theme.v1";
 
-export const DARK_COLORS: ThemeColors = { background: "#0d0f12", surface: "#171a1f", text: "#e7e9ec", muted: "#9299a3", accent: "#45a9df", border: "#292e35" };
-export const LIGHT_COLORS: ThemeColors = { background: "#f6f7f9", surface: "#ffffff", text: "#202328", muted: "#68707b", accent: "#1677a8", border: "#d7dbe0" };
+export const DARK_COLORS: ThemeColors = { background: "#121212", surface: "#191919", text: "#ececec", muted: "#a1a1a1", accent: "#6ea8fe", border: "#2a2a2a" };
+export const LIGHT_COLORS: ThemeColors = { background: "#f3f3f2", surface: "#ffffff", text: "#1c1c1c", muted: "#5f5f5f", accent: "#2a6fdb", border: "#e0e0de" };
 
 export function resolvedTheme(theme: ThemeSettings, systemDark: boolean): "dark" | "light" {
   if (theme.mode === "system") return systemDark ? "dark" : "light";
@@ -17,36 +17,39 @@ export function themeBackgroundClass(theme: ThemeSettings): string {
 
 export function themeCssVariables(theme: ThemeSettings, systemDark: boolean): Record<string, string> {
   const resolved = resolvedTheme(theme, systemDark);
-  const colors = theme.mode === "custom" ? theme.colors : resolved === "light" ? LIGHT_COLORS : DARK_COLORS;
+  const dark = resolved === "dark";
+  const colors = theme.mode === "custom" ? theme.colors : dark ? DARK_COLORS : LIGHT_COLORS;
+  // Brand buttons are monochrome (near-white on dark, near-black on light). A
+  // custom theme opts into its own accent as the primary action colour instead.
+  const primary = theme.mode === "custom" ? colors.accent : mix(colors.text, dark ? "#ffffff" : "#000000", 0.12);
+  const primaryForeground = theme.mode === "custom" ? (contrastRatio("#ffffff", primary) >= contrastRatio("#000000", primary) ? "#ffffff" : "#000000") : colors.background;
   return {
-    "--bg": colors.background,
-    "--main": colors.background,
-    "--panel": colors.surface,
-    "--panel-2": mix(colors.surface, colors.text, resolved === "light" ? 0.035 : 0.045),
-    "--panel-3": mix(colors.surface, colors.text, resolved === "light" ? 0.075 : 0.09),
-    "--input-bg": mix(colors.background, colors.text, resolved === "light" ? 0.018 : 0.025),
-    "--elevated": mix(colors.surface, colors.text, resolved === "light" ? 0.025 : 0.065),
-    "--button-bg": mix(colors.surface, colors.text, resolved === "light" ? 0.06 : 0.095),
-    "--hover": mix(colors.surface, colors.text, resolved === "light" ? 0.085 : 0.12),
-    "--chip-bg": mix(colors.surface, colors.text, resolved === "light" ? 0.055 : 0.08),
-    "--border": colors.border,
-    "--border-strong": mix(colors.border, colors.text, 0.18),
-    "--muted": colors.muted,
-    "--text": colors.text,
-    "--text-secondary": mix(colors.text, colors.muted, 0.42),
-    "--text-strong": mix(colors.text, resolved === "light" ? "#000000" : "#ffffff", 0.12),
-    "--accent": colors.accent,
-    "--accent-2": mix(colors.accent, resolved === "light" ? "#000000" : "#ffffff", 0.18),
-    "--accent-soft": mix(colors.background, colors.accent, resolved === "light" ? 0.1 : 0.16),
-    "--surface-translucent": withAlpha(colors.surface, resolved === "light" ? 0.86 : 0.84),
-    "--shadow": resolved === "light" ? "#16202a24" : "#00000088",
-    "--danger": resolved === "light" ? "#b73742" : "#ef6c72",
-    "--success": resolved === "light" ? "#247a56" : "#56c596",
-    "--warning": resolved === "light" ? "#8a6811" : "#e7b75d",
+    // Surface ladder: window -> frame -> card -> popover. Hover/selected are
+    // derived in tokens.css with color-mix() from --color-fg.
+    "--color-window": colors.background,
+    "--color-frame": colors.surface,
+    "--color-card": mix(colors.surface, colors.text, dark ? 0.045 : 0.03),
+    "--color-card-selected": mix(colors.surface, colors.text, dark ? 0.085 : 0.065),
+    "--color-popover": dark ? mix(colors.surface, colors.text, 0.065) : colors.surface,
+    "--color-input": dark ? mix(colors.surface, colors.text, 0.02) : colors.surface,
+    "--color-border": colors.border,
+    "--color-border-strong": mix(colors.border, colors.text, 0.18),
+    "--color-fg": colors.text,
+    "--color-fg-subtle": colors.muted,
+    "--color-fg-subtlest": mix(colors.muted, colors.background, 0.42),
+    "--color-primary": primary,
+    "--color-primary-fg": primaryForeground,
+    "--color-accent": colors.accent,
+    "--color-success": dark ? "#4cc38a" : "#1f8a5b",
+    "--color-warning": dark ? "#e5b454" : "#9a6a0c",
+    "--color-danger": dark ? "#f06a6a" : "#c53b3b",
+    "--text-strong": mix(colors.text, dark ? "#ffffff" : "#000000", 0.12),
+    "--shadow": dark ? "#00000088" : "#16202a24",
+    "--shadow-overlay": dark ? "0 10px 30px #00000073, 0 0 0 1px var(--color-border)" : "0 10px 30px #16202a1f, 0 0 0 1px var(--color-border)",
     "--background-opacity": String(theme.background.opacity),
     "--background-blur": `${theme.background.blur}px`,
     "--background-dim": String(theme.background.dim),
-    "--background-mask": resolved === "light" ? "255 255 255" : "0 0 0",
+    "--background-mask": dark ? "0 0 0" : "255 255 255",
     "--background-fit": theme.background.fit,
     "--background-position": theme.background.position,
     "--theme-background-image": theme.background.enabled ? 'url("grok-theme://background/current")' : "none",
@@ -114,5 +117,4 @@ function mix(left: string, right: string, weight: number): string {
   const a = parseHex(left); const b = parseHex(right);
   return `#${a.map((value, index) => Math.round(value + ((b[index] ?? value) - value) * weight).toString(16).padStart(2, "0")).join("")}`;
 }
-function withAlpha(color: string, alpha: number): string { return `${color}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`; }
 function parseHex(color: string): number[] { const normalized = /^#[0-9a-f]{6}$/i.test(color) ? color.slice(1) : "000000"; return [0, 2, 4].map((index) => Number.parseInt(normalized.slice(index, index + 2), 16)); }

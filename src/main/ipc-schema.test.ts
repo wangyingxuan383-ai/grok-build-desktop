@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { hasIpcRuntimeSchema, validateIpcInvocation } from "./ipc-schema";
 
 describe("IPC runtime schemas", () => {
+  it("allows clearing an image draft after submission and keeps its identity required", () => {
+    expect(() => validateIpcInvocation("images:draft", ["image-session", ""], 2)).not.toThrow();
+    for (const args of [["", ""], ["image-session", null], ["image-session", "\0"], ["image-session", "x".repeat(2*1024*1024+1)]])
+      expect(() => validateIpcInvocation("images:draft", args, 2)).toThrow();
+  });
+  it("accepts an empty Memory search without weakening query validation", () => {
+    for (const query of ["", undefined, "中文记忆"]) expect(() => validateIpcInvocation("memory:list", ["D:\\repo", query], 2)).not.toThrow();
+    for (const query of [null, 42, "x".repeat(16_385), "\0"]) expect(() => validateIpcInvocation("memory:list", ["D:\\repo", query], 2)).toThrow();
+  });
   it("validates one-shot CLI update policies and recovery actions", () => {
     for (const policy of ["standard", "try-new", "retain-unverified"]) {
       expect(() => validateIpcInvocation("cli:update-preview", [policy, "verify"], 2)).not.toThrow();
@@ -123,7 +132,7 @@ describe("IPC runtime schemas", () => {
       theme: {
         mode: "dark",
         customBase: "dark",
-        colors: { background: "#0d0f12", surface: "#171a1f", text: "#e7e9ec", muted: "#9299a3", accent: "#45a9df", border: "#292e35" },
+        colors: { background: "#121212", surface: "#191919", text: "#ececec", muted: "#a1a1a1", accent: "#6ea8fe", border: "#2a2a2a" },
         background: { enabled: false, scope: "conversation", fit: "cover", position: "center", opacity: 0.32, blur: 0, dim: 0.42 },
       },
     }], 1)).not.toThrow();

@@ -30,6 +30,16 @@ async function fixture() {
   return { client, call, backend, tasks, service, injection, setMode: (next: SessionMode) => { mode = next; } };
 }
 describe("Desktop MCP wire contract", () => {
+  it("passes explicit Computer access but strips future-intent proof from persisted definitions", async () => {
+    const { call, backend, tasks } = await fixture();
+    const result = await call("automation_create", { name: "GUI later", prompt: "use the app", schedule: { kind: "interval", minutes: 5 }, destination: "standalone", computerEnabled: true, futureIntent: true });
+    expect(result.isError).toBe(false);
+    const definition = vi.mocked(backend.create).mock.calls[0]![1];
+    expect(definition.computerEnabled).toBe(true); expect(definition).not.toHaveProperty("futureIntent");
+    tasks[0]!.profile = { mode: "auto", modelId: "fixture", effort: "", permissionPolicy: "auto", computerEnabled: false };
+    await call("automation_update", { id: "here", computerEnabled: true });
+    expect(backend.update).toHaveBeenCalledWith("here", { profile: { ...tasks[0]!.profile, computerEnabled: true } });
+  });
   it("discovers tools and filters tasks by workspace", async () => {
     const { client, call } = await fixture();
     expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(expect.arrayContaining(["automation_create", "automation_update", "automation_pause", "automation_delete", "automation_runs", "automation_cancel_run", "capabilities"]));

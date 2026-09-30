@@ -12,12 +12,13 @@ describe("renderer theme mapping", () => {
   it("maps custom colors and background controls to semantic variables", () => {
     const theme = { ...DEFAULT_THEME, mode: "custom" as const, colors: { ...DEFAULT_THEME.colors, accent: "#123456" }, background: { ...DEFAULT_THEME.background, fit: "contain" as const, position: "top" as const, blur: 7 } };
     const variables = themeCssVariables(theme, false);
-    expect(variables["--accent"]).toBe("#123456");
+    expect(variables["--color-accent"]).toBe("#123456");
+    expect(variables["--color-primary"]).toBe("#123456");
     expect(variables["--background-fit"]).toBe("contain");
     expect(variables["--background-position"]).toBe("top");
     expect(variables["--background-blur"]).toBe("7px");
-    expect(variables["--elevated"]).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(variables["--button-bg"]).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(variables["--color-card"]).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(variables["--color-popover"]).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
   it("reports WCAG contrast ratios", () => {

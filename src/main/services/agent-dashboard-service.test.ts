@@ -88,4 +88,6 @@ it("joins native task identity with child session progress and keeps worktree as
   expect(snapshot.roots[0]?.children).toHaveLength(1);
   expect(await service.cancellationTarget(snapshot.roots[0]!.children[0]!.id)).toEqual({ sessionId: "s1", nativeSubagentId: "native-id" });
   expect(snapshot.roots[0]?.children[0]).toMatchObject({ nativeSubagentId: "native-id", childSessionId: "child", worktreeId: "wt", isolation: "worktree", status: "completed", summary: "verified" });
+  expect(await service.subagentRecord("session:s1:subagent:native-id")).toMatchObject({childSessionId:"child"});
+  expect(await service.cancellationTarget("session:s1:subagent:native-id")).toEqual({sessionId:"s1",nativeSubagentId:"native-id"});
 });

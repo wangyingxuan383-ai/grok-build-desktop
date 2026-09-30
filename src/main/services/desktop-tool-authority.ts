@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { cp, mkdir, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { DESKTOP_HOOK_MATCHER } from "./desktop-hook-readiness";
 
 const PROOF = "_desktopCallerProof";
 interface Permit { tool: string; hash: string; expires: number }
@@ -40,7 +41,7 @@ export class DesktopToolAuthority {
     this.runtimePath = join(this.runtimeRoot, this.token);
     await cp(source, this.runtimePath, { recursive: true });
     await mkdir(join(this.runtimePath, "hooks"), { recursive: true });
-    await writeFile(join(this.runtimePath, "hooks", "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "^(grok_desktop|grok_desktop_computer)__", hooks: [{ type: "http", url: `http://127.0.0.1:${port}/${this.token}`, timeout: 5 }] }] } }), "utf8");
+    await writeFile(join(this.runtimePath, "hooks", "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: DESKTOP_HOOK_MATCHER, hooks: [{ type: "http", url: `http://127.0.0.1:${port}/${this.token}`, timeout: 5 }] }] } }), "utf8");
     return this.runtimePath;
   }
 

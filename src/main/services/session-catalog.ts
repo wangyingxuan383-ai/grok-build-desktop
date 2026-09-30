@@ -9,6 +9,7 @@ interface SessionMetadata {
   unread: Record<string, "ok" | "error">;
   pinned: Record<string, boolean>;
   archived?: Record<string, boolean>;
+  dismissed?: Record<string, boolean>;
   parents?: Record<string, string>;
   origins?: Record<string, { kind: SessionOriginKind; id?: string; title?: string }>;
 }
@@ -50,7 +51,7 @@ export class SessionCatalog {
     return match ? join(sessionsRoot, match.name) : this.sessionRoot(cwd);
   }
 
-  async list(cwd: string, query = "", live = new Map<string, LiveStatus>()): Promise<SessionSummary[]> {
+  async list(cwd: string, query = "", live = new Map<string, LiveStatus>(), includeDismissed = false): Promise<SessionSummary[]> {
     if (!cwd) return [];
     const root = await this.resolveSessionRoot(cwd);
     const dirs = await readdir(root, { withFileTypes: true }).catch(() => []);
@@ -86,6 +87,7 @@ export class SessionCatalog {
     const normalized = query.trim().toLowerCase();
     return rows
       .filter((row): row is SessionSummary => Boolean(row))
+      .filter((row) => includeDismissed || !metadata.dismissed?.[row.id])
       .filter((row) => !normalized || row.title.toLowerCase().includes(normalized) || row.id.includes(normalized))
       .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Number(Boolean(a.archived)) - Number(Boolean(b.archived)) || b.updatedAt.localeCompare(a.updatedAt));
   }
@@ -206,6 +208,15 @@ export class SessionCatalog {
     const rel = relative(resolve(root), target);
     if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("非法会话路径");
     await rm(target, { recursive: true, force: true });
+    await this.forgetMetadata(sessionId);
+  }
+
+  /** Hide Desktop's reference only; never remove CLI-owned files. */
+  async dismiss(sessionId: string): Promise<void> {
+    await this.forgetMetadata(sessionId, true);
+  }
+
+  private async forgetMetadata(sessionId: string, dismissed = false): Promise<void> {
     await this.meta.mutate((metadata) => {
       delete metadata.renames[sessionId];
       delete metadata.unread[sessionId];
@@ -216,6 +227,8 @@ export class SessionCatalog {
         for (const [child, parent] of Object.entries(metadata.parents)) if (parent === sessionId) delete metadata.parents[child];
       }
       if (metadata.origins) delete metadata.origins[sessionId];
+      if (metadata.dismissed) delete metadata.dismissed[sessionId];
+      if (dismissed) { metadata.dismissed ??= {}; metadata.dismissed[sessionId] = true; }
     });
   }
 

@@ -14,8 +14,8 @@ describe("SessionListRow", () => {
     expect(html).toContain('class="session-open"');
     expect(html).toContain('aria-current="page"');
     expect(html).toContain("等待操作");
-    expect(html).toContain("导出 Markdown");
-    expect(html).toContain("重命名");
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain("修复登录的更多操作");
     expect(html).not.toContain("session-quick-actions");
   });
 
