@@ -298,14 +298,17 @@ export default function App(): React.JSX.Element {
     void window.grokDesktop.bootstrap().then(async (data) => {
       const fixture = await window.grokDesktop.getOfflineUiFixture();
       offlineFixtureRef.current = Boolean(fixture);
-      useAppStore.getState().bootstrap(data);
+      // Establish the stable project ID before hydrating/autosaving a new-task draft.
+      // Publishing settings first briefly used a path-based draft key, then switched it
+      // after asynchronous discovery, allowing an empty hydration to erase the draft row.
+      const workspaces = await window.grokDesktop.discoverWorkspaces().catch(() => data.workspaces);
+      useAppStore.getState().bootstrap({ ...data, workspaces });
       if (fixture) {
         setOfflineFixtureActive(true);
         useAppStore.getState().setSessions(fixture.sessions?.length ? fixture.sessions : [fixture.session]);
         useAppStore.getState().setActiveSession(fixture.activeSessionId || fixture.session.id);
         useAppStore.getState().handleEvents(fixture.events);
       } else if (!data.onboarding.completed && !data.onboarding.skipped) setPanel("onboarding");
-      void window.grokDesktop.discoverWorkspaces().then((values) => useAppStore.getState().setWorkspaces(values)).catch(() => undefined);
       if (data.settings.activeWorkspace) {
         void window.grokDesktop.listCodexSessions(data.settings.activeWorkspace, data.settings.showArchivedCodex).then((values) => useAppStore.getState().setCodexSessions(values)).catch(() => undefined);
         void window.grokDesktop.listClaudeSessions(data.settings.activeWorkspace).then((values) => useAppStore.getState().setClaudeSessions(values)).catch(() => undefined);

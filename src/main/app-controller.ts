@@ -1624,7 +1624,9 @@ export class AppController {
     const legacy=record?.job.savedProjectFiles?.length===1?record.job.savedProjectFiles[0]:undefined;
     const path=artifact?.savedPath??legacy;
     if(!path)throw Error("没有此图像的保存记录");
-    const canonical=await realpath(path);if(!samePath(canonical,path))throw Error("保存的原图路径已改变");
+    const canonical=await realpath(path);
+    const canonicalParent=await realpath(dirname(path));
+    if(!samePath(canonical,join(canonicalParent,basename(path))))throw Error("保存的原图路径已改变");
     const mimeType=localMediaMimeType(canonical);if(!mimeType?.startsWith("image/"))throw Error("保存记录不是图片");
     const cached=await this.cacheMediaArtifact(id,{id:`${jobId}-original-${artifactId}`,media:"image",source:canonical,mimeType,isData:false},[dirname(canonical)],[]);
     if(this.deletingSessions.has(id)||!await this.imageWorkspace.get(id)){
