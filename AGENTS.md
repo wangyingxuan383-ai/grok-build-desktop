@@ -2,7 +2,7 @@
 
 Before changing this repository:
 
-1. Read `docs/NEXT_SESSION_HANDOFF.md` when it exists.
+1. Read `local/NEXT_SESSION_HANDOFF.md` when it exists.
 2. Read `docs/IMPLEMENTATION_PLAN.md`.
 3. Read `docs/FEATURE_MATRIX.md`.
 4. Read `CHANGELOG.md` and `docs/CLI_COMPATIBILITY.md`.
@@ -10,3 +10,5 @@ Before changing this repository:
 6. Do not claim a feature works until its automated test or documented live verification passes.
 
 The application is a Windows-first Electron GUI for the locally installed Grok Build CLI. Keep the renderer sandboxed (`nodeIntegration: false`, `contextIsolation: true`) and put filesystem, process, credential, and ACP work in the Electron main process.
+
+Public documentation must describe the product for external readers. Keep machine-specific handovers, user quotations and private verification records under ignored local directories. Never stage those files.

@@ -2,7 +2,7 @@
 
 ## v0.10.0 interface references and dependencies
 
-- **ZCode** (`zai-org/ZCode`, Apache-2.0), reference commit `872ad960de7ec172591f7e1952f7849229f94521`: interaction and workspace organization reference. Components and styles are independently authored; ZCode source, backend, accounts and branding are not redistributed. See docs/ZCODE_UI_REDESIGN.md.
+- **ZCode** (`zai-org/ZCode`, Apache-2.0), reference commit `872ad960de7ec172591f7e1952f7849229f94521`: interaction and workspace organization reference. Components and styles are independently authored; ZCode source, backend, accounts and branding are not redistributed. See docs/ARCHITECTURE.md.
 - **Radix UI**: accessible menu, context-menu, dialog, tooltip, popover and tabs primitives, MIT.
 - **lucide-react** (1.48.0): interface icon components, ISC; original notices are preserved with the dependency and release license inventory.
 - **xterm.js**, fit addon and **node-pty**: manual terminal rendering and process I/O, under their dependency licenses; node-pty Windows prebuilds are included in the packaged application.

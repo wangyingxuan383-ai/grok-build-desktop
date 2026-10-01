@@ -46,3 +46,11 @@ resources/resource-manifest.json
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Internal coordination and local prototypes
+docs/*HANDOFF*.md
+docs/*SESSION_TRANSFER*.md
+docs/AUDIT_FIXES_*.md
+docs/design/
+_SESSION_HANDOFF.md
+_tmp_*

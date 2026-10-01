@@ -50,8 +50,11 @@ if ($CurrentUser -and $CurrentUser.Length -ge 3) {
 
 foreach ($File in $Files) {
     $RelativePath = $File.FullName.Substring($Root.Length).TrimStart('\')
+    if ($RelativePath -match '(?i)^docs\\.*(?:HANDOFF|SESSION_TRANSFER|AUDIT_FIXES_).*\.md$') { $Failures.Add("$RelativePath：内部交接不属于公开文档") }
     $Content = Get-Content -LiteralPath $File.FullName -Raw -ErrorAction SilentlyContinue
     if ($null -eq $Content) { continue }
+    if ($RelativePath -match '(?i)^(?:docs\\|CHANGELOG\.md)' -and $Content -match '(?:用户原话|用户已经对|已拍板|给 Codex 用|给 Claude 用|可粘贴提示词|用户：)') { $Failures.Add("$RelativePath：含内部对话或交接口吻") }
+
     foreach ($Pattern in $Patterns) {
         if ($Content -match $Pattern.Regex -and -not ($RelativePath -eq 'package-lock.json' -and $Pattern.Name -eq '真实邮箱')) { $Failures.Add("$RelativePath：$($Pattern.Name)") }
     }
