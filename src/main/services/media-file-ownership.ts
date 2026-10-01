@@ -25,7 +25,7 @@ export async function recordOwnedMediaFile(path: string, root: string): Promise<
 /** Exact files only. Changed content, escaped junctions and shared outputs are retained. */
 export async function removeProvenMediaFiles(files: readonly OwnedMediaFile[], protectedPaths: ReadonlySet<string> = new Set()): Promise<{ removed: number; keptFiles: string[] }> {
   const result = { removed: 0, keptFiles: [] as string[] };
-  const protectedIds = new Set([...protectedPaths].map(identity));
+  const protectedIds = new Set(await Promise.all([...protectedPaths].map(async path=>identity(await realpath(path).catch(()=>path)))));
   const seen = new Set<string>();
   const verified: string[] = [];
   for (const file of files) {

@@ -11,7 +11,7 @@ const tool = (patch: Partial<ToolCallState> & { raw?: Record<string, unknown> })
   kind: "subagent",
   source: "subagent-lifecycle",
   status: "completed",
-  rawInput: { sessionUpdate: "subagent_finished", description: "Review scheduling", subagent_type: "explore", model: "grok-4.5", tool_calls: 7, turns: 2, duration_ms: 84_000, tokens_used: 12_345, capability_mode: "read-only", output: "All good.", ...patch.raw },
+  rawInput: { sessionUpdate: "subagent_finished", subagent_id:"native-child", child_session_id:"child-session", description: "Review scheduling", subagent_type: "explore", model: "grok-4.5", tool_calls: 7, turns: 2, duration_ms: 84_000, tokens_used: 12_345, capability_mode: "read-only", output: "All good.", ...patch.raw },
   ...patch,
 });
 const render = (value: ToolCallState, open?: (id: string) => void) => renderToStaticMarkup(createElement(SubagentOpenContext.Provider, { value: open }, createElement(SubagentCard, { tool: value, sessionId: "parent" })));
@@ -50,4 +50,9 @@ describe("SubagentCard", () => {
     expect(html).toContain("失败");
     expect(html).toContain("网络中断");
   });
+});
+
+it("does not turn a lifecycle call ID into a child-session identity",()=>{
+ const value=tool({raw:{subagent_id:undefined,child_session_id:undefined}});
+ expect(render(value,()=>undefined)).not.toContain("查看会话");
 });

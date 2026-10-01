@@ -355,7 +355,7 @@ try {
   await clickText('.settings-layout > nav button', 'Token 活动');
   await waitFor(() => evaluate("document.querySelectorAll('.token-heatmap-grid .token-cell').length === 371"), "Token activity did not render an exact 371-day heatmap");
   const tokenUi = await evaluate(`({ cells: document.querySelectorAll('.token-heatmap-grid .token-cell').length, windows: Array.from(document.querySelectorAll('.token-window-grid article strong')).map((node) => node.textContent.trim()), privacy: document.querySelector('.token-heatmap footer')?.textContent || '' })`);
-  if (tokenUi.cells !== 371 || !tokenUi.windows.includes("最近 24 小时") || !tokenUi.windows.includes("本月") || !tokenUi.privacy.includes("不含提示词")) throw new Error(`Token activity mismatch: ${JSON.stringify(tokenUi)}`);
+  if (tokenUi.cells !== 371 || !tokenUi.windows.includes("最近 24 小时") || !tokenUi.windows.includes("本月") || !tokenUi.privacy.includes("不保存提示词正文")) throw new Error(`Token activity mismatch: ${JSON.stringify(tokenUi)}`);
   await clickText('.settings-layout > nav button', '更新与诊断');
   const updateUi = await evaluate(`({ actions: document.querySelectorAll('.settings-action-list button').length, labels: Array.from(document.querySelectorAll('.settings-action-list button')).map((node) => node.textContent.trim()), resultRegion: document.querySelector('.settings-action-results')?.getAttribute('aria-live') })`);
   const requiredUpdateLabels = ['检查应用更新', '检查 Grok CLI 更新', '预览并更新 CLI', '验证当前 CLI', '打开诊断中心', '导出脱敏日志'];

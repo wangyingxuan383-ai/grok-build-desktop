@@ -11,10 +11,10 @@ it("removes proven outputs and retains unrelated, modified and shared files",asy
  await Promise.all([writeFile(original,"generated"),writeFile(copy,"copy"),writeFile(mine,"mine")]);
  const proofs=await Promise.all([recordOwnedMediaFile(original,root),recordOwnedMediaFile(copy,root)]);
  await writeFile(copy,"user edit");
- expect(await removeProvenMediaFiles(proofs)).toEqual({removed:0,keptFiles:[copy]});
+ expect(await removeProvenMediaFiles(proofs)).toEqual({removed:0,keptFiles:[proofs[1]!.path]});
  expect(await readFile(original,"utf8")).toBe("generated");
  await writeFile(copy,"copy");
- expect((await removeProvenMediaFiles(proofs,new Set([original]))).keptFiles).toEqual([original]);
+ expect((await removeProvenMediaFiles(proofs,new Set([original]))).keptFiles).toEqual([proofs[0]!.path]);
  expect((await removeProvenMediaFiles(proofs)).removed).toBe(2);
  expect(await readFile(mine,"utf8")).toBe("mine");
  expect((await removeProvenMediaFiles(proofs)).keptFiles).toEqual([]);
