@@ -18,7 +18,7 @@ describe("AgentDashboardService", () => {
     const session = historySession();
     const live = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [session], liveSessions: [{ sessionId: "s1", cwd: "C:\\repo", modelId: "grok" }], tasks: [], assignments: [], liveCapability: "supported" });
     expect(live.mode).toBe("live");
-    expect(live.roots[0]).toMatchObject({ status: "running", toolCount: 2, live: true });
+    expect(live.roots[0]).toMatchObject({ status: "running", toolCount: 1, live: true });
     expect(live.roots[0]!.children[0]!).toMatchObject({ agentId: "reviewer", status: "running", live: true });
 
     const history = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [session], liveSessions: [], tasks: [], assignments: [], liveCapability: "unknown" });

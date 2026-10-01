@@ -1,6 +1,7 @@
 import { scopedMediaUrl } from "../../../shared/media-scope";
 import { McpElicitationCard } from "./McpElicitationCard";
 import { isExpiredInteractionError } from "./interaction-utils";
+import { useOverlayFocusTrap } from "../hooks/use-overlay-focus-trap";
 import { lazy, memo, Suspense, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { EditorDocument, EditorOpenResult, NavigationIntent, ToolCallState, TurnFailure } from "../../../shared/types";
@@ -15,6 +16,8 @@ const DiffEditor = lazy(async () => {
   const module = await import("@monaco-editor/react");
   return { default: module.DiffEditor };
 });
+
+const IMAGE_LIGHTBOX_ROOT_ID = "image-lightbox-root";
 
 export const MessageCard = memo(function MessageCard({ message, sessionId, navigationRoot, allowFileNavigation = true, showThinking, expandTools, onResolved, onRetry, onNavigate, onDiagnose }: { message: UiMessage; sessionId: string; navigationRoot?: string; allowFileNavigation?: boolean; showThinking: boolean; expandTools: boolean; onResolved?: (id: string) => void; onDiagnose?: (failure: TurnFailure) => void; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void; onNavigate?: (intent: NavigationIntent) => void }): React.JSX.Element | null {
   // Resolved interactions remain in the durable conversation projection as an
@@ -83,8 +86,48 @@ function GeneratedMediaItem({ message, sessionId }: { sessionId?: string; messag
       {!unavailable && message.media === "image" && <><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button></>}
       {pathActions}
     </div>
-    {preview && !unavailable && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label="生成图片预览" onClick={() => setPreview(false)}><button aria-label="关闭大图" onClick={() => setPreview(false)}>×</button><img src={src} alt="Grok 生成图片" onError={() => { setUnavailable(true); setPreview(false); }} onClick={(event) => event.stopPropagation()}/><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openMedia(src)}>打开原文件</button>}</div><span>生成图片</span></div>, document.body)}
+    {preview && !unavailable && createPortal(<ImageLightbox label="生成图片预览" caption="生成图片" src={src} onClose={() => setPreview(false)} onUnavailable={() => { setUnavailable(true); setPreview(false); }} actions={<><button onClick={() => void window.grokDesktop.copyImage(src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(src)}>另存为</button>{!message.isData && <button onClick={() => void window.grokDesktop.openMedia(src)}>打开原文件</button>}</>} />, document.body)}
   </div>;
+}
+
+/**
+ * Both image lightboxes portal to <body>, i.e. outside #overlay-root, so the
+ * app-wide Escape handler and useOverlayFocusTrap never reach them: a
+ * keyboard-only user could not close the preview at all. The lightbox owns a
+ * dedicated root inside #overlay-root so the shared hook both contains focus
+ * and restores it to the thumbnail that opened the preview.
+ */
+function ImageLightbox({ label, caption, src, alt, onClose, onUnavailable, actions }: { label: string; caption: string; src: string; alt?: string; onClose(): void; onUnavailable?(): void; actions?: React.ReactNode }): React.JSX.Element {
+  useOverlayFocusTrap(true, IMAGE_LIGHTBOX_ROOT_ID);
+  useEffect(() => {
+    // Capture phase: #overlay-root sits below the image lightbox in the stack,
+    // so this Escape press belongs to the lightbox and must not also close the
+    // dialog or panel underneath it.
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  return createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={onClose}>
+    <button type="button" aria-label="关闭大图" onClick={onClose}>×</button>
+    <img src={src} alt={alt ?? label} onClick={(event) => event.stopPropagation()} onError={onUnavailable}/>
+    {actions && <div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}>{actions}</div>}
+    <span>{caption}</span>
+  </div>, imageLightboxRoot());
+}
+
+/** One lazily created container keeps the lightbox inside the overlay root. */
+function imageLightboxRoot(): HTMLElement {
+  const existing = document.getElementById(IMAGE_LIGHTBOX_ROOT_ID);
+  if (existing) return existing;
+  const container = document.createElement("div");
+  container.id = IMAGE_LIGHTBOX_ROOT_ID;
+  (document.getElementById("overlay-root") ?? document.body).appendChild(container);
+  return container;
 }
 
 function UserMessageCard({ message, onRetry, sessionId }: { sessionId?: string; message: Extract<UiMessage, { kind: "user" }>; onRetry?: (message: Extract<UiMessage, { kind: "user" }>) => void }): React.JSX.Element {
@@ -106,7 +149,7 @@ function UserMessageCard({ message, onRetry, sessionId }: { sessionId?: string; 
         {message.text && <button type="button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard.writeText(message.text)}>复制</button>}
       </div>
     </div>
-    {preview && createPortal(<div className="image-lightbox" role="dialog" aria-modal="true" aria-label={preview.name} onClick={() => setPreview(undefined)}><button type="button" aria-label="关闭大图" onClick={() => setPreview(undefined)}>×</button><img src={preview.src} alt={preview.name} onClick={(event) => event.stopPropagation()} /><div className="image-lightbox-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => void window.grokDesktop.copyImage(preview.src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(preview.src)}>另存为</button></div><span>{preview.name}</span></div>, document.body)}
+    {preview && createPortal(<ImageLightbox label={preview.name} caption={preview.name} src={preview.src} onClose={() => setPreview(undefined)} actions={<><button onClick={() => void window.grokDesktop.copyImage(preview.src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(preview.src)}>另存为</button></>} />, document.body)}
   </div>;
 }
 

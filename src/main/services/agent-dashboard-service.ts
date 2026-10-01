@@ -108,7 +108,7 @@ export class AgentDashboardService {
         status: live ? record?.status ?? sessionStatus(session.status) : terminalHistoricalStatus(record?.status),
         startedAt: record?.startedAt || session.createdAt, completedAt: live ? record?.completedAt : record?.completedAt || session.updatedAt,
         durationMs: duration(record?.startedAt || session.createdAt, live ? undefined : record?.completedAt || session.updatedAt),
-        toolCount: Math.max(record?.toolCount ?? 0, dedupedChildren.reduce((sum, child) => sum + child.toolCount, 0)),
+        toolCount: record?.toolCount ?? 0,
         isolation: assignment?.worktreeId ? "worktree" : "workspace", worktreeId: assignment?.worktreeId,
         latestAction: record?.latestAction || (live ? "会话已加载" : "只读历史"), waitingReason: record?.waitingReason,
         failureReason: record?.failureReason, summary: record?.summary, live: Boolean(live), updatedAt: record?.updatedAt || session.updatedAt || now,

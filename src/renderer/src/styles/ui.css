@@ -125,3 +125,8 @@ body { font-family: var(--font-sans); font-size: var(--text-base); line-height: 
 .sa-toggle { margin-top: 4px; padding: 0; border: 0; background: none; color: var(--color-accent); font: inherit; font-size: var(--text-sm); cursor: pointer; }
 .sa-toggle:hover { text-decoration: underline; }
 .sa-waiting { margin: 0; color: var(--color-fg-subtlest); font-size: var(--text-caption); }
+
+/* Legacy business controls share the same semantic variants as Button. */
+button.primary:not(.ui-btn){background:var(--color-primary);color:var(--color-primary-fg);border-color:transparent;border-radius:var(--radius-md)}
+button.danger:not(.ui-btn){background:transparent;color:var(--color-danger);border-color:color-mix(in srgb,var(--color-danger) 45%,transparent);border-radius:var(--radius-md)}
+button.danger:not(.ui-btn):hover:not(:disabled){background:var(--color-danger-soft)}

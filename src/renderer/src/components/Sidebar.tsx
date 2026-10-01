@@ -104,7 +104,7 @@ export function Sidebar(props: {
     { id: "files", label: "文件", icon: <UiIcon name="file" />, run: () => props.onView("files") },
     { id: "git", label: "源代码管理", icon: <UiIcon name="branch" />, run: () => props.onView("source-control") },
     { id: "terminal", label: "终端", icon: <UiIcon name="terminal" />, run: () => props.onView("terminal") },
-    { id: "browser", label: "浏览器", icon: <UiIcon name="globe" />, run: () => props.onView("browser") },
+    { id: "browser", label: "网页预览（手动）", icon: <UiIcon name="globe" />, run: () => props.onView("browser") },
     { id: "artifacts", label: "产物预览", icon: <UiIcon name="images" />, run: () => props.onView("artifacts") },
     { id: "worktrees", label: "Worktree", icon: <UiIcon name="worktree" />, separatorBefore: true, run: () => props.onView("worktrees") },
     { id: "memory", label: "Memory", icon: <UiIcon name="memory" />, run: () => props.onView("memory") },
@@ -212,10 +212,11 @@ export function Sidebar(props: {
               <span>项目</span>
               <IconButton icon="plus" size="sm" label="添加项目文件夹" onClick={props.onChooseWorkspace} />
             </div>
-            <label className="sb-search">
+            <div className="sb-search">
               <UiIcon name="search" size={14} />
-              <input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="筛选会话" aria-label="筛选会话" />
-            </label>
+              <input id="session-search" value={props.search} onChange={(event) => props.onSearch(event.target.value)} placeholder="筛选会话" aria-label="筛选所有项目的会话" />
+              {props.search && <IconButton icon="close" size="sm" label="清除会话筛选" onClick={()=>props.onSearch("")} />}
+            </div>
             <div className="sb-scroll">
               {!projects.length && <div className="sb-hint">还没有项目。点击右上角 + 添加一个文件夹。</div>}
               {visibleProjects.map((workspace) => {

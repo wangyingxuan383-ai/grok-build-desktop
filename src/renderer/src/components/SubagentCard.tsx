@@ -29,10 +29,11 @@ export const SubagentCard = memo(function SubagentCard({ tool, sessionId }: { to
   const facts = readFacts(tool);
   const settled = tool.status === "completed" && !finishedByEvent(tool);
   const state = cardState(tool, settled);
-  const identity = tool.toolCallId.replace(/^subagent-/, "");
+  const raw = tool.rawInput && typeof tool.rawInput === "object" ? tool.rawInput as Record<string,unknown> : {};
+  const identity = text(raw.subagent_id) ?? text(raw.subagentId) ?? text(raw.child_session_id) ?? text(raw.childSessionId);
   const metrics = [
     facts.model,
-    facts.tools !== undefined ? `${facts.tools} 次工具` : undefined,
+    facts.tools !== undefined ? `子任务 ${facts.tools} 次工具` : undefined,
     facts.turns !== undefined ? `${facts.turns} 回合` : undefined,
     facts.durationMs !== undefined ? formatDuration(facts.durationMs) : undefined,
     facts.tokens !== undefined ? `${facts.tokens.toLocaleString()} Token` : undefined,
@@ -52,7 +53,7 @@ export const SubagentCard = memo(function SubagentCard({ tool, sessionId }: { to
           </div>
         </div>
         <div className="sa-actions">
-          {open && <Button size="sm" variant="secondary" iconEnd="chevron-right" onClick={() => open(subagentNodeId(sessionId, identity))}>查看会话</Button>}
+          {open && identity && <Button size="sm" variant="secondary" iconEnd="chevron-right" onClick={() => open(subagentNodeId(sessionId, identity))}>查看会话</Button>}
         </div>
       </header>
       {metrics.length > 0 && <div className="sa-metrics">{metrics.map((value, index) => <span key={index}>{value}</span>)}</div>}

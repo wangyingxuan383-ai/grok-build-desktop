@@ -39,7 +39,7 @@ export function TokenActivityPanel({ onError }: { onError(message: string): void
   ];
 
   return <div className="token-activity">
-    <p className="settings-note">本页是本机逐回合历史（{report?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone}）。卡片只汇总保留的回合明细，热图另含匿名删除会话汇总。总量只累加 CLI/Provider 明确返回的 total；当前进程会话累计和账号订阅额度分别显示在会话信息与账号额度中。</p>
+    <p className="settings-note">本页是本机逐回合历史（{report?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone}）。涵盖编程会话和 CLI 明确上报的媒体回合；直接 Provider 生图暂未计入。卡片只汇总保留的回合明细，热图另含匿名删除会话汇总。总量与输入、输出分别保留各次上报值，可能来自不同通知，不能保证简单相加相等；不自行补造 total；当前进程会话累计和账号订阅额度分别显示在会话信息与账号额度中。</p>
     {report?.sources.length ? <small className="settings-note">当前明细来源：{report.sources.map(sourceName).join("、")}</small> : null}
     {report?.anonymousExcludedByFilter && <p className="settings-note">当前筛选不包含已删除会话的匿名汇总；清除筛选后，热图会显示匿名历史和保留旧 UTC 口径的汇总。</p>}
     <div className="token-activity-controls">
@@ -65,6 +65,7 @@ export function TokenActivityPanel({ onError }: { onError(message: string): void
       <b>{value ? formatTokens(value.totalTokens) : "—"}</b>
       <span>{value ? coverageLabel(value) : loading ? "读取中…" : "暂无数据"}</span>
       {value && value.turnsWithUsage > 0 && <small>输入 {formatTokens(value.inputTokens)} · 输出 {formatTokens(value.outputTokens)}</small>}
+      {value && value.subagentTurns > 0 && <small>另有子智能体 {formatTokens(value.subagentTokens)}（未计入上方总量，避免与 CLI 父回合重复）</small>}
     </article>)}</div>
 
     <section className="token-heatmap">
@@ -73,22 +74,22 @@ export function TokenActivityPanel({ onError }: { onError(message: string): void
         {cells.map((cell) => <i
           key={cell.key}
           className={`token-cell level-${level(cell.totalTokens, peak)}`}
-          title={`${cell.label} · ${formatTokens(cell.totalTokens)} Token · ${cell.turns} 回合 · ${sourceLabel(cell.source)}`}
-          onMouseEnter={() => setHovered({ day: cell.label, turns: cell.turns, turnsWithUsage: cell.turnsWithUsage, turnsWithTotal: cell.turnsWithTotal, totalTokens: cell.totalTokens, source: cell.source })}
+          title={`${cell.label} · ${formatTokens(cell.totalTokens)} Token · 另有子任务 ${formatTokens(cell.subagentTokens)} Token · ${cell.turns} 回合 · ${sourceLabel(cell.source)}`}
+          onMouseEnter={() => setHovered({ day: cell.label, turns: cell.turns, turnsWithUsage: cell.turnsWithUsage, turnsWithTotal: cell.turnsWithTotal, totalTokens: cell.totalTokens, subagentTokens: cell.subagentTokens, subagentTurns: cell.subagentTurns, source: cell.source })}
         />)}
       </div>
       <footer>
-        <span>仅保留本机汇总，不含提示词。删除会话后的匿名数据不能按模型/提供商/工作区筛选；旧版日桶仍按 UTC 标记。</span>
+        <span>统计文件不保存提示词正文；输入 Token 按 CLI／Provider 上报计入。删除会话后的匿名数据不能按模型/提供商/工作区筛选；旧版日桶仍按 UTC 标记。</span>
         <span className="token-legend">少 <i className="token-cell level-0"/><i className="token-cell level-1"/><i className="token-cell level-2"/><i className="token-cell level-3"/><i className="token-cell level-4"/> 多</span>
       </footer>
     </section>
   </div>;
 }
 
-interface Cell { key: string; label: string; turns: number; turnsWithUsage: number; turnsWithTotal: number; totalTokens: number; source: TokenDayBucket["source"] }
+interface Cell { key: string; label: string; turns: number; turnsWithUsage: number; turnsWithTotal: number; totalTokens: number; subagentTokens: number; subagentTurns: number; source: TokenDayBucket["source"] }
 
 function buildCells(days: TokenDayBucket[], view: View): Cell[] {
-  if (view === "daily") return days.map((day) => ({ key: day.day, label: day.day, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: day.totalTokens, source: day.source }));
+  if (view === "daily") return days.map((day) => ({ key: day.day, label: day.day, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: day.totalTokens, subagentTokens: day.subagentTokens, subagentTurns: day.subagentTurns, source: day.source }));
   if (view === "weekly") {
     const weeks: Cell[] = [];
     for (let index = 0; index < days.length; index += 7) {
@@ -100,6 +101,8 @@ function buildCells(days: TokenDayBucket[], view: View): Cell[] {
         turnsWithUsage: slice.reduce((total, day) => total + day.turnsWithUsage, 0),
         turnsWithTotal: slice.reduce((total, day) => total + day.turnsWithTotal, 0),
         totalTokens: slice.reduce((total, day) => total + day.totalTokens, 0),
+        subagentTokens: slice.reduce((total, day) => total + day.subagentTokens, 0),
+        subagentTurns: slice.reduce((total, day) => total + day.subagentTurns, 0),
         source: combineSource(slice.map((day) => day.source)),
       });
     }
@@ -108,7 +111,7 @@ function buildCells(days: TokenDayBucket[], view: View): Cell[] {
   let running = 0;
   return days.map((day) => {
     running += day.totalTokens;
-    return { key: day.day, label: `截至 ${day.day}`, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: running, source: combineSource(days.slice(0, days.indexOf(day) + 1).map((item) => item.source)) };
+    return { key: day.day, label: `截至 ${day.day}`, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: running, subagentTokens: day.subagentTokens, subagentTurns: day.subagentTurns, source: combineSource(days.slice(0, days.indexOf(day) + 1).map((item) => item.source)) };
   });
 }
 
@@ -132,7 +135,7 @@ function sourceLabel(source: TokenDayBucket["source"]): string {
 }
 
 function sourceName(value: string): string {
-  return ({ "acp-turn": "CLI 回合上报", "prompt-result": "CLI Prompt 返回", history: "CLI 历史记录", "legacy-utc-aggregate": "旧版 UTC 汇总", unknown: "来源未知" } as Record<string, string>)[value] ?? value;
+  return ({ "acp-turn": "CLI 回合上报", "prompt-result": "CLI Prompt 返回", history: "CLI 历史记录", "subagent": "子智能体独立上报", "legacy-utc-aggregate": "旧版 UTC 汇总", unknown: "来源未知" } as Record<string, string>)[value] ?? value;
 }
 
 function combineSource(values: TokenDayBucket["source"][]): TokenDayBucket["source"] {

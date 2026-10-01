@@ -504,9 +504,9 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
         title: `Computer Use · ${event.state.appName || "Windows 应用"}`,
         kind: "computer_use",
         source: "computer-host",
-        computerEvidence: failed ? "failed" : event.state.stepCount > 0 ? "operated" : event.state.lastState ? "observed" : inProgress ? "attempted" : "unknown",
+        computerEvidence: failed ? "failed" : (event.state.operationCount ?? 0)>0 ? "operated" : (event.state.controlCount ?? 0)>0 ? "controlled" : event.state.lastState ? "observed" : inProgress ? "attempted" : "unknown",
         status: failed ? "failed" : inProgress ? "in_progress" : "completed",
-        output: `${event.state.stepCount} 步 · ${event.state.message || event.state.status}`,
+        output: `应用操作 ${event.state.operationCount ?? 0} 次 · 窗口控制 ${event.state.controlCount ?? 0} 次 · ${event.state.message || event.state.status}`,
         error: failed ? event.state.message : undefined,
         rawInput: state ? { stateId: state.stateId, window: state.window.title, dpi: state.window.dpi, interactiveElements: state.elements.length, capturedAt: state.capturedAt } : undefined,
         content: state?.screenshot ? [{ type: "image", data: state.screenshot, mimeType: "image/png" }] : [],
@@ -617,14 +617,21 @@ function buildTurn(id: string, messages: UiMessage[], completed: boolean, runnin
     return [{ kind, label: labels[kind], count: items.length, failed: items.filter(isFailed).length, items }];
   });
   const tools = messages.filter((message): message is Extract<UiMessage, { kind: "tool" }> => message.kind === "tool");
+  const callTools = tools.filter(message => message.tool.source!=="computer-host" && !isChildLifecycle(message.tool));
+  const childTools=tools.filter(message=>isChildLifecycle(message.tool));
   const writes = tools.filter((message) => isFileWriteTool(message.tool));
   const files = new Set(writes.map((message) => message.tool.locations?.find((location) => location.path)?.path || message.tool.toolCallId)).size;
   const additions = writes.reduce((total, message) => total + (message.tool.additions ?? 0), 0);
   const deletions = writes.reduce((total, message) => total + (message.tool.deletions ?? 0), 0);
   const commands = tools.filter((message) => classifyActivity(message) === "commands").length;
-  const subagents = tools.filter((message) => classifyActivity(message) === "subagents").length;
+  const subagents = childTools.length || tools.filter((message) => classifyActivity(message) === "subagents").length;
   const failed = tools.filter(isFailed).length;
-  return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, presentation, legacySegments, summary: { files, additions, deletions, commands, tools: tools.length, subagents, failed } };
+  return { id, completed, running, user, groups, activityGroups: groups.map(({ items: _items, ...group }) => group), final, pending, trailing, presentation, legacySegments, summary: { files, additions, deletions, commands, tools: callTools.length, subagents, failed } };
+}
+
+function isChildLifecycle(tool:ToolCallState):boolean {
+  const raw=tool.rawInput&&typeof tool.rawInput==="object"?tool.rawInput as Record<string,unknown>:{};
+  return ["subagent_spawned","subagent_progress","subagent_finished"].includes(String(raw.sessionUpdate||""));
 }
 
 function isActionMessage(message: UiMessage): message is Extract<UiMessage, { kind: "permission" | "question" | "plan" | "mcp-elicitation" }> {

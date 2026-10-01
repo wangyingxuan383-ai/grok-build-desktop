@@ -312,7 +312,7 @@ describe("automation definition/runtime transactions", () => {
     now = new Date("2026-01-04T01:30:00Z"); expect((await service.execute(task.id, "scheduled", body)).status).toBe("skipped");
     release(); await first;
     now = new Date("2026-01-05T01:30:00Z"); expect((await service.execute(task.id, "scheduled", body)).status).toBe("completed");
-    expect((await service.execute(task.id, "scheduled", body)).status).toBe("skipped"); expect(body).toHaveBeenCalledTimes(1);
+    expect((await service.execute(task.id, "scheduled", body)).status).toBe("completed"); expect(body).toHaveBeenCalledTimes(1);
     expect(scheduler.registrations).toHaveLength(1);
   });
   it("does not consume execution slots while a bound session is busy, and cancels its wait", async () => {
@@ -382,4 +382,46 @@ it("blocks removed-project automations until an independent task is rebound",asy
  await expect(service.pause(task.id,false)).rejects.toThrow("重新绑定");await expect(service.runNow(task.id)).rejects.toThrow("重新绑定");
  const executor=vi.fn(async()=>({}));expect((await service.execute(task.id,"removed-project",executor)).status).toBe("skipped");expect(executor).not.toHaveBeenCalled();
  await service.update(task.id,{workspace:"D:\\rebound",enabled:true});expect((await service.list()).find(t=>t.id===task.id)?.projectRemoved).toBe(false);
+});
+
+
+describe("automation completion and retention",()=>{
+ it("persists warnings and publishes a windowless result once per scheduled occurrence",async()=>{
+  let now=new Date("2026-10-01T00:00:00Z");const finished=vi.fn(async()=>undefined);
+  const {service}=await fixture({now:()=>now,onRunFinished:finished,pendingPollMs:5});
+  const task=await service.createOne(input({schedule:{kind:"interval",minutes:60},profile:{...input().profile,mode:"agent",permissionPolicy:"agent"}}));
+  now=new Date("2026-10-01T01:00:00Z");
+  const first=service.execute(task.id,"scheduled",async({confirm})=>{await confirm({action:"delete"},true);return {sessionId:"child-session"};});
+  await vi.waitFor(async()=>expect(await service.pending()).toHaveLength(1));
+  await service.respondPending((await service.pending())[0]!.id,false);
+  const run=await first;
+  expect(run).toMatchObject({status:"completed",deniedConfirmations:1,trigger:"scheduled"});
+  expect(run.warning).toContain("未执行");
+  await service.execute(task.id,"scheduled",async()=>{throw Error("must not replay")});
+  expect(finished).toHaveBeenCalledOnce();
+  expect((await service.listRuns(task.id))[0]).toMatchObject({id:run.id,warning:run.warning,notifiedAt:expect.any(String)});
+  now=new Date("2026-10-01T02:00:00Z");
+  const next=await service.execute(task.id,"scheduled",async()=>({}));expect(next.id).not.toBe(run.id);
+ });
+ it("clears only finished history and keeps a live run and its task",async()=>{
+  const {service}=await fixture();const task=await service.createOne(input());
+  await service.execute(task.id,"old-finished",async()=>({}));
+  let release!:()=>void;
+  const current=service.execute(task.id,"still-running",async()=>{await new Promise<void>(resolve=>{release=resolve});return {}});
+  await vi.waitFor(()=>expect(release).toBeTypeOf("function"));
+  try{expect((await service.clearFinishedRuns(task.id)).map(run=>run.id)).toEqual(["still-running"]);expect(await service.list()).toHaveLength(1);}finally{release();await current;}
+ });
+});
+
+it("does not rerun a cleared scheduled occurrence and never consumes a slot for manual execution",async()=>{
+ let now=new Date("2026-10-01T00:00:00Z");const {service}=await fixture({now:()=>now});
+ const task=await service.createOne(input({schedule:{kind:"interval",minutes:60}}));now=new Date("2026-10-01T01:00:00Z");const body=vi.fn(async()=>({}));
+ await service.execute(task.id,undefined,body);await service.execute(task.id,"scheduled",body);expect(body).toHaveBeenCalledTimes(2);
+ await service.clearFinishedRuns(task.id);expect((await service.execute(task.id,"scheduled",body)).status).toBe("skipped");expect(body).toHaveBeenCalledTimes(2);
+});
+
+it("enforces the total history ceiling even when no task reaches its individual limit",async()=>{
+ let now=new Date("2026-10-01T00:00:00Z");const {service}=await fixture({now:()=>now,maxRunsTotal:2,maxRunsPerTask:100,pruneIntervalMs:0});
+ for(let i=0;i<3;i++){now=new Date(+now+1000);const task=await service.createOne(input({name:`task-${i}`}));await service.execute(task.id,`run-${i}`,async()=>({}));}
+ expect((await service.listRuns()).map(run=>run.id)).toEqual(["run-2","run-1"]);
 });

@@ -65,6 +65,8 @@ export interface BuildInfo {
   repository: string;
   profile: "public" | "local";
   packaged: boolean;
+  publicRelease?: boolean;
+  localBuildId?: string;
   signed: false;
   unofficial: true;
 }
@@ -128,6 +130,13 @@ export interface TokenActivityWindow {
   cachedReadTokens: number;
   reasoningTokens: number;
   totalTokens: number;
+  /**
+   * Tokens the CLI reported for child agents in this period. Kept separate from
+   * the fields above because the CLI's own parent-turn total may already include
+   * them; adding both would double count. Zero when nothing was reported.
+   */
+  subagentTokens: number;
+  subagentTurns: number;
 }
 
 export interface TokenDayBucket {
@@ -136,6 +145,9 @@ export interface TokenDayBucket {
   turnsWithUsage: number;
   turnsWithTotal: number;
   totalTokens: number;
+  /** Child-agent tokens tracked outside totalTokens; see TokenActivityWindow. */
+  subagentTokens: number;
+  subagentTurns: number;
   source: "turn-details" | "anonymous-local" | "legacy-utc" | "mixed" | "none";
 }
 
@@ -653,6 +665,14 @@ export interface AutomationRunRecord {
   finishedAt?: string;
   sessionId?: string;
   error?: string;
+  /** How the run was started; a scheduled wakeup re-fires with a stable id per occurrence. */
+  trigger?: "scheduled" | "manual" | "retry";
+  /** Set when one or more high-impact confirmations were denied or expired. */
+  deniedConfirmations?: number;
+  /** Non-fatal warning shown with the result (for example a denied confirmation). */
+  warning?: string;
+  /** Marks that completion/failure was already persisted to the notification inbox. */
+  notifiedAt?: string;
 }
 
 export interface AutomationPendingConfirmation {
@@ -1284,6 +1304,9 @@ export interface ComputerTaskState {
   appName?: string;
   status: ComputerTaskStatus;
   stepCount: number;
+  operationCount?: number;
+  controlCount?: number;
+  observationCount?: number;
   startedAt?: string;
   updatedAt: string;
   lastAction?: ComputerActionName;
@@ -1412,7 +1435,11 @@ export interface MediaArtifact {
    * batch fails to save, and deleting the wrong file is worse than deleting none.
    */
   savedPath?: string;
+  /** Main-recorded ownership proof for generated originals, cache and saved copies. */
+  ownedFiles?: OwnedMediaFile[];
 }
+
+export interface OwnedMediaFile { path: string; root: string; sha256: string }
 
 /** Opaque, session-bound access to a cached media file. Local paths stay in main. */
 export interface MediaAccessHandle {
@@ -1434,6 +1461,8 @@ export interface MediaGenerationJob {
   message: string;
   artifacts: MediaArtifact[];
   savedProjectFiles?: string[];
+  /** Destination captured for this generation, independently of the native CLI history directory. */
+  outputRoot?: string;
   outputWarning?: string;
   startedAt: string;
   updatedAt: string;
@@ -1561,8 +1590,12 @@ export interface TurnPresentation {
 
 export interface TurnUsage extends PromptMeta {
   providerId?: string;
-  source: "acp-turn" | "prompt-result" | "history";
+  source: "acp-turn" | "prompt-result" | "history" | "subagent";
   exact: true;
+  /** Fields retain their own notification authority; arithmetic equality is not assumed. */
+  fieldSources?: Partial<Record<"inputTokens" | "outputTokens" | "totalTokens" | "cachedReadTokens" | "reasoningTokens", TurnUsage["source"]>>;
+  mixedSources?: boolean;
+  usageIsIncomplete?: boolean;
 }
 
 /**
@@ -1896,6 +1929,8 @@ export interface CliCompatibilityReceipt {
 
 export interface CliCompatibilitySnapshot {
   cliVersion?: string;
+  /** Local cache identity (path, normalized version and SHA-256); never a version-only approval. */
+  binaryIdentity?: string;
   checkedAt: string;
   handshake?: CliRuntimeHandshake;
   capabilities: CliCapabilityEvidence[];
@@ -2330,6 +2365,8 @@ export interface GrokDesktopApi {
   deleteAutomation(id: string): Promise<AutomationTask[]>;
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]>;
   runAutomationNow(id: string): Promise<AutomationRunRecord>;
+  retryAutomationRun(id: string): Promise<AutomationRunRecord>;
+  clearAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]>;
   cancelAutomationRun(id: string): Promise<AutomationRunRecord>;
   listAutomationRuns(taskId?: string): Promise<AutomationRunRecord[]>;
   getAutomationGlobalPolicy(): Promise<AutomationGlobalPolicy>;

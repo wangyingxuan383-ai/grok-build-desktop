@@ -47,7 +47,7 @@
 .im-composer textarea::placeholder { color: var(--color-fg-subtlest); }
 .im-composer.hero { margin-bottom: 22vh; }
 .im-options { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.im-select select { height: var(--control-md); padding: 0 8px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtle); font: inherit; font-size: var(--text-caption); }
+.im-select select { height: var(--control-md); padding: 0 8px; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-input); color: var(--color-fg); font: inherit; font-size: var(--text-caption); }
 .im-select select:hover:not(:disabled) { background: var(--color-hover); color: var(--color-fg); }
 .im-refs { display: flex; flex-wrap: wrap; gap: 6px; }
 .im-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 4px 0 8px; border-radius: var(--radius-md); background: var(--color-selected); font-size: var(--text-sm); }
@@ -87,3 +87,7 @@
 .im-check { position: absolute; top: 8px; left: 8px; display: grid; place-items: center; width: 20px; height: 20px; border: 1.5px solid #fff; border-radius: 50%; background: #00000066; color: #fff; }
 .im-check.on { background: var(--color-accent); border-color: var(--color-accent); }
 .im-selection-bar { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 16px; border-radius: 999px; background: var(--color-popover); box-shadow: var(--shadow-overlay); font-size: var(--text-caption); }
+
+.image-pinned{display:flex;gap:6px;overflow:auto;padding:6px 14px;border-bottom:1px solid var(--color-border)}
+.image-pinned>span{display:inline-flex;align-items:center;flex-shrink:0;border:1px solid var(--color-border);border-radius:6px}
+.image-pinned button.active{background:var(--color-accent-soft)}

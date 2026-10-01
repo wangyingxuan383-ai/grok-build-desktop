@@ -419,3 +419,20 @@ describe("Codex-style turn grouping", () => {
     expect(turn?.groups.find((group) => group.kind === "other")?.items.map((item) => item.id)).toContain("fake");
   });
 });
+
+it("does not count Host summaries and child lifecycle cards as additional native tool calls",()=>{
+ const [turn]=buildChatTurns([
+  {id:"u",kind:"user",text:"delegate"},
+  {id:"spawn",kind:"tool",tool:{toolCallId:"spawn",title:"delegate",toolName:"spawn_subagent",status:"completed"}},
+  {id:"child",kind:"tool",tool:{toolCallId:"subagent-child",title:"child",status:"completed",rawInput:{sessionUpdate:"subagent_finished",subagent_id:"child",tool_calls:12}}},
+  {id:"host",kind:"tool",tool:{toolCallId:"computer-host",title:"host",status:"completed",source:"computer-host",computerEvidence:"controlled"}},
+ ]);
+ expect(turn?.summary).toMatchObject({tools:1,subagents:1});
+});
+it("keeps foreground control distinct from an application operation",()=>{
+ let state=baseState();state.views.session.messages.push({id:"u",kind:"user",text:"observe"});
+ state=apply(state,{type:"computer-state",sessionId:"session",state:{sessionId:"session",status:"running",stepCount:1,controlCount:1,operationCount:0,lastAction:"activate_window",updatedAt:"now"}});
+ expect(state.views.session.messages.at(-1).tool.computerEvidence).toBe("controlled");
+ state=apply(state,{type:"computer-state",sessionId:"session",state:{sessionId:"session",status:"running",stepCount:2,controlCount:1,operationCount:1,lastAction:"click",updatedAt:"later"}});
+ expect(state.views.session.messages.at(-1).tool.computerEvidence).toBe("operated");
+});

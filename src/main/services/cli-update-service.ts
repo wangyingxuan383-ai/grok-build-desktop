@@ -201,6 +201,7 @@ export class CliUpdateService {
   private readonly compatibilityPath: string;
   private activeApply?: { key: string; operation: Promise<CliUpdateReceipt> };
   private latestCompatibility?: CliCompatibilitySnapshot;
+  private latestCompatibilityIdentity?: string;
 
   constructor(
     userDataPath: string,
@@ -306,15 +307,13 @@ export class CliUpdateService {
     return this.activeApply?.operation;
   }
 
-  /**
-   * Decide whether the ordinary session launcher may attach to this CLI.
-   *
-   * Source-reviewed releases are accepted by the shipped offline contract.
-   * A newer patch on the same 1.0 line is accepted only after this exact
-   * Desktop installation has completed the fixed-target updater's live ACP
-   * probe and persisted a passing receipt. This keeps the updater flexible
-   * without silently trusting a CLI that was replaced outside the app.
-   */
+  /** Explicit transaction failure is different from missing compatibility evidence. */
+  async assertRuntimeLaunchAllowed(): Promise<void> {
+    if (this.isActive() && this.phase !== "restoring") throw new Error("CLI 正在更新，请等待更新完成后再启动任务。");
+    if ((await this.recovery.get()).recovery?.retained) throw new Error("此 CLI 更新验证失败，执行已暂停。请在更新中心重新验证或回滚；账号登录仍可使用。");
+  }
+
+  /** Whether evidence already approves this binary; false alone is not a launch prohibition. */
   async isRuntimeVersionAllowed(rawVersion: string): Promise<boolean> {
     // `grok version --json` reports "1.0.40 (eb1a2256660d)"; approvals are
     // stored against the bare semver, so compare only the normalized form.
@@ -343,27 +342,43 @@ export class CliUpdateService {
 
   async compatibility(): Promise<CliCompatibilitySnapshot> {
     if ((await this.recovery.get()).recovery?.retained) throw new Error("CLI 尚未通过验证，请在更新中心重新验证或回滚；不会自动启动诊断 ACP 会话");
-    if (this.latestCompatibility) return structuredClone(this.latestCompatibility);
     const settings = await this.getSettings();
     const cliPath = await (this.testRuntime?.locateCli(settings) ?? locateGrokCli(settings.cliPath));
     if (!cliPath) throw new Error("未找到 Grok CLI");
     const env = buildCliEnv(settings, await this.getApiKey());
     const currentVersion = await (this.testRuntime?.readVersion(cliPath, env) ?? readCliVersion(cliPath, env));
+    const version = parseVersion(currentVersion)?.join(".");
+    if (!version) throw new Error("无法识别当前 CLI 版本，未复用旧兼容证据");
+    const identity = await this.binaryIdentity(cliPath, version);
+    if (this.latestCompatibility && this.latestCompatibilityIdentity === identity) return structuredClone(this.latestCompatibility);
     const persisted = await readFile(this.compatibilityPath, "utf8").then((value) => JSON.parse(value) as CliCompatibilitySnapshot).catch(() => undefined);
-    if (persisted?.cliVersion && persisted.cliVersion === currentVersion) {
+    // Version-only historical evidence must not be stamped as proof for a different binary.
+    const reusable = persisted && parseVersion(persisted.cliVersion)?.join(".") === version
+      && persisted.binaryIdentity === identity;
+    if (persisted && reusable) {
       // Re-derive the gate when Desktop's compatibility rules evolve.  The
       // persisted handshake/evidence remains the observation source, while a
       // stale gate must not keep optional capabilities enabled after an app
       // update (for example the first stable 1.0.0 binary lacks
       // x.ai/git/status and x.ai/session/usage despite newer source snapshots).
       this.latestCompatibility = enrichCompatibilitySnapshot(persisted, currentVersion);
-      await this.saveCompatibility(this.latestCompatibility);
+      this.latestCompatibilityIdentity = identity;
+      // Stamp the identity so the next check can tell whether the binary was
+      // replaced, without paying for another probe now.
+      if (persisted.binaryIdentity !== identity) {
+        this.latestCompatibility.binaryIdentity = identity;
+        await this.saveCompatibility(this.latestCompatibility);
+      }
       return structuredClone(this.latestCompatibility);
     }
     this.latestCompatibility = enrichCompatibilitySnapshot(
       await (this.testRuntime?.probe(cliPath, env) ?? this.probe(cliPath, env)),
       currentVersion,
     );
+    if (identity !== await this.binaryIdentity(cliPath, version)) throw new Error("兼容检测期间 CLI 二进制发生变化，请重新检测");
+    this.latestCompatibilityIdentity = identity;
+    this.latestCompatibility.binaryIdentity = identity;
+    await this.saveCompatibility(this.latestCompatibility);
     return structuredClone(this.latestCompatibility);
   }
 
@@ -407,6 +422,9 @@ export class CliUpdateService {
       await this.recovery.mutate((data) => { data.approvedIdentity = undefined; });
       const identity = await this.binaryIdentity(cliPath, version);
       if (identity !== identityBefore || await readVersion() !== version) throw new Error("验证期间 CLI 二进制发生变化，请重新验证");
+      this.latestCompatibilityIdentity = identity;
+      snapshot.binaryIdentity = identity;
+      await this.saveCompatibility(snapshot);
       await this.recovery.mutate((data) => { data.approvedIdentity = identity; if (data.recovery) data.recovery.retained = false; });
       return snapshot;
     };

@@ -143,7 +143,7 @@ export default function App(): React.JSX.Element {
   const openSubagent = useCallback((nodeId:string)=>{setArtifactPreview(undefined);setRightToolState(null);setSubagentPane(nodeId)},[]);
   useEffect(()=>{setSubagentPane(undefined)},[store.activeSessionId]);
   useEffect(()=>{if(artifactPreview)setSubagentPane(undefined)},[artifactPreview]);
-  useEffect(()=>setArtifactPreview(undefined),[store.activeSessionId,store.settings?.activeWorkspace,activeCodexId,activeClaudeId]);
+  useEffect(()=>{setConversationSearch("");setConversationMatch(0);},[store.activeSessionId,activeCodexId,activeClaudeId]);
   const [artifactPath, setArtifactPath] = useState("");
   const [reviewInitialScope, setReviewInitialScope] = useState<"unstaged" | "last-turn">("unstaged");
 
@@ -1233,7 +1233,7 @@ function ForeignSessionMirror({ source, detail, busy, onRefresh, onContinue, onH
 
 function ComputerLiveStrip({ task, onPause, onResume, onStop }: { task: ComputerTaskState; onPause(): void; onResume(): void; onStop(): void }): React.JSX.Element {
   const waiting = task.status === "awaiting-risk-confirmation";
-  return <div className={`computer-live-strip ${task.status} ${task.manualInterventionRequired ? "manual" : ""} ${task.interventionKind === "elevation-blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span className="computer-live-dot" /><div><strong>{task.headline || (task.manualInterventionRequired ? "等待你手动完成 Windows 确认" : waiting ? "等待高影响操作确认" : task.status === "paused" ? "Computer Use 已暂停" : `Grok 正在控制 ${task.appName || "Windows 应用"}`)}</strong><span>{task.message || "正在观察目标窗口"} · {task.stepCount} 步</span></div><kbd>Esc 停止</kbd><div className="computer-live-actions">{task.status === "running" && <button onClick={onPause}>暂停</button>}{task.status === "paused" && task.interventionKind !== "elevation-blocked" && <button className="primary" onClick={onResume}>{task.manualInterventionRequired ? "已手动完成，继续" : "继续"}</button>}<button onClick={onStop}>停止</button></div></div>;
+  return <div className={`computer-live-strip ${task.status} ${task.manualInterventionRequired ? "manual" : ""} ${task.interventionKind === "elevation-blocked" ? "blocked" : ""}`} role="status" aria-live="polite"><span className="computer-live-dot" /><div><strong>{task.headline || (task.manualInterventionRequired ? "等待你手动完成 Windows 确认" : waiting ? "等待高影响操作确认" : task.status === "paused" ? "Computer Use 已暂停" : `Computer Use · ${task.appName || "Windows 应用"}`)}</strong><span>{task.message || "正在观察目标窗口"} · {task.stepCount} 步</span></div><kbd>Esc 停止</kbd><div className="computer-live-actions">{task.status === "running" && <button onClick={onPause}>暂停</button>}{task.status === "paused" && task.interventionKind !== "elevation-blocked" && <button className="primary" onClick={onResume}>{task.manualInterventionRequired ? "已手动完成，继续" : "继续"}</button>}<button onClick={onStop}>停止</button></div></div>;
 }
 
 

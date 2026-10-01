@@ -1,3 +1,4 @@
+import type {TokenRecordContext} from "./token-activity-service";
 import { Worker } from "node:worker_threads";
 import type { TokenActivityQuery,TokenActivityReport,TurnPresentation } from "../../shared/types";
 export class TokenActivityClient {
@@ -15,7 +16,7 @@ export class TokenActivityClient {
   const flight=new Promise((resolve,reject)=>{const id=++this.sequence;this.pending.set(id,{resolve,reject});this.worker!.postMessage({id,method,args,now:new Date().toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC"})});
   this.flights.add(flight);void flight.then(()=>this.flights.delete(flight),()=>this.flights.delete(flight));return flight;
  }
- record(id:string,presentation:TurnPresentation,context:{workspace?:string}={}){return this.call("record",[id,presentation,context]) as Promise<void>}
+ record(id:string,presentation:TurnPresentation,context:TokenRecordContext={}){return this.call("record",[id,presentation,context]) as Promise<void>}
  forgetSession(id:string){return this.forgetSessions([id])}
  forgetSessions(ids:Iterable<string>){return this.call("forgetSessions",[[...ids]]) as Promise<void>}
  rebindSession(source:string,target:string,workspace:string){return this.call("rebindSession",[source,target,workspace]) as Promise<void>}

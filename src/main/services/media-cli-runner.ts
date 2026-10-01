@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { MediaArtifact, MediaCreationKind } from "../../shared/types";
+import type { MediaArtifact, MediaCreationKind, TurnUsage } from "../../shared/types";
 import { mediaArtifactsFromStreamingLine } from "./media-artifact-parser";
 
 export interface CliMediaProcessInput {
@@ -15,7 +15,9 @@ export interface CliMediaProcessInput {
   /** Reference images passed to the tool; never accepted as generated results. */
   excludeSources?: readonly string[];
   onSpawn?(child: ChildProcessWithoutNullStreams): void;
-  onProgress?(): void;
+  onProgress?(progress?: { stage: "starting" | "generating" | "waiting" | "result"; message: string }): void;
+  /** Invocation-final ledger only; per-message usage is not accumulated again. */
+  onUsage?(usage: TurnUsage): void;
 }
 
 /**
@@ -48,7 +50,12 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   let timedOut = false;
   let terminalError: string | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
-  const idleTimeoutMs = input.idleTimeoutMs === undefined ? 600_000 : input.idleTimeoutMs;
+  const idleTimeoutMs = input.idleTimeoutMs === undefined ? 180_000 : input.idleTimeoutMs;
+  let lastOutputAt = Date.now();
+  let stage: "starting" | "generating" | "result" = "starting";
+  const waitingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-lastOutputAt)/1000);if(seconds>=30)input.onProgress?.({stage:"waiting",message:`已等待 ${seconds} 秒没有新输出。CLI 未报告排队原因；可检查登录、网络或取消任务，不会自动重新提交。`});},10_000);
+  waitingTimer.unref?.();
+  input.onProgress?.({stage, message:"正在启动 CLI 并验证会话，尚未开始生成"});
   // Process startup (especially a packaged Node/Electron child) can take
   // longer than a deliberately small test/inactivity interval. Give a
   // silent child a bounded startup grace period, then apply the configured
@@ -69,29 +76,34 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     // infer failure from assistant text or a recoverable tool_result.
     try {
       const event = JSON.parse(line);
+      if (event?.type === "tool_use" && /^(image_gen|image_edit|video_gen)$/.test(event.name ?? event.tool ?? "")) {
+        stage="generating";input.onProgress?.({stage,message:`CLI 已调用 ${event.name ?? event.tool}，等待生成服务返回`});
+      }
+      const usage = cliMediaTurnUsage(event);
+      if (usage) input.onUsage?.(usage);
       if (event?.type === "error" && typeof event.message === "string" && event.message.trim()) {
-        terminalError ??= event.message.trim().slice(0, 8_000);
+        terminalError ??= mediaCliFailureMessage(event.message.trim().slice(0, 8_000));
         if (!child.killed) child.kill();
         return;
       }
     } catch { /* Non-JSON progress is not a protocol error. */ }
     for (const artifact of mediaArtifactsFromStreamingLine(line, input.media, input.cwd, { exclude: input.excludeSources, toolIdentities })) {
-      if (!artifacts.some((value) => value.source === artifact.source)) artifacts.push(artifact);
+      if (!artifacts.some((value) => value.source === artifact.source)) { artifacts.push(artifact); stage="result";input.onProgress?.({stage,message:"生成服务已返回媒体路径，正在校验和保存原图"}); }
     }
   };
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
-    armIdleTimer();
+    lastOutputAt=Date.now();armIdleTimer();
     pending += chunk;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
     for (const line of lines) collectLine(line);
     if (pending.length > 1024 * 1024) pending = pending.slice(-1024 * 1024);
-    input.onProgress?.();
+    input.onProgress?.({stage,message:stage==="generating"?"媒体工具正在运行，等待图片返回":stage==="result"?"已收到媒体结果，正在完成保存":"CLI 已有响应，等待媒体工具调用"});
   });
   child.stderr.on("data", (chunk: string) => {
-    armIdleTimer();
+    lastOutputAt=Date.now();armIdleTimer();
     stderr = `${stderr}${chunk}`.slice(-100_000);
   });
   const abort = (): void => { if (!child.killed) child.kill(); };
@@ -111,14 +123,31 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     if (pending.trim()) collectLine(pending);
     if (input.signal.aborted) throw abortReason(input.signal);
     if (terminalError) throw new Error(terminalError);
-    if (timedOut) throw new Error(`媒体任务连续 ${Math.ceil((idleTimeoutMs ?? 0) / 1000)} 秒没有输出`);
+    if (timedOut) throw new Error(`媒体任务连续 ${Math.ceil((idleTimeoutMs ?? 0) / 1000)} 秒没有输出，已停止等待。CLI 未提供排队状态；请检查账号和网络后手动重试，避免重复生成。`);
     if (exitCode !== 0) throw new Error(mediaCliFailureMessage(stderr) || `Grok CLI 媒体任务退出（${String(exitCode)}）`);
     if (!artifacts.length) throw new Error(mediaCliFailureMessage(stderr) || "Grok CLI 已结束，但 streaming-json 中没有可识别的媒体产物");
     return artifacts;
   } finally {
     if (idleTimer) clearTimeout(idleTimer);
+    clearInterval(waitingTimer);
     input.signal.removeEventListener("abort", abort);
   }
+}
+
+/** The official streaming-json `end` event reports the current invocation's ledger. */
+export function cliMediaTurnUsage(event: unknown): TurnUsage | undefined {
+  if (!event || typeof event !== "object") return undefined;
+  const row=event as Record<string,unknown>;
+  if(row.type!=="end"||!row.usage||typeof row.usage!=="object")return undefined;
+  const raw=row.usage as Record<string,unknown>,result:TurnUsage={source:"prompt-result",exact:true};
+  for(const [key,snake]of [["inputTokens","input_tokens"],["outputTokens","output_tokens"],["totalTokens","total_tokens"],["cachedReadTokens","cached_read_tokens"],["reasoningTokens","reasoning_tokens"]] as const){
+    const value=raw[key]??raw[snake];
+    if(typeof value==="number"&&Number.isFinite(value)&&value>=0)result[key]=value;
+  }
+  if(!Object.keys(result).some(key=>key.endsWith("Tokens")))return undefined;
+  const models=row.modelUsage&&typeof row.modelUsage==="object"?Object.keys(row.modelUsage):[];
+  if(models.length===1)result.modelId=models[0];
+  return result;
 }
 
 export function mediaCliFailureMessage(stderr: string): string {
@@ -127,6 +156,9 @@ export function mediaCliFailureMessage(stderr: string): string {
   if (/Zero Data Retention teams must provide output\.upload_url/i.test(plain)) {
     return "Zero Data Retention teams must provide output.upload_url for video generation.";
   }
+  if (/authentication required|unauthorized|token.{0,30}expired|\b401\b|暂时无法验证订阅/i.test(plain)) return `账号认证或订阅验证失败，请先重新登录再生成。${plain.slice(-500)}`;
+  if (/rate.?limit|too many requests|\b429\b|quota|usage limit|额度|限流/i.test(plain)) return `生成服务报告限流或额度不足，请检查官方用量并稍后手动重试。${plain.slice(-500)}`;
+  if (/ECONN|ENOTFOUND|network|connect.{0,20}timeout|proxy/i.test(plain)) return `生成服务连接失败，请检查代理和网络。${plain.slice(-500)}`;
   const lines = plain.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   return lines.at(-1)?.slice(0, 2_000) || "";
 }

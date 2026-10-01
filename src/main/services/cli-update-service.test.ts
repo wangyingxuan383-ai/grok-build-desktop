@@ -213,7 +213,7 @@ describe("CliUpdateService", () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
     const persisted: CliCompatibilitySnapshot = {
-      cliVersion: "1.0.0 (fixture)",
+      cliVersion: "1.0.0 (fixture)", binaryIdentity: "1.0.0:fixture-1.0.0",
       checkedAt: new Date().toISOString(),
       handshake: normalizeRuntimeHandshake({
         protocolVersion: 1,

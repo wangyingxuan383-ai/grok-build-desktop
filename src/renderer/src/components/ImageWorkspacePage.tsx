@@ -41,6 +41,11 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
   const [providers, setProviders] = useState<CustomProviderProfile[]>([]);
   const [codeImages, setCodeImages] = useState<MediaAccessHandle[]>();
   const [preview, setPreview] = useState<ArtifactPreviewTarget>();
+  const [pinned,setPinned]=useState<Array<Extract<ArtifactPreviewTarget,{kind:"media"}>>>(()=>{
+    try{return (JSON.parse(localStorage.getItem("grok-image-pins-v1")||"[]") as unknown[]).filter((row):row is Extract<ArtifactPreviewTarget,{kind:"media"}>=>Boolean(row&&typeof row==="object"&&(row as any).kind==="media"&&typeof(row as any).sessionId==="string"&&typeof(row as any).messageId==="string"&&typeof(row as any).source==="string"&&(row as any).source.startsWith("grok-media:")&&typeof(row as any).workspace==="string")).slice(0,12);}catch{return []}
+  });
+  useEffect(()=>{try{localStorage.setItem("grok-image-pins-v1",JSON.stringify(pinned));}catch{/* View references are optional. */}},[pinned]);
+
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [pending, setPending] = useState<Pending>();
@@ -62,9 +67,15 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
   const workCount = useMemo(() => collectWorks(conversations).length, [conversations]);
 
   const fail = useCallback((value: unknown): void => { if (alive.current) setError(value instanceof Error ? value.message : String(value)); }, []);
+  useEffect(()=>{
+    if(!data)return;
+    setPinned(values=>{const valid=values.filter(target=>data.conversations.some(row=>row.id===target.sessionId&&row.jobs.some(record=>record.job.artifacts.some(artifact=>artifact.id===target.messageId))));return valid.length===values.length?values:valid;});
+  },[data]);
+  const refreshSequence=useRef(0);
   const refresh = useCallback(async (): Promise<ImageWorkspace> => {
+    const sequence=++refreshSequence.current;
     const value = await window.grokDesktop.listImageWorkspace();
-    if (alive.current) setData(value);
+    if (alive.current && sequence===refreshSequence.current) setData(value);
     return value;
   }, []);
 
@@ -186,7 +197,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
             : await window.grokDesktop.deleteImageJob(conversation.id, record.job.jobId, deleteFiles);
           kept += result.keptFiles.length;
         }
-        if (kept) setError(`有 ${kept} 个文件未能删除，对应记录已保留，可重试或仅移除记录。`);
+        if (kept) setError(`有 ${kept} 个文件未能删除，对应记录已保留。文件已修改、仍被引用或缺少旧版来源证明时，可选择仅移除记录后手动管理文件；其他错误可重试。`);
       }
       setPending(undefined); setPreview(undefined);
     } catch (reason) { setPending(undefined); fail(reason); }
@@ -274,6 +285,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
             <IconButton icon="close" label="关闭提示" size="sm" onClick={() => setError("")} />
           </div>
         )}
+        {pinned.length>0&&<nav className="image-pinned" aria-label="固定的图片视图">{pinned.map(target=><span key={`${target.sessionId}:${target.messageId}`}><button className={preview?.kind==="media"&&preview.messageId===target.messageId?"active":""} onClick={()=>setPreview(target)}>图片 {target.messageId.slice(0,6)}</button><IconButton size="sm" icon="close" label="关闭固定的图片视图" onClick={()=>setPinned(values=>values.filter(value=>value.messageId!==target.messageId||value.sessionId!==target.sessionId))}/></span>)}</nav>}
         {!data && !error && <p className="im-loading" role="status">正在读取图像会话…</p>}
 
         {view === "gallery" ? (
@@ -314,6 +326,15 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
           target={preview}
           onClose={() => setPreview(undefined)}
           onPin={() => undefined}
+          onPinMedia={target=>setPinned(values=>values.some(value=>value.sessionId===target.sessionId&&value.messageId===target.messageId)?values:[...values.slice(-11),target])}
+          onRecoverMedia={async()=>{
+            const target=preview;if(target.kind!=="media")return;
+            const conversation=conversations.find(value=>value.id===target.sessionId);
+            const record=conversation?.jobs.find(value=>value.job.artifacts.some(artifact=>artifact.id===target.messageId));
+            if(!conversation||!record)throw Error("图片记录已删除，不能恢复原图");
+            const original=await window.grokDesktop.previewImageOriginal(conversation.id,record.job.jobId,target.messageId);
+            setPreview(current=>current===target?{...target,source:original.source,isData:original.isData}:current);
+          }}
           onReturn={(id) => { setPreview(undefined); void show(id); }}
           onError={fail}
         />
@@ -326,7 +347,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
               {pending.kind === "conversation"
                 ? `删除会话“${pending.conversation.title}”及其 ${pending.conversation.jobs.length} 条生成记录？`
                 : pending.items.length === 1 ? pending.items[0]?.artifactId ? "删除这张图片？同次生成的其他图片会保留。" : "删除这条生成记录？" : `删除选中的 ${pending.items.length} 张图片或记录？`}
-              {" "}可以只移除记录并保留图片文件，也可以连同原图一起删除。
+              {" "}仅移除记录会保留已保存的图片；同时删除会清理可核验的原图、保存副本及预览缓存。旧版记录没有内容归属证明时保留现存文件；可仅移除记录后手动管理文件。
             </p>
             <div className="ui-dialog-actions">
               <Button variant="ghost" disabled={removing} onClick={() => setPending(undefined)}>取消</Button>

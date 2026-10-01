@@ -5,10 +5,11 @@ import { mediaPreviewUrl, type ArtifactPreviewTarget } from "../artifact-preview
 import { ArtifactContent } from "./ArtifactWorkbench";
 import "../styles/artifact-preview.css";
 
-export function ArtifactPreviewPane({target,onClose,onPin,onReturn,onError,onPinMedia}:{
-  target:ArtifactPreviewTarget; onPinMedia?(target:Extract<ArtifactPreviewTarget,{kind:"media"}>):void; onClose():void; onPin(workspace:string,path:string):void;
+export function ArtifactPreviewPane({target,onClose,onPin,onReturn,onError,onPinMedia,onRecoverMedia}:{
+  onRecoverMedia?():Promise<void>; target:ArtifactPreviewTarget; onPinMedia?(target:Extract<ArtifactPreviewTarget,{kind:"media"}>):void; onClose():void; onPin(workspace:string,path:string):void;
   onReturn(sessionId:string,workspace:string):void; onError(message:string):void;
 }) {
+  const [recovering,setRecovering]=useState(false);
   const [expanded,setExpanded]=useState(false);
   const [artifact,setArtifact]=useState<WorkspaceArtifact>();
   const [error,setError]=useState("");
@@ -27,7 +28,7 @@ export function ArtifactPreviewPane({target,onClose,onPin,onReturn,onError,onPin
   const content=()=>{
     if(error)return <div role="alert"><p>{error}</p><button onClick={()=>setRevision(v=>v+1)}>重新读取</button></div>;
     if(target.kind==="file")return artifact?<ArtifactContent artifact={artifact} onMediaError={()=>setError("无法解码此媒体文件；可以另存原文件后使用外部应用检查。")}/>:<p role="status">正在读取产物…</p>;
-    if(!src||failedMedia)return <p role="alert">原文件已不可用或媒体身份未验证。请返回来源会话检查，不会重新生成。</p>;
+    if(!src||failedMedia)return <div role="alert"><p>预览缓存不可用。可以从已登记原图恢复，不会重新生成。</p>{onRecoverMedia&&<button disabled={recovering} onClick={()=>{setRecovering(true);void onRecoverMedia().catch(reason=>onError(String(reason))).finally(()=>setRecovering(false));}}>{recovering?"正在恢复…":"从原文件恢复预览"}</button>}</div>;
     return target.media==="image"?<img src={src} alt={title} onError={()=>setFailedMedia(true)}/>:<video src={src} controls onError={()=>setFailedMedia(true)}/>;
   };
   const actions=<div className="artifact-preview-actions">
