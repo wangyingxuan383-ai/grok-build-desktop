@@ -256,6 +256,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("automations:delete", (id: string) => controller.deleteAutomation(id));
   handle("automations:pause", (id: string, paused: boolean) => controller.pauseAutomation(id, paused));
   handle("automations:run-now", (id: string) => controller.runAutomationNow(id));
+  handle("automations:run:retry", (id: string) => controller.retryAutomationRun(id));
+  handle("automations:runs:clear", (taskId?: string) => controller.clearAutomationRuns(taskId));
   handle("automations:run:cancel", (id: string) => controller.cancelAutomationRun(id));
   handle("automations:runs", (taskId?: string) => controller.listAutomationRuns(taskId));
   handle("automations:policy:get", () => controller.getAutomationGlobalPolicy());

@@ -9,7 +9,7 @@
 - [x] Separate Computer observation, window control and application actions.
 - [x] Permit common source formats and isolated interactive HTML previews.
 - [x] Keep public documentation focused on product behavior; exclude local handovers.
-- [ ] Finish targeted regressions and packaged interaction acceptance.
+- [x] Targeted regressions and packaged startup/IPC acceptance passed for the 0.10.2 release candidate; live capability acceptance remains separate.
 
 ## Capability acceptance still required
 

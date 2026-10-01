@@ -24,6 +24,7 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "grok-html", privileges: {standard:true,secure:true,supportFetchAPI:true} },
   { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
@@ -90,6 +91,7 @@ else {
     windowState = new WindowStateService(app.getPath("userData"));
     const restoredWindow = await windowState.load(screen.getAllDisplays().map((display) => display.workArea));
     const startupTheme = await controller.prepareAppearance();
+    protocol.handle("grok-html", request => controller?.htmlPreviewResponse(request.url) ?? new Response("Not found",{status:404}));
     protocol.handle("grok-theme", async (request) => {
       if (!isAllowedThemeBackgroundUrl(request.url)) return new Response("Not found", { status: 404 });
       const background = await controller?.currentThemeBackground();
@@ -215,7 +217,7 @@ else {
       const answer = dialog.showMessageBoxSync(mainWindow!, {
         type: "warning",
         title: "仍有任务运行",
-        message: "关闭应用会停止所有正在运行或等待确认的 Grok 会话。",
+        message: "关闭应用会停止正在运行或等待确认的 Grok 会话，以及图片和视频生成任务。",
         buttons: ["继续使用", "停止任务并退出"],
         defaultId: 0,
         cancelId: 0,

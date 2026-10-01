@@ -55,6 +55,7 @@ export class GrokProcessManager {
     private readonly runtimeState?: SessionRuntimeStateService,
     private readonly isFutureCliVersionAllowed?: (version: string) => Promise<boolean>,
     private readonly sessionLockRoot?: string,
+    private readonly assertRuntimeLaunchAllowed?: () => Promise<void>,
   ) {
     this.reaper = setInterval(() => void this.reap(), 5 * 60_000);
     this.reaper.unref();
@@ -626,6 +627,9 @@ export class GrokProcessManager {
     const settings = await this.getSettings();
     const cliPath = await locateGrokCli(settings.cliPath);
     if (!cliPath) throw new Error("未找到 Grok CLI，请在设置中指定路径");
+    // Unknown releases may attempt ACP negotiation, but an explicitly failed
+    // update transaction must not silently escape its quarantine.
+    await this.assertRuntimeLaunchAllowed?.();
     const apiKey = await this.getApiKey();
     const mcpSecretEnvironment = await this.getMcpSecretEnvironment();
     const workspaceEnvironment = await this.getWorkspaceEnvironment(cwd);
@@ -656,9 +660,11 @@ export class GrokProcessManager {
     }
     const effortFlag = await detectEffortFlag(cliPath, env);
     const ownership = resumeSessionId && this.sessionLockRoot ? await acquireProcessResource(this.sessionLockPath(resumeSessionId), 1500) : undefined;
-    let extensions: Awaited<ReturnType<NonNullable<typeof this.getSessionExtensions>>>;
-    try { extensions = await this.getSessionExtensions?.({ cwd, computerEnabled: processOptions?.computerEnabled }) ?? {}; }
-    catch (error) { await ownership?.release(); throw error; }
+    let extensions: Awaited<ReturnType<NonNullable<typeof this.getSessionExtensions>>> | undefined;
+    try {
+      extensions = await this.getSessionExtensions?.({ cwd, computerEnabled: processOptions?.computerEnabled }) ?? {};
+      await this.assertRuntimeLaunchAllowed?.();
+    } catch (error) { await ownership?.release(); this.onSessionClosed?.(extensions?.leaseId); throw error; }
     const adapter = new GrokAcpAdapter({
       cliPath,
       computerEnabled: processOptions?.computerEnabled,

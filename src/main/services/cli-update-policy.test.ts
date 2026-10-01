@@ -38,6 +38,26 @@ async function fixture() {
 }
 
 describe("confirmed CLI policies (no CLI or model requests)", () => {
+  it("allows an ordinary unverified CLI to launch but blocks retained failed transactions", async () => {
+    const f=await fixture();f.state.version="1.0.46";
+    await expect(f.updater.assertRuntimeLaunchAllowed()).resolves.toBeUndefined();
+    f.state.badCore=true;
+    await f.apply("retain-unverified");
+    await expect(f.updater.assertRuntimeLaunchAllowed()).rejects.toThrow("更新验证失败");
+    await expect(f.service().assertRuntimeLaunchAllowed()).rejects.toThrow("更新验证失败");
+  });
+  it("binds cached compatibility to the path/hash and normalized version", async () => {
+    const f=await fixture();const probe=vi.fn(f.runtime.probe);f.runtime.probe=probe;
+    await f.updater.compatibility();await f.updater.compatibility();
+    expect(probe).toHaveBeenCalledTimes(1);
+    f.runtime.readVersion=async()=>`${f.state.version} (build-hash)`;
+    await f.service().compatibility();expect(probe).toHaveBeenCalledTimes(1);
+    f.state.hash="same-version-replaced";
+    await f.updater.compatibility();expect(probe).toHaveBeenCalledTimes(2);
+    f.runtime.locateCli=async()=>"other.exe";
+    f.runtime.identity=async(path)=>`${path}:${f.state.hash}`;
+    await f.updater.compatibility();expect(probe).toHaveBeenCalledTimes(3);
+  });
   it("recovers the screenshot's quarantined 1.0.0 by verifying current, without stable access or downloading", async () => {
     const f = await fixture(); f.state.version = "1.0.0";
     await writeFile(join(f.root, "cli-update-recovery.json"), JSON.stringify({ recovery: { previousVersion: "1.0.0", targetVersion: "1.0.24", retained: true, snapshots: [{ sessionId: "s1", cwd: f.root, mode: "agent", effort: "" }] } }));

@@ -23,6 +23,10 @@
   background: var(--bg);
 }
 .app-shell.density-compact { --sidebar-width: 252px; --topbar-height: 48px; --session-row-height: 42px; --content-width: 740px; --composer-height: 50px; --ui-gap: 6px; }
+/* `balanced` is the default App.tsx applies, so it needs its own rule: without
+   one the class matched nothing and the shell silently fell back to the bare
+   `.app-shell` values instead of the documented middle density. */
+.app-shell.density-balanced { --sidebar-width: 264px; --topbar-height: 52px; --session-row-height: 46px; --content-width: 760px; --composer-height: 56px; --ui-gap: 8px; }
 .app-shell.density-comfortable { --sidebar-width: 292px; --topbar-height: 56px; --session-row-height: 52px; --content-width: 800px; --composer-height: 64px; --ui-gap: 10px; }
 .new-task-button { display: flex; align-items: center; gap: 9px; width: calc(100% - 18px); margin: 1px 9px 8px; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
 .new-task-button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
@@ -95,6 +99,7 @@
   background: rgb(var(--background-mask) / var(--background-dim));
   backdrop-filter: none;
 }
+/* The single owner of .chat-turn's width; base.css no longer repeats it. */
 .chat-turn { width: min(var(--conversation-content-width, var(--content-width)), calc(100% - 40px)); padding: 8px 0 14px; }
 .chat-turn:has(> .execution-process:first-child:last-child) { padding-block: 2px; }
 .message-row { margin: 10px 0 18px; }
@@ -291,3 +296,7 @@
 }
 .follow-up-suggestions > span { color: var(--text-muted); font-size: 12px; flex: 0 0 auto; }
 .follow-up-suggestions button { flex: 0 0 auto; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.run-status.warning{color:var(--warning);background:color-mix(in srgb,var(--warning) 14%,transparent)}
+.automation-runs .task-center-actions{display:flex;flex-wrap:wrap;align-items:end;gap:8px}
+.automation-runs .task-center-actions label{display:flex;flex-direction:column;gap:4px}

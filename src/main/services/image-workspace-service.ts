@@ -11,10 +11,10 @@ export class ImageWorkspaceService {
  private readonly ready:Promise<unknown>;
  constructor(userData:string,defaultRoot:string,recover=false){
   this.store=new JsonStore(join(userData,"image-workspace.json"),{version:1,outputRoot:defaultRoot,conversations:[]});
-  this.ready=this.store.mutate(state=>{
-  // A session exists only once something was generated (or a draft was typed), so an abandoned empty one is dropped.
-  state.conversations=state.conversations.filter(conversation=>conversation.jobs.length>0||conversation.draft.trim().length>0);
-  if(recover)for(const conversation of state.conversations)for(const record of conversation.jobs)if(busy(record.job)){record.job.status="failed";record.job.error="上次应用退出时任务未完成；请检查已有产物后手动重试。";record.job.message=record.job.error;record.job.updatedAt=new Date().toISOString()}});
+  // Worker readers must never alter GUI-owned rows. Removing the last artwork is
+  // also not deletion of its conversation or native multi-turn context.
+  this.ready=recover?this.store.mutate(state=>{
+  for(const conversation of state.conversations)for(const record of conversation.jobs)if(busy(record.job)){record.job.status="failed";record.job.error="上次应用退出时任务未完成；请检查已有产物后手动重试。";record.job.message=record.job.error;record.job.updatedAt=new Date().toISOString()}}):Promise.resolve();
  }
  async list(){await this.ready;return this.store.get()}
  async get(id:string){return (await this.list()).conversations.find(row=>row.id===id)}
@@ -79,13 +79,14 @@ export class ImageWorkspaceService {
   // moving it after an output-root change made --resume fail and silently dropped the context.
   const directory=existing.cwd||join(snapshot.outputRoot,input.conversationId);
   await mkdir(directory,{recursive:true});const cwd=await realpath(directory);
+  const destination=join(snapshot.outputRoot,input.conversationId);await mkdir(destination,{recursive:true});const outputRoot=await realpath(destination);
   await this.store.mutate(state=>{
    const row=state.conversations.find(row=>row.id===input.conversationId);if(!row)throw Error("图像会话已不存在");
    const existing=row.jobs.find(record=>record.requestId===input.requestId);if(existing){result={created:false,job:existing.job};return}
    if(row.jobs.some(record=>busy(record.job)))throw Error("此图像会话已有任务在运行");
    if(state.outputRoot!==snapshot.outputRoot)throw Error("输出目录刚刚改变，请重试提交");
-   const now=new Date().toISOString(),job:MediaGenerationJob={jobId:randomUUID(),sessionId:row.id,kind:"image",route:input.request.route==="provider"?"provider":"cli",status:"queued",message:"正在提交图像任务",artifacts:[],startedAt:now,updatedAt:now};
-   row.cwd=cwd;row.updatedAt=now;if(!row.titleLocked&&row.jobs.length===0)row.title=input.request.prompt.trim().slice(0,60);row.draft="";row.jobs.push({requestId:input.requestId,prompt:input.request.prompt,aspectRatio:input.request.aspectRatio,references:{names:(input.request.referencePaths??[]).map(path=>basename(path)),sources:[...(input.referenceSources??[])]},job});result={created:true,job};
+   const now=new Date().toISOString(),job:MediaGenerationJob={jobId:randomUUID(),sessionId:row.id,kind:"image",route:input.request.route==="provider"?"provider":"cli",status:"queued",message:"正在提交图像任务",artifacts:[],outputRoot,startedAt:now,updatedAt:now};
+   row.cwd=cwd;row.updatedAt=now;if(!row.titleLocked&&!row.firstRequestAt&&row.jobs.length===0&&row.title==="新图像会话")row.title=input.request.prompt.trim().slice(0,60);row.firstRequestAt??=row.jobs[0]?.job.startedAt??now;row.draft="";row.jobs.push({requestId:input.requestId,prompt:input.request.prompt,aspectRatio:input.request.aspectRatio,references:{names:(input.request.referencePaths??[]).map(path=>basename(path)),sources:[...(input.referenceSources??[])]},job});result={created:true,job};
   });return result;
  }
  async update(job:MediaGenerationJob){if(!job.sessionId.startsWith("image-"))return;await this.ready;const copy=structuredClone(job);await this.store.mutate(state=>{const row=state.conversations.find(row=>row.id===copy.sessionId);const record=row?.jobs.find(record=>record.job.jobId===copy.jobId);if(record && Date.parse(copy.updatedAt)>=Date.parse(record.job.updatedAt)){record.job=copy;row!.updatedAt=copy.updatedAt}})}

@@ -10,7 +10,7 @@ it("persists drafts and outputs, changes only future destinations, removes recor
  // The CLI session's history is stored per folder, so an existing conversation must keep its own
  // folder even after the output root changes; only new conversations start under the new root.
  expect((await service.get(row.id))?.cwd).toBe(row.cwd);
- expect((await service.create()).cwd).toContain("NewPictures");const restarted=new ImageWorkspaceService(root,"unused",true);expect((await restarted.get(row.id))?.jobs[1]?.job.status).toBe("failed");expect((await restarted.get(row.id))?.jobs[0]?.job.status).toBe("completed");await restarted.draft(row.id,"saved draft");expect((await new ImageWorkspaceService(root,"unused").get(row.id))?.draft).toBe("saved draft");await restarted.remove(row.id);expect(await readFile(file,"utf8")).toBe("original");expect((await restarted.list()).conversations).toEqual([])});
+ const empty=await service.create();expect(empty.cwd).toContain("NewPictures");const restarted=new ImageWorkspaceService(root,"unused",true);expect((await restarted.get(row.id))?.jobs[1]?.job.status).toBe("failed");expect((await restarted.get(row.id))?.jobs[0]?.job.status).toBe("completed");await restarted.draft(row.id,"saved draft");expect((await new ImageWorkspaceService(root,"unused").get(row.id))?.draft).toBe("saved draft");await restarted.remove(row.id);expect(await readFile(file,"utf8")).toBe("original");expect((await restarted.list()).conversations.map(value=>value.id)).toEqual([empty.id])});
 it("worker readers do not mark a live GUI image task interrupted",async()=>{const {service,row,root}=await fixture();await service.reserve({conversationId:row.id,requestId:"1",request:{kind:"image",prompt:"x",aspectRatio:"auto"}});const worker=new ImageWorkspaceService(root,"unused");expect((await worker.get(row.id))?.jobs[0]?.job.status).toBe("queued");await expect(worker.remove(row.id)).rejects.toThrow("取消")});
 
 it("removes a failed or finished generation record, but refuses a running one", async () => {
@@ -50,11 +50,34 @@ it("records what each generation started from", async () => {
   expect((await service.get(row.id))?.jobs[0]).toMatchObject({ aspectRatio: "16:9", references: { names: ["ref.png"], sources: ["grok-media://access/1"] } });
 });
 
-it("drops sessions that never generated anything when the app starts", async () => {
+it("worker readers preserve newly created conversations and do not rewrite the GUI store", async () => {
   const { service, root, row } = await fixture();
   const kept = await service.create();
   await service.draft(kept.id, "half-typed idea");
   expect((await service.list()).conversations.map((value) => value.id)).toContain(row.id);
   const reopened = new ImageWorkspaceService(root, join(root, "Pictures"));
-  expect((await reopened.list()).conversations.map((value) => value.id)).toEqual([kept.id]);
+  const before = await readFile(join(root,"image-workspace.json"),"utf8");
+  expect((await reopened.list()).conversations.map((value) => value.id)).toEqual([row.id,kept.id]);
+  expect(await readFile(join(root,"image-workspace.json"),"utf8")).toBe(before);
+  await service.reserve({conversationId:row.id,requestId:"gui-request",request:{kind:"image",prompt:"cat",aspectRatio:"auto"}});
+});
+
+it("keeps native conversation context after the last artwork is removed and the GUI restarts", async () => {
+  const {service,row,root}=await fixture();
+  const reserved=await service.reserve({conversationId:row.id,requestId:"one",request:{kind:"image",prompt:"cat",aspectRatio:"auto"}});
+  await service.setCliSession(row.id,"native-child");
+  await service.update({...reserved.job,status:"completed",artifacts:[{id:"a",media:"image",source:"grok-media://access/one"}],updatedAt:new Date(Date.parse(reserved.job.updatedAt)+1000).toISOString()});
+  await service.removeArtifact(row.id,reserved.job.jobId,"a");
+  expect((await new ImageWorkspaceService(root,"unused",true).get(row.id))?.cliSessionId).toBe("native-child");
+});
+
+it("changes the next output destination while preserving native execution context", async () => {
+  const {service,row,root}=await fixture();
+  const first=await service.reserve({conversationId:row.id,requestId:"one",request:{kind:"image",prompt:"cat",aspectRatio:"auto"}});
+  await service.update({...first.job,status:"completed",updatedAt:new Date(Date.parse(first.job.updatedAt)+1000).toISOString()});
+  await service.root(join(root,"NewPictures"));
+  const next=await service.reserve({conversationId:row.id,requestId:"two",request:{kind:"image",prompt:"warmer",aspectRatio:"auto"}});
+  expect(next.job.outputRoot).toContain("NewPictures");
+  expect((await service.get(row.id))?.cwd).toBe(row.cwd);
+  expect((await service.get(row.id))?.jobs[0]?.job.outputRoot).toBe(first.job.outputRoot);
 });

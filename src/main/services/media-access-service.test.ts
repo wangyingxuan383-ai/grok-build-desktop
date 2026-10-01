@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,17 @@ afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recur
 async function root(): Promise<string> { const value = await mkdtemp(join(tmpdir(), "grok-media-access-")); roots.push(value); return value; }
 
 describe("MediaAccessService", () => {
+  it("revokes a removed artwork and its cache without touching siblings or another session",async()=>{
+    const userData=await root(),service=new MediaAccessService(userData);
+    const directory=join(userData,"session-media",sessionCacheKey("image-one"));await mkdir(directory,{recursive:true});
+    const a=join(directory,"a.png"),b=join(directory,"b.png");await writeFile(a,"a");await writeFile(b,"b");
+    const first=await service.register("image-one",a,"image","image/png"),second=await service.register("image-one",b,"image","image/png");
+    await service.removeSources("another-session",[first.url]);expect(await readFile(a,"utf8")).toBe("a");
+    await service.removeSources("image-one",[first.url]);
+    await expect(service.resolve(first.url)).rejects.toThrow("已失效");
+    await expect(readFile(a,"utf8")).rejects.toThrow();
+    expect((await service.resolve(second.url)).sessionId).toBe("image-one");
+  });
   it("code gallery excludes attachments, image-mode and deleting owners without exposing paths",async()=>{
     const userData=await root(),service=new MediaAccessService(userData);
     for(const id of ["code","deleting","image-gallery"]){

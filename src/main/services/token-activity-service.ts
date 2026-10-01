@@ -1,10 +1,13 @@
 import { join } from "node:path";
 import type { TokenActivityQuery, TokenActivityReport, TokenActivityWindow, TokenDayBucket, TurnPresentation, TurnUsage } from "../../shared/types";
+import { mergeTurnUsage } from "../../shared/turn-usage";
 import { JsonStore } from "./json-store";
 
 /** Keep local history for 400 days; deleted-session totals become anonymous aggregates. */
 const ROLLUP_RETENTION_DAYS = 400;
 const REPORT_DAYS = 371;
+
+export interface TokenRecordContext {workspace?:string; relatedTurnIds?:string[]}
 
 export interface TurnRecord {
   at: string;
@@ -21,6 +24,9 @@ export interface TurnRecord {
   /** Only an explicitly returned total is counted. Component fields are never added to manufacture it. */
   totalTokens?: number;
   hasUsage: boolean;
+  fieldSources?: TurnUsage["fieldSources"];
+  mixedSources?: boolean;
+  usageIsIncomplete?: boolean;
 }
 
 export interface DayRollup {
@@ -32,6 +38,9 @@ export interface DayRollup {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Child-agent tokens kept out of totalTokens; see windowFor(). */
+  subagentTokens?: number;
+  subagentTurns?: number;
   sources?: Record<string, number>;
 }
 
@@ -61,29 +70,19 @@ export class TokenActivityService {
     this.store = new JsonStore(join(userDataPath, "token-activity.json"), { turns: [], days: {}, anonymousDays: {}, legacyUtcDays: {} });
   }
 
-  async record(sessionId: string, presentation: TurnPresentation, context: { workspace?: string } = {}): Promise<void> {
-    const usage = presentation.usage;
-    const at = presentation.completedAt ?? this.now().toISOString();
+  async record(sessionId: string, presentation: TurnPresentation, context: TokenRecordContext = {}): Promise<void> {
     await this.store.mutate((raw) => {
       const data = migrate(raw);
-      const record: TurnRecord = {
-        at, sessionId, turnId: presentation.turnId,
-        hasUsage: Boolean(usage),
-        ...(usage?.source ? { source: usage.source } : {}),
-        ...(usage?.modelId ? { modelId: usage.modelId } : {}),
-        ...(usage?.providerId ? { providerId: usage.providerId } : {}),
-        ...(context.workspace ? { workspace: context.workspace } : {}),
-        ...(usage?.inputTokens === undefined ? {} : { inputTokens: usage.inputTokens }),
-        ...(usage?.outputTokens === undefined ? {} : { outputTokens: usage.outputTokens }),
-        ...(usage?.cachedReadTokens === undefined ? {} : { cachedReadTokens: usage.cachedReadTokens }),
-        ...(usage?.reasoningTokens === undefined ? {} : { reasoningTokens: usage.reasoningTokens }),
-        ...(usage?.totalTokens === undefined ? {} : { totalTokens: usage.totalTokens }),
-      };
+      const related=relatedUsageIds(presentation,context);
+      const oldRows=data.turns.filter(turn=>turn.sessionId===sessionId&&related.includes(turn.turnId)).sort((a,b)=>a.at.localeCompare(b.at));
+      const previous=oldRows.at(-1);
+      data.turns=data.turns.filter(turn=>turn.sessionId!==sessionId||!related.includes(turn.turnId)||turn.turnId===presentation.turnId);
       const existingIndex = data.turns.findIndex((turn) => turn.turnId === presentation.turnId && turn.sessionId === sessionId);
+      const record = mergeTokenTurn(previous ?? data.turns[existingIndex], sessionId, presentation, context, this.now());
       if (existingIndex >= 0) {
         // A normal prompt result can precede the authoritative end-of-turn usage.
         // Replace the same row instead of counting both notifications.
-        if (!usage) return data;
+        if (!presentation.usage) return data;
         data.turns[existingIndex] = record;
       } else data.turns.push(record);
       return prune(data, this.now());
@@ -131,6 +130,22 @@ export class TokenActivityService {
   }
 }
 
+/** Shared by JSON migration/fallback and the SQLite Worker. */
+export function mergeTokenTurn(previous: TurnRecord | undefined, sessionId: string, presentation: TurnPresentation, context: TokenRecordContext, now: Date): TurnRecord {
+  const keys = ["source", "modelId", "providerId", "inputTokens", "outputTokens", "cachedReadTokens", "reasoningTokens", "totalTokens", "fieldSources", "mixedSources", "usageIsIncomplete"] as const;
+  const previousUsage = previous?.hasUsage
+    ? Object.fromEntries([...keys.map(key => [key, previous[key]]), ["source", previous.source ?? "history"], ["exact", true]]) as unknown as TurnUsage
+    : undefined;
+  const usage = mergeTurnUsage(previousUsage, presentation.usage);
+  const record: TurnRecord = {
+    ...previous, at: presentation.completedAt ?? previous?.at ?? now.toISOString(),
+    sessionId, turnId: presentation.turnId, hasUsage: Boolean(usage),
+    ...(context.workspace === undefined ? {} : { workspace: context.workspace }),
+  };
+  if (usage) for (const key of keys) if (usage[key] !== undefined) Object.assign(record, { [key]: usage[key] });
+  return record;
+}
+
 function matches(turn: TurnRecord, query: TokenActivityQuery): boolean {
   return (!query.modelId || turn.modelId === query.modelId)
     && (!query.providerId || turn.providerId === query.providerId)
@@ -139,11 +154,16 @@ function matches(turn: TurnRecord, query: TokenActivityQuery): boolean {
 
 function windowFor(turns: TurnRecord[], from: Date): TokenActivityWindow {
   const selected = turns.filter((turn) => Date.parse(turn.at) >= from.getTime());
-  const measured = selected.filter((turn) => turn.hasUsage);
+  // Child-agent usage is reported by the CLI on its own event and may already be
+  // billed inside the parent turn's total, so it is summed separately instead of
+  // being added to the parent figures.
+  const parents = selected.filter((turn) => turn.source !== "subagent");
+  const children = selected.filter((turn) => turn.source === "subagent");
+  const measured = parents.filter((turn) => turn.hasUsage);
   const totals = measured.filter((turn) => turn.totalTokens !== undefined);
   return {
     from: from.toISOString(),
-    turns: selected.length,
+    turns: parents.length,
     turnsWithUsage: measured.length,
     turnsWithTotal: totals.length,
     inputTokens: sum(measured, "inputTokens"),
@@ -151,6 +171,8 @@ function windowFor(turns: TurnRecord[], from: Date): TokenActivityWindow {
     cachedReadTokens: sum(measured, "cachedReadTokens"),
     reasoningTokens: sum(measured, "reasoningTokens"),
     totalTokens: totals.reduce((total, turn) => total + turn.totalTokens!, 0),
+    subagentTokens: children.reduce((total, turn) => total + (turn.totalTokens ?? 0), 0),
+    subagentTurns: children.length,
   };
 }
 
@@ -168,6 +190,14 @@ function dayBuckets(input: { turns: TurnRecord[]; anonymous: Record<string, DayR
     const day = localDateKey(turn.at, input.timeZone);
     const bucket = buckets.get(day);
     if (!bucket) continue;
+    // Child-agent rows are visible in the report but excluded from the day totals,
+    // for the same reason described in windowFor().
+    if (turn.source === "subagent") {
+      bucket.source = bucket.source === "none" ? "turn-details" : bucket.source;
+      bucket.subagentTokens += turn.totalTokens ?? 0;
+      bucket.subagentTurns += 1;
+      continue;
+    }
     bucket.turns += 1;
     if (turn.hasUsage) bucket.turnsWithUsage += 1;
     if (turn.totalTokens !== undefined) { bucket.turnsWithTotal += 1; bucket.totalTokens += turn.totalTokens; }
@@ -191,18 +221,26 @@ function mergeRollup(bucket: TokenDayBucket, rollup: DayRollup, source: "anonymo
   bucket.turnsWithUsage += finiteNonNegative(rollup.turnsWithUsage);
   bucket.turnsWithTotal += finiteNonNegative(rollup.turnsWithTotal);
   bucket.totalTokens += finiteNonNegative(rollup.totalTokens);
+  bucket.subagentTokens += finiteNonNegative(rollup.subagentTokens);
+  bucket.subagentTurns += finiteNonNegative(rollup.subagentTurns);
   bucket.source = bucket.source === "none" || bucket.source === source ? source : "mixed";
 }
 
 function emptyDayBucket(day: string): TokenDayBucket {
-  return { day, turns: 0, turnsWithUsage: 0, turnsWithTotal: 0, totalTokens: 0, source: "none" };
+  return { day, turns: 0, turnsWithUsage: 0, turnsWithTotal: 0, totalTokens: 0, subagentTokens: 0, subagentTurns: 0, source: "none" };
 }
 
 export function emptyRollup(day: string): DayRollup {
-  return { day, turns: 0, turnsWithUsage: 0, turnsWithTotal: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, sources: {} };
+  return { day, turns: 0, turnsWithUsage: 0, turnsWithTotal: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, subagentTokens: 0, subagentTurns: 0, sources: {} };
 }
 
 export function addTurnToRollup(rollup: DayRollup, turn: TurnRecord): void {
+  // Child-agent usage is tracked alongside, never inside, the parent totals.
+  if (turn.source === "subagent") {
+    rollup.subagentTurns = (rollup.subagentTurns ?? 0) + 1;
+    rollup.subagentTokens = (rollup.subagentTokens ?? 0) + (turn.totalTokens ?? 0);
+    return;
+  }
   rollup.turns += 1;
   if (turn.hasUsage) rollup.turnsWithUsage += 1;
   if (turn.totalTokens !== undefined) { rollup.turnsWithTotal = (rollup.turnsWithTotal ?? 0) + 1; rollup.totalTokens += turn.totalTokens; }
@@ -215,7 +253,7 @@ export function addTurnToRollup(rollup: DayRollup, turn: TurnRecord): void {
 
 function sourceList(turns: TurnRecord[], anonymous: Record<string, DayRollup>, legacy: Record<string, DayRollup>): string[] {
   const sources = new Set<string>(turns.flatMap((turn) => turn.source ? [turn.source] : []));
-  for (const rollup of Object.values(anonymous)) if (rollup.turns > 0) for (const source of Object.keys(rollup.sources ?? {})) sources.add(source);
+  for (const rollup of Object.values(anonymous)) if (rollup.turns > 0 || (rollup.subagentTurns ?? 0)>0) for (const source of Object.keys(rollup.sources ?? {})) sources.add(source);
   if (Object.values(legacy).some((rollup) => rollup.turns > 0)) sources.add("legacy-utc-aggregate");
   return [...sources].sort();
 }
@@ -224,8 +262,8 @@ function hasAnonymousData(data: ActivityData, now: Date, timeZone: string): bool
   const today = localDateKey(now.toISOString(), timeZone);
   const first = shiftDay(today, -(REPORT_DAYS - 1));
   const inRange = (day: string) => day >= first && day <= today;
-  return Object.entries(data.anonymousDays ?? {}).some(([day, row]) => inRange(day) && row.turns > 0)
-    || Object.entries(data.legacyUtcDays ?? {}).some(([day, row]) => inRange(day) && row.turns > 0);
+  return Object.entries(data.anonymousDays ?? {}).some(([day, row]) => inRange(day) && (row.turns > 0 || (row.subagentTurns ?? 0)>0))
+    || Object.entries(data.legacyUtcDays ?? {}).some(([day, row]) => inRange(day) && (row.turns > 0 || (row.subagentTurns ?? 0)>0));
 }
 
 /** Convert existing all-session UTC aggregates into an explicitly legacy anonymous remainder. */
@@ -372,4 +410,9 @@ export function buildTokenReport(data:ActivityData,query:TokenActivityQuery,now:
       providers: unique(data.turns.map((turn) => turn.providerId)),
       workspaces: unique(data.turns.map((turn) => turn.workspace)),
     };
+}
+
+/** Alias reconciliation applies only to authenticated native child reports, never to parent rows. */
+export function relatedUsageIds(presentation:TurnPresentation,context:TokenRecordContext):string[]{
+ return [...new Set([presentation.turnId,...(presentation.usage?.source==="subagent"&&presentation.turnId.startsWith("subagent:")?(context.relatedTurnIds??[]).filter(id=>id.startsWith("subagent:")):[])])].slice(0,12);
 }

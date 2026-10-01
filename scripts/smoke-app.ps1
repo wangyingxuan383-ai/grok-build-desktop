@@ -15,11 +15,11 @@ $Executable = [System.IO.Path]::GetFullPath($Executable)
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Executable not found: $Executable" }
 $ProfileRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ("Grok-Build-Desktop-smoke-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString('N').Substring(0,8))))
 [IO.Directory]::CreateDirectory($ProfileRoot) | Out-Null
-if ($ProbeScript -in @('probe-remaining-packaged.mjs', 'probe-library-packaged.mjs', 'probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs')) {
+if ($ProbeScript -in @('probe-remaining-packaged.mjs', 'probe-library-packaged.mjs', 'probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs', 'probe-image-options-packaged.mjs', 'probe-recovery-packaged.mjs')) {
     $IsolatedSettings = @{ activeWorkspace = $ProfileRoot; recentWorkspaces = @($ProfileRoot) } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $ProfileRoot 'settings.json'), $IsolatedSettings, [Text.UTF8Encoding]::new($false))
 }
-if ($ProbeScript -in @('probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs')) {
+if ($ProbeScript -in @('probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs', 'probe-image-options-packaged.mjs', 'probe-recovery-packaged.mjs')) {
     [IO.File]::WriteAllText((Join-Path $ProfileRoot 'onboarding.json'), '{"version":1,"completed":false,"skipped":true,"currentStep":0}', [Text.UTF8Encoding]::new($false))
 }
 if ($ProbeScript -eq 'probe-image-review-packaged.mjs') {
@@ -31,7 +31,11 @@ if ($ProbeScript -eq 'probe-image-review-packaged.mjs') {
     $OutsideImage = Join-Path $ProfileRoot 'outside.png'
     [IO.File]::WriteAllBytes($OutsideImage, [Convert]::FromBase64String($Png))
     $Now = [DateTime]::UtcNow.ToString('o')
-    $Artifacts = @('a','b') | ForEach-Object { @{id=$_;media='image';source=$Png;isData=$true;mimeType='image/png';savedPath=(Join-Path $ImageDirectory ($_+'.png'))} }
+    $Artifacts = @('a','b') | ForEach-Object {
+        $FilePath = [IO.Path]::GetFullPath((Join-Path $ImageDirectory ($_+'.png')))
+        $Proof = @{path=$FilePath;root=[IO.Path]::GetFullPath($ImageDirectory);sha256=(Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()}
+        @{id=$_;media='image';source=$Png;isData=$true;mimeType='image/png';savedPath=$FilePath;ownedFiles=@($Proof)}
+    }
     $Jobs = @(
         @{requestId='batch';prompt='batch';job=@{jobId='batch';sessionId='image-review';kind='image';route='cli';status='completed';message='done';artifacts=@($Artifacts);startedAt=$Now;updatedAt=$Now}},
         @{requestId='partial';prompt='partial';job=@{jobId='partial';sessionId='image-review';kind='image';route='cli';status='failed';message='partial';artifacts=@(@{id='partial';media='image';source=$Png;isData=$true;mimeType='image/png';savedPath=(Join-Path $ImageDirectory 'partial.png')});startedAt=$Now;updatedAt=$Now}},

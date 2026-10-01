@@ -39,6 +39,7 @@ export function createBuildInfo(config: PublicAppConfig, version = app.getVersio
     repository: config.repository,
     profile: buildProfile(),
     packaged,
+    ...localBuildMetadata(packaged),
     signed: false,
     unofficial: true,
   };
@@ -70,3 +71,12 @@ function buildProfile(): "public" | "local" {
 function embeddedRepository(): string { return typeof __GROK_BUILD_REPOSITORY__ === "undefined" ? DEFAULTS.repository : __GROK_BUILD_REPOSITORY__; }
 function buildCommit(): string { return typeof __GROK_BUILD_COMMIT__ === "undefined" ? "working-tree" : __GROK_BUILD_COMMIT__; }
 function buildTime(): string { return typeof __GROK_BUILD_TIME__ === "undefined" ? "unknown" : __GROK_BUILD_TIME__; }
+
+function localBuildMetadata(packaged:boolean): {publicRelease?:boolean;localBuildId?:string} {
+  if(!packaged) return {publicRelease:false};
+  try {
+    const file=join(process.execPath.replace(/[\\/][^\\/]+$/, ""),"LOCAL_BUILD.json");
+    const metadata=JSON.parse(readFileSync(file,"utf8"));
+    return {publicRelease:metadata.publicRelease===true,localBuildId:typeof metadata.buildId==="string"?metadata.buildId:typeof metadata.buildLabel==="string"?metadata.buildLabel:undefined};
+  } catch {return {};}
+}

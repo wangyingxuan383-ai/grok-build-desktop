@@ -107,12 +107,17 @@
   --muted: var(--color-fg-subtle);
   --text: var(--color-fg);
   --text-secondary: color-mix(in srgb, var(--color-fg) 78%, var(--color-fg-subtle));
+  --text-tertiary: var(--color-fg-subtlest);
+  --text-muted: var(--color-fg-subtle);
   --text-strong: #ffffff;
   --accent: var(--color-accent);
   --accent-2: color-mix(in srgb, var(--color-accent) 82%, #000);
   --accent-soft: var(--color-accent-soft);
+  --surface: var(--color-popover);
+  --surface-2: var(--color-card);
   --surface-translucent: color-mix(in srgb, var(--color-frame) 86%, transparent);
   --shadow: #00000088;
+  --shadow-lg: var(--shadow-overlay);
   --danger: var(--color-danger);
   --success: var(--color-success);
   --warning: var(--color-warning);

@@ -342,7 +342,7 @@ export class ComputerUseService {
         if (!app?.executablePath) throw new Error("没有已验证的目标应用路径");
         this.announce(task, `正在启动 ${app.name}…`, action);
         await this.getHost().call("launch_app", { executablePath: app.executablePath });
-        task.stepCount += 1; task.lastAction = action; task.message = `${app.name} 已启动`; task.updatedAt = new Date().toISOString(); this.publish(task); await this.audit(task, action, true);
+        task.stepCount += 1; task.controlCount = (task.controlCount ?? 0)+1; task.lastAction = action; task.message = `${app.name} 已启动`; task.updatedAt = new Date().toISOString(); this.publish(task); await this.audit(task, action, true);
         return textResult({ launched: app.name, task: { ...task, lastState: undefined } });
       }
       if (!request.stateId || request.stateId !== task.lastState?.stateId) throw new Error("stateId 已过期；请重新观察后只执行一个动作");
@@ -355,7 +355,7 @@ export class ComputerUseService {
       if (action === "activate_window") {
         this.announce(task, "正在把目标窗口带到前台…", action);
         await this.getHost().call("activate_window", { windowId: task.windowId });
-        const state = await this.observe(task, {}, "目标窗口已置于前台"); task.stepCount += 1; task.lastAction = action; task.updatedAt = new Date().toISOString(); this.publish(task);
+        const state = await this.observe(task, {}, "目标窗口已置于前台"); task.controlCount = (task.controlCount ?? 0)+1; task.stepCount += 1; task.lastAction = action; task.updatedAt = new Date().toISOString(); this.publish(task);
         await this.audit(task, action, true); return buildComputerStateResult(state, task);
       }
       const element = task.lastState?.elements.find((value) => value.elementId === request.elementId);
@@ -369,7 +369,7 @@ export class ComputerUseService {
       await this.assertEnabled(sessionId);
       const maxEdge = (await this.settings.get()).maxScreenshotEdge;
       const raw = await this.getHost().call(action, { ...mapScreenshotCoordinates(request, task.lastState), maxEdge });
-      const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), sessionId); task.lastState = state; task.stepCount += 1; task.lastAction = action; task.message = `${actionDescription.replace(/^正在/, "已").replace(/…$/, "")}，正在分析新画面`; task.updatedAt = new Date().toISOString(); this.publish(task);
+      const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), sessionId); task.lastState = state; task.operationCount = (task.operationCount ?? 0)+1; task.stepCount += 1; task.lastAction = action; task.message = `${actionDescription.replace(/^正在/, "已").replace(/…$/, "")}，正在分析新画面`; task.updatedAt = new Date().toISOString(); this.publish(task);
       await this.audit(task, action, true); return buildComputerStateResult(state, task);
     } catch (error) {
       const outcomeUnknown = isComputerHostTimeout(error);
@@ -415,6 +415,7 @@ export class ComputerUseService {
       if (!observationOnly) {
         await this.getHost().call("activate_window", { windowId: window.id });
         task.stepCount += 1;
+        task.controlCount = (task.controlCount ?? 0)+1;
         task.lastAction = "activate_window";
       }
       task.lastState = await this.observe(task, {}, observationOnly ? "Plan 模式：仅观察，不修改窗口" : "已进入 Computer Use，Grok 正在观察画面"); return { ...task };
@@ -428,7 +429,7 @@ export class ComputerUseService {
     }
   }
 
-  private async observe(task: ComputerTaskState, detail: Record<string, unknown> = {}, completedMessage = "画面已更新"): Promise<ComputerState> { const maxEdge = (await this.settings.get()).maxScreenshotEdge; const raw = await this.getHost().call("get_window_state", { windowId: task.windowId, maxEdge, detailX: detail.detailX, detailY: detail.detailY, detailWidth: detail.detailWidth, detailHeight: detail.detailHeight }); const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), task.sessionId); task.lastState = state; task.message = completedMessage; task.updatedAt = new Date().toISOString(); this.publish(task); return state; }
+  private async observe(task: ComputerTaskState, detail: Record<string, unknown> = {}, completedMessage = "画面已更新"): Promise<ComputerState> { const maxEdge = (await this.settings.get()).maxScreenshotEdge; const raw = await this.getHost().call("get_window_state", { windowId: task.windowId, maxEdge, detailX: detail.detailX, detailY: detail.detailY, detailWidth: detail.detailWidth, detailHeight: detail.detailHeight }); const state = normalizeComputerState(await this.preferElectronScreenshot(raw, task.windowId || "", maxEdge), task.sessionId); task.lastState = state; task.observationCount = (task.observationCount ?? 0)+1; task.message = completedMessage; task.updatedAt = new Date().toISOString(); this.publish(task); return state; }
 
   private async preferElectronScreenshot(raw: unknown, windowId: string, maxEdge: number): Promise<unknown> {
     if (!this.captureWindow) return raw;

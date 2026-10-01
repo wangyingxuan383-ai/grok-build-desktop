@@ -1,0 +1,21 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { recordOwnedMediaFile, removeProvenMediaFiles } from "./media-file-ownership";
+const roots:string[]=[];
+afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})});
+it("removes proven outputs and retains unrelated, modified and shared files",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"grok-owned-media-"));roots.push(root);
+ const original=join(root,"generated.png"),copy=join(root,"saved.png"),mine=join(root,"my-image.png");
+ await Promise.all([writeFile(original,"generated"),writeFile(copy,"copy"),writeFile(mine,"mine")]);
+ const proofs=await Promise.all([recordOwnedMediaFile(original,root),recordOwnedMediaFile(copy,root)]);
+ await writeFile(copy,"user edit");
+ expect(await removeProvenMediaFiles(proofs)).toEqual({removed:0,keptFiles:[proofs[1]!.path]});
+ expect(await readFile(original,"utf8")).toBe("generated");
+ await writeFile(copy,"copy");
+ expect((await removeProvenMediaFiles(proofs,new Set([original]))).keptFiles).toEqual([proofs[0]!.path]);
+ expect((await removeProvenMediaFiles(proofs)).removed).toBe(2);
+ expect(await readFile(mine,"utf8")).toBe("mine");
+ expect((await removeProvenMediaFiles(proofs)).keptFiles).toEqual([]);
+});

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppSettings, ReasoningEffort } from "../../shared/types";
 import { enforceProtectedWorkspaceEnvironment, GrokProcessManager, isMutatingExtensionMethod, mergeProcessEnvironment } from "./grok-process-manager";
 import { DEFAULT_THEME } from "./theme-service";
+import * as locator from "./cli-locator";
 
 const settings = {
   theme: DEFAULT_THEME,
@@ -41,6 +42,21 @@ function fixture(effort: ReasoningEffort, setEffort = vi.fn().mockResolvedValue(
 }
 
 describe("Grok process reasoning effort switching", () => {
+  it("does not spawn a quarantined CLI, while ordinary missing evidence remains advisory", async () => {
+    const locate=vi.spyOn(locator,"locateGrokCli").mockResolvedValue("fixture.exe");
+    const version=vi.spyOn(locator,"readCliVersion").mockResolvedValue("1.0.46 (fixture)");
+    const effort=vi.spyOn(locator,"detectEffortFlag").mockResolvedValue("--effort");
+    const guard=vi.fn<()=>Promise<void>>(async()=>{throw Error("更新验证失败")});
+    const manager=new GrokProcessManager(async()=>settings,async()=>undefined,{log:vi.fn(async()=>undefined)} as any,vi.fn(),undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,async()=>false,undefined,guard);
+    try{
+      await expect((manager as any).spawn("C:/fixture","","agent")).rejects.toThrow("更新验证失败");
+      expect(version).not.toHaveBeenCalled();
+      guard.mockResolvedValue(undefined);
+      const adapter=await (manager as any).spawn("C:/fixture","","agent");
+      expect(adapter.options.cliVersion).toBe("1.0.46 (fixture)");
+      await adapter.dispose();
+    }finally{await manager.dispose();locate.mockRestore();version.mockRestore();effort.mockRestore()}
+  });
   it("still disposes a suspended ACP process when background cleanup and its log both fail", async () => {
     const { manager, adapter, log } = fixture("low");
     vi.spyOn(manager as any, "stopOwnedBackgroundWork").mockRejectedValue(Error("task cleanup failed"));

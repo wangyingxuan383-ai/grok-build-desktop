@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { join } from "node:path";
 import type { TokenActivityQuery, TurnPresentation } from "../../shared/types";
 import { withCrossProcessFileLock } from "./json-store";
-import { addTurnToRollup, buildTokenReport, emptyRollup, localDateKey, migrate, prune, validTimeZone, type ActivityData, type DayRollup, type TurnRecord } from "./token-activity-service";
+import { addTurnToRollup, buildTokenReport, emptyRollup, localDateKey, mergeTokenTurn, migrate, prune, validTimeZone, relatedUsageIds, type TokenRecordContext, type ActivityData, type DayRollup, type TurnRecord } from "./token-activity-service";
 
 /** Used only inside the statistics Worker in production. */
 export class TokenActivitySqlite {
@@ -26,12 +26,15 @@ export class TokenActivitySqlite {
  private put(row:TurnRecord){this.db.prepare("INSERT INTO turns VALUES(?,?,?,?,?,?,?) ON CONFLICT(session,turn) DO UPDATE SET at=excluded.at,model=excluded.model,provider=excluded.provider,workspace=excluded.workspace,json=excluded.json").run(row.sessionId,row.turnId,row.at,row.modelId??null,row.providerId??null,row.workspace??null,JSON.stringify(row))}
  private bucket(kind:string,row:DayRollup){this.db.prepare("INSERT INTO buckets VALUES(?,?,?) ON CONFLICT(kind,day) DO UPDATE SET json=excluded.json").run(kind,row.day,JSON.stringify(row))}
  private prune(now:Date){const cutoff=new Date(now.getTime()-400*86400000).toISOString();this.db.prepare("DELETE FROM turns WHERE at < ?").run(cutoff);this.db.prepare("DELETE FROM buckets WHERE day < ?").run(cutoff.slice(0,10))}
- record(sessionId:string,presentation:TurnPresentation,context:{workspace?:string},now:Date){return this.transaction(()=>{
-  const existing=this.db.prepare("SELECT json FROM turns WHERE session=? AND turn=?").get(sessionId,presentation.turnId);
+ record(sessionId:string,presentation:TurnPresentation,context:TokenRecordContext,now:Date){return this.transaction(()=>{
+  const related=relatedUsageIds(presentation,context);
+  const rows=this.db.prepare(`SELECT json FROM turns WHERE session=? AND turn IN (${related.map(()=>"?").join(",")}) ORDER BY at`).all(sessionId,...related);
+  const existing=rows.at(-1);
   if(existing&&!presentation.usage)return;
-  const usage=presentation.usage;const row:TurnRecord={at:presentation.completedAt??now.toISOString(),sessionId,turnId:presentation.turnId,hasUsage:Boolean(usage),workspace:context.workspace};
-  if(usage)for(const key of ["source","modelId","providerId","inputTokens","outputTokens","cachedReadTokens","reasoningTokens","totalTokens"] as const)if(usage[key]!==undefined)(row as any)[key]=usage[key];
-  this.put(row);this.prune(now);
+  const row=mergeTokenTurn(existing?JSON.parse(String(existing.json)) as TurnRecord:undefined,sessionId,presentation,context,now);
+  this.put(row);
+  for(const id of related)if(id!==presentation.turnId)this.db.prepare("DELETE FROM turns WHERE session=? AND turn=?").run(sessionId,id);
+  this.prune(now);
  })}
  forgetSessions(ids:string[],now:Date,timeZone:string){return this.transaction(()=>{for(const id of new Set(ids)){
   const rows=this.db.prepare("SELECT json FROM turns WHERE session=?").all(id);

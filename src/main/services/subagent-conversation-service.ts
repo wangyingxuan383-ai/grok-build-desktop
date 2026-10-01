@@ -31,9 +31,14 @@ export class SubagentConversationService {
     const result: SubagentConversationSnapshot = { nodeId, parentSessionId: node.sessionId, childSessionId: child, title: node.title, status: node.status, summary: node.summary, source: "summary-only" };
     if (!child || child === node.sessionId || !SAFE_ID.test(child)) return { ...result, notice: "CLI 尚未提供可核验的独立子会话 ID，仅显示子智能体摘要。" };
     const projection = await this.projection(child);
-    if (projection?.sessionId === child && projection.events.length) return { ...result, source: "desktop-projection", projection };
+    const fallback = () => projection?.sessionId === child && projection.events.length
+      ? { ...result, source: "desktop-projection" as const, projection, notice: "显示本机已保存的子会话记录；当前没有可读取的新原生记录。" }
+      : undefined;
     const path = await this.findUpdates(child);
-    if (!path) return this.readSubagentFiles(result, node.sessionId, child);
+    if (!path) {
+      const native = await this.readSubagentFiles(result, node.sessionId, child);
+      return native.projection ? native : fallback() ?? native;
+    }
     const events: ChatEvent[] = [];
     const tools = new Map<string, ToolCallState>();
     let bytes = 0, truncated = false;
@@ -55,7 +60,7 @@ export class SubagentConversationService {
         } catch { /* An incomplete trailing line can still be written by the CLI. */ }
       }
     } finally { lines.close(); stream.destroy(); }
-    if (!events.length) return { ...result, notice: "子会话记录格式尚不可识别，仅显示摘要；没有打开父会话代替。" };
+    if (!events.length) return fallback() ?? { ...result, notice: "子会话记录格式尚不可识别，仅显示摘要；没有打开父会话代替。" };
     return { ...result, source: "cli-updates", notice: truncated ? "记录较长，仅展示前 2000 个事件或 8 MiB；原始历史保留。" : "只读原生子会话记录；刷新可读取新进展。", projection: { version: 2, sessionId: child, updatedAt: new Date().toISOString(), events: events as unknown as Array<Record<string, unknown>> } };
   }
 
@@ -68,6 +73,7 @@ export class SubagentConversationService {
     if (!directory) return { ...result, notice: "CLI 没有为这个子 Agent 留下记录文件，仅显示摘要；查看不会启动或恢复执行。" };
     const meta = await readJson(join(directory, "meta.json"));
     const output = await readJson(join(directory, "output.json"));
+    if (!meta && !output) return { ...result, notice: "原生子智能体记录暂时无法读取，仅显示已保存内容或摘要。" };
     const prompt = text(meta?.prompt);
     const answer = text(output?.output) ?? result.summary;
     if (!prompt && !answer) return { ...result, notice: "子 Agent 记录文件为空，仅显示摘要。" };

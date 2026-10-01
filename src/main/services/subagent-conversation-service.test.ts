@@ -16,6 +16,18 @@ const update = (sessionId: string, value: object) => ({ params: { sessionId, upd
 afterEach(async () => { await Promise.all(roots.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 describe("read-only native child conversation", () => {
+  it("refreshes native child progress even when a Desktop projection already exists", async () => {
+    const root=await temporary();
+    const projection=async()=>({version:2 as const,sessionId:"child",updatedAt:"",events:[{type:"message-chunk",sessionId:"child",text:"stale cached answer"}]});
+    const service=new SubagentConversationService(async()=>({...node,status:"running"}),projection,root);
+    await updates(root,"workspace","child",[update("child",{sessionUpdate:"agent_message_chunk",content:{text:"live first"}})]);
+    expect(JSON.stringify(await service.read(node.id))).toContain("live first");
+    await updates(root,"workspace","child",[update("child",{sessionUpdate:"agent_message_chunk",content:{text:"live next"}})]);
+    const refreshed=await service.read(node.id);
+    expect(refreshed.source).toBe("cli-updates");
+    expect(JSON.stringify(refreshed)).toContain("live next");
+    expect(JSON.stringify(refreshed)).not.toContain("stale cached answer");
+  });
   it("uses only the child projection and does not request the parent history", async () => {
     const projection = vi.fn(async (sessionId: string) => ({version: 2 as const, sessionId, updatedAt: "", events: [{type: "message-chunk", sessionId, text: "child answer"}]}));
     const result = await new SubagentConversationService(async () => node, projection).read(node.id);

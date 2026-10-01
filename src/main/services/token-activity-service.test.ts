@@ -203,3 +203,13 @@ describe("token activity recording", () => {
     expect((await reopened.report()).windows.today.totalTokens).toBe(50);
   });
 });
+
+it("shows cumulative child usage separately and preserves it after anonymizing the parent",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"grok-child-tokens-"));roots.push(root);
+ const now=()=>new Date("2026-10-01T04:00:00Z");const service=new TokenActivityService(root,now,"Asia/Shanghai");
+ await service.record("parent",{turnId:"p",ordinal:1,startedAt:now().toISOString(),completedAt:now().toISOString(),usage:{source:"acp-turn",exact:true,totalTokens:100}});
+ for(const totalTokens of [300,500])await service.record("parent",{turnId:"subagent:child",ordinal:0,startedAt:now().toISOString(),completedAt:now().toISOString(),usage:{source:"subagent",exact:true,totalTokens}});
+ expect((await service.report()).windows.today).toMatchObject({totalTokens:100,subagentTokens:500,subagentTurns:1});
+ await service.forgetSession("parent");const day=(await service.report()).days.at(-1)!;
+ expect(day).toMatchObject({totalTokens:100,subagentTokens:500,subagentTurns:1});
+});

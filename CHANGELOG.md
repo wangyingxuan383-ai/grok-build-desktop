@@ -1,8 +1,11 @@
 # Changelog
 
-## 0.10.1 — Unreleased
+## 0.10.2 — 2026-10-01
+
+- Update DOMPurify to the 3.4.16 security patch.
 
 - Coordinate account changes with active coding and CLI image tasks; keep login independent of version allowlists.
+- Enforce the global run-history limit independently of per-task limits; remove deleted images from pinned views.
 - Bound scheduled history, deduplicate repeated scheduled occurrences, notify from workers, and expose filters, results, retries and cleanup. Declined confirmations carry a visible partial-result warning.
 - Retain partial usage fields with provenance; show cumulative child-agent reports separately while parent inclusion is unknown. Exclude replay side effects.
 - Correct Computer evidence: window control, observation and application actions are distinct.

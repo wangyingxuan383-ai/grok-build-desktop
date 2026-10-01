@@ -1,8 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { buildCliMediaArgs, mediaCliFailureMessage, runCliMediaProcess } from "./media-cli-runner";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildCliMediaArgs, cliMediaTurnUsage, mediaCliFailureMessage, runCliMediaProcess } from "./media-cli-runner";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -16,6 +16,13 @@ async function fixture(source: string): Promise<{ root: string; script: string }
 }
 
 describe("runCliMediaProcess", () => {
+  it("records only explicit invocation-final usage, never sums per-message notifications or invents totals",async()=>{
+    const {root,script}=await fixture("console.log(JSON.stringify({type:'usage',usage:{input_tokens:80,output_tokens:20}})); console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})); console.log(JSON.stringify({type:'end',usage:{inputTokens:80,outputTokens:20,totalTokens:100},modelUsage:{actual:{}}}));");
+    const onUsage=vi.fn();await runCliMediaProcess({executable:process.execPath,args:[script,join(root,'image.png')],cwd:root,env:process.env,media:'image',signal:new AbortController().signal,onUsage});
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({totalTokens:100,inputTokens:80,modelId:"actual"}));
+    expect(cliMediaTurnUsage({type:"end",usage:{input_tokens:8,output_tokens:2}})?.totalTokens).toBeUndefined();
+    expect(cliMediaTurnUsage({type:"end",usage:{}})).toBeUndefined();
+  });
   it("ends on an official terminal error without waiting for inactivity or accepting a prior artifact", async () => {
     const { root, script } = await fixture("console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})); console.log(JSON.stringify({type:'error',message:'Not signed in: credentials expired'})); setInterval(()=>{},1000);");
     await expect(runCliMediaProcess({executable:process.execPath,args:[script,join(root,'partial.png')],cwd:root,env:process.env,media:'image',signal:new AbortController().signal,idleTimeoutMs:30_000})).rejects.toThrow('Not signed in: credentials expired');

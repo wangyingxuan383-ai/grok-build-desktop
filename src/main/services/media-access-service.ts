@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
+import { realpath, rm, stat } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 import type { MediaAccessHandle, MediaCreationKind } from "../../shared/types";
 import { JsonStore } from "./json-store";
@@ -124,6 +124,28 @@ export class MediaAccessService {
     await this.store.mutate((state) => {
       for (const [id, record] of Object.entries(state.records)) if (record.sessionId === sessionId) delete state.records[id];
     });
+  }
+
+  /** Revoke just the removed artwork's handles and its main-owned cache file. */
+  async removeSources(sessionId: string, sources: readonly string[]): Promise<void> {
+    assertSessionId(sessionId);
+    const urls = new Set(sources);
+    const paths: string[] = [];
+    await this.store.mutate(state => {
+      for (const [id, record] of Object.entries(state.records)) {
+        if (record.sessionId === sessionId && record.cacheKind !== "attachment" && urls.has(record.url)) {
+          paths.push(record.path); delete state.records[id];
+        }
+      }
+      // A second live handle can still refer to the same cache file.
+      for (let index = paths.length - 1; index >= 0; index--) if (Object.values(state.records).some(record => normalizeCase(record.path) === normalizeCase(paths[index]!))) paths.splice(index, 1);
+    });
+    const root = await realpath(join(this.cacheRoot, sessionCacheKey(sessionId))).catch(() => undefined);
+    if (!root) return;
+    for (const path of new Set(paths)) {
+      const canonical = await realpath(path).catch(() => undefined);
+      if (canonical && inside(root, canonical)) await rm(canonical, { force: true });
+    }
   }
 
   async sweep(sessionIds: ReadonlySet<string>): Promise<void> {

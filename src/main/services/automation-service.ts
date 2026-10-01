@@ -26,13 +26,30 @@ export interface AutomationServiceOptions {
   launchWorker?: (taskId: string, runId: string) => Promise<void>;
   now?: () => Date;
   onChanged?: (event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask; pending?: AutomationPendingConfirmation }) => void;
+  /** Called exactly once per run that reaches a terminal state, in every process (including windowless Workers). */
+  onRunFinished?: (run: AutomationRunRecord) => void | Promise<void>;
   pendingPollMs?: number;
   globalSlotPollMs?: number;
   globalSlotTimeoutMs?: number;
   leaseHeartbeatMs?: number;
   leaseStaleMs?: number;
   cancellationPollMs?: number;
+  runRetentionMs?: number;
+  maxRunsPerTask?: number;
+  maxRunsTotal?: number;
+  pruneIntervalMs?: number;
 }
+
+const DEFAULT_RUN_RETENTION_MS = 30 * 86_400_000;
+const DEFAULT_MAX_RUNS_PER_TASK = 100;
+const DEFAULT_MAX_RUNS_TOTAL = 1_000;
+const DEFAULT_PRUNE_INTERVAL_MS = 5 * 60_000;
+const TERMINAL_RUN_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
+const ACTIVE_RUN_STATUSES = ["queued", "running", "awaiting-confirmation"] as const;
+const SCHEDULED_RUN_SENTINEL = "scheduled";
+
+function isTerminalRun(run: AutomationRunRecord): boolean { return (TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status); }
+function isActiveRun(run: AutomationRunRecord): boolean { return (ACTIVE_RUN_STATUSES as readonly string[]).includes(run.status); }
 
 const DEFAULT_POLICY: AutomationGlobalPolicy = {
   // Empty means "inherit the current Desktop default when the run starts".
@@ -75,6 +92,8 @@ export class AutomationService {
   private readonly scheduler: TaskSchedulerAdapter;
   private readonly now: () => Date;
   private readonly activeRunControllers = new Map<string, AbortController>();
+  private pruning?: Promise<void>;
+  private lastPrunedAt = 0;
 
   constructor(userDataPath: string, private readonly log: LogService, private readonly options: AutomationServiceOptions) {
     this.root = join(userDataPath, "automations");
@@ -143,25 +162,51 @@ export class AutomationService {
       await this.writeTask(task);
       await this.scheduler.unregister(id).catch((error) => this.log.log(error));
     });
-    for (const run of await this.listRuns(id)) if (["queued", "running", "awaiting-confirmation"].includes(run.status)) await this.cancelRun(run.id);
+    for (const run of await this.listRuns(id)) if (isActiveRun(run)) await this.cancelRun(run.id);
+    // A deleted task's occurrence cursor would otherwise be inherited by a
+    // future task that reuses the id and silently suppress its first fire.
+    await rm(join(this.root, "calendar-cursors", `${safeId(id)}.json`), { force: true }).catch(() => undefined);
+    await rm(join(this.root, "runtime", `${safeId(id)}.json`), { force: true }).catch(() => undefined);
+    void this.scheduleRetention();
     this.options.onChanged?.({ taskId: id });
     return this.list();
   }
 
   async pause(id: string, paused: boolean): Promise<AutomationTask[]> { return this.update(id, { enabled: !paused }); }
 
-  async runNow(id: string): Promise<AutomationRunRecord> {
+  async runNow(id: string, trigger: AutomationRunRecord["trigger"] = "manual"): Promise<AutomationRunRecord> {
     const task = await this.readTask(id);
     if (task.projectRemoved) throw new Error("关联项目已删除，请先重新绑定工作区");
-    const run: AutomationRunRecord = { id: crypto.randomUUID(), taskId: id, status: "queued", scheduledAt: this.now().toISOString() };
+    const run: AutomationRunRecord = { id: crypto.randomUUID(), taskId: id, status: "queued", scheduledAt: this.now().toISOString(), trigger };
     await this.writeRun(run); this.options.onChanged?.({ taskId: id, run });
     if (this.options.launchWorker) await this.options.launchWorker(id, run.id);
     else await this.execute(id, run.id, async () => { throw new Error("未配置自动化 Worker"); });
     return run;
   }
 
+  /** Retry a finished run: a fresh run that reuses the task definition. */
+  async retryRun(runId: string): Promise<AutomationRunRecord> {
+    const previous = await readJson<AutomationRunRecord>(this.runPath(runId)).catch(() => undefined);
+    if (!previous) throw new Error("未找到运行记录");
+    if (!isTerminalRun(previous)) throw new Error("本次运行尚未结束，无需重试");
+    return this.runNow(previous.taskId, "retry");
+  }
+
+  async clearFinishedRuns(taskId?: string): Promise<AutomationRunRecord[]> {
+    for (const run of await this.readRuns()) {
+      if (taskId && run.taskId !== taskId) continue;
+      await withCrossProcessFileLock(join(this.root, "run-transactions", `${safeId(run.id)}.lock`), async () => {
+        const current = await readJson<AutomationRunRecord>(this.runPath(run.id)).catch(() => undefined);
+        if (current && isTerminalRun(current)) await rm(this.runPath(run.id), { force: true });
+      });
+    }
+    this.options.onChanged?.({ taskId: taskId ?? "" });
+    return this.listRuns(taskId);
+  }
+
   async listRuns(taskId?: string): Promise<AutomationRunRecord[]> {
     await this.recoverAbandonedRuns();
+    await this.scheduleRetention();
     return (await this.readRuns()).filter((value) => !taskId || value.taskId === taskId).slice(0, 500);
   }
 
@@ -255,25 +300,40 @@ export class AutomationService {
   }
 
   async execute(taskId: string, runId: string | undefined, executor: (value: { task: AutomationTask; prompt: string; runId: string; signal: AbortSignal; waitUntilReady(): Promise<void>; confirm(toolCall: unknown, force?: boolean, requestSignal?: AbortSignal): Promise<boolean> }) => Promise<{ sessionId?: string }>, ready?: (task: AutomationTask) => boolean): Promise<AutomationRunRecord> {
-    let task = await this.readTask(taskId); const id = runId && runId !== "scheduled" ? runId : crypto.randomUUID();
-    let run: AutomationRunRecord = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => ({ id, taskId, status: "queued", scheduledAt: this.now().toISOString() }));
+    const task0 = await this.readTask(taskId);
+    // A scheduled wake carries no run identity of its own. Derive it from the
+    // task and the occurrence it belongs to so repeated OS fires of one
+    // occurrence resolve to the same record instead of minting a new run.
+    const occurrence = runId === SCHEDULED_RUN_SENTINEL ? scheduledRunOccurrence(task0, this.now()) : undefined;
+    let task = task0;
+    const id = runId && runId !== SCHEDULED_RUN_SENTINEL ? runId : runId === SCHEDULED_RUN_SENTINEL ? scheduledRunId(taskId, occurrence!) : crypto.randomUUID();
+    let run: AutomationRunRecord = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => ({ id, taskId, status: "queued", scheduledAt: this.now().toISOString(), trigger: occurrence ? "scheduled" : "manual" }));
+    if (!run.trigger) run = { ...run, trigger: occurrence ? "scheduled" : "manual" };
     if (run.taskId !== taskId) throw new Error("运行不属于指定任务");
-    if (["completed", "failed", "cancelled", "skipped"].includes(run.status)) return run;
-    if (!task.enabled || task.projectRemoved) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: task.projectRemoved ? "关联项目已删除，请重新绑定工作区" : "任务已暂停" }; await this.writeRun(run); return run; }
-    if (runId === "scheduled" && !await this.admitCalendarOccurrence(taskId)) {
-      return { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "本次唤醒不对应新的日历执行时间" };
+    if (isTerminalRun(run)) { await this.publishRunResult(run); await this.scheduleRetention(); return run; }
+    if (!task.enabled || task.projectRemoved) { run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: task.projectRemoved ? "关联项目已删除，请重新绑定工作区" : "任务已暂停" }; await this.writeRun(run); await this.scheduleRetention(); return run; }
+    if (occurrence) {
+      const admission = await this.admitCalendarOccurrence(taskId, task, occurrence);
+      // A consumed occurrence is only replayed when its own run record proves
+      // it actually ran; otherwise this is a stale wakeup for a slot already
+      // taken by a later one (Windows may deliver several late catch-ups).
+      const recorded = run.status !== "queued" ? run : await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => undefined);
+      if (admission !== "admitted" && !(recorded && recorded.status !== "queued")) {
+        return { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "本次唤醒不对应新的日历执行时间" };
+      }
     }
     const lock = await this.acquire(taskId, id);
     if (!lock) {
       const active = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => undefined);
       if (active && ["running", "awaiting-confirmation"].includes(active.status)) return active;
-      run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "同一任务已有运行实例，本次触发已合并" }; await this.writeRun(run); return run; }
+      run = { ...run, status: "skipped", finishedAt: this.now().toISOString(), error: "同一任务已有运行实例，本次触发已合并" }; await this.writeRun(run); await this.scheduleRetention(); return run; }
     if (["running", "awaiting-confirmation"].includes(run.status)) {
       try { run = { ...run, status: "failed", error: "上次运行已中断，不会自动重放同一个运行 ID", finishedAt: this.now().toISOString() }; await this.writeRun(run); return run; }
       finally { await lock.release(); }
     }
     let slot: AutomationLease | undefined;
     let prompt: string | undefined;
+    let deniedConfirmations = 0;
     const controller = new AbortController();
     this.activeRunControllers.set(id, controller);
     const cancellationPoll = setInterval(() => {
@@ -304,13 +364,23 @@ export class AutomationService {
           if (!currentTask.enabled || currentTask.revision !== task.revision) throw new Error("等待期间任务配置已改变，请按新配置重新运行");
           run = { ...run, status: "running" }; await this.writeRun(run); this.options.onChanged?.({ taskId, run });
         },
-        confirm: (toolCall, force, requestSignal) => this.confirmHighImpact(taskId, id, toolCall, force, requestSignal ? AbortSignal.any([controller.signal, requestSignal]) : controller.signal) });
+        confirm: (toolCall, force, requestSignal) => this.confirmHighImpact(taskId, id, toolCall, force, requestSignal ? AbortSignal.any([controller.signal, requestSignal]) : controller.signal).then((approved) => {
+          if (!approved) deniedConfirmations += 1;
+          return approved;
+        }) });
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("任务已取消");
       if (result.sessionId) await this.setExecutionSession(taskId, result.sessionId, task.revision);
       const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => run);
+      // A denied/expired high-impact confirmation is not a clean success: the
+      // requested action never ran, so the record must carry a warning the UI
+      // shows instead of a bare green "completed".
       run = current.status === "cancelled"
         ? current
-        : { ...run, status: "completed", sessionId: result.sessionId, finishedAt: this.now().toISOString() };
+        : { ...run, status: "completed", sessionId: result.sessionId, finishedAt: this.now().toISOString(),
+            ...(deniedConfirmations ? {
+              deniedConfirmations,
+              warning: `有 ${deniedConfirmations} 项高影响操作未获确认（已拒绝或确认超时），相应操作未执行；运行结果不完整，请检查后重试。`,
+            } : {}) };
     } catch (error) {
       const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => undefined);
       run = controller.signal.aborted || current?.status === "cancelled"
@@ -327,27 +397,50 @@ export class AutomationService {
         await this.log.log(`自动化任务锁清理失败：${sanitizeError(error)}`).catch(() => undefined);
       });
     }
-    await this.writeRun(run); this.options.onChanged?.({ taskId, run });
+    // The early returns above persist their own terminal result; only a run that
+    // actually reached a committed state is broadcast and notified once.
+    this.options.onChanged?.({ taskId, run });
+    await this.publishRunResult(run);
+    await this.scheduleRetention();
     return run;
   }
 
-  private async admitCalendarOccurrence(taskId: string): Promise<boolean> {
+  /** Idempotent across processes: the persisted `notifiedAt` is the marker. */
+  private async publishRunResult(run: AutomationRunRecord): Promise<void> {
+    if (!this.options.onRunFinished || run.notifiedAt || (run.status !== "completed" && run.status !== "failed")) return;
+    try {
+      await withCrossProcessFileLock(join(this.root, "run-transactions", `${safeId(run.id)}.lock`), async () => {
+        const current = await readJson<AutomationRunRecord>(this.runPath(run.id)).catch(() => undefined);
+        if (!current || current.notifiedAt || (current.status !== "completed" && current.status !== "failed")) return;
+        await this.options.onRunFinished?.(current);
+        await atomicJson(this.runPath(run.id), { ...current, notifiedAt: this.now().toISOString() });
+      });
+    } catch (error) {
+      await this.log.log(`自动化运行结果通知失败：${sanitizeError(error)}`).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Admission for a schedule occurrence. Returns the occurrence identity so the
+   * caller can persist it as a deterministic run identity: a coalesced, missed
+   * or late wakeup of the same occurrence then collapses onto one run record.
+   */
+  private async admitCalendarOccurrence(taskId: string, task: StoredAutomationTask, occurrence: string): Promise<"admitted" | "missing" | "consumed" | "out-of-policy"> {
     return this.definitionTransaction(taskId, async () => {
-      const task = await this.readTask(taskId);
-      if (!task.enabled || task.projectRemoved) return false;
-      if (task.schedule.kind !== "daily" && task.schedule.kind !== "weekly") return true;
-      const now = this.now();
-      const due = latestCalendarOccurrence(task.schedule, now, task.timeZone!);
+      if (!task.enabled || task.projectRemoved) return "missing";
       const anchor = task.scheduleAnchor ?? task.createdAt;
-      if (!due || +due < Date.parse(anchor)) return false;
+      if (Date.parse(occurrence) < Date.parse(anchor)) return "missing";
       const path = join(this.root, "calendar-cursors", `${safeId(taskId)}.json`);
-      const key = `${scheduleKey(task.schedule)}|${task.timeZone}|${anchor}`;
+      const key = occurrenceKey(task, anchor);
       const saved = await readJson<{ key: string; at: string }>(path).catch(() => undefined);
-      if (saved?.key === key && Date.parse(saved.at) >= +due) return false;
+      if (saved?.key === key && Date.parse(saved.at) >= Date.parse(occurrence)) return "consumed";
       // Consume even a coalesced/late occurrence. The recurring OS trigger,
       // independent of this worker, continues to supply future occurrences.
-      await atomicJson(path, { key, at: due.toISOString() });
-      return task.missedRunPolicy !== "skip" || +now - +due < 5 * 60_000;
+      await atomicJson(path, { key, at: occurrence });
+      if (task.missedRunPolicy !== "skip") return "admitted";
+      // "skip" only suppresses a late replay of THIS occurrence. The OS trigger
+      // stays enabled, so a wakeup that arrives on time still runs.
+      return this.now().getTime() - Date.parse(occurrence) < missedRunGraceMs(task) ? "admitted" : "out-of-policy";
     });
   }
 
@@ -565,6 +658,54 @@ export class AutomationService {
     const values = await Promise.all((await readdir(this.runsRoot).catch(() => [])).filter((name) => name.endsWith(".json")).map((name) => readJson<AutomationRunRecord>(join(this.runsRoot, name)).catch(() => undefined)));
     return values.filter((value): value is AutomationRunRecord => Boolean(value)).sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt));
   }
+
+  /**
+   * Bounded retention. Active runs are never removed; terminal runs are kept
+   * newest-first within a per-task budget and a time window, every task always
+   * keeps at least its latest run, and the total is capped. The lock keeps
+   * concurrent workers from unlinking records a peer just decided to keep.
+   */
+  private async pruneRuns(): Promise<void> {
+    const retentionMs = this.options.runRetentionMs ?? DEFAULT_RUN_RETENTION_MS;
+    const perTask = this.options.maxRunsPerTask ?? DEFAULT_MAX_RUNS_PER_TASK;
+    const total = this.options.maxRunsTotal ?? DEFAULT_MAX_RUNS_TOTAL;
+    const cutoff = this.now().getTime() - retentionMs;
+    const runs = await this.readRuns();
+    const kept = new Map<string, number>();
+    const victims: AutomationRunRecord[] = [];
+    for (const run of runs) {
+      if (isActiveRun(run)) continue;
+      const count = kept.get(run.taskId) ?? 0;
+      if (count < perTask && (count === 0 || Date.parse(run.finishedAt ?? run.scheduledAt) >= cutoff)) { kept.set(run.taskId, count + 1); continue; }
+      victims.push(run);
+    }
+    await withCrossProcessFileLock(join(this.root, "lease-allocation.lock"), async () => {
+      const live = new Set((await this.readRuns()).map((run) => run.id));
+      for (const victim of victims) if (live.has(victim.id)) await this.removeTerminalRun(victim.id);
+      // Trim the whole directory back to the global ceiling, oldest first.
+      const survivors = (await this.readRuns()).filter((run) => !isActiveRun(run));
+      for (const run of survivors.slice(total)) await this.removeTerminalRun(run.id);
+    });
+  }
+
+  private async removeTerminalRun(id: string): Promise<void> {
+    await withCrossProcessFileLock(join(this.root, "run-transactions", `${safeId(id)}.lock`), async () => {
+      const current = await readJson<AutomationRunRecord>(this.runPath(id)).catch(() => undefined);
+      if (current && isTerminalRun(current)) await rm(this.runPath(id), { force: true });
+    });
+  }
+
+  /** Retention runs at most once per interval, coalescing concurrent callers. */
+  private scheduleRetention(): Promise<void> {
+    if (this.pruning) return this.pruning;
+    if (this.now().getTime() - this.lastPrunedAt < (this.options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS)) return Promise.resolve();
+    this.lastPrunedAt = this.now().getTime();
+    const pruning = this.pruneRuns()
+      .catch((error) => this.log.log(`自动化运行记录清理失败：${sanitizeError(error)}`))
+      .finally(() => { this.pruning = undefined; });
+    this.pruning = pruning;
+    return pruning;
+  }
   private async writeTask(task: StoredAutomationTask): Promise<void> {
     const { sessionId, sessionRevision, ...definition } = task;
     const runtimePath = join(this.root, "runtime", `${safeId(task.id)}.json`);
@@ -574,7 +715,7 @@ export class AutomationService {
   private async writeRun(run: AutomationRunRecord): Promise<void> {
     await withCrossProcessFileLock(join(this.root, "run-transactions", `${safeId(run.id)}.lock`), async () => {
       const current = await readJson<AutomationRunRecord>(this.runPath(run.id)).catch(() => undefined);
-      if (current && ["completed", "failed", "cancelled", "skipped"].includes(current.status)) { Object.assign(run, current); return; }
+      if (current && isTerminalRun(current)) { Object.assign(run, current); return; }
       await atomicJson(this.runPath(run.id), run);
     });
   }
@@ -635,6 +776,45 @@ function scheduleKey(schedule: AutomationTask["schedule"]): string {
   if (schedule.kind === "daily") return `daily|${schedule.time}`;
   if (schedule.kind === "interval") return `interval|${schedule.minutes}`;
   return `once|${new Date(schedule.at).toISOString()}`;
+}
+
+function occurrenceKey(task: AutomationTask, anchor = task.scheduleAnchor ?? task.createdAt): string {
+  return `${scheduleKey(task.schedule)}|${task.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}|${anchor}`;
+}
+
+/** How late a "skip" task still accepts the occurrence it was woken for. */
+function missedRunGraceMs(task: AutomationTask): number {
+  if (task.schedule.kind === "daily" || task.schedule.kind === "weekly") return 5 * 60_000;
+  if (task.schedule.kind === "interval") return Math.max(1, task.schedule.minutes) * 60_000;
+  return 24 * 60 * 60_000;
+}
+
+/**
+ * The schedule occurrence a wakeup belongs to. Calendar rules use the most
+ * recent past occurrence in the task's own zone; interval rules use the
+ * boundary derived from the task's anchor so the identity survives a restart.
+ */
+function scheduledRunOccurrence(task: AutomationTask, now: Date): string {
+  const anchor = task.scheduleAnchor ?? task.createdAt;
+  const timeZone = task.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const schedule = task.schedule;
+  if (schedule.kind === "daily" || schedule.kind === "weekly") {
+    const due = latestCalendarOccurrence(schedule, now, timeZone);
+    if (!due || +due < Date.parse(anchor)) throw new Error("本次唤醒不对应新的日历执行时间");
+    return due.toISOString();
+  }
+  if (schedule.kind === "interval") {
+    const origin = Date.parse(anchor);
+    const period = Math.max(1, schedule.minutes) * 60_000;
+    if (!Number.isFinite(origin)) throw new Error("调度起点无效");
+    return new Date(origin + Math.max(0, Math.floor((+now - origin) / period)) * period).toISOString();
+  }
+  return new Date(schedule.at).toISOString();
+}
+
+/** Stable identity for one scheduled occurrence of one task: re-fires dedupe. */
+function scheduledRunId(taskId: string, occurrence: string): string {
+  return `scheduled-${safeId(taskId)}-${new Date(occurrence).toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`;
 }
 
 function nextBoundary(time: string): string { const match = /^(\d{2}):(\d{2})$/.exec(time); const date = new Date(); date.setHours(Number(match?.[1] ?? 0), Number(match?.[2] ?? 0), 0, 0); if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1); return localIso(date); }

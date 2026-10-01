@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mergeTurnUsage } from "../../shared/turn-usage";
 import { SessionMcpTools } from "./session-mcp-tools";
 import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
@@ -457,7 +458,7 @@ export class GrokAcpAdapter extends EventEmitter {
   readonly extensionLeaseId?: string;
   runtimeHandshake?: CliRuntimeHandshake;
   private cliIdentityPromise?: Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }>;
-  private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status">>();
+  private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status" | "title" | "kind">>();
   lastCloseReceipt?: SessionCloseReceipt;
 
   get cwd(): string { return this.options.cwd; }
@@ -1739,8 +1740,8 @@ export class GrokAcpAdapter extends EventEmitter {
     const computerEvidence = computerToolEvidence({ toolName, serverName, status });
     const tool: ToolCallState = {
       toolCallId,
-      title: update.title || update.rawInput?.name || "工具调用",
-      ...(update.kind !== undefined ? { kind: update.kind } : {}),
+      title: update.title || previous?.title || update.rawInput?.name || toolName || "工具调用",
+      ...((update.kind ?? previous?.kind) !== undefined ? { kind: update.kind ?? previous?.kind } : {}),
       ...(toolName ? { toolName } : {}),
       ...(serverName ? { serverName } : {}),
       source: serverName || String(update.kind ?? "").toLowerCase() === "mcp" || toolName?.toLowerCase().startsWith("grok_desktop_computer__") ? "mcp" : previous?.source ?? "cli",
@@ -1758,7 +1759,7 @@ export class GrokAcpAdapter extends EventEmitter {
       ...((update.error?.message || update.error) ? { error: update.error?.message || update.error } : {}),
       ...((update.truncated === true || boundedContent?.truncated || boundedStructuredContent?.truncated) ? { truncated: true } : {}),
     };
-    identities.set(toolCallId, { toolName, serverName, source: tool.source, rawInput: tool.rawInput, status });
+    identities.set(toolCallId, { toolName, serverName, source: tool.source, rawInput: tool.rawInput, status, title:tool.title,kind:tool.kind });
     if (status === "completed" || status === "failed") identities.delete(toolCallId);
     if (isMediaTool(update)) this.mediaToolIds.add(toolCallId);
     if (this.mediaToolIds.has(toolCallId)) this.emitGeneratedMedia(update);
@@ -2521,7 +2522,7 @@ export class GrokAcpAdapter extends EventEmitter {
     const corrected: TurnPresentation = {
       ...previous,
       outcome,
-      ...(usage ? { usage } : {}),
+      usage: mergeTurnUsage(previous.usage, usage),
     };
     this.turnsAwaitingAuthoritativeTerminal.delete(turnId);
     this.rememberSettledTurn(corrected);

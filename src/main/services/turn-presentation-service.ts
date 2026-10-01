@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import type { TurnPresentation } from "../../shared/types";
+import { mergeTurnUsage } from "../../shared/turn-usage";
 import { JsonStore } from "./json-store";
 
 interface TurnPresentationState {
@@ -23,7 +24,7 @@ export class TurnPresentationService {
     await this.store.mutate((state) => {
       records = [...(state.sessions[sessionId] ?? [])];
       const index = records.findIndex((value) => value.turnId === presentation.turnId);
-      if (index >= 0) records[index] = { ...records[index], ...presentation };
+      if (index >= 0) records[index] = { ...records[index], ...presentation, usage: mergeTurnUsage(records[index]!.usage, presentation.usage) };
       else records.push({ ...presentation });
       records.sort((a, b) => a.ordinal - b.ordinal);
       state.sessions[sessionId] = records;

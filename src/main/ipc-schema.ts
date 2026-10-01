@@ -167,6 +167,8 @@ const RULES: Record<string, Rule> = {
   "automations:update": (args) => { idArg(args, 0); automationTaskPatchArg(args, 1); },
   "automations:pause": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "automations:run-now": (args) => idArg(args, 0),
+  "automations:run:retry": (args) => idArg(args, 0),
+  "automations:runs:clear": (args) => optionalIdArg(args, 0),
   "automations:run:cancel": (args) => idArg(args, 0),
   "automations:runs": (args) => optionalIdArg(args, 0),
   "automations:policy:get": noArgs,
