@@ -940,3 +940,10 @@ describe("ProviderService deep compatibility scan", () => {
     }
   });
 });
+
+it("retains explicit direct image usage without inventing a total",async()=>{
+ const {root,grokHome,environment}=await fixture();const response={data:[{b64_json:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jpQAAAABJRU5ErkJggg=="}],usage:{input_tokens:20,output_tokens:4}};
+ const service=new ProviderService(join(root,"usage-data"),new LogService(join(root,"usage.log")),{grokHome,environment,fetcher:async()=>new Response(JSON.stringify(response),{status:200,headers:{"Content-Type":"application/json"}})});
+ await service.upsert(input({models:[{id:"image",model:"image",name:"image",media:{image:{transport:"openai_images",endpoint:"images/generations"}}}]}));
+ let usage:unknown;await service.generateImage({providerId:"sample",modelId:"image",prompt:"sample",aspectRatio:"1:1",signal:new AbortController().signal,onUsage:value=>{usage=value}});expect(usage).toMatchObject({inputTokens:20,outputTokens:4,providerId:"sample",modelId:"image"});expect((usage as any).totalTokens).toBeUndefined();await service.dispose();
+});

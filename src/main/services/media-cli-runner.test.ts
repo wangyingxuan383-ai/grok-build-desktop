@@ -16,6 +16,13 @@ async function fixture(source: string): Promise<{ root: string; script: string }
 }
 
 describe("runCliMediaProcess", () => {
+  it("passes the explicit dispatch model for both new and resumed work",()=>{for(const resume of [false,true]){const args=buildCliMediaArgs("draw","id","image_gen",resume,"explicit-model");expect(args.slice(-2)).toEqual(["--model","explicit-model"]);}});
+  it("extends the same running process and accepts a buffered tool response",async()=>{
+    const {root,script}=await fixture("console.log(JSON.stringify({type:'tool_use',name:'image_gen'}));setTimeout(()=>console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})),240);");
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const result=await runCliMediaProcess({executable:process.execPath,args:[script,join(root,"buffered.png")],cwd:root,env:process.env,media:"image",signal:new AbortController().signal,idleTimeoutMs:80,generationTimeoutMs:170,onWaitControl:extend=>{timer=setTimeout(extend,150)}});
+    clearTimeout(timer);expect(result).toHaveLength(1);
+  });
   it("records only explicit invocation-final usage, never sums per-message notifications or invents totals",async()=>{
     const {root,script}=await fixture("console.log(JSON.stringify({type:'usage',usage:{input_tokens:80,output_tokens:20}})); console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})); console.log(JSON.stringify({type:'end',usage:{inputTokens:80,outputTokens:20,totalTokens:100},modelUsage:{actual:{}}}));");
     const onUsage=vi.fn();await runCliMediaProcess({executable:process.execPath,args:[script,join(root,'image.png')],cwd:root,env:process.env,media:'image',signal:new AbortController().signal,onUsage});

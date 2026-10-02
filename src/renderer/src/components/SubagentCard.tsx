@@ -33,7 +33,7 @@ export const SubagentCard = memo(function SubagentCard({ tool, sessionId }: { to
   const identity = text(raw.subagent_id) ?? text(raw.subagentId) ?? text(raw.child_session_id) ?? text(raw.childSessionId);
   const metrics = [
     facts.model,
-    facts.tools !== undefined ? `子任务 ${facts.tools} 次工具` : undefined,
+    facts.tools !== undefined ? `CLI 上报 ${facts.tools} 次工具` : undefined,
     facts.turns !== undefined ? `${facts.turns} 回合` : undefined,
     facts.durationMs !== undefined ? formatDuration(facts.durationMs) : undefined,
     facts.tokens !== undefined ? `${facts.tokens.toLocaleString()} Token` : undefined,

@@ -13,6 +13,7 @@ export interface ComposerState {
   ratio: MediaAspectRatio;
   route: ImageRoute;
   model: string;
+  cliModel: string;
   references: Attachment[];
   sources: Array<{ source: string; label: string }>;
 }
@@ -21,6 +22,7 @@ export interface ComposerState {
 export function ImageComposer(props: {
   state: ComposerState;
   models: ProviderModelOption[];
+  cliModels?:ProviderModelOption[];
   busy: boolean;
   hero?: boolean;
   codeImages?: MediaAccessHandle[];
@@ -103,11 +105,13 @@ export function ImageComposer(props: {
             </select>
           </label>
         )}
+        {state.route==="cli"&&<label className="im-select"><span className="visually-hidden">CLI 调度模型</span><select aria-label="CLI 调度模型" value={state.cliModel} disabled={busy} onChange={event=>props.onChange({cliModel:event.target.value})}><option value="">选择调度模型</option>{state.cliModel&&!props.cliModels?.some(model=>model.value===state.cliModel)&&<option value={state.cliModel}>{state.cliModel}</option>}{props.cliModels?.map(model=><option key={model.value} value={model.value}>{model.label}</option>)}</select></label>}
         <span className="im-spacer" />
         <Button variant="primary" loading={busy} disabled={!canSend} onClick={props.onSubmit}>{busy ? "生成中" : "生成"}</Button>
       </div>
       {state.route === "provider" && hasReference && <p className="im-note">此 Provider 的图片编辑接口尚未接入；请改用 Grok CLI，或移除参考图。</p>}
       {state.route === "provider" && !hasReference && <p className="im-note">Provider 路由每次都是独立请求，不会续接这个会话的上一轮内容。</p>}
+      {state.route==="cli"&&<p className="im-note">调度模型负责调用 CLI 的生图工具；图片后端由 CLI 配置决定。使用当前账号，不会自动切换到 Provider 生图。</p>}
     </section>
   );
 }

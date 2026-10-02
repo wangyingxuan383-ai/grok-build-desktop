@@ -12,7 +12,8 @@ async function setup() {
   const source=join(root,"validated-cache.png");await writeFile(source,"validated-image");
   const output=await prepareMediaProjectOutput(workspace,"generated/images");
   const job:any={jobId:"job",sessionId:"original-session",route:"provider",kind:"image",artifacts:[]};
-  const controller:any={mediaJobs:new Map([["job",job]]),mediaJobControls:new Map([["job",{abort:new AbortController()}]]),
+  const controller:any={mediaJobs:new Map([["job",job]]),mediaJobControls:new Map([["job",{abort:new AbortController()}]]),mediaWaitExtensions:new Map(),
+    inbox:{add:vi.fn(async()=>undefined)},notices:()=>({show:vi.fn(async()=>undefined)}),
     publishMediaJob:vi.fn(),runProviderMedia:vi.fn(async()=>[{id:"image",media:"image",source:"provider-data"}]),
     providerMediaAllowedOrigins:async()=>[],cacheMediaArtifact:vi.fn(async()=>({id:"image",media:"image",source:"grok-media://access/fixture",mimeType:"image/png"})),
     mediaAccess:{resolve:vi.fn(async()=>({path:source,mimeType:"image/png"}))},handleEvent:vi.fn(async()=>{})};

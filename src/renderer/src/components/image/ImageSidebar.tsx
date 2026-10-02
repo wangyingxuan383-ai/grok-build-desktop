@@ -3,6 +3,7 @@ import { UiIcon } from "../../ui-icons";
 import { ActionMenu, ActionContextMenu, type UiAction } from "../ui/ActionMenu";
 import { IconButton } from "../ui/Button";
 import { ModeSwitch, type AppMode } from "../ModeSwitch";
+import { UpdateIndicator } from "../UpdateIndicator";
 import { newestFirst, sessionStats, whenLabel } from "./image-model";
 
 export type ImageView = "session" | "gallery";
@@ -24,6 +25,7 @@ export function ImageSidebar(props: {
   onSettings?(): void;
   onAccounts?(): void;
   onDiagnostics?(): void;
+  onUpdates?(): void;
 }): React.JSX.Element {
   const rows = newestFirst(props.conversations);
   const actionsFor = (conversation: ImageConversation): UiAction[] => [
@@ -67,6 +69,7 @@ export function ImageSidebar(props: {
         </button>
         {props.onAccounts && <IconButton icon="account" label="账号与用量" onClick={props.onAccounts} />}
         {props.onDiagnostics && <IconButton icon="alert" label="诊断" onClick={props.onDiagnostics} />}
+        {props.onUpdates && <UpdateIndicator onOpen={props.onUpdates} />}
         {props.onSettings && <IconButton icon="settings" label="设置" onClick={props.onSettings} />}
       </div>
     </aside>

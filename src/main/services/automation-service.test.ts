@@ -15,6 +15,7 @@ function input(patch: Partial<AutomationTaskInput> = {}): AutomationTaskInput { 
 async function fixture(options: Partial<ConstructorParameters<typeof AutomationService>[2]> = {}) { const root = await mkdtemp(join(tmpdir(), "grok-automation-")); roots.push(root); const scheduler = new FakeScheduler(); const launched = vi.fn(async () => undefined); const service = new AutomationService(root, new LogService(join(root, "app.log")), { executable: "D:\\应用 目录\\Grok Build Desktop.exe", cipher: new FakeCipher(), scheduler, launchWorker: launched, ...options }); return { root, scheduler, launched, service }; }
 
 describe("AutomationService", () => {
+  it("reads encrypted instructions for editing without modifying the stored task",async()=>{const {service}=await fixture();const task=await service.createOne(input({prompt:"editable instructions"}));expect(await service.instructions(task.id)).toBe("editable instructions");expect((await service.list())[0]?.revision).toBe(task.revision);await expect(service.instructions("missing")).rejects.toThrow();});
   it("holds project-removal leases against another Worker and releases them after failure", async () => {
     const { root, service } = await fixture();
     const task = await service.createOne(input());

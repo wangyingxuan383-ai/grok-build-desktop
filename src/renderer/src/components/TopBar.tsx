@@ -76,7 +76,7 @@ export function TopBar({ pageTitle, session, codex, claude, workspace, workbench
       ...(fileTools.length ? [{ id: "file-apps", label: "使用应用打开", children: fileTools.map(tool => ({ id: tool.id, label: tool.label, run: () => openWith(tool, activeEditorPath) })) }] : []),
     ] }] : []),
   ];
-  const folderName = location.split(/[\/]/).filter(Boolean).at(-1) || location;
+  const folderName = location.split(/[\\/]/).filter(Boolean).at(-1) || location;
   const onSessionPage = !pageTitle && workbenchView === "chat";
   return <><header className="topbar">
     <IconButton icon="panel-left" label="显示或隐藏左侧栏" onClick={onToggleSidebar} />

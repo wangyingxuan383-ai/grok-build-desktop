@@ -1,3 +1,4 @@
+import {cliMediaTurnUsage} from "./media-cli-runner";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -458,7 +459,7 @@ export class ProviderService {
     return result.candidates;
   }
 
-  async generateImage(input: { providerId: string; modelId: string; prompt: string; aspectRatio: MediaAspectRatio; signal: AbortSignal }): Promise<MediaArtifact[]> {
+  async generateImage(input: { providerId: string; modelId: string; prompt: string; aspectRatio: MediaAspectRatio; signal: AbortSignal; onUsage?(usage:import("../../shared/types").TurnUsage):Promise<void>|void }): Promise<MediaArtifact[]> {
     const provider = (await this.store.get()).providers.find((value) => value.id === input.providerId && value.enabled !== false);
     const model = provider?.models.find((value) => value.id === input.modelId && value.enabled !== false);
     if (!provider || !model) throw new Error("媒体 Provider 或模型不存在、已停用");
@@ -479,6 +480,7 @@ export class ProviderService {
     if (!response.ok) throw new Error(`图片端点返回 HTTP ${response.status}：${sanitizeProbeMessage(raw)}`);
     let parsed: any;
     try { parsed = JSON.parse(raw); } catch { throw new Error("图片端点未返回 JSON"); }
+    const usage=cliMediaTurnUsage({type:"end",usage:parsed?.usage});if(usage)await input.onUsage?.({...usage,modelId:model.id,providerId:provider.id});
     const rows = extractMediaAssets(parsed, "image");
     const artifacts: MediaArtifact[] = [];
     for (const row of rows) {
@@ -1261,31 +1263,24 @@ export class ProviderService {
 }
 
 export class WindowsUserEnvironment implements ProviderEnvironment {
+  private readonly userValues=new Set<string>();
   async read(name: string): Promise<string | undefined> {
     const inherited = process.env[name];
     if (inherited !== undefined) return inherited;
     if (process.platform !== "win32") return undefined;
-    const value = await new Promise<string | undefined>((resolve) => {
-      execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write([Environment]::GetEnvironmentVariable($args[0],[EnvironmentVariableTarget]::User))", name], { windowsHide: true, timeout: 10_000 }, (error, stdout) => resolve(error ? undefined : String(stdout)));
-    });
-    if (value !== undefined && value !== "") process.env[name] = value;
+    const value = await readWindowsUserVariable(name);
+    if (value !== undefined && value !== "") {this.userValues.add(name);process.env[name] = value;}
     return value || undefined;
   }
   async readFresh(name: string): Promise<string | undefined> {
     if (process.platform !== "win32") return this.read(name);
-    const result = await new Promise<{ ok: boolean; value?: string }>((resolve) => {
-      execFile(
-        "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write([Environment]::GetEnvironmentVariable($args[0],[EnvironmentVariableTarget]::User))", name],
-        { windowsHide: true, timeout: 10_000 },
-        (error, stdout) => resolve(error ? { ok: false } : { ok: true, value: String(stdout) }),
-      );
-    });
-    if (!result.ok) return process.env[name];
-    if (result.value) {
-      process.env[name] = result.value;
-      return result.value;
+    const value = await readWindowsUserVariable(name);
+    if (value) {
+      this.userValues.add(name);
+      process.env[name] = value;
+      return value;
     }
+    if(!this.userValues.has(name))return process.env[name];
     delete process.env[name];
     return undefined;
   }
@@ -1298,8 +1293,24 @@ export class WindowsUserEnvironment implements ProviderEnvironment {
       child.on("error", reject); child.on("exit", (code) => code === 0 ? resolve() : reject(new Error(error.trim() || `写入用户环境变量失败（${code}）`)));
       child.stdin.end(JSON.stringify({ name, value: value ?? null }));
     });
-    if (value === undefined) delete process.env[name]; else process.env[name] = value;
+    if (value === undefined) {this.userValues.delete(name);delete process.env[name];} else {this.userValues.add(name);process.env[name] = value;}
   }
+}
+
+/** stdin is data: -Command arguments are otherwise appended to a PowerShell expression. */
+export function readWindowsUserVariable(name: string): Promise<string | undefined> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return Promise.reject(new Error("环境变量名称无效"));
+  return new Promise((resolve, reject) => {
+    const script = "$ErrorActionPreference='Stop';$name=[Console]::In.ReadToEnd();[Console]::Out.Write([Environment]::GetEnvironmentVariable($name,[EnvironmentVariableTarget]::User))";
+    const child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 10_000, stdio: ["pipe", "pipe", "pipe"] });
+    let value = "";
+    child.stdout.setEncoding("utf8"); child.stdout.on("data", chunk => { value += chunk; });
+    // Error details may include environment values; report the source and outcome only.
+    child.stderr.resume();
+    child.once("error", () => reject(new Error("无法启动 Windows 用户环境读取；请检查系统 PowerShell")));
+    child.once("close", (code, signal) => code === 0 ? resolve(value || undefined) : reject(new Error(`Windows 用户环境读取失败（${signal || code}）；未将读取错误当作密钥不存在`)));
+    child.stdin.on("error", () => undefined); child.stdin.end(name);
+  });
 }
 
 export async function validateGrokConfig(cliPath: string, cwd = process.cwd()): Promise<void> {

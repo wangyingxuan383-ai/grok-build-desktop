@@ -376,6 +376,10 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .automation-policy-grid label, .automation-grid label { display: grid; gap: 5px; color: var(--text-secondary); font-size: .75em; }
 .automation-grid .wide { grid-column: 1 / -1; }
 .automation-grid textarea { min-height: 90px; resize: vertical; }
+.weekly-schedule { display: grid; gap: 8px; align-content: start; }
+.weekday-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.automation-grid .weekday-picker label.check { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; cursor: pointer; }
+.automation-grid .weekday-picker input { width: 14px; height: 14px; min-height: 0; margin: 0; }
 .automation-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .automation-grid .automation-options .automation-option { display: flex; align-items: flex-start; gap: 9px; min-height: 64px; padding: 10px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); color: var(--text); cursor: pointer; }
 .automation-grid .automation-options .automation-option:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: var(--hover); }

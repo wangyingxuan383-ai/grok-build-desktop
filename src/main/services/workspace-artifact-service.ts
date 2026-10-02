@@ -1,3 +1,4 @@
+import iconv from "iconv-lite";
 import { open } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import { unzipSync, strFromU8 } from "fflate";
@@ -37,5 +38,5 @@ export async function readWorkspaceArtifact(workspace:string,requested:string,op
  return {path,name:basename(path),kind:binary?.[0]||(office?"office":html?"html":"text"),mimeType:binary?.[1]||"text/plain",data};
 }
 function isPreviewableText(path:string):boolean{const name=basename(path).toLowerCase();const extension=extname(name);if(extension)return textExtensions.has(extension);return textBasenames.has(name)||!name.includes(".")}
-function looksBinary(buffer:Buffer):boolean{const bom=(buffer[0]===0xff&&buffer[1]===0xfe)||(buffer[0]===0xfe&&buffer[1]===0xff)?2:0;const sample=buffer.length>8192+bom?buffer.subarray(bom,8192+bom):buffer.subarray(bom);return sample.includes(0)}
-function decodeText(value:Buffer):string{if(value[0]===0xff&&value[1]===0xfe)return new TextDecoder("utf-16le").decode(value.subarray(2));if(value[0]===0xfe&&value[1]===0xff)return new TextDecoder("utf-16be").decode(value.subarray(2));if(value[0]===0xef&&value[1]===0xbb&&value[2]===0xbf)return new TextDecoder("utf-8").decode(value.subarray(3));return new TextDecoder("utf-8").decode(value)}
+function looksBinary(buffer:Buffer):boolean{if((buffer[0]===0xff&&buffer[1]===0xfe)||(buffer[0]===0xfe&&buffer[1]===0xff))return false;return buffer.subarray(0,8192).includes(0)}
+function decodeText(value:Buffer):string{if(value[0]===0xff&&value[1]===0xfe)return new TextDecoder("utf-16le").decode(value.subarray(2));if(value[0]===0xfe&&value[1]===0xff)return new TextDecoder("utf-16be").decode(value.subarray(2));if(value[0]===0xef&&value[1]===0xbb&&value[2]===0xbf)return new TextDecoder("utf-8").decode(value.subarray(3));try{return new TextDecoder("utf-8",{fatal:true}).decode(value)}catch{return iconv.decode(value,"gb18030")}}

@@ -26,7 +26,7 @@ try {
  await click('.im-tile.work .im-tile-del');await chooseText('同时删除图片文件');
  await wait('document.querySelectorAll(".im-tile.work").length===2');
  const after=await run('window.grokDesktop.listImageWorkspace()');if(after.conversations[0].jobs.find(r=>r.job.jobId==='batch').job.artifacts.length!==1)throw Error('Sibling lost');
- await click('.im-tile.miss .im-tile-x');await chooseText('同时删除图片文件');await wait('document.body.innerText.includes("对应记录已保留")');
+ await chooseText('失败 1');await click('.im-tile.miss .im-tile-x');await chooseText('同时删除图片文件');await wait('document.body.innerText.includes("对应记录已保留")');
  if(!(await run('window.grokDesktop.listImageWorkspace()')).conversations[0].jobs.some(r=>r.job.jobId==='blocked'))throw Error('Failed cleanup lost record');
  await click('.image-sidebar .session-open');await wait('Boolean(document.querySelector(".im-composer textarea"))');await click('.im-composer textarea');await send('Input.insertText',{text:'RECOVERY_DRAFT'});
  // Remove the isolated main-process row to force a genuine draft IPC rejection during navigation.

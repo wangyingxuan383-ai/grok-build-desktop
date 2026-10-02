@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { MediaArtifact, MediaCreationKind, TurnUsage } from "../../shared/types";
 import { mediaArtifactsFromStreamingLine } from "./media-artifact-parser";
+import { explainMediaFailure } from "../../shared/media-failure";
 
 export interface CliMediaProcessInput {
   executable: string;
@@ -11,6 +12,8 @@ export interface CliMediaProcessInput {
   signal: AbortSignal;
   /** Stops only a silent/stalled process. null disables inactivity recovery. */
   idleTimeoutMs?: number | null;
+  generationTimeoutMs?: number;
+  onWaitControl?(extend: () => void): void;
   windowsVerbatimArguments?: boolean;
   /** Reference images passed to the tool; never accepted as generated results. */
   excludeSources?: readonly string[];
@@ -24,8 +27,8 @@ export interface CliMediaProcessInput {
  * `resume` continues an existing CLI session (an image conversation's later turns) instead of
  * starting the one named by `sessionId`, so the model keeps the earlier prompts and results.
  */
-export function buildCliMediaArgs(prompt: string, sessionId: string, toolList: string, resume = false): string[] {
-  return ["--no-auto-update", "--single", prompt, resume ? "--resume" : "--session-id", sessionId, "--output-format", "streaming-json", "--always-approve", "--tools", toolList];
+export function buildCliMediaArgs(prompt: string, sessionId: string, toolList: string, resume = false, modelId?: string): string[] {
+  return ["--no-auto-update", "--single", prompt, resume ? "--resume" : "--session-id", sessionId, "--output-format", "streaming-json", "--always-approve", "--tools", toolList, ...(modelId ? ["--model", modelId] : [])];
 }
 
 /**
@@ -53,7 +56,8 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   const idleTimeoutMs = input.idleTimeoutMs === undefined ? 180_000 : input.idleTimeoutMs;
   let lastOutputAt = Date.now();
   let stage: "starting" | "generating" | "result" = "starting";
-  const waitingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-lastOutputAt)/1000);if(seconds>=30)input.onProgress?.({stage:"waiting",message:`已等待 ${seconds} 秒没有新输出。CLI 未报告排队原因；可检查登录、网络或取消任务，不会自动重新提交。`});},10_000);
+  let waitBudgetMs = idleTimeoutMs;
+  const waitingTimer=setInterval(()=>{const seconds=Math.floor((Date.now()-lastOutputAt)/1000);if(seconds>=30)input.onProgress?.({stage:"waiting",message:`${stage==="generating"?"生成工具已提交，服务可能正在缓冲图片":"正在等待 CLI 响应"}；${seconds} 秒没有新输出。可延长等待或取消；不会自动再次提交。`});},10_000);
   waitingTimer.unref?.();
   input.onProgress?.({stage, message:"正在启动 CLI 并验证会话，尚未开始生成"});
   // Process startup (especially a packaged Node/Electron child) can take
@@ -64,11 +68,11 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   const startupGraceMs = idleTimeoutMs === null ? null : Math.max(idleTimeoutMs, 1_000);
   const armIdleTimer = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
-    if (idleTimeoutMs === null) return;
+    if (waitBudgetMs === null) return;
     idleTimer = setTimeout(() => {
       timedOut = true;
       if (!child.killed) child.kill();
-    }, Math.max(1, idleTimeoutMs));
+    }, Math.max(1, waitBudgetMs));
     idleTimer.unref?.();
   };
   const collectLine = (line: string): void => {
@@ -77,6 +81,8 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     try {
       const event = JSON.parse(line);
       if (event?.type === "tool_use" && /^(image_gen|image_edit|video_gen)$/.test(event.name ?? event.tool ?? "")) {
+        if (waitBudgetMs !== null) waitBudgetMs = Math.max(waitBudgetMs, input.generationTimeoutMs ?? 360_000);
+        armIdleTimer();
         stage="generating";input.onProgress?.({stage,message:`CLI 已调用 ${event.name ?? event.tool}，等待生成服务返回`});
       }
       const usage = cliMediaTurnUsage(event);
@@ -87,7 +93,9 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
         return;
       }
     } catch { /* Non-JSON progress is not a protocol error. */ }
-    for (const artifact of mediaArtifactsFromStreamingLine(line, input.media, input.cwd, { exclude: input.excludeSources, toolIdentities })) {
+    const parsedArtifacts=mediaArtifactsFromStreamingLine(line,input.media,input.cwd,{exclude:input.excludeSources,toolIdentities});
+    if(stage!=="result"&&[...toolIdentities.values()].some(name=>/^(image_gen|image_edit|video_gen)$/.test(name))){stage="generating";if(waitBudgetMs!==null)waitBudgetMs=Math.max(waitBudgetMs,input.generationTimeoutMs??360_000);armIdleTimer();}
+    for (const artifact of parsedArtifacts) {
       if (!artifacts.some((value) => value.source === artifact.source)) { artifacts.push(artifact); stage="result";input.onProgress?.({stage,message:"生成服务已返回媒体路径，正在校验和保存原图"}); }
     }
   };
@@ -108,6 +116,7 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
   });
   const abort = (): void => { if (!child.killed) child.kill(); };
   input.signal.addEventListener("abort", abort, { once: true });
+  input.onWaitControl?.(() => { if (!child.killed) { lastOutputAt=Date.now(); armIdleTimer(); } });
   if (startupGraceMs !== null) {
     idleTimer = setTimeout(() => {
       timedOut = true;
@@ -123,7 +132,7 @@ export async function runCliMediaProcess(input: CliMediaProcessInput): Promise<M
     if (pending.trim()) collectLine(pending);
     if (input.signal.aborted) throw abortReason(input.signal);
     if (terminalError) throw new Error(terminalError);
-    if (timedOut) throw new Error(`媒体任务连续 ${Math.ceil((idleTimeoutMs ?? 0) / 1000)} 秒没有输出，已停止等待。CLI 未提供排队状态；请检查账号和网络后手动重试，避免重复生成。`);
+    if (timedOut) throw new Error(`媒体任务连续 ${Math.ceil((waitBudgetMs ?? 0) / 1000)} 秒没有输出，已停止本机等待。远端完成状态未确认；请先检查已有产物，避免重复生成。`);
     if (exitCode !== 0) throw new Error(mediaCliFailureMessage(stderr) || `Grok CLI 媒体任务退出（${String(exitCode)}）`);
     if (!artifacts.length) throw new Error(mediaCliFailureMessage(stderr) || "Grok CLI 已结束，但 streaming-json 中没有可识别的媒体产物");
     return artifacts;
@@ -156,9 +165,8 @@ export function mediaCliFailureMessage(stderr: string): string {
   if (/Zero Data Retention teams must provide output\.upload_url/i.test(plain)) {
     return "Zero Data Retention teams must provide output.upload_url for video generation.";
   }
-  if (/authentication required|unauthorized|token.{0,30}expired|\b401\b|暂时无法验证订阅/i.test(plain)) return `账号认证或订阅验证失败，请先重新登录再生成。${plain.slice(-500)}`;
-  if (/rate.?limit|too many requests|\b429\b|quota|usage limit|额度|限流/i.test(plain)) return `生成服务报告限流或额度不足，请检查官方用量并稍后手动重试。${plain.slice(-500)}`;
-  if (/ECONN|ENOTFOUND|network|connect.{0,20}timeout|proxy/i.test(plain)) return `生成服务连接失败，请检查代理和网络。${plain.slice(-500)}`;
+  const explained=explainMediaFailure(plain);
+  if (explained.action!=="none") return `${explained.summary}\n\n${explained.detail}`;
   const lines = plain.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   return lines.at(-1)?.slice(0, 2_000) || "";
 }

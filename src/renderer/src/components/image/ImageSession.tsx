@@ -5,11 +5,15 @@ import { UiIcon } from "../../ui-icons";
 import { Badge } from "../ui/Display";
 import { Button, IconButton } from "../ui/Button";
 import { artworkSrc, isRunning } from "./image-model";
+import {explainMediaFailure} from "../../../../shared/media-failure";
 
 export interface SessionActions {
   onPreview(conversation: ImageConversation, artifact: MediaArtifact): void;
   onContinue(conversation: ImageConversation, artifact: MediaArtifact): void;
   onReuse(record: ImageRecord): void;
+  onReuseSettings?(record:ImageRecord):void;
+  onFailureAction?(action:string):void;
+  onExtend?(jobId:string):void;
   onCancel(jobId: string): void;
   onDelete(conversation: ImageConversation, record: ImageRecord): void;
   onDeleteArtifact(conversation: ImageConversation, record: ImageRecord, artifact: MediaArtifact): void;
@@ -59,13 +63,14 @@ function Turn({ conversation, record, actions, busy }: { conversation: ImageConv
           <div className="im-status running">
             <UiIcon name="loader" size={15} className="ui-spin" />
             <span>{job.message || "正在生成"}</span>
+            {job.stage==="waiting"&&<Button size="sm" variant="secondary" onClick={()=>actions.onExtend?.(job.jobId)}>延长本次等待</Button>}
             <Button size="sm" variant="secondary" disabled={job.status === "cancelling"} onClick={() => actions.onCancel(job.jobId)}>{job.status === "cancelling" ? "正在取消" : "取消"}</Button>
           </div>
         )}
         {job.status === "failed" && (
           <div className="im-status failed" role="alert">
             <UiIcon name="alert" size={15} />
-            <div><strong>生成失败</strong><p>{job.error || job.message}</p></div>
+            <div><strong>生成失败</strong><p>{explainMediaFailure(job.error||job.message).summary}</p><details><summary>查看诊断详情</summary><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{explainMediaFailure(job.error||job.message).detail}</pre></details>{["accounts","providers","network","usage"].includes(explainMediaFailure(job.error||job.message).action)&&<Button size="sm" variant="ghost" onClick={()=>actions.onFailureAction?.(explainMediaFailure(job.error||job.message).action)}>{explainMediaFailure(job.error||job.message).action==="providers"?"检查提供商":explainMediaFailure(job.error||job.message).action==="network"?"检查网络设置":"账号与用量"}</Button>}</div>
           </div>
         )}
         {job.status === "cancelled" && <div className="im-status"><UiIcon name="stop" size={14} /><span>已取消</span></div>}
@@ -93,6 +98,7 @@ function Turn({ conversation, record, actions, busy }: { conversation: ImageConv
         {!running && (
           <div className="im-turn-actions">
             <Button size="sm" variant="ghost" icon="retry" disabled={busy} onClick={() => actions.onReuse(record)}>用此描述再来一次</Button>
+            {record.request&&<Button size="sm" variant="ghost" disabled={busy} onClick={()=>actions.onReuseSettings?.(record)}>重用完整设置</Button>}
             <Button size="sm" variant="ghost" icon="trash" onClick={() => actions.onDelete(conversation, record)}>删除记录</Button>
           </div>
         )}

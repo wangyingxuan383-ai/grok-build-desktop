@@ -1,0 +1,43 @@
+import { readdir, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+const endpoint=process.argv[2];
+const target=(await(await fetch(endpoint+"/json/list")).json()).find(t=>t.type==="page");
+const socket=new WebSocket(target.webSocketDebuggerUrl); await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject});
+let id=0, global; const pending=new Map();
+socket.onmessage=({data})=>{const m=JSON.parse(data);const p=pending.get(m.id);if(p){clearTimeout(p.timer);pending.delete(m.id);m.error?p.reject(Error(m.error.message)):p.resolve(m.result)}};
+const send=(method,params={})=>new Promise((resolve,reject)=>{const seq=++id;const timer=setTimeout(()=>{pending.delete(seq);reject(Error(method+" timeout"))},20000);pending.set(seq,{resolve,reject,timer});socket.send(JSON.stringify({id:seq,method,params}))});
+const run=async expression=>{const r=await send("Runtime.evaluate",{expression,returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result?.value};
+const call=async(functionDeclaration,...values)=>{const r=await send("Runtime.callFunctionOn",{objectId:global,functionDeclaration,arguments:values.map(value=>({value})),returnByValue:true,awaitPromise:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result?.value};
+const wait=async expr=>{for(let i=0;i<140;i++){if(await run(expr))return;await new Promise(r=>setTimeout(r,70))}throw Error("Wait failed "+expr+" "+await run("document.body.innerText.slice(-1000)"))};
+const click=async selector=>{await wait(`Boolean(document.querySelector(${JSON.stringify(selector)}))`);const p=await call("function(selector){const e=document.querySelector(selector);e.scrollIntoView({block:'center'});const b=e.getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2}}",selector);await send("Input.dispatchMouseEvent",{type:"mouseMoved",...p});for(const type of ["mousePressed","mouseReleased"])await send("Input.dispatchMouseEvent",{type,button:"left",clickCount:1,...p})};
+const choose=async text=>{await call("function(text){document.querySelector('[data-showcase-target]')?.removeAttribute('data-showcase-target');const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===text);if(!e)throw Error('Missing '+text);e.dataset.showcaseTarget='1'}",text);await click('[data-showcase-target="1"]')};
+const assets=new URL(process.argv[3]==="verify" ? "../out/showcase-verification/" : "../docs/assets/",import.meta.url); await mkdir(assets,{recursive:true});
+const capture=async name=>{await run("document.fonts.ready");await new Promise(r=>setTimeout(r,300));const png=await send("Page.captureScreenshot",{format:"png",captureBeyondViewport:false});await writeFile(new URL(name+".png",assets),Buffer.from(png.data,"base64"));};
+try {
+ await send("Runtime.enable");await wait('Boolean(document.querySelector(".app-shell"))');global=(await send("Runtime.evaluate",{expression:"globalThis"})).result.objectId;
+ const settings=await run("window.grokDesktop.getSettings()");if(!settings.activeWorkspace.includes("Grok-Build-Desktop-smoke-"))throw Error("Not isolated");
+ await send("Emulation.setDeviceMetricsOverride",{width:1440,height:960,deviceScaleFactor:1,mobile:false});
+ const file=(await readdir(new URL("../out/renderer/assets/",import.meta.url))).find(n=>/^store-[\w-]+\.js$/.test(n));
+ await call("async function(file){const m=await import(new URL('assets/'+file,document.baseURI).href);window.__showcaseStore=Object.values(m).find(v=>typeof v==='function'&&v.getState&&v.getState().setCli);if(!window.__showcaseStore)throw Error('Store unavailable')}",file);
+ await call("function(settings){const s=window.__showcaseStore.getState();s.setSettings({...settings,automaticUpdateChecks:true});s.setCli({found:true,currentVersion:'1.0.40',latestVersion:'1.0.41',updateAvailable:true,checkedAt:new Date().toISOString()});s.setAppRelease({configured:true,currentVersion:'0.10.4',latestVersion:'0.11.0',updateAvailable:true,checkedAt:new Date().toISOString()})}",settings);
+ await wait('Boolean(document.querySelector(".update-indicator-dot"))');await click('.update-indicator');await wait('document.body.innerText.includes("桌面应用")&&document.body.innerText.includes("Grok CLI")');
+ await click('.control-panel > header button');await wait('!document.querySelector(".control-panel")');
+ await call("function(){const s=window.__showcaseStore.getState();s.setSettings({...s.settings,automaticUpdateChecks:false})}");await wait('!document.querySelector(".update-indicator-dot")');
+ await call("function(){const s=window.__showcaseStore.getState();s.setSettings({...s.settings,automaticUpdateChecks:true})}");await wait('Boolean(document.querySelector(".update-indicator-dot"))');
+ await choose("图像");await wait('Boolean(document.querySelector(".image-shell"))');await wait('Boolean(document.querySelector(".image-sidebar .update-indicator-dot"))');await click('.image-sidebar .update-indicator');await wait('Boolean(document.querySelector(".update-center"))');await click('.control-panel > header button');
+ await choose("图库");await wait('document.querySelectorAll(".im-tile.work").length===4');if(await run('document.querySelectorAll(".im-tile.miss").length'))throw Error("Failed records shown by default");
+ await choose("全部 5");await wait('document.querySelectorAll(".im-tile.miss").length===1');await choose("失败 1");await wait('document.querySelectorAll(".im-tile.work").length===0');await choose("图片 4");
+ // Demo update numbers were only for behavior acceptance, never publish them as actual releases.
+ await call("function(){const s=window.__showcaseStore.getState();s.setCli({found:true,currentVersion:'1.0.40',updateAvailable:false});s.setAppRelease(undefined)}");
+ await capture("image-gallery");await click('.image-sidebar .session-open[title="暖色日落方案"]');await wait('Boolean(document.querySelector(".im-composer textarea"))');await capture("image-conversation");
+ await choose("新建图像会话");await capture("image-studio");await choose("编程");await wait('Boolean(document.querySelector(".sidebar:not(.image-sidebar)"))');
+ await call("function(workspace){const s=window.__showcaseStore.getState();const id='showcase-coding';s.setSessions([{id,title:'设计并实现产品首页',cwd:workspace,source:'grok',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}]);s.setActiveSession(id);s.handleEvents([{type:'session-ready',sessionId:id,models:[{modelId:'grok-4.5',name:'Grok 4.5'}],currentModelId:'grok-4.5',effort:'high'},{type:'user-message',sessionId:id,id:'demo-user',text:'把产品首页做得简洁一些，并加一个可交互的预览。',delivery:'sent'},{type:'message-chunk',sessionId:id,text:'已完成首页演示。页面采用清晰的标题、简洁卡片和响应式布局。你可以打开右侧 HTML 预览，点击按钮检查交互。\\n\\n- 主内容与辅助信息保持层级\\\n- 预览来自项目文件\\\n- 图片任务保留在独立的图像会话中'},{type:'turn-completed',sessionId:id}])}",settings.activeWorkspace);
+ await wait('document.body.innerText.includes("已完成首页演示")');await capture("coding-workspace");
+ await choose("更多工具");await click('[role="menuitem"]');await wait('Boolean(document.querySelector(".file-explorer"))');
+ await wait('[...document.querySelectorAll(".file-tree-row")].some(e=>e.textContent.includes("preview.html"))');await call("function(){const e=[...document.querySelectorAll('.file-tree-row')].find(e=>e.textContent.includes('preview.html'));e.dataset.showcasePreview='1'}");await click('[data-showcase-preview="1"]');await choose("预览");
+ await wait('Boolean(document.querySelector(".artifact-preview-pane iframe"))');await capture("artifact-preview");
+ await choose("定时任务");await wait('document.body.innerText.includes("新建持久任务")');await choose("新建持久任务");
+ const fill=async(selector,text)=>{await click(selector);await send("Input.dispatchKeyEvent",{type:"keyDown",key:"a",code:"KeyA",modifiers:2,windowsVirtualKeyCode:65});await send("Input.dispatchKeyEvent",{type:"keyUp",key:"a",code:"KeyA",modifiers:2,windowsVirtualKeyCode:65});await send("Input.insertText",{text})};
+ await fill('.automation-editor label:nth-child(1) input',"工作日项目简报");await fill('.automation-editor label:nth-child(2) input',"C:\\Projects\\Aurora Demo");await fill('.automation-editor textarea',"汇总项目最近的改动、待处理问题与下一步建议，完成后通知我。");await choose("工作日 9 点");await capture("scheduled-tasks");
+ console.log("UPDATES_GALLERY_PASSED startup UI indicators in both modes, disabled preference, real menu navigation, pictures-only default and all/failure filters; isolated showcase screenshots captured");
+}finally{socket.close()}

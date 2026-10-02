@@ -125,6 +125,7 @@ export default function App(): React.JSX.Element {
   const [operationBusy, setOperationBusy] = useState(false);
   const { sendingSessionIds, sendingSessionIdsRef, updateSendingSessions } = useSubmissionController();
   const [composerNotice, setComposerNotice] = useState("");
+  const [pendingFeedback,setPendingFeedback]=useState<{sessionId:string;text:string;attachments?:Attachment[]}>();
   const [diagnosingFailure, setDiagnosingFailure] = useState<TurnFailure>();
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -185,6 +186,7 @@ export default function App(): React.JSX.Element {
   }, [store.setError]);
 
   useEffect(() => { void refreshModelCatalog(); }, [refreshModelCatalog, store.settings?.activeWorkspace]);
+  useEffect(()=>{if(!imageMode)void window.grokDesktop.setVisibleConversation(store.activeSessionId).catch(()=>undefined)},[imageMode,store.activeSessionId]);
 
   const focusComposer = useCallback(() => {
     if (useWorkbenchStore.getState().activeView !== "chat") return;
@@ -283,6 +285,7 @@ export default function App(): React.JSX.Element {
     const removeLogin = window.grokDesktop.onLogin((state) => useAppStore.getState().setLogin(state));
     const removeDrop = window.grokDesktop.onDroppedAttachments((attachments) => useAppStore.getState().addAttachments(attachments));
     const removeNavigate = window.grokDesktop.onNavigateSession((target) => { void openConversationTargetRef.current(target).catch((error) => useAppStore.getState().setError(errorMessage(error))); });
+    const removeNotice=window.grokDesktop.onNotificationTarget(target=>{if(target.kind==="image"){localStorage.setItem("grok.image-notification-target",target.id);selectImageMode(true);window.dispatchEvent(new CustomEvent("grok:open-image-conversation",{detail:{id:target.id}}))}else{localStorage.setItem("grok.task-notification-run.v1",target.id);setPanel("tasks")}});
     const removeComputer = window.grokDesktop.onComputerStateChanged((state) => {
       setComputerTasks((current) => ({ ...current, [state.sessionId]: state }));
       if (["stopped", "completed", "error"].includes(state.status)) {
@@ -319,7 +322,7 @@ export default function App(): React.JSX.Element {
       }).catch(() => undefined); };
       automaticUpdateTimer = window.setTimeout(() => {
         checkUpdates();
-        // The main process remains the source of truth for the 24-hour gate.
+        // The main process checks once per launch, then owns the 24-hour gate.
         // A six-hour wakeup means an app left open for days eventually observes
         // a new stable CLI/App release without issuing frequent network calls.
         automaticUpdateTimer = window.setInterval(checkUpdates, 6 * 60 * 60_000);
@@ -329,7 +332,7 @@ export default function App(): React.JSX.Element {
       if (frame) window.cancelAnimationFrame(frame);
       if (automaticUpdateTimer !== undefined) window.clearInterval(automaticUpdateTimer);
       flush();
-      removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeComputer(); removeAutomation();
+      removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeNotice(); removeComputer(); removeAutomation();
     };
   }, [updateSendingSessions]);
 
@@ -697,6 +700,9 @@ export default function App(): React.JSX.Element {
     finally { setOperationBusy(false); }
   };
 
+  useEffect(()=>{const preview=(event:Event)=>{const target=(event as CustomEvent<{workspace:string;sessionId?:string}>).detail;selectImageMode(false);setPanel(null);setWorkbenchView("browser");void window.grokDesktop.listPreviewServers(target.workspace).then(servers=>window.grokDesktop.createWorkspaceBrowserTab(servers.find(server=>server.status==="running"&&server.url)?.url||"about:blank",{workspace:target.workspace,sessionId:target.sessionId})).then(tab=>useWorkbenchStore.getState().setActiveBrowser(tab.id)).catch(error=>store.setError(errorMessage(error)))};window.addEventListener("grok:project-preview",preview);return()=>window.removeEventListener("grok:project-preview",preview)},[]);
+  useEffect(()=>{const feedback=(event:Event)=>{const target=(event as CustomEvent<{sessionId?:string;cwd?:string;text:string;attachments?:Attachment[]}>).detail;selectImageMode(false);setPanel(null);if(target.sessionId&&target.cwd){void openConversationTargetRef.current({sessionId:target.sessionId,cwd:target.cwd}).then(()=>setPendingFeedback({sessionId:target.sessionId!,text:target.text,attachments:target.attachments})).catch(error=>store.setError(errorMessage(error)))}else {setComposer(value=>[value,target.text].filter(Boolean).join("\n\n"));if(target.attachments)useAppStore.getState().addAttachments(target.attachments);setWorkbenchView("chat");focusComposer()};};window.addEventListener("grok:compose-feedback",feedback);return()=>window.removeEventListener("grok:compose-feedback",feedback)},[setComposer]);
+  useEffect(()=>{if(pendingFeedback&&pendingFeedback.sessionId===store.activeSessionId){setComposer(value=>[value,pendingFeedback.text].filter(Boolean).join("\n\n"));if(pendingFeedback.attachments)useAppStore.getState().addAttachments(pendingFeedback.attachments);setPendingFeedback(undefined);setWorkbenchView("chat");focusComposer()}},[pendingFeedback,store.activeSessionId,setComposer]);
   const send = async (delivery: "normal" | "queue" | "interject" = "normal"): Promise<void> => {
     const text = composer.trim();
     const sourceDraftKey = draftKey;
@@ -915,7 +921,7 @@ export default function App(): React.JSX.Element {
     ...([['tasks','任务中心'],['extensions','扩展与 Skills'],['settings','设置'],['accounts','账号'],['providers','模型提供商'],['diagnostics','诊断'],['about','关于与更新'],['onboarding','使用引导'],['media','创作'],['history','会话历史与分叉'],['feedback','官方反馈']] as const).map(([id,label]) => ({id:`panel:${id}`,label,disabled:(id==='history'||id==='feedback')&&!store.activeSessionId,run:()=>setPanel(id)})),
     ...store.sessions.map(session=>({id:`session:${session.id}`,label:`会话 / ${session.title}`,run:()=>openConversationTarget({cwd:session.cwd,sessionId:session.id})})),
   ];
-  if(imageMode)return <><Suspense fallback={<div role="status">正在加载图像模式…</div>}><LazyImageWorkspacePage onCode={()=>{setPanel(null);selectImageMode(false)}} onPanel={setPanel} onNotice={store.setError}/></Suspense><DialogHost>
+  if(imageMode)return <><Suspense fallback={<div role="status">正在加载图像模式…</div>}><LazyImageWorkspacePage onCode={()=>{setPanel(null);selectImageMode(false)}} onPanel={panel=>{if(panel==="providers")selectImageMode(false);setPanel(panel)}} onNotice={store.setError}/></Suspense><DialogHost>
     <Suspense fallback={<div role="status">正在加载…</div>}>
       {(panel === "settings" || panel === "accounts" || panel === "about") && <ControlPanel type={panel} confirmAction={askConfirm} onDiagnostics={()=>setPanel("diagnostics")} onProviders={()=>setPanel("providers")} onOnboarding={()=>setPanel("onboarding")} onClose={()=>setPanel(null)}/>}
       {panel === "diagnostics" && <LazyDiagnosticsPanel confirmAction={askConfirm} onClose={()=>setPanel(null)}/>}

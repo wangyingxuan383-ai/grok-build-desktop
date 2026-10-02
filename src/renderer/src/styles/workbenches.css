@@ -356,3 +356,6 @@ button.danger-text { color: var(--danger); }
 @media (max-width: 1040px) {
   .provider-protocol-grid { grid-template-columns: 1fr; }
 }
+
+.preview-server-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--color-border)}
+.preview-server-bar span{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px}

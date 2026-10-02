@@ -271,6 +271,7 @@ export interface AttachmentPrivacyFinding {
 }
 
 export interface AppSettings {
+  notifications?:{completion:"background"|"always"|"off";failure:boolean;confirmation:boolean;sound:boolean};
   cliPath: string;
   httpProxy: string;
   httpsProxy: string;
@@ -279,7 +280,7 @@ export interface AppSettings {
   defaultMode: SessionMode;
   showThinking: boolean;
   expandToolDetails: boolean;
-  /** Check the CLI stable channel and the Desktop GitHub Release on startup, then at most once per 24 hours. */
+  /** Check each app launch; while open check at most once per 24 hours. Also show update indicators. */
   automaticUpdateChecks?: boolean;
   /** Main-process maintained timestamp used to throttle automatic checks. */
   lastAutomaticUpdateCheckAt?: string;
@@ -1470,6 +1471,9 @@ export interface MediaGenerationJob {
   error?: string;
   /** Set when the conversation's earlier CLI session was gone and this turn started fresh. */
   contextReset?: boolean;
+  modelId?: string;
+  providerId?: string;
+  stage?: "starting" | "generating" | "waiting" | "result";
 }
 
 export interface OpenTargetIntent {
@@ -1714,6 +1718,8 @@ export interface ConversationProjection {
 }
 
 export interface SubagentConversationSnapshot {
+  parentCwd?:string;
+  controls?:{canCancel:boolean;cancelReason:string};
   nodeId: string;
   parentSessionId: string;
   childSessionId?: string;
@@ -2138,7 +2144,12 @@ export interface OfflineUiFixture {
 
 export interface GrokDesktopApi {
   listWorkspaceBrowserTabs():Promise<import("./workspace-tools").WorkspaceBrowserTab[]>;
-  createWorkspaceBrowserTab(url:string):Promise<import("./workspace-tools").WorkspaceBrowserTab>;
+  createWorkspaceBrowserTab(url:string,context?:{sessionId?:string;workspace?:string}):Promise<import("./workspace-tools").WorkspaceBrowserTab>;
+  previewConfigurations(workspace:string):Promise<string[]>;
+  startPreviewServer(workspace:string,script:string):Promise<string>;
+  listPreviewServers(workspace:string):Promise<import("./workspace-tools").PreviewServer[]>;
+  stopPreviewServer(id:string):Promise<void>;
+  captureBrowserFeedback(id:string):Promise<{tab:import("./workspace-tools").WorkspaceBrowserTab;previewUrl:string;attachment:Attachment}>;
   navigateWorkspaceBrowser(id:string,url:string):Promise<void>;
   commandWorkspaceBrowser(id:string,action:"back"|"forward"|"reload"|"stop"):Promise<void>;
   boundsWorkspaceBrowser(id:string,bounds:import("./workspace-tools").WorkspaceViewBounds):Promise<void>;
@@ -2303,6 +2314,8 @@ export interface GrokDesktopApi {
   listCodeImages():Promise<MediaAccessHandle[]>;
   createImageConversation():Promise<import("./image-workspace").ImageConversation>;
   saveImageDraft(id:string,draft:string):Promise<void>;
+  saveImageComposerDraft(id:string,draft:import("./image-workspace").ImageComposerDraft):Promise<void>;
+  extendMediaWait(jobId:string):Promise<void>;
   pickImageOutputRoot():Promise<string|undefined>;
   deleteImageConversation(id:string,deleteFiles?:boolean):Promise<{removedFiles:boolean;removedFileCount:number;keptFiles:string[];recordRemoved:boolean;cleanupError?:string}>;
   renameImageConversation(id:string,title:string):Promise<void>;
@@ -2314,6 +2327,8 @@ export interface GrokDesktopApi {
   openMedia(source: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
+  getPullRequestStatus(workspace:string):Promise<import("./workspace-tools").PullRequestStatus>;
+  watchPullRequest(workspace:string,sessionId:string,enabled:boolean):Promise<void>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   listModelCatalog(): Promise<ModelInfo[]>;
   getTheme(): Promise<ThemeSettings>;
@@ -2360,6 +2375,7 @@ export interface GrokDesktopApi {
   setProviderCliDefault(modelId: string): Promise<CustomProviderProfile[]>;
   reloadProviders(): Promise<void>;
   listAutomations(): Promise<AutomationTask[]>;
+  readAutomationInstructions(id:string):Promise<string>;
   createAutomation(input: AutomationTaskInput): Promise<AutomationTask[]>;
   updateAutomation(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]>;
   deleteAutomation(id: string): Promise<AutomationTask[]>;
@@ -2391,6 +2407,10 @@ export interface GrokDesktopApi {
   listBackgroundTasks(): Promise<BackgroundTaskSummary[]>;
   killBackgroundTask(id: string): Promise<void>;
   listInbox(): Promise<NotificationInboxItem[]>;
+  openInboxItem(id:string):Promise<void>;
+  setVisibleConversation(id:string):Promise<void>;
+  testDesktopNotification():Promise<void>;
+  onNotificationTarget(listener:(target:{kind:"image"|"automation";id:string})=>void):()=>void;
   markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]>;
   clearInbox(): Promise<NotificationInboxItem[]>;
   getDraft(key: string): Promise<ComposerDraftState | null>;

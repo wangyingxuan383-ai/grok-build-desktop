@@ -126,6 +126,8 @@
 .sb-account:hover, .sb-version:hover { background: var(--color-hover); }
 .sb-account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-version { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtlest); font: inherit; font-size: var(--text-xs); cursor: pointer; }
+.update-indicator { position: relative; flex-shrink: 0; }
+.update-indicator-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-danger, #e85b63); align-self: flex-start; margin-top: 5px; }
 .avatar { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; border: 1px solid var(--color-border-strong); background: var(--color-card); color: var(--color-fg); font-size: var(--text-xs); font-weight: 700; }
 
 /* ---- Header ---- */
