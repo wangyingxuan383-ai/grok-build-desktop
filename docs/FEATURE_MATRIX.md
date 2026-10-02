@@ -11,7 +11,7 @@
 | Artifacts | Contextual right-pane preview and pinned views | HTML is interactive but isolated, with local relative resources and no external network; Office uses text extraction |
 | Terminal | Workspace-bound manual PTY | No model-control tool is exposed |
 | Web preview | Manual isolated browser view, workspace preview servers, screenshot feedback, downloads and site-data cleanup | No model browser integration is claimed |
-| Notifications | Completion/failure/waiting preferences, inbox and persistent activation targets | Windows activation requires packaged acceptance |
+| Notifications | Completion/failure/waiting preferences, inbox and persistent activation targets | Packaged startup activation verified; system toast delivery depends on Windows notification settings |
 | PR/CI | Optional read-only GitHub CLI status and completion monitoring | Requires gh installation, login and a branch PR |
 | Accounts | Device login and API-key profiles; safe switching | Running official-CLI tasks must complete or stop before mutation |
 

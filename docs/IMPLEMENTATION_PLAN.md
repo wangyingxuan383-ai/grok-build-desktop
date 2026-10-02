@@ -18,7 +18,7 @@
 - [x] Implement notification preferences and activation targets, task-center edit protection and child follow-up.
 - [x] Implement local HTML resources, development previews and screenshot/region feedback.
 - [x] Implement usage refresh, explicit image usage, gallery comparison and optional PR/CI monitoring.
-- [ ] Verify the packaged follow-up candidate and install locally with rollback.
+- [x] Verify the packaged follow-up candidate and install locally with rollback.
 
 ## Capability acceptance still required
 
