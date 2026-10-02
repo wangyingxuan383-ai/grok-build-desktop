@@ -30,7 +30,7 @@ type Pending =
  * switching modes changes the content, not the layout. A session is a real conversation that keeps its
  * context between generations; the gallery is a separate page across all sessions.
  */
-export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers"): void; onNotice?(message: string): void }): React.JSX.Element {
+export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers" | "about"): void; onNotice?(message: string): void }): React.JSX.Element {
   const defaultCliModel=useAppStore(state=>state.settings?.defaultModel||"");
   const declaredModels=useAppStore(state=>state.views[state.activeSessionId]?.models);
   const cliModels=(declaredModels??[]).map(model=>({value:model.modelId,label:model.name||model.modelId}));
@@ -271,6 +271,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
           onSettings={onPanel ? () => onPanel("settings") : undefined}
           onAccounts={onPanel ? () => onPanel("accounts") : undefined}
           onDiagnostics={onPanel ? () => onPanel("diagnostics") : undefined}
+          onUpdates={onPanel ? () => onPanel("about") : undefined}
         />
       }
     >

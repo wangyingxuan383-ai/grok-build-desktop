@@ -20,7 +20,16 @@
 - [x] Implement usage refresh, explicit image usage, gallery comparison and optional PR/CI monitoring.
 - [x] Verify the packaged follow-up candidate and install locally with rollback.
 
-## Capability acceptance still required
+## Update discovery and product overview
+
+- [x] Check updates once per app launch, coalesce repeated requests and retain the daily interval while open.
+- [x] Add optional update indicators to coding and image sidebars; keep failed checks distinct from available versions.
+- [x] Default the gallery to pictures and retain explicit all/failed views.
+- [x] Replace outdated overview screenshots with six isolated demonstrations and document future experience improvements.
+
+See [experience roadmap](EXPERIENCE_ROADMAP.md) for proposed work beyond the current implementation.
+
+## Live capability acceptance
 
 Authenticated end-to-end CLI media editing, Computer Hook proof consumption and native subagent cancellation require separate live acceptance. Anonymous handshakes and fixture tests do not prove model behavior. The CLI is installed separately and is not automatically upgraded by this work.
 

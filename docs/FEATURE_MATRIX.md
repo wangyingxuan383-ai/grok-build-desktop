@@ -14,5 +14,6 @@
 | Notifications | Completion/failure/waiting preferences, inbox and persistent activation targets | Packaged startup activation verified; system toast delivery depends on Windows notification settings |
 | PR/CI | Optional read-only GitHub CLI status and completion monitoring | Requires gh installation, login and a branch PR |
 | Accounts | Device login and API-key profiles; safe switching | Running official-CLI tasks must complete or stop before mutation |
+| Update discovery | Each-launch Desktop/CLI checks, daily interval while open, optional indicators in both modes | Queries stable versions only; never installs automatically or treats network failures as updates |
 
 See [CLI compatibility](CLI_COMPATIBILITY.md), [architecture](ARCHITECTURE.md) and [privacy](PRIVACY.md).

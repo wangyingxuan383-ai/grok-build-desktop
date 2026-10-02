@@ -322,7 +322,7 @@ export default function App(): React.JSX.Element {
       }).catch(() => undefined); };
       automaticUpdateTimer = window.setTimeout(() => {
         checkUpdates();
-        // The main process remains the source of truth for the 24-hour gate.
+        // The main process checks once per launch, then owns the 24-hour gate.
         // A six-hour wakeup means an app left open for days eventually observes
         // a new stable CLI/App release without issuing frequent network calls.
         automaticUpdateTimer = window.setInterval(checkUpdates, 6 * 60 * 60_000);

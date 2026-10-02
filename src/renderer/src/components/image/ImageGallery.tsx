@@ -24,7 +24,7 @@ export function ImageGallery({ conversations, onPreview, onOpenSession, onRemove
   onRemove(removal: GalleryRemoval): void;
 }): React.JSX.Element {
   const [comparison,setComparison]=useState<Work[]>([]);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>("done");
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const works = useMemo(() => collectWorks(conversations), [conversations]);
@@ -60,7 +60,7 @@ export function ImageGallery({ conversations, onPreview, onOpenSession, onRemove
   return (
     <div className="im-gallery">
       <div className="im-gallery-bar">
-        <Segmented<Filter> label="筛选" size="sm" value={filter} onChange={setFilter} items={[{ value: "all", label: `全部 ${works.length + misses.length}` }, { value: "done", label: `图片 ${works.length}` }, { value: "failed", label: `失败 ${misses.length}` }]} />
+        <Segmented<Filter> label="筛选" size="sm" value={filter} onChange={setFilter} items={[{ value: "done", label: `图片 ${works.length}` }, { value: "all", label: `全部 ${works.length + misses.length}` }, { value: "failed", label: `失败 ${misses.length}` }]} />
         <span className="im-spacer" />
         {selecting ? (
           <>

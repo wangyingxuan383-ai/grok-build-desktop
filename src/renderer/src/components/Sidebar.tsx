@@ -8,6 +8,7 @@ import { SessionListRow, relativeTime } from "./SessionListRow";
 import { ActionMenu, type UiAction } from "./ui/ActionMenu";
 import { IconButton } from "./ui/Button";
 import { ModeSwitch, type AppMode } from "./ModeSwitch";
+import { UpdateIndicator } from "./UpdateIndicator";
 
 const LazyFileExplorer = lazy(() => import("./FileWorkbench").then((module) => ({ default: module.FileExplorer })));
 const LazyGitExplorer = lazy(() => import("./GitWorkbench").then((module) => ({ default: module.GitExplorer })));
@@ -292,7 +293,7 @@ export function Sidebar(props: {
           <span className="avatar">{activeAccount?.label.slice(0, 1).toUpperCase() || "?"}</span>
           <span className="sb-account-name">{activeAccount?.label || "登录账号"}</span>
         </button>
-        <button type="button" className="sb-version" title="版本与更新" onClick={() => props.onPanel("about")}><UiIcon name="download" size={14} />{props.version}</button>
+        <UpdateIndicator showVersion onOpen={() => props.onPanel("about")} />
         <IconButton icon="settings" label="设置" onClick={() => props.onPanel("settings")} />
       </div>
     </aside>

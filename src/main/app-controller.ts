@@ -190,7 +190,7 @@ import { TokenActivityClient as TokenActivityService } from "./services/token-ac
 import { ConversationProjectionService } from "./services/conversation-projection-service";
 import { conversationProjectionMatches } from "./services/conversation-search";
 import { buildForkRuntimePreferences, SessionRuntimeStateService } from "./services/session-runtime-state-service";
-import { automaticUpdateCheckDecision } from "./services/update-check-policy";
+import { AutomaticUpdateChecker } from "./services/update-check-policy";
 import { LogService, redactLogText, redactSecrets } from "./services/log-service";
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
@@ -293,6 +293,7 @@ export class AppController {
   private readonly onboarding: OnboardingService;
   private readonly diagnostics: DiagnosticsService;
   private readonly appRelease: AppReleaseService;
+  private automaticUpdateChecker?: AutomaticUpdateChecker;
   private readonly workspaceFiles = new WorkspaceFileService();
   private readonly externalOpenTools = new ExternalOpenToolService();
   private readonly resourceIntegrity: ResourceIntegrityResult;
@@ -3307,18 +3308,13 @@ export class AppController {
   }
   checkCliUpdate() { return this.updater.check(); }
   async checkUpdatesAutomatically(): Promise<import("../shared/types").AutomaticUpdateCheckResult> {
-    const settings = await this.settingsStore.get();
-    const decision = automaticUpdateCheckDecision(settings);
-    if (!decision.shouldCheck) return decision.reason === "disabled"
-      ? { checked: false, reason: "disabled" }
-      : { checked: false, checkedAt: decision.checkedAt, nextCheckAt: decision.nextCheckAt, reason: "throttled" };
-    const [cli, appStatus] = await Promise.all([
-      this.updater.check().catch((error) => ({ found: false, error: error instanceof Error ? error.message : String(error) })),
-      this.appRelease.check(false).catch((error) => ({ configured: false, currentVersion: app.getVersion(), updateAvailable: false, checkedAt: new Date().toISOString(), error: error instanceof Error ? error.message : String(error) })),
-    ]);
-    const checkedAt = new Date().toISOString();
-    await this.settingsStore.patch({ lastAutomaticUpdateCheckAt: checkedAt });
-    return { checked: true, checkedAt, nextCheckAt: decision.nextCheckAt, reason: "checked", cli, app: appStatus };
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return { checked: false, reason: "disabled" };
+    this.automaticUpdateChecker ??= new AutomaticUpdateChecker({
+      settings: () => this.settingsStore.get(), cli: () => this.updater.check(),
+      app: () => this.appRelease.check(false), currentVersion: app.getVersion(),
+      record: at => this.settingsStore.patch({ lastAutomaticUpdateCheckAt: at }),
+    });
+    return this.automaticUpdateChecker.check();
   }
   previewCliUpdate(policy?: CliUpdatePolicy, action?: CliUpdateAction) { return this.updater.preview(policy, action); }
   getCliUpdateState() { return this.updater.state(); }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.10.4
+
+- Check Desktop and CLI updates once per launch, then daily while open; show optional update indicators in both modes without automatic installation.
+- Default the image gallery to pictures while retaining all/failed filters and cleanup.
+- Display Windows workspace folder names correctly in the header.
+- Keep weekly schedule controls compact and prevent checkboxes from expanding the task form.
+- Refresh the project overview with six isolated UI screenshots, feature boundaries and an experience roadmap.
+
 ## 0.10.3 — 2026-10-02
 
 - Fix Windows Provider credential reads and apply Desktop proxy settings to CLI media launches. Bind image dispatch to an explicit model and keep temporary authentication errors separate from missing Provider credentials.

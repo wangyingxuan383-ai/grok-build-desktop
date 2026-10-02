@@ -280,7 +280,7 @@ export interface AppSettings {
   defaultMode: SessionMode;
   showThinking: boolean;
   expandToolDetails: boolean;
-  /** Check the CLI stable channel and the Desktop GitHub Release on startup, then at most once per 24 hours. */
+  /** Check each app launch; while open check at most once per 24 hours. Also show update indicators. */
   automaticUpdateChecks?: boolean;
   /** Main-process maintained timestamp used to throttle automatic checks. */
   lastAutomaticUpdateCheckAt?: string;
