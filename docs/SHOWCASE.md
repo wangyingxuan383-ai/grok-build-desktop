@@ -1,6 +1,6 @@
 # 界面展示
 
-以下是 0.10.4 开发界面的实际截图，使用隔离演示项目、合成会话与自行绘制的示例插画。未使用真实账号、私人会话或付费模型调用；图中生成结果不构成模型能力或速度的证明。安装包版本以 [Releases](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest) 为准。
+以下是 0.10.4 界面的实际截图，使用隔离演示项目、合成会话与自行绘制的示例插画。未使用真实账号、私人会话或付费模型调用；图中生成结果不构成模型能力或速度的证明。安装包版本以 [Releases](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest) 为准。
 
 ## 编程工作台
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.4
+## 0.10.4 — 2026-10-02
 
 - Check Desktop and CLI updates once per launch, then daily while open; show optional update indicators in both modes without automatic installation.
 - Default the image gallery to pictures while retaining all/failed filters and cleanup.

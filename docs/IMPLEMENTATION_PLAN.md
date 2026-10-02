@@ -35,4 +35,7 @@ Authenticated end-to-end CLI media editing, Computer Hook proof consumption and 
 
 ## Delivery
 
+- [x] Prepare 0.10.4 public release notes covering the cumulative desktop experience changes.
+- [ ] Publish the tagged 0.10.4 release after required source checks, artifact construction and remote checksum/provenance verification.
+
 Source changes, local installations and public releases are distinct. The version, build timestamp and release marker are displayed in About. Release procedures remain in the repository scripts and workflows.
