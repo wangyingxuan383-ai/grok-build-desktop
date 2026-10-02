@@ -2,32 +2,55 @@
 
 > 非官方社区客户端，与 xAI 无隶属关系。Grok、Grok Build 与相关商标归其权利人所有。
 
-Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户端。应用通过 ACP 连接用户本机安装的 Grok CLI，提供项目会话、流式对话、工具与 Diff、插件中心、额度面板、Codex 项目会话只读镜像，以及实验性的 Windows Computer Use。
+Grok Build Desktop 是面向 Windows 用户的 Grok Build CLI 图形客户端。在一个工作台里管理代码会话、独立图像创作、项目文件、产物预览和持久定时任务。应用通过 ACP 连接你安装的 Grok CLI，沿用其原生模型、工具与子智能体机制。
 
-![项目仪表盘：从一个任务开始](docs/assets/app-dashboard.png)
+[下载稳定版](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest) · [界面展示](docs/SHOWCASE.md) · [功能与边界](docs/FEATURE_MATRIX.md) · [CLI 兼容说明](docs/CLI_COMPATIBILITY.md) · [反馈问题](https://github.com/wangyingxuan383-ai/grok-build-desktop/issues)
 
-![会话与计划结果展示](docs/assets/app-conversation.png)
+![编程工作台：项目、会话、标签与消息](docs/assets/coding-workspace.png)
 
-## 功能
+以下功能与截图以 0.10.4 开发界面为准，部分改进尚未进入稳定安装包。截图使用隔离演示数据；示例文字与插画不代表真实模型生成或性能结果。公开安装包以 Releases 中的版本为准。
 
-- 编程／图像模式、独立图像会话与图库、参考图及单张/批量删除；编程生图也可保存项目副本。
-- 共享嵌套菜单和命令搜索，右侧产物与只读子智能体会话、项目归档/隐藏及标签管理。
-- 手动终端、隔离浏览器与本机产物预览；Token Worker/SQLite 汇总与系统时区筛选。
+## 工作流
 
-- OAuth / API Key 配置档与 Windows DPAPI 加密，多账号切换。
-- Grok 会话新建、恢复、搜索、置顶、导出与后台通知。
-- Codex 风格的回合、多层执行过程折叠、Markdown/GFM、公式、Mermaid、Diff 和媒体。
-- 动态模型、推理强度、Agent / Plan / 自动批准模式。
-- Grok 插件、Marketplace、Skills、MCP、Hooks 和 Codex 插件兼容扫描。
-- 项目范围 Codex 与 Claude Code 会话只读镜像，并可创建独立 Grok 接力会话。
-- OAuth 周/月/按量额度（取决于当前 Grok CLI 与账号接口）。
-- Windows Computer Use：精确窗口、可见操作状态、紧急停止和高影响操作确认。
-- Codex 风格“+”添加面板：文件、图片、文件夹、工作区文件和已启用插件 Skills；Computer Use 以单次消息能力芯片启用，发送前不提前选择窗口。
-- 经典深色、经典浅色、跟随 Windows、自定义纯色和本地背景图片；背景可只作用于对话区或整个应用内容区。
-- 首次运行向导、兼容诊断、脱敏支持包和仅提示式应用更新。
-- 自定义模型提供商：Chat Completions、Responses、Anthropic Messages、本地服务、模型拉取与连接测试；凭据只引用 Windows 当前用户环境变量。
-- 关闭主窗口后仍能触发的 Windows 持久定时任务：一次、每日、每周、固定间隔、运行记录、通知和高影响操作确认。
-- 活动回合消息队列与 `Ctrl+Enter` 插话、队列编辑/排序、会话分叉、对话/文件回退、会话归档及统一任务中心（取决于 CLI 能力探测）。
+| 场景 | 可以做什么 |
+|---|---|
+| 编程 | 项目与会话管理、原生 ACP 对话、模型/effort/模式选择、消息队列、工具结果、Diff、Git 与 Worktree |
+| 图像创作 | 独立图像会话、参考图、比例与模型选择、完整草稿、请求复用、图库筛选、单张/批量删除与两图对比 |
+| 预览与反馈 | 右侧图片、Markdown、代码、PDF、Office 文本与交互 HTML；手动开发服务器预览、网页截图和区域反馈 |
+| 任务与提醒 | Windows 持久定时任务、运行记录、确认收件箱、完成/失败提醒及返回对应会话 |
+| 扩展能力 | Skills、插件、MCP、Hooks、Agent/Persona、配置档及实验性的 Windows Computer Use |
+| 账号与用量 | OAuth/API Key、多账号、自定义 Provider、明确来源的 Token 汇总与账号额度 |
+
+编程模式也可强调选择生图能力，结果留在当前代码项目中；切换图像模式不会重新分类旧会话。
+
+### 图像会话与图库
+
+每个图像会话保存自己的请求、草稿和作品。图库用于跨会话浏览，默认只显示图片；失败记录在独立筛选中保留，方便诊断和清理。
+
+![独立图像会话：作品与后续描述](docs/assets/image-conversation.png)
+
+![图库：图片优先，失败记录单独筛选](docs/assets/image-gallery.png)
+
+### 右侧产物预览
+
+项目 HTML 可使用同目录相对 CSS、JS、图片与 JSON。需要开发服务器或外部接口的页面，可打开手动网页预览，并将截图和说明加入会话草稿。
+
+![项目文件与右侧交互 HTML 预览](docs/assets/artifact-preview.png)
+
+### 持久任务
+
+选择执行位置、任务指令和时间，查看运行记录与待确认事项。Windows Worker 可在主窗口关闭后执行；电脑仍需开机，Computer 操作要求活动且解锁的桌面。
+
+![持久任务：工作日预设与高级配置](docs/assets/scheduled-tasks.png)
+
+## 能力边界
+
+- 子智能体由 Grok CLI 原生调度；桌面展示状态、结果和可读取的子会话。跟进、取消与恢复按所选 CLI 的实际合同开放。
+- Computer 的能力选择、观察与实际操作分别记录；本机 Host 就绪不代表模型已完成操作。
+- 终端与内嵌浏览器提供手动操作和预览；当前不宣称模型拥有专用浏览器或终端控制工具。
+- 本机历史 Token、当前回合/进程累计和账号额度分别展示，不推算缺失的官方总量。
+- 多轮续图、Computer 与部分原生子智能体操作仍需对应 CLI、模型与登录环境的实际验收。
+- 完成提醒受 Windows 通知权限影响；PR/CI 状态需要已安装并登录的 GitHub CLI。
 
 ## 系统要求
 
@@ -37,7 +60,7 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 
 ## 安装
 
-从[我的仓库 Releases](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases)页面选择：
+从[Releases](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases)页面选择：
 
 - `Grok-Build-Desktop-Setup-vX.Y.Z-x64.exe`：当前用户 NSIS 安装版，无需管理员权限。
 - `Grok-Build-Desktop-Portable-vX.Y.Z-x64.zip`：解压后直接运行，其中的用户数据仍写入 `%APPDATA%\Grok Build Desktop`。
@@ -45,7 +68,7 @@ Grok Build Desktop 是面向 Windows 中文用户的 Grok Build CLI 图形客户
 本项目首批 Release **没有代码签名**。Windows 可能显示 SmartScreen 提示。请从本仓库 Release 下载，并使用同一 Release 中的 `SHA256SUMS.txt` 校验：
 
 ```powershell
-Get-FileHash .\Grok-Build-Desktop-Setup-v0.5.10-x64.exe -Algorithm SHA256
+Get-FileHash .\Grok-Build-Desktop-Setup-vX.Y.Z-x64.exe -Algorithm SHA256
 ```
 
 应用不会静默下载或自动执行未签名安装包。
@@ -104,7 +127,7 @@ npm run check:public # 扫描个人路径、邮箱、代理与凭据模式
 
 ## 常见问题
 
-**为什么没有自动更新？** 公开首版未签名，只检查 GitHub 稳定 Release 并打开下载页，避免静默执行未签名程序。
+**会自动更新吗？** 默认在每次启动后检查应用稳定 Release 和 CLI stable 通道；持续打开时每天检查一次，有更新时在两种模式的侧栏显示红点。可在“设置 → 更新与诊断”关闭检查和提醒。检查不下载安装；应用打开正式 Release 页面，CLI 更新需手动确认并验证兼容性。
 
 **卸载会删除对话吗？** NSIS 默认保留 `%APPDATA%`、`%USERPROFILE%\.grok` 和 Grok 会话。若要完全清理，请在确认备份后手动删除。
 
@@ -116,13 +139,13 @@ npm run check:public # 扫描个人路径、邮箱、代理与凭据模式
 
 **自定义提供商的密钥保存在哪里？** 默认保存为 Windows 当前用户环境变量，`config.toml` 只保存变量名。相同 Windows 用户下的其他进程也可能读取用户环境变量。
 
-**支持 macOS / Linux / 英文吗？** v0.5.10 不支持。当前目标是 Windows x64 与简体中文。
+**支持 macOS / Linux / 英文吗？** 当前目标是 Windows x64 与简体中文。
 
 ## 贡献与安全
 
 请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md) 和 [隐私说明](docs/PRIVACY.md)。Bug 报告不得附带真实 Token、完整日志、工作区源码或未脱敏截图。
 
-仓库入口：[我的 GitHub 仓库](https://github.com/wangyingxuan383-ai/grok-build-desktop) · [版本发布](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases) · [问题反馈](https://github.com/wangyingxuan383-ai/grok-build-desktop/issues)
+仓库入口：[GitHub](https://github.com/wangyingxuan383-ai/grok-build-desktop) · [版本发布](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases) · [问题反馈](https://github.com/wangyingxuan383-ai/grok-build-desktop/issues)
 
 ## 许可证
 
