@@ -1,3 +1,4 @@
+import {PullRequestStatus} from "./PullRequestStatus";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitCommitDetails, GitCommitSummary, GitFileChange, GitRepositoryStatus } from "../../../shared/types";
 import { useGitStore, type GitSelection } from "../git-store";
@@ -66,7 +67,7 @@ export function GitExplorer({ workspace, dialogs }: { workspace: string; dialogs
   };
 
   const groups = groupChanges(git.status);
-  return <section className="git-explorer" aria-label="源代码管理">
+  return <section className="git-explorer" aria-label="源代码管理"><PullRequestStatus workspace={workspace} onError={dialogs.setError}/>
     <header><strong>源代码管理</strong><button title="刷新 Git 状态" disabled={!workspace || git.loading} onClick={() => void refresh()}>↻</button></header>
     {!workspace ? <p className="file-empty">请选择工作区</p> : !git.status ? <p className="file-empty">{git.loading ? "正在读取 Git…" : "当前工作区不是 Git 仓库"}</p> : <>
       <div className="git-branch-summary"><strong>{git.status.branch?.detached ? "分离 HEAD" : git.status.branch?.name || "未知分支"}</strong><span>{branchTrack(git.status)}</span></div>

@@ -11,6 +11,15 @@
 - [x] Keep public documentation focused on product behavior; exclude local handovers.
 - [x] Targeted regressions and packaged startup/IPC acceptance passed for the 0.10.2 release candidate; live capability acceptance remains separate.
 
+## Desktop experience follow-up
+
+- [x] Implement Provider environment boundary fix, unified CLI media launch and explicit image model selection.
+- [x] Implement full image drafts, complete-request reuse, staged waits and diagnostics.
+- [x] Implement notification preferences and activation targets, task-center edit protection and child follow-up.
+- [x] Implement local HTML resources, development previews and screenshot/region feedback.
+- [x] Implement usage refresh, explicit image usage, gallery comparison and optional PR/CI monitoring.
+- [ ] Verify the packaged follow-up candidate and install locally with rollback.
+
 ## Capability acceptance still required
 
 Authenticated end-to-end CLI media editing, Computer Hook proof consumption and native subagent cancellation require separate live acceptance. Anonymous handshakes and fixture tests do not prove model behavior. The CLI is installed separately and is not automatically upgraded by this work.

@@ -18,7 +18,12 @@ const RULES: Record<string, Rule> = {
   "workspace-artifact:save":args=>{absoluteFilesystemPathArg(args,0,"产物工作区");absoluteFilesystemPathArg(args,1,"产物路径")},
   "workspace-artifact:read":args=>{absoluteFilesystemPathArg(args,0,"产物工作区");absoluteFilesystemPathArg(args,1,"产物路径")},
   "workspace-browser:list":noArgs,
-  "workspace-browser:create":args=>stringArg(args,0,8192),
+  "workspace-browser:create":args=>{stringArg(args,0,8192);if(args[1]!==undefined){const context=strictRecordArg(args,1,["sessionId","workspace"]);optionalRecordString(context,"sessionId",512);optionalRecordString(context,"workspace",32767)}},
+  "preview:configurations":args=>pathArg(args,0),
+  "preview:start":args=>{pathArg(args,0);stringArg(args,1,512)},
+  "preview:list":args=>pathArg(args,0),
+  "preview:stop":args=>idArg(args,0),
+  "workspace-browser:capture":args=>idArg(args,0),
   "workspace-browser:navigate":args=>{idArg(args,0);stringArg(args,1,8192)},
   "workspace-browser:command":args=>{idArg(args,0);enumArg(args,1,["back","forward","reload","stop"])},
   "workspace-browser:bounds":args=>{idArg(args,0);const bounds=strictRecordArg(args,1,["x","y","width","height","visible"]);for(const key of ["x","y","width","height"])if(typeof bounds[key]!=="number"||!Number.isFinite(bounds[key])||(bounds[key] as number)<0||(bounds[key] as number)>20000)throw Error("浏览器尺寸无效");if(typeof bounds.visible!=="boolean")throw Error("浏览器显示状态无效")},
@@ -162,6 +167,7 @@ const RULES: Record<string, Rule> = {
   "providers:set-cli-default": (args) => idArg(args, 0),
   "providers:reload": noArgs,
   "automations:list": noArgs,
+  "automations:instructions":args=>idArg(args,0),
   "automations:delete": (args) => idArg(args, 0),
   "automations:create": (args) => automationTaskInputArg(args, 0),
   "automations:update": (args) => { idArg(args, 0); automationTaskPatchArg(args, 1); },
@@ -231,6 +237,9 @@ const RULES: Record<string, Rule> = {
   "tasks:list": noArgs,
   "tasks:kill": (args) => idArg(args, 0),
   "inbox:list": noArgs,
+  "inbox:open":args=>idArg(args,0),
+  "notifications:visible":args=>stringArgAllowEmpty(args,0,512),
+  "notifications:test":noArgs,
   "inbox:mark-read": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "inbox:clear": noArgs,
   "media:start": (args) => mediaCreationArg(args, 0),
@@ -238,6 +247,8 @@ const RULES: Record<string, Rule> = {
   "images:code-artifacts":noArgs,
   "images:create":noArgs,
   "images:draft":args=>{idArg(args,0);stringArgAllowEmpty(args,1,2*1024*1024)},
+  "images:composer":args=>{idArg(args,0);imageComposerArg(args,1)},
+  "media:extend-wait":args=>idArg(args,0),
   "images:root":noArgs,
   "images:delete":args=>{idArg(args,0);optionalBooleanArg(args,1)},
   "images:rename":args=>{idArg(args,0);stringArg(args,1,200)},
@@ -259,6 +270,8 @@ const RULES: Record<string, Rule> = {
   "auth:switch": (args) => idArg(args, 0),
   "auth:remove": (args) => idArg(args, 0),
   "settings:get": noArgs,
+  "git:pull-request":args=>pathArg(args,0),
+  "git:watch-pull-request":args=>{pathArg(args,0);idArg(args,1);booleanArg(args,2)},
   "settings:update": (args) => settingsPatchArg(args, 0),
   "models:catalog": noArgs,
   "updates:auto-check": noArgs,
@@ -602,7 +615,7 @@ const APP_SETTINGS_PATCH_KEYS = [
   "cliPath", "httpProxy", "httpsProxy", "defaultModel", "defaultEffort", "defaultMode",
   "showThinking", "expandToolDetails", "automaticUpdateChecks", "lastAutomaticUpdateCheckAt",
   "fontScale", "uiDensity", "conversationContentWidth", "conversationFontScale", "recentWorkspaces", "activeWorkspace",
-  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme",
+  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme", "notifications",
 ] as const satisfies readonly (keyof AppSettings)[];
 type MissingAppSettingsPatchKey = Exclude<keyof AppSettings, (typeof APP_SETTINGS_PATCH_KEYS)[number]>;
 const _assertAppSettingsPatchKeys: [MissingAppSettingsPatchKey] extends [never] ? true : MissingAppSettingsPatchKey = true;
@@ -617,6 +630,7 @@ void _assertComputerSettingsPatchKeys;
 
 function settingsPatchArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, APP_SETTINGS_PATCH_KEYS);
+  if(value.notifications!==undefined){const policy=strictRecordArg([value.notifications],0,["completion","failure","confirmation","sound"]);requiredRecordEnum(policy,"completion",["background","always","off"]);for(const key of ["failure","confirmation","sound"])if(typeof policy[key]!=="boolean")throw Error("通知设置无效");}
   if (value.cliPath !== undefined) cliPathSetting(value.cliPath);
   for (const key of ["httpProxy", "httpsProxy"] as const) {
     const proxy = optionalRecordStringAllowEmpty(value, key, 4_096);
@@ -910,4 +924,14 @@ function mediaSourceArg(args: unknown[], index: number, allowData: boolean): voi
   if (/^grok-media:\/\/access\/[0-9a-f-]{36}$/i.test(value)) return;
   if (allowData && /^data:image\/[a-z0-9.+-]+;base64,/i.test(value)) return;
   throw new Error("IPC 媒体来源必须是受控媒体句柄");
+}
+function imageComposerArg(args: unknown[], index: number): void {
+ const value=strictRecordArg(args,index,["draft","ratio","route","model","cliModel","references","sources"]);
+ if(typeof value.draft!=="string"||value.draft.length>2*1024*1024)throw Error("图像草稿无效");
+ requiredRecordEnum(value,"ratio",["auto","1:1","16:9","9:16","4:3","3:4"]);
+ requiredRecordEnum(value,"route",["cli","provider"]);
+ for(const name of ["model","cliModel"])if(typeof value[name]!=="string"||(value[name] as string).length>512)throw Error("图像模型无效");
+ attachmentArrayArg([value.references],0);
+ if(!Array.isArray(value.sources)||value.sources.length>8)throw Error("图像参考来源无效");
+ for(const source of value.sources){if(!source||typeof source!=="object")throw Error("图像参考来源无效");mediaSourceArg([(source as Record<string,unknown>).source],0,false);requiredRecordString(source as Record<string,unknown>,"label",512);}
 }

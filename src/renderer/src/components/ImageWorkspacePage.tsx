@@ -3,6 +3,8 @@ import type { ImageConversation, ImageRecord, ImageWorkspace } from "../../../sh
 import type { CustomProviderProfile, MediaAccessHandle, MediaArtifact } from "../../../shared/types";
 import type { ArtifactPreviewTarget } from "../artifact-preview";
 import { UiIcon } from "../ui-icons";
+import { useAppStore } from "../store";
+import type { ImageComposerDraft } from "../../../shared/image-workspace";
 import { AppShell } from "./AppShell";
 import { ArtifactPreviewPane } from "./ArtifactPreviewPane";
 import { ActionMenu, type UiAction } from "./ui/ActionMenu";
@@ -17,6 +19,7 @@ import "../styles/image-studio.css";
 
 const NEW_DRAFT_KEY = "grok.image-new-draft.v1";
 const DRAFT_RECOVERY_KEY = "grok.image-drafts.v1";
+const FULL_DRAFT_KEY="grok.image-composer.v2";
 
 type Pending =
   | { kind: "records"; items: GalleryRemoval["records"] }
@@ -27,17 +30,21 @@ type Pending =
  * switching modes changes the content, not the layout. A session is a real conversation that keeps its
  * context between generations; the gallery is a separate page across all sessions.
  */
-export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics"): void; onNotice?(message: string): void }): React.JSX.Element {
+export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers"): void; onNotice?(message: string): void }): React.JSX.Element {
+  const defaultCliModel=useAppStore(state=>state.settings?.defaultModel||"");
+  const declaredModels=useAppStore(state=>state.views[state.activeSessionId]?.models);
+  const cliModels=(declaredModels??[]).map(model=>({value:model.modelId,label:model.name||model.modelId}));
+  const cachedComposers=useRef<Record<string,ImageComposerDraft>>((()=>{try{return JSON.parse(localStorage.getItem(FULL_DRAFT_KEY)||"{}")}catch{return {}}})());
   const [data, setData] = useState<ImageWorkspace>();
-  const [active, setActive] = useState("");
+  const [active, setActive] = useState(()=>localStorage.getItem("grok.image-notification-target")||"");
   const [view, setView] = useState<ImageView>("session");
   const [collapsed, setCollapsed] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>((): Record<string, string> => {
     try { return { ...JSON.parse(localStorage.getItem(DRAFT_RECOVERY_KEY) || "{}"), "": localStorage.getItem(NEW_DRAFT_KEY) || "" }; } catch { return {}; }
   });
-  const [options, setOptions] = useState<Pick<ComposerState, "ratio" | "route" | "model">>({ ratio: "1:1", route: "cli", model: "" });
-  const [references, setReferences] = useState<ComposerState["references"]>([]);
-  const [sources, setSources] = useState<ComposerState["sources"]>([]);
+  const [options, setOptions] = useState<Pick<ComposerState, "ratio" | "route" | "model" | "cliModel">>({...{ ratio: "1:1", route: "cli", model: "",cliModel:defaultCliModel },...cachedComposers.current[""]});
+  const [references, setReferences] = useState<ComposerState["references"]>(cachedComposers.current[""]?.references??[]);
+  const [sources, setSources] = useState<ComposerState["sources"]>(cachedComposers.current[""]?.sources??[]);
   const [providers, setProviders] = useState<CustomProviderProfile[]>([]);
   const [codeImages, setCodeImages] = useState<MediaAccessHandle[]>();
   const [preview, setPreview] = useState<ArtifactPreviewTarget>();
@@ -59,6 +66,8 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
 
+  useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<{id:string}>).detail.id;void show(id)};window.addEventListener("grok:open-image-conversation",open);return()=>window.removeEventListener("grok:open-image-conversation",open)},[data,active,options,references,sources]);
+  useEffect(()=>{void window.grokDesktop.setVisibleConversation(view==="session"?active:"").catch(()=>undefined)},[active,view]);
   const conversations = data?.conversations ?? [];
   const row = conversations.find((value) => value.id === active);
   const draft = drafts[active] ?? row?.draft ?? "";
@@ -102,10 +111,10 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
       saveTimer.current = setTimeout(() => { void window.grokDesktop.saveImageDraft(id, value).catch(fail); }, 300);
     }
   };
-  const flush = async (): Promise<void> => {
-    clearTimeout(saveTimer.current);
-    if (active && draftsRef.current[active] !== undefined) await window.grokDesktop.saveImageDraft(active, draftsRef.current[active]!);
-  };
+  const capture=():ImageComposerDraft=>({draft:draftsRef.current[active]??row?.draft??"",...options,cliModel:options.cliModel||row?.execution?.modelId||defaultCliModel,references,sources});
+  const saveComposer=async()=>{const value=capture();cachedComposers.current[active]=value;try{localStorage.setItem(FULL_DRAFT_KEY,JSON.stringify(cachedComposers.current))}catch{}if(active)await window.grokDesktop.saveImageComposerDraft(active,value);};
+  useEffect(()=>{if(busy)return;clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>void saveComposer().catch(fail),350);return()=>clearTimeout(saveTimer.current)},[active,draft,options,references,sources,busy]);
+  const flush = async (): Promise<void> => { clearTimeout(saveTimer.current); await saveComposer(); };
   /**
    * Leaves for coding mode. Switching modes is navigation, not a save, so a failed write must not
    * trap the user here: the draft stays on screen in this session and the failure is reported.
@@ -121,7 +130,12 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
     try {
       await flush();
       if (request !== navigation.current) return false;
-      setActive(id); setView(next); resetAttachments(); setError("");
+      const conversation=conversations.find(value=>value.id===id);
+      const restored=cachedComposers.current[id]??conversation?.composerDraft;
+      setOptions({ratio:restored?.ratio??"1:1",route:restored?.route??"cli",model:restored?.model??"",cliModel:restored?.cliModel||conversation?.execution?.modelId||defaultCliModel});
+      setReferences(restored?.references??[]);setSources(restored?.sources??[]);setCodeImages(undefined);
+      if(restored)setDrafts(value=>({...value,[id]:restored.draft}));
+      setActive(id); setView(next); setError("");
       return true;
     } catch (reason) { fail(reason); return false; }
   };
@@ -133,6 +147,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
     const at = navigation.current;
     submittingRef.current = true; setSubmitting(true); setError(""); clearTimeout(saveTimer.current);
     try {
+      await flush();
       let id = active;
       if (!id) {
         // A session is created by its first request, so abandoned "new" pages leave nothing behind.
@@ -147,12 +162,13 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
         // A stable request identity survives an uncertain response; nothing is resubmitted automatically.
         requestId: crypto.randomUUID(),
         referenceSources: sources.map((item) => item.source),
-        request: { kind: "image", prompt: draft, aspectRatio: options.ratio, route: options.route, providerId, modelId, referencePaths: references.flatMap((value) => value.path ? [value.path] : []) },
+        request: { kind: "image", prompt: draft, aspectRatio: options.ratio, route: options.route, providerId:options.route==="provider"?providerId:undefined, modelId:options.route==="provider"?modelId:options.cliModel||row?.execution?.modelId||defaultCliModel, referencePaths: references.flatMap((value) => value.path ? [value.path] : []) },
       });
       if (!alive.current) return;
       if (!active) { try { localStorage.removeItem(NEW_DRAFT_KEY); } catch { /* ignore */ } }
       setDrafts((value) => ({ ...value, [id]: "", ...(!active ? { "": "" } : {}) }));
       try { localStorage.setItem(DRAFT_RECOVERY_KEY, JSON.stringify({ ...draftsRef.current, [id]: "", ...(!active ? { "": "" } : {}) })); } catch { /* best effort */ }
+      delete cachedComposers.current[id];if(!active)delete cachedComposers.current[""];try{localStorage.setItem(FULL_DRAFT_KEY,JSON.stringify(cachedComposers.current))}catch{}
       if (navigation.current === at) resetAttachments();
       await refresh();
       if (job.error && navigation.current === at) setError(job.error);
@@ -168,6 +184,9 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
     onReuse: (record: ImageRecord) => {
       changeDraft(record.prompt);
     },
+    onReuseSettings:record=>{const request=record.request;if(!request)return;changeDraft(record.prompt);setOptions(value=>({...value,ratio:request.aspectRatio,route:request.route==="provider"?"provider":"cli",model:request.providerId&&request.modelId?`${request.providerId}:${request.modelId}`:"",cliModel:request.route!=="provider"?request.modelId||value.cliModel:value.cliModel}));setReferences((request.referencePaths??[]).map((path,index)=>({id:`reused-${index}`,name:path.split(/[\\/]/).at(-1)||"参考图",kind:"image" as const,path})));setSources((record.references?.sources??[]).map(source=>({source,label:"历史作品"})));},
+    onFailureAction:action=>onPanel?.(action==="providers"?"providers":action==="accounts"||action==="usage"?"accounts":"settings"),
+    onExtend:jobId=>{void window.grokDesktop.extendMediaWait(jobId).catch(fail)},
     onCancel: (jobId) => { void window.grokDesktop.cancelMediaGeneration(jobId).catch(fail); },
     onDelete: (conversation, record) => setPending({ kind: "records", items: [{ conversation, record }] }),
     onDeleteArtifact: (conversation, record, artifact) => setPending({ kind: "records", items: [{ conversation, record, artifactId: artifact.id }] }),
@@ -301,6 +320,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
             <ImageComposer
               state={composer}
               models={models}
+              cliModels={cliModels}
               busy={busy}
               hero={!row?.jobs.length}
               codeImages={codeImages}

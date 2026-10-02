@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.3 — 2026-10-02
+
+- Fix Windows Provider credential reads and apply Desktop proxy settings to CLI media launches. Bind image dispatch to an explicit model and keep temporary authentication errors separate from missing Provider credentials.
+- Preserve full image drafts and reusable request settings; allow extending an existing generation wait, improve failure details, and compare two gallery images.
+- Add configurable completion, failure and confirmation notifications with persistent Windows activation targets.
+- Improve task-center partial loading, edit protection, instruction editing, quick schedules and result navigation.
+- Show child-session evidence and recent work, gate cancellation, and prepare follow-up in the parent conversation.
+- Load local HTML resources, add workspace preview servers and screenshot/region feedback, and fix common Windows text decoding.
+- Refresh usage after tasks, record explicitly returned Provider image usage and correct cumulative child charts.
+- Add optional read-only PR/CI status and CI completion monitoring through GitHub CLI; align terminal colors and clarify process termination.
+
 ## 0.10.2 — 2026-10-01
 
 - Update DOMPurify to the 3.4.16 security patch.

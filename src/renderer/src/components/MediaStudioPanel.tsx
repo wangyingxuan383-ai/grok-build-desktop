@@ -1,3 +1,4 @@
+import {explainMediaFailure} from "../../../shared/media-failure";
 import { PanelSurface } from "./ui/PanelSurface";
 import { useEffect, useRef, useState } from "react";
 import type { Attachment, CustomProviderProfile, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution } from "../../../shared/types";
@@ -70,8 +71,8 @@ export function MediaStudioPanel({ sessionId, initialPrompt = "", hasGrokConvers
         projectOutputDirectory: projectOutput ? outputDirectory.trim() : undefined,
         referencePaths: references.flatMap((attachment) => attachment.path ? [attachment.path] : []),
         route,
-        providerId: selectedMediaModel?.provider.id,
-        modelId: selectedMediaModel?.model.id,
+        providerId: route==="provider"?selectedMediaModel?.provider.id:undefined,
+        modelId: route==="provider"?selectedMediaModel?.model.id:undefined,
       });
       if (!openingSession.current) openingSession.current = created.sessionId;
       setJob(pendingProgress.current.get(created.jobId) ?? created);
@@ -105,8 +106,8 @@ export function MediaStudioPanel({ sessionId, initialPrompt = "", hasGrokConvers
         {job && <div className={`media-job-state ${job.status}`}><strong>{job.message}</strong><progress value={job.progress ?? 0} max={100}/>{job.artifacts.map((artifact) => <button key={artifact.id} onClick={() => void window.grokDesktop.openMedia(artifact.source)}>{artifact.name || "打开结果"}</button>)}</div>}
         {job?.savedProjectFiles?.length ? <div role="status"><strong>已保存到项目</strong>{job.savedProjectFiles.map(path=><p key={path} className="media-output-path">{path}</p>)}</div> : null}
         {job?.outputWarning && <p role="alert" className="warning-text">{job.outputWarning}</p>}
-        {(error || job?.error) && <p className="error-text">{error || job?.error}</p>}
-        <div className="button-row media-actions"><button disabled={busy} onClick={onClose}>{job?.status === "completed" ? "完成" : "关闭"}</button>{busy ? <button disabled={!job || submitting} className="danger" onClick={() => job && void window.grokDesktop.cancelMediaGeneration(job.jobId).catch(value=>setError(errorMessage(value)))}>取消生成</button> : <button className="primary" disabled={contextChanged || !prompt.trim() || (projectOutput && !outputDirectory.trim()) || (route === "provider" && !selectedMediaModel)} onClick={() => void submit()}>{job?.status === "completed" ? "再次生成（新请求）" : `开始生成${kind === "image" ? "图片" : "视频"}`}</button>}</div>
+        {(error || job?.error) && <p className="error-text">{explainMediaFailure(error||job?.error||"").summary}</p>}
+        <div className="button-row media-actions"><button disabled={busy} onClick={onClose}>{job?.status === "completed" ? "完成" : "关闭"}</button>{job?.stage==="waiting"&&<button onClick={()=>void window.grokDesktop.extendMediaWait(job.jobId).catch(error=>setError(String(error)))}>延长本次等待</button>}{busy ? <button disabled={!job || submitting} className="danger" onClick={() => job && void window.grokDesktop.cancelMediaGeneration(job.jobId).catch(value=>setError(errorMessage(value)))}>取消生成</button> : <button className="primary" disabled={contextChanged || !prompt.trim() || (projectOutput && !outputDirectory.trim()) || (route === "provider" && !selectedMediaModel)} onClick={() => void submit()}>{job?.status === "completed" ? "再次生成（新请求）" : `开始生成${kind === "image" ? "图片" : "视频"}`}</button>}</div>
       </div>
     </section>
   </PanelSurface>;

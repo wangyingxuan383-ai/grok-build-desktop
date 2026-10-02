@@ -25,7 +25,7 @@ export function ArtifactContent({artifact:a,onMediaError}:{artifact:WorkspaceArt
  if(a.kind==="audio")return <audio controls src={url} onError={onMediaError}/>;
  if(a.kind==="video")return <video className="artifact-media" controls src={url} onError={onMediaError}/>;
  if(a.kind==="pdf")return <iframe className="artifact-frame" title={a.name} src={url}/>;
- if(a.kind==="html")return <><p className="inline-note">隔离预览：脚本与内联样式可用，内联图表和交互可用；网络请求、表单提交和顶层跳转已禁用。</p><iframe className="artifact-frame" title={a.name} sandbox="allow-scripts" referrerPolicy="no-referrer" src={trustedHtmlPreviewUrl(a.previewUrl)}/></>;
+ if(a.kind==="html")return <><p className="inline-note">本地预览：支持脚本及同目录 CSS、JS、图片和 JSON；外部网络与表单禁用。需要接口或热更新的项目请打开开发服务器预览。</p><iframe className="artifact-frame" title={a.name} sandbox="allow-scripts" referrerPolicy="no-referrer" src={trustedHtmlPreviewUrl(a.previewUrl)}/></>;
  if(a.kind==="text"&&/\.md$/i.test(a.name))return <div className="artifact-document"><LazyMarkdownView text={a.data}/></div>;
  return <>{a.kind==="office"&&<p className="inline-note">Office 内容提取：不保留原排版；表格可能显示共享字符串索引，公式及嵌入对象不执行。</p>}<pre className="artifact-document">{a.data}</pre></>;
 }

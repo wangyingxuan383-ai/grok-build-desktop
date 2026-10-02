@@ -1,3 +1,4 @@
+import {UiDialog} from "../ui/primitives";
 import { useEffect, useMemo, useState } from "react";
 import type { ImageConversation, ImageRecord } from "../../../../shared/image-workspace";
 import type { MediaArtifact } from "../../../../shared/types";
@@ -22,6 +23,7 @@ export function ImageGallery({ conversations, onPreview, onOpenSession, onRemove
   onOpenSession(id: string): void;
   onRemove(removal: GalleryRemoval): void;
 }): React.JSX.Element {
+  const [comparison,setComparison]=useState<Work[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -106,9 +108,11 @@ export function ImageGallery({ conversations, onPreview, onOpenSession, onRemove
           })}
         </div>
       )}
+      <UiDialog open={comparison.length===2} onOpenChange={open=>{if(!open)setComparison([])}} title="图片版本对比"><div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>{comparison.map(work=><figure style={{margin:0,minWidth:0}} key={work.key}><img style={{width:"100%",maxHeight:"60vh",objectFit:"contain"}} src={artworkSrc(work.artifact,work.conversation.id,false)} alt={work.record.prompt}/><figcaption>{work.record.prompt} · {work.record.aspectRatio||"自动比例"}</figcaption><Button size="sm" onClick={()=>onOpenSession(work.conversation.id)}>查看来源会话</Button></figure>)}</div></UiDialog>
       {selecting && (
         <div className="im-selection-bar" role="toolbar" aria-label="批量操作">
           <span>已选 {picked.size} 条</span>
+          <Button size="sm" variant="secondary" disabled={works.filter(work=>picked.has(work.key)).length!==2} onClick={()=>setComparison(works.filter(work=>picked.has(work.key)).slice(0,2))}>对比两张图片</Button>
           <Button size="sm" variant="danger" icon="trash" disabled={!picked.size} onClick={removeSelected}>删除…</Button>
         </div>
       )}

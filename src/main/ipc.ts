@@ -23,7 +23,12 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("workspace-terminal:resize",(id:string,cols:number,rows:number)=>controller.resizeWorkspaceTerminal(id,cols,rows));
   handle("workspace-terminal:close",(id:string)=>controller.closeWorkspaceTerminal(id));
   handle("workspace-browser:list",()=>controller.listWorkspaceBrowserTabs());
-  handle("workspace-browser:create",(url:string)=>controller.createWorkspaceBrowserTab(url));
+  handle("workspace-browser:create",(url:string,context?:{sessionId?:string;workspace?:string})=>controller.createWorkspaceBrowserTab(url,context));
+  handle("preview:configurations",(workspace:string)=>controller.previewConfigurations(workspace));
+  handle("preview:start",(workspace:string,script:string)=>controller.startPreviewServer(workspace,script));
+  handle("preview:list",(workspace:string)=>controller.listPreviewServers(workspace));
+  handle("preview:stop",(id:string)=>controller.stopPreviewServer(id));
+  handle("workspace-browser:capture",(id:string)=>controller.captureBrowserFeedback(id));
   handle("workspace-browser:navigate",(id:string,url:string)=>controller.navigateWorkspaceBrowser(id,url));
   handle("workspace-browser:command",(id:string,action:"back"|"forward"|"reload"|"stop")=>controller.commandWorkspaceBrowser(id,action));
   handle("workspace-browser:bounds",(id:string,bounds:import("../shared/workspace-tools").WorkspaceViewBounds)=>controller.boundsWorkspaceBrowser(id,bounds));
@@ -157,6 +162,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("images:code-artifacts",()=>controller.listCodeImages());
   handle("images:create",()=>controller.createImageConversation());
   handle("images:draft",(id:string,draft:string)=>controller.saveImageDraft(id,draft));
+  handle("images:composer",(id:string,draft:import("../shared/image-workspace").ImageComposerDraft)=>controller.saveImageComposerDraft(id,draft));
+  handle("media:extend-wait",(id:string)=>controller.extendMediaWait(id));
   handle("images:root",()=>controller.pickImageOutputRoot());
   handle("images:delete",(id:string,deleteFiles?:boolean)=>controller.deleteImageConversation(id,deleteFiles===true));
   handle("images:rename",(id:string,title:string)=>controller.renameImageConversation(id,title));
@@ -184,6 +191,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("tasks:list", () => controller.listBackgroundTasks());
   handle("tasks:kill", (id: string) => controller.killBackgroundTask(id));
   handle("inbox:list", () => controller.listInbox());
+  handle("inbox:open",(id:string)=>controller.openInboxItem(id));
+  handle("notifications:visible",(id:string)=>controller.setVisibleConversation(id));
+  handle("notifications:test",()=>controller.testDesktopNotification());
   handle("inbox:mark-read", (id: string, read: boolean) => controller.markInboxRead(id, read));
   handle("inbox:clear", () => controller.clearInbox());
   handle("session:cancel", (id: string) => controller.cancelSession(id));
@@ -206,6 +216,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("system:open-media", (source: string) => controller.openMedia(source));
   handle("system:open-external", (url: string) => controller.openExternal(url));
   handle("settings:get", () => controller.getSettings());
+  handle("git:pull-request",(workspace:string)=>controller.getPullRequestStatus(workspace));
+  handle("git:watch-pull-request",(workspace:string,sessionId:string,enabled:boolean)=>controller.watchPullRequest(workspace,sessionId,enabled));
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
   handle("models:catalog", () => controller.listModelCatalog());
   handle("theme:get", () => controller.getTheme());
@@ -251,6 +263,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("providers:set-cli-default", (modelId: string) => controller.setProviderCliDefault(modelId));
   handle("providers:reload", () => controller.reloadProviders());
   handle("automations:list", () => controller.listAutomations());
+  handle("automations:instructions",(id:string)=>controller.readAutomationInstructions(id));
   handle("automations:create", (input: AutomationTaskInput) => controller.createAutomation(input));
   handle("automations:update", (id: string, patch: Partial<AutomationTaskInput>) => controller.updateAutomation(id, patch));
   handle("automations:delete", (id: string) => controller.deleteAutomation(id));

@@ -15,12 +15,23 @@ $Executable = [System.IO.Path]::GetFullPath($Executable)
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Executable not found: $Executable" }
 $ProfileRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ("Grok-Build-Desktop-smoke-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString('N').Substring(0,8))))
 [IO.Directory]::CreateDirectory($ProfileRoot) | Out-Null
-if ($ProbeScript -in @('probe-remaining-packaged.mjs', 'probe-library-packaged.mjs', 'probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs', 'probe-image-options-packaged.mjs', 'probe-recovery-packaged.mjs')) {
+if ($ProbeScript -in @('probe-remaining-packaged.mjs', 'probe-library-packaged.mjs', 'probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs', 'probe-image-options-packaged.mjs', 'probe-recovery-packaged.mjs', 'probe-experience-packaged.mjs')) {
     $IsolatedSettings = @{ activeWorkspace = $ProfileRoot; recentWorkspaces = @($ProfileRoot) } | ConvertTo-Json
     [IO.File]::WriteAllText((Join-Path $ProfileRoot 'settings.json'), $IsolatedSettings, [Text.UTF8Encoding]::new($false))
 }
-if ($ProbeScript -in @('probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs', 'probe-image-options-packaged.mjs', 'probe-recovery-packaged.mjs')) {
+if ($ProbeScript -in @('probe-pages-packaged.mjs', 'probe-image-failure-packaged.mjs', 'probe-image-review-packaged.mjs', 'probe-image-options-packaged.mjs', 'probe-recovery-packaged.mjs', 'probe-experience-packaged.mjs')) {
     [IO.File]::WriteAllText((Join-Path $ProfileRoot 'onboarding.json'), '{"version":1,"completed":false,"skipped":true,"currentStep":0}', [Text.UTF8Encoding]::new($false))
+}
+if ($ProbeScript -eq 'probe-experience-packaged.mjs') {
+    $ImageDirectory = Join-Path $ProfileRoot 'images'
+    [IO.Directory]::CreateDirectory($ImageDirectory) | Out-Null
+    $Rows = @('image-experience-one','image-experience-two') | ForEach-Object {
+        $Directory = Join-Path $ImageDirectory $_
+        [IO.Directory]::CreateDirectory($Directory) | Out-Null
+        @{id=$_;title=$_;cwd=$Directory;createdAt=[DateTime]::UtcNow.ToString('o');updatedAt=[DateTime]::UtcNow.ToString('o');draft='';jobs=@()}
+    }
+    $State = @{version=1;outputRoot=$ImageDirectory;conversations=$Rows} | ConvertTo-Json -Depth 12
+    [IO.File]::WriteAllText((Join-Path $ProfileRoot 'image-workspace.json'),$State,[Text.UTF8Encoding]::new($false))
 }
 if ($ProbeScript -eq 'probe-image-review-packaged.mjs') {
     $ImageDirectory = Join-Path $ProfileRoot 'images\image-review'
@@ -85,6 +96,7 @@ $DebugPort = Get-Random -Minimum 19000 -Maximum 25000
 $HostedRunnerFlags = if ($env:GITHUB_ACTIONS -eq 'true') { '--disable-gpu' } else { '' }
 $Info.Arguments = ("--remote-debugging-port=$DebugPort --user-data-dir=`"$ProfileRoot`" $HostedRunnerFlags $ApplicationArguments").Trim()
 $Info.EnvironmentVariables['GROK_DESKTOP_OFFLINE_SMOKE'] = '1'
+$Info.EnvironmentVariables.Remove('ELECTRON_RUN_AS_NODE')
 $Info.EnvironmentVariables['GROK_HOME'] = Join-Path $ProfileRoot 'offline-cli'
 if ($ProbeScript -in @('probe-v061-ui.mjs', 'probe-v062-ui.mjs', 'probe-v063-ui.mjs', 'probe-v064-ui.mjs', 'probe-v065-ui.mjs', 'probe-v066-ui.mjs', 'probe-v070-ui.mjs')) {
     $Info.EnvironmentVariables['GROK_DESKTOP_UI_FIXTURE'] = '1'

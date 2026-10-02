@@ -12,6 +12,7 @@ const policy: AutomationGlobalPolicy = {
 };
 
 describe("task center data loading", () => {
+  it("publishes tasks before slow sources and preserves them when provider discovery fails",async()=>{const api={listAutomations:async()=>[{id:"kept"}],listAutomationRuns:async()=>[],getAutomationGlobalPolicy:async()=>policy,listBackgroundTasks:async()=>[],listInbox:async()=>[],listProviders:async()=>{throw Error("provider unavailable")}} as unknown as Parameters<typeof loadTaskCenterSnapshot>[0];const snapshots:unknown[]=[];const result=await loadTaskCenterSnapshot(api,value=>snapshots.push(value.tasks));expect(snapshots[0]).toEqual([{id:"kept"}]);expect(result.tasks).toEqual([{id:"kept"}]);expect(result.errors).toEqual(["providers：provider unavailable"])});
   it("reads system-backed sources sequentially before publishing one snapshot", async () => {
     const order: string[] = [];
     let active = 0;

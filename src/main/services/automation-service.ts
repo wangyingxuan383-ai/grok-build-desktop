@@ -114,6 +114,7 @@ export class AutomationService {
     const tasks = values.filter((value): value is StoredAutomationTask => Boolean(value));
     return tasks.map((value) => stripPrompt(value, this.now())).sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
   }
+  async instructions(id:string):Promise<string>{const task=await this.readTask(id);return this.cipher.decrypt(task.encryptedPrompt)}
 
   async create(input: AutomationTaskInput): Promise<AutomationTask[]> { await this.createOne(input); return this.list(); }
 

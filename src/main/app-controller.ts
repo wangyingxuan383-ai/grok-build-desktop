@@ -217,6 +217,8 @@ import { managedBaseUrlEnvironmentName, ProviderService, validateGrokConfig } fr
 import { AutomationService } from "./services/automation-service";
 import { resolveAutomationSessionAction } from "./services/automation-session-lifecycle";
 import { NotificationInboxService } from "./services/notification-inbox";
+import {readPullRequest} from "./services/pull-request-service";
+import {DesktopNotifications,parseNotificationUrl,type NotificationTarget} from "./services/desktop-notifications";
 import { CliCapabilityService } from "./services/cli-capability-service";
 import { WorkspaceTreeService } from "./services/workspace-tree-service";
 import { EditorService } from "./services/editor-service";
@@ -318,9 +320,27 @@ export class AppController {
   private readonly sessionRuntime: SessionRuntimeStateService;
   private window?: BrowserWindow;
   private workspaceBrowser?:WorkspaceBrowserService;
+  private readonly previewServers=new Map<string,{workspace:string;script:string}>();
+  private readonly pullRequestWatches=new Map<string,NodeJS.Timeout>();
+  async getPullRequestStatus(workspace:string){const root=await this.requireToolWorkspace(workspace);return {...await readPullRequest(root,buildCliEnv(await this.settingsStore.get())),watching:this.pullRequestWatches.has(root)}}
+  async watchPullRequest(workspace:string,sessionId:string,enabled:boolean){const root=await this.requireToolWorkspace(workspace);const existing=this.pullRequestWatches.get(root);if(existing)clearInterval(existing);this.pullRequestWatches.delete(root);if(!enabled)return;const owner=this.processes.snapshot(sessionId)??await this.sessionRuntime.get(sessionId);if(!owner||!samePath(owner.cwd,root))throw Error("PR 提醒必须绑定当前项目会话");let previous=await this.getPullRequestStatus(root);if(!previous.available)throw Error(previous.reason);let reading=false;const timer=setInterval(()=>{if(reading)return;reading=true;void this.getPullRequestStatus(root).then(async next=>{if(next.available&&next.number===previous.number&&previous.pending&&!next.pending){await this.inbox.add({kind:"completion",title:"PR 的 CI 检查已结束",detail:`#${next.number} ${next.title}`,sessionId});await this.notices().show(`ci:${root}:${next.number}:${JSON.stringify(next.checks)}`,"completion","PR 的 CI 检查已结束","点击返回关联会话查看项目。",{kind:"session",id:sessionId});}if(next.available)previous=next;}).catch(error=>this.log.log(String(error))).finally(()=>{reading=false})},60_000);timer.unref();this.pullRequestWatches.set(root,timer)}
   private readonly workspaceTerminals=new WorkspaceTerminalService(event=>{if(this.window&&!this.window.isDestroyed())this.window.webContents.send("grok:workspace-terminal",event)});
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
+  private visibleConversationId="";
+  private desktopNotices?:DesktopNotifications;
+  private notices(){return this.desktopNotices??=new DesktopNotifications(()=>this.settingsStore.get(),()=>this.window,()=>this.visibleConversationId,target=>void this.navigateNotification(target).catch(error=>this.log.log(String(error))))}
+  private pendingNotice?:NotificationTarget;
+  private rendererNoticeReady=false;
+  setVisibleConversation(id:string){this.rendererNoticeReady=true;this.visibleConversationId=id;if(this.pendingNotice){const target=this.pendingNotice;this.pendingNotice=undefined;void this.navigateNotification(target).catch(error=>this.log.log(String(error)))}}
+  async testDesktopNotification(){await this.notices().show(`test:${crypto.randomUUID()}`,"completion","Grok 通知测试","点击返回应用。系统通知可在 Windows 设置中管理。",{kind:"automation",id:"test"},true)}
+  async navigateNotification(target:NotificationTarget){
+    if(this.window&&!this.window.isDestroyed()){if(this.window.isMinimized())this.window.restore();this.window.show();this.window.focus();}
+    if(target.kind==="session"){const session=this.processes.snapshot(target.id)??await this.sessionRuntime.get(target.id);if(!session)throw Error("通知所属会话已不存在");this.window?.webContents.send("grok:navigate-session",{sessionId:target.id,cwd:session.cwd});}
+    else this.window?.webContents.send("grok:notification-target",target);
+  }
+  handleNotificationUrl(value:string){const target=parseNotificationUrl(value);if(target){this.pendingNotice=target;if(this.window&&this.rendererNoticeReady)return this.navigateNotification(target).then(()=>{this.pendingNotice=undefined})}return Promise.resolve()}
+  async openInboxItem(id:string){const item=(await this.inbox.list()).find(item=>item.id===id);if(!item)throw Error("通知记录已不存在");await this.navigateNotification(item.automationRunId?{kind:"automation",id:item.automationRunId}:item.sessionId?.startsWith("image-")?{kind:"image",id:item.sessionId}:item.sessionId?{kind:"session",id:item.sessionId}:{kind:"automation",id:item.taskId||"test"});await this.inbox.markRead(id,true)}
   private readonly agentChanges = new AgentChangeService();
   private readonly turnFileChanges = new TurnFileChangeJournal();
   private readonly mediaAccess: MediaAccessService;
@@ -338,6 +358,7 @@ export class AppController {
   private readonly sessionOpenFlights = new Map<string, Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }>>();
   private nextHydrationGeneration = 0;
   private readonly mediaJobs = new Map<string, MediaGenerationJob>();
+  private readonly mediaWaitExtensions = new Map<string, () => void>();
   private readonly mediaJobControls = new Map<string, { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string; keep?: boolean }; contextReset?: boolean; cancellationMessage?: string }>();
   private readonly mediaJobFlights = new Map<string, Promise<void>>();
   private mediaCredentialChanges = 0;
@@ -628,9 +649,9 @@ export class AppController {
   }
   async readWorkspaceArtifact(cwd:string,path:string){
     const artifact=await readWorkspaceArtifact(await this.requireToolWorkspace(cwd),path,{issuedPaths:this.trustedPickedPaths});
-    return artifact.kind==="html"?{...artifact,previewUrl:this.htmlPreviews.register(artifact.data)}:artifact;
+    return artifact.kind==="html"?{...artifact,previewUrl:this.htmlPreviews.register(artifact.data,artifact.path)}:artifact;
   }
-  htmlPreviewResponse(url:string):Response{return this.htmlPreviews.response(url);}
+  htmlPreviewResponse(url:string):Promise<Response>{return this.htmlPreviews.request(url);}
 
   async listWorkspaceTerminals(cwd:string){return this.workspaceTerminals.list(await this.requireToolWorkspace(cwd))}
   async createWorkspaceTerminal(cwd:string){return this.workspaceTerminals.create(await this.requireToolWorkspace(cwd))}
@@ -638,7 +659,12 @@ export class AppController {
   resizeWorkspaceTerminal(id:string,cols:number,rows:number){this.workspaceTerminals.resize(id,cols,rows)}
   closeWorkspaceTerminal(id:string){this.workspaceTerminals.close(id)}
   listWorkspaceBrowserTabs(){return this.workspaceBrowser?.list()??[]}
-  createWorkspaceBrowserTab(url:string){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");return this.workspaceBrowser.create(url)}
+  async createWorkspaceBrowserTab(url:string,context?:{sessionId?:string;workspace?:string}){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");if(context?.workspace)context={...context,workspace:await this.requireToolWorkspace(context.workspace)};if(context?.sessionId){const owner=this.processes.snapshot(context.sessionId)??await this.sessionRuntime.get(context.sessionId);if(!owner||context.workspace&&!samePath(context.workspace,owner.cwd))throw Error("网页关联会话与工作区不匹配");context={...context,workspace:owner.cwd}}return this.workspaceBrowser.create(url,context)}
+  async previewConfigurations(workspace:string):Promise<string[]>{const root=await this.requireToolWorkspace(workspace);try{const data=JSON.parse(await readFile(join(root,"package.json"),"utf8"));return Object.keys(data.scripts??{}).filter(script=>/^(dev|start|preview)(:[A-Za-z0-9_-]+)?$/.test(script))}catch{return []}}
+  async startPreviewServer(workspace:string,script:string){const root=await this.requireToolWorkspace(workspace);if(!(await this.previewConfigurations(root)).includes(script))throw Error("开发服务器配置不存在，请刷新项目脚本");const terminal=await this.workspaceTerminals.create(root);try{this.workspaceTerminals.write(terminal.id,`${process.platform==="win32"?"npm.cmd":"npm"} run ${script}\r`);this.previewServers.set(terminal.id,{workspace:root,script});return terminal.id}catch(error){this.workspaceTerminals.close(terminal.id);throw error}}
+  listPreviewServers(workspace:string):import("../shared/workspace-tools").PreviewServer[]{const terminals=this.workspaceTerminals.list(workspace);return [...this.previewServers].filter(([,value])=>samePath(value.workspace,workspace)).map(([terminalId,value])=>{const terminal=terminals.find(row=>row.id===terminalId);const text=terminal?.output.replace(/\u001b\[[0-9;]*[A-Za-z]/g,"")??"";const url=text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}[^\s\u001b]*/)?.[0];return {terminalId,...value,status:terminal?.status??"exited",url}})}
+  stopPreviewServer(id:string){if(!this.previewServers.has(id))throw Error("开发服务器已不存在");this.workspaceTerminals.close(id);this.previewServers.delete(id)}
+  async captureBrowserFeedback(id:string){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");const {image,state}=await this.workspaceBrowser.capture(id);const bytes=image.toPNG();if(!bytes.length||bytes.length>20*1024*1024)throw Error("网页截图不可用或过大");const owner=state.sessionId||`browser:${id}`;const directory=join(this.userDataPath,"session-attachments",sessionCacheKey(owner));await mkdir(directory,{recursive:true});const path=join(directory,`${crypto.randomUUID()}.png`);await writeFile(path,bytes);this.trustedPickedPaths.add(process.platform==="win32"?path.toLowerCase():path);const media=await this.mediaAccess.registerAttachment(owner,path,"image/png","网页截图");return {tab:state,previewUrl:`grok-media://access/${media.id}?sessionId=${encodeURIComponent(owner)}`,attachment:{id:crypto.randomUUID(),name:"网页预览.png",path,kind:"image" as const,mimeType:"image/png",size:bytes.length}}}
   navigateWorkspaceBrowser(id:string,url:string){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");return this.workspaceBrowser.navigate(id,url)}
   commandWorkspaceBrowser(id:string,action:"back"|"forward"|"reload"|"stop"){this.workspaceBrowser?.command(id,action)}
   boundsWorkspaceBrowser(id:string,bounds:import("../shared/workspace-tools").WorkspaceViewBounds){this.workspaceBrowser?.bounds(id,bounds)}
@@ -1252,8 +1278,12 @@ export class AppController {
     if (nodeId.startsWith("session:")) return this.cancelSession(nodeId.slice("session:".length));
     throw new Error("Agent Dashboard 节点标识无效");
   }
-  getSubagentConversation(nodeId: string) {
-    return new SubagentConversationService(id => this.dashboard.subagentRecord(id), id => this.conversationProjections.inspect(id)).read(nodeId);
+  async getSubagentConversation(nodeId: string) {
+    const snapshot=await new SubagentConversationService(id => this.dashboard.subagentRecord(id), id => this.conversationProjections.inspect(id)).read(nodeId);
+    const parent=this.processes.snapshot(snapshot.parentSessionId)??await this.sessionRuntime.get(snapshot.parentSessionId);
+    let advertised=false;try{advertised=this.processes.get(snapshot.parentSessionId).runtimeHandshake?.extensions.includes("x.ai/subagent/cancel")===true}catch{}
+    const target=await this.dashboard.cancellationTarget(nodeId);
+    return {...snapshot,parentCwd:parent?.cwd,controls:{canCancel:Boolean(target&&advertised),cancelReason:advertised?"CLI 尚未提供可取消的原生 ID":"当前父会话未声明取消合同；可在父会话要求停止对应子任务"}};
   }
   clearAgentDashboardRecord(nodeId?: string): Promise<void> { return this.dashboard.clear(nodeId); }
   async inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]> { return inspectAttachmentPrivacy(cwd, attachments); }
@@ -1520,6 +1550,13 @@ export class AppController {
   createImageConversation(){return this.imageWorkspace.create()}
   async listCodeImages(){const images=await this.imageWorkspace.list();return this.mediaAccess.listGeneratedImages(new Set([...this.deletingSessions,...images.conversations.map(row=>row.id)]))}
   saveImageDraft(id:string,draft:string){return this.imageWorkspace.draft(id,draft)}
+  readAutomationInstructions(id:string){return this.automations.instructions(id)}
+  async saveImageComposerDraft(id:string,draft:import("../shared/image-workspace").ImageComposerDraft){
+    const row=await this.imageWorkspace.get(id);if(!row)throw Error("图像会话已不存在");
+    for(const reference of draft.references){if(!reference.path)continue;const path=await realpath(reference.path);if(!pathWithin(path,row.cwd)&&!hasCanonicalPath(this.trustedPickedPaths,path)&&!row.composerDraft?.references.some(previous=>previous.path===reference.path)&&!row.jobs.some(record=>record.job.status==="completed"&&record.request?.referencePaths?.includes(reference.path!)))throw Error("请通过文件选择器重新授权参考图");}
+    return this.imageWorkspace.composer(id,draft);
+  }
+  extendMediaWait(jobId:string):void{const extend=this.mediaWaitExtensions.get(jobId);if(!extend)throw Error("此任务已结束或尚未开始等待");extend();const job=this.mediaJobs.get(jobId);if(job){job.message="已延长本次等待，没有重新提交生成请求";job.updatedAt=new Date().toISOString();this.publishMediaJob(job)}}
   async pickImageOutputRoot(){const result=await dialog.showOpenDialog(this.window!,{title:"选择图片保存根目录",properties:["openDirectory","createDirectory"]});return result.canceled?undefined:this.imageWorkspace.root(result.filePaths[0]!)}
   renameImageConversation(id:string,title:string){return this.imageWorkspace.rename(id,title)}
   /**
@@ -1677,10 +1714,12 @@ export class AppController {
     if(this.deletingSessions.has(input.conversationId))throw Error("此图像会话正在删除");
     if(input.request.kind!=="image")throw Error("图像模式只接受图片任务");
     if(input.request.referencePaths?.length && input.request.route==="provider")throw Error("此 Provider 图片编辑合同尚未接入，请使用 CLI 或移除参考图");
+    const prior=await this.imageWorkspace.get(input.conversationId);
     const reserved=await this.imageWorkspace.reserve(input);
     if(!reserved.created)return reserved.job;
     try{
       const references=[...(input.request.referencePaths??[])];
+      for(const path of references)if(prior?.composerDraft?.references.some(reference=>reference.path===path)){const canonical=await realpath(path);this.trustedPickedPaths.add(process.platform==="win32"?canonical.toLowerCase():canonical);}
       for(const source of input.referenceSources??[]){const local=await this.mediaAccess.resolve(source);if(local.media!=="image")throw Error("参考产物必须是图片");this.trustedPickedPaths.add(process.platform==="win32"?local.path.toLowerCase():local.path);references.push(local.path)}
       if(references.length && input.request.route==="provider")throw Error("此 Provider 图片编辑合同尚未接入，请选择 CLI");
       return await this.startMediaGeneration({...input.request,referencePaths:references,sessionId:input.conversationId,projectOutputDirectory:"originals"},reserved.job.jobId,reserved.job.outputRoot)
@@ -1782,7 +1821,7 @@ export class AppController {
     this.publishMediaJob(job);
     try {
       let artifacts: MediaArtifact[];
-      if (job.route === "provider") artifacts = await this.runProviderMedia(request, control.abort.signal);
+      if (job.route === "provider") artifacts = await this.runProviderMedia(request, control.abort.signal,jobId);
       else {
         try { artifacts = await this.runCliMedia(jobId, request, control, submittedCwd); }
         catch (cliError) {
@@ -1794,7 +1833,7 @@ export class AppController {
           job.updatedAt = new Date().toISOString();
           this.publishMediaJob(job);
           request = { ...request, providerId: fallback.providerId, modelId: fallback.modelId };
-          artifacts = await this.runProviderMedia(request, control.abort.signal);
+          artifacts = await this.runProviderMedia(request, control.abort.signal,jobId);
         }
       }
       if (control.abort.signal.aborted) throw control.abort.signal.reason;
@@ -1802,6 +1841,7 @@ export class AppController {
       job.progress = 90;
       job.updatedAt = new Date().toISOString();
       this.publishMediaJob(job);
+
       job.artifacts = [];
       const artifactRoots: string[] = submittedCwd ? [submittedCwd] : [];
       if (control.transientSession) {
@@ -1853,8 +1893,10 @@ export class AppController {
       }
       try {
         if(job.sessionId.startsWith("image-"))await this.imageWorkspace.update(job).catch(error=>this.log.log(`图像记录保存失败：${String(error)}`).catch(()=>undefined));
-      } finally { this.mediaJobControls.delete(jobId); }
+      } finally { this.mediaJobControls.delete(jobId); this.mediaWaitExtensions.delete(jobId); }
       this.publishMediaJob(job);
+      await this.inbox.add({kind:job.status==="completed"?"completion":"failure",title:job.status==="completed"?"图像任务已完成":job.status==="cancelled"?"媒体等待已取消":"图像任务失败",detail:job.status==="completed"?job.message:job.error||job.message,sessionId:job.sessionId});
+      await this.notices().show(`media:${jobId}`,job.status==="completed"?"completion":"failure",job.status==="completed"?"Grok 媒体已生成":"Grok 媒体任务已结束",job.status==="completed"?`已保存 ${job.artifacts.length} 个产物，点击查看。`:"点击查看原因与现有结果。",{kind:job.sessionId.startsWith("image-")?"image":"session",id:job.sessionId});
     }
   }
 
@@ -1867,6 +1909,12 @@ export class AppController {
     if (!session) throw new Error("会话当前未加载");
     if (submittedCwd !== undefined && session.cwd !== submittedCwd) throw new Error("媒体生成前会话项目已改变，请重新提交");
     const executionCwd = session.cwd;
+    const modelId = request.modelId || imageSession?.execution?.modelId || session.modelId || settings.defaultModel;
+    if (!modelId) throw new Error("请明确选择 CLI 调度模型后生成图片");
+    const providerId = await this.resolveManagedProviderSelection(modelId);
+    const accountId = (await this.vault.active())?.profile.id;
+    if(imageSession)await this.imageWorkspace.execution(imageSession.id,{modelId,providerId,accountId});
+    const mediaJob=this.mediaJobs.get(jobId);if(mediaJob){mediaJob.modelId=modelId;mediaJob.providerId=providerId;}
     const continuing = Boolean(imageSession?.cliSessionId);
     // A continued conversation may edit what an earlier turn produced without a fresh reference file.
     const toolList = request.kind === "image" ? continuing ? "image_gen,image_edit" : request.referencePaths?.length ? "image_edit" : "image_gen" : "video_gen,image_to_video,reference_to_video";
@@ -1875,7 +1923,8 @@ export class AppController {
       scopeId: `media-${crypto.randomUUID()}`,
       sessionId: request.sessionId,
       cwd: session.cwd,
-      modelId: session.modelId,
+      modelId,
+      providerId,
     });
     const apiKey = await this.auth.activeApiKey();
     await this.updater.assertRuntimeLaunchAllowed();
@@ -1893,23 +1942,26 @@ export class AppController {
     const launch = async (sessionId: string, resume: boolean): Promise<MediaArtifact[]> => {
       await this.updater.assertRuntimeLaunchAllowed();
       control.abort.signal.throwIfAborted();
-      const cliArgs = buildCliMediaArgs(prompt, sessionId, toolList, resume);
+      const cliArgs = buildCliMediaArgs(prompt, sessionId, toolList, resume, modelId);
       let usage: import("../shared/types").TurnUsage | undefined;
       try { return await runCliMediaProcess({
       executable,
       args: batch ? ["/d", "/s", "/c", windowsBatchCommand(cliPath, cliArgs)] : cliArgs,
       cwd: session.cwd,
-      env: { ...process.env, ...providerEnvironment, ...(apiKey ? { XAI_API_KEY: apiKey } : {}) },
+      env: { ...buildCliEnv(settings, apiKey), ...providerEnvironment },
       media: request.kind,
       excludeSources: request.referencePaths,
       signal: control.abort.signal,
       idleTimeoutMs: request.kind === "video" ? 600_000 : 180_000,
+      generationTimeoutMs: request.kind === "video" ? 600_000 : 360_000,
+      onWaitControl: extend => this.mediaWaitExtensions.set(jobId, extend),
       windowsVerbatimArguments: batch,
       onSpawn: (child) => { control.child = child; },
-      onUsage: (reported) => { usage = mergeTurnUsage(usage, reported); },
+      onUsage: (reported) => { usage = mergeTurnUsage(usage, {...reported, ...(providerId ? {providerId}: {})}); },
       onProgress: (progress) => {
         const job = this.mediaJobs.get(jobId);
         if (job) {
+          job.stage = progress?.stage;
           job.progress = progress?.stage === "result" ? 85 : progress?.stage === "generating" ? 35 : Math.max(job.progress ?? 5, 5);
           job.message = progress?.message ?? "Grok CLI 已有响应，等待媒体结果";
           job.updatedAt = new Date().toISOString();
@@ -2069,10 +2121,10 @@ export class AppController {
     }
   }
 
-  private async runProviderMedia(request: MediaCreationRequest & { sessionId: string }, signal: AbortSignal): Promise<MediaArtifact[]> {
+  private async runProviderMedia(request: MediaCreationRequest & { sessionId: string }, signal: AbortSignal,jobId?:string): Promise<MediaArtifact[]> {
     if (!request.providerId || !request.modelId) throw new Error("Provider 媒体路由缺少提供商或模型");
     return request.kind === "image"
-      ? this.providers.generateImage({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, signal })
+      ? this.providers.generateImage({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, signal,onUsage:async usage=>jobId?this.tokenActivity.record(request.sessionId,{turnId:`media-provider:${jobId}`,ordinal:0,startedAt:this.mediaJobs.get(jobId)?.startedAt??new Date().toISOString(),completedAt:new Date().toISOString(),usage},{workspace:this.processes.snapshot(request.sessionId)?.cwd??(await this.imageWorkspace.get(request.sessionId))?.cwd}).catch(error=>this.log.log(`媒体用量记录失败：${String(error)}`)):undefined })
       : this.providers.generateVideo({ providerId: request.providerId, modelId: request.modelId, prompt: request.prompt, aspectRatio: request.aspectRatio, duration: request.duration ?? 6, resolution: request.resolution ?? "480p", voice: request.voice, referencePaths: request.referencePaths, signal });
   }
 
@@ -3431,6 +3483,7 @@ export class AppController {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    for(const timer of this.pullRequestWatches.values())clearInterval(timer);this.pullRequestWatches.clear();
     this.workspaceTerminals.dispose();
     this.workspaceBrowser?.dispose();
     // The updater may currently be replacing grok.exe and still owes the user a
@@ -3750,11 +3803,12 @@ export class AppController {
     if (event.type === "status" && event.status === "error") await this.computer.settleSession(event.sessionId, "error", event.text || "Grok 进程异常，Computer Use 已清理").catch(() => undefined);
     if (event.type === "status" && event.status === "error" && event.text) this.captureQuotaSignal(event.text, this.processes.snapshot(event.sessionId)?.modelId);
     if (event.type === "status" && (event.status === "working" || event.status === "needs-user")) this.runningSessions.add(event.sessionId);
-    if (event.type === "status" && (event.status === "idle" || event.status === "error") && event.sessionId !== this.focusedSessionId) {
-      await this.catalog.markUnread(event.sessionId, event.status === "error");
-      if (this.runningSessions.has(event.sessionId)) await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "后台会话失败" : "后台会话已完成", detail: event.text, sessionId: event.sessionId });
-      if (this.runningSessions.delete(event.sessionId)) this.showSessionNotification(event.sessionId, event.status === "error");
+    if (event.type === "status" && (event.status === "idle" || event.status === "error") && this.runningSessions.delete(event.sessionId)) {
+      if(this.visibleConversationId!==event.sessionId||!this.window?.isFocused())await this.catalog.markUnread(event.sessionId, event.status === "error");
+      await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "会话失败" : "会话已完成", detail: event.text, sessionId: event.sessionId });
+      await this.notices().show(`session:${event.sessionId}:${Date.now()}`,event.status==="error"?"failure":"completion",event.status==="error"?"Grok 会话失败":"Grok 会话已完成","点击查看最终回复或错误详情。",{kind:"session",id:event.sessionId});
     }
+    if(["permission","question","plan","computer-permission","computer-risk"].includes(event.type)&&event.sessionId){const raw=event as unknown as {requestId?:string;request?:{requestId?:string}};await this.notices().show(`confirmation:${event.sessionId}:${raw.requestId??raw.request?.requestId??event.type}`,"confirmation","Grok 正在等待你处理","任务已暂停，点击返回会话。",{kind:"session",id:event.sessionId});}
   }
 
   private finishProjectionReplay(sessionId: string): void {
@@ -3826,33 +3880,10 @@ export class AppController {
     }
   }
 
-  private showSessionNotification(sessionId: string, failed: boolean): void {
-    if (!Notification.isSupported()) return;
-    const snapshot = this.processes.snapshot(sessionId);
-    if (!snapshot) return;
-    const notification = new Notification({ title: failed ? "Grok 后台任务失败" : "Grok 后台任务已完成", body: failed ? "点击查看错误详情。" : "点击查看最终回复。", silent: false });
-    notification.on("click", () => {
-      if (!this.window) return;
-      if (this.window.isMinimized()) this.window.restore();
-      this.window.show(); this.window.focus();
-      this.window.webContents.send("grok:navigate-session", { sessionId, cwd: snapshot.cwd });
-    });
-    notification.show();
-  }
-
   private async showAutomationNotification(run: AutomationRunRecord): Promise<void> {
-    if (!Notification.isSupported()) return;
-    const [task, policy] = await Promise.all([this.automations.list().then((values) => values.find((value) => value.id === run.taskId)), this.automations.getPolicy()]);
-    if (!task?.notify || (run.status === "completed" ? !policy.notifyOnSuccess : !policy.notifyOnFailure)) return;
-    const interactive = Boolean(this.window);
-    const notification = new Notification({
-      title: run.warning ? "定时任务结果待检查" : run.status === "completed" ? "定时任务已完成" : "定时任务失败",
-      body: run.warning || (run.status === "completed"
-        ? interactive ? "点击打开任务中心查看结果。" : "结果已保存，可在任务中心查看。"
-        : run.error || (interactive ? "点击打开任务中心查看详情。" : "详情已保存到任务中心。")),
-    });
-    if (interactive) notification.on("click", () => this.openInteractiveTaskCenter());
-    notification.show();
+    const [task,policy]=await Promise.all([this.automations.list().then(tasks=>tasks.find(task=>task.id===run.taskId)),this.automations.getPolicy()]);
+    if(!task?.notify||(run.status==="completed"?!policy.notifyOnSuccess:!policy.notifyOnFailure))return;
+    await this.notices().show(`automation:${run.id}`,run.status==="completed"&&!run.warning?"completion":"failure",run.warning?"定时任务结果待检查":run.status==="completed"?"定时任务已完成":"定时任务失败","点击打开对应运行记录。",{kind:"automation",id:run.id});
   }
 
   private async recordAutomationResult(run: AutomationRunRecord): Promise<void> {
@@ -3867,10 +3898,7 @@ export class AppController {
   }
 
   private showAutomationPendingNotification(pending: import("../shared/types").AutomationPendingConfirmation): void {
-    if (!Notification.isSupported()) return;
-    const notification = new Notification({ title: pending.source === "computer" ? "定时任务：Computer 操作等待确认" : "定时任务：工具权限等待确认", body: `操作已暂停，将在 ${new Date(pending.expiresAt).toLocaleTimeString("zh-CN")} 前等待处理。可在关联会话或任务中心处理。` });
-    notification.on("click", () => this.openInteractiveTaskCenter());
-    notification.show();
+    void this.notices().show(`pending:${pending.id}`,"confirmation","定时任务等待确认",`操作已暂停，将在 ${new Date(pending.expiresAt).toLocaleTimeString("zh-CN")} 前等待处理。点击打开任务中心。`,{kind:"automation",id:pending.runId}).catch(error=>this.log.log(String(error)));
   }
 
   private openInteractiveTaskCenter(): void {

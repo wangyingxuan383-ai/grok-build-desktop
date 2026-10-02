@@ -10,6 +10,7 @@ type View = "daily" | "weekly" | "total";
  * for, and a chart that quietly omits it would be a lie of omission.
  */
 export function TokenActivityPanel({ onError }: { onError(message: string): void }): React.JSX.Element {
+  const [revision,setRevision]=useState(0);
   const [report, setReport] = useState<TokenActivityReport>();
   const [model, setModel] = useState("");
   const [provider, setProvider] = useState("");
@@ -26,7 +27,8 @@ export function TokenActivityPanel({ onError }: { onError(message: string): void
       .catch((error: unknown) => { if (!cancelled) onError(error instanceof Error ? error.message : String(error)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [model, provider, workspace]);
+  }, [model, provider, workspace,revision]);
+  useEffect(()=>{let timer:ReturnType<typeof setTimeout>|undefined;const refresh=()=>{clearTimeout(timer);timer=setTimeout(()=>setRevision(value=>value+1),350)};const off=window.grokDesktop.onEvent(event=>{if(event.type==="turn-completed"||(event.type==="status"&&["idle","error"].includes(event.status)))refresh()});const media=window.grokDesktop.onMediaGenerationProgress(job=>{if(["completed","failed","cancelled"].includes(job.status))refresh()});window.addEventListener("focus",refresh);return()=>{off();media();clearTimeout(timer);window.removeEventListener("focus",refresh)}},[]);
 
   const cells = useMemo(() => buildCells(report?.days ?? [], view), [report, view]);
   const peak = useMemo(() => Math.max(1, ...cells.map((cell) => cell.totalTokens)), [cells]);
@@ -39,10 +41,10 @@ export function TokenActivityPanel({ onError }: { onError(message: string): void
   ];
 
   return <div className="token-activity">
-    <p className="settings-note">本页是本机逐回合历史（{report?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone}）。涵盖编程会话和 CLI 明确上报的媒体回合；直接 Provider 生图暂未计入。卡片只汇总保留的回合明细，热图另含匿名删除会话汇总。总量与输入、输出分别保留各次上报值，可能来自不同通知，不能保证简单相加相等；不自行补造 total；当前进程会话累计和账号订阅额度分别显示在会话信息与账号额度中。</p>
+    <p className="settings-note">本页是本机逐回合历史（{report?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone}）。涵盖编程会话和 CLI 明确上报的媒体回合；直接 Provider 生图仅在接口明确返回用量时计入，未上报的消耗无法推算。卡片只汇总保留的回合明细，热图另含匿名删除会话汇总。总量与输入、输出分别保留各次上报值，可能来自不同通知，不能保证简单相加相等；不自行补造 total；当前进程会话累计和账号订阅额度分别显示在会话信息与账号额度中。</p>
     {report?.sources.length ? <small className="settings-note">当前明细来源：{report.sources.map(sourceName).join("、")}</small> : null}
     {report?.anonymousExcludedByFilter && <p className="settings-note">当前筛选不包含已删除会话的匿名汇总；清除筛选后，热图会显示匿名历史和保留旧 UTC 口径的汇总。</p>}
-    <div className="token-activity-controls">
+    <div className="token-activity-controls"><button disabled={loading} onClick={()=>setRevision(value=>value+1)}>{loading?"正在刷新…":"刷新统计"}</button>
       <label>模型
         <select value={model} onChange={(event) => setModel(event.target.value)}>
           <option value="">全部模型</option>
@@ -88,7 +90,7 @@ export function TokenActivityPanel({ onError }: { onError(message: string): void
 
 interface Cell { key: string; label: string; turns: number; turnsWithUsage: number; turnsWithTotal: number; totalTokens: number; subagentTokens: number; subagentTurns: number; source: TokenDayBucket["source"] }
 
-function buildCells(days: TokenDayBucket[], view: View): Cell[] {
+export function buildCells(days: TokenDayBucket[], view: View): Cell[] {
   if (view === "daily") return days.map((day) => ({ key: day.day, label: day.day, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: day.totalTokens, subagentTokens: day.subagentTokens, subagentTurns: day.subagentTurns, source: day.source }));
   if (view === "weekly") {
     const weeks: Cell[] = [];
@@ -108,10 +110,10 @@ function buildCells(days: TokenDayBucket[], view: View): Cell[] {
     }
     return weeks;
   }
-  let running = 0;
+  let running = 0,childRunning=0,childTurns=0;
   return days.map((day) => {
-    running += day.totalTokens;
-    return { key: day.day, label: `截至 ${day.day}`, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: running, subagentTokens: day.subagentTokens, subagentTurns: day.subagentTurns, source: combineSource(days.slice(0, days.indexOf(day) + 1).map((item) => item.source)) };
+    running += day.totalTokens;childRunning+=day.subagentTokens;childTurns+=day.subagentTurns;
+    return { key: day.day, label: `截至 ${day.day}`, turns: day.turns, turnsWithUsage: day.turnsWithUsage, turnsWithTotal: day.turnsWithTotal, totalTokens: running, subagentTokens: childRunning, subagentTurns: childTurns, source: combineSource(days.slice(0, days.indexOf(day) + 1).map((item) => item.source)) };
   });
 }
 

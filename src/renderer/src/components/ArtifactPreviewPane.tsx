@@ -33,7 +33,7 @@ export function ArtifactPreviewPane({target,onClose,onPin,onReturn,onError,onPin
   };
   const actions=<div className="artifact-preview-actions">
     {target.sessionId&&<button onClick={()=>onReturn(target.sessionId!,target.workspace)}>返回来源会话</button>}
-    {target.kind==="file"&&artifact&&<><button onClick={()=>onPin(target.workspace,artifact.path)}>固定为标签</button><button onClick={()=>action(window.grokDesktop.saveWorkspaceArtifact(target.workspace,artifact.path))}>另存原文件</button></>}
+    {target.kind==="file"&&artifact&&<><button onClick={()=>onPin(target.workspace,artifact.path)}>固定为标签</button>{artifact.kind==="html"&&<button onClick={()=>window.dispatchEvent(new CustomEvent("grok:project-preview",{detail:{workspace:target.workspace,sessionId:target.sessionId}}))}>开发服务器预览</button>}<button onClick={()=>action(window.grokDesktop.saveWorkspaceArtifact(target.workspace,artifact.path))}>另存原文件</button></>}
     {target.kind==="media"&&src&&!failedMedia&&<>{onPinMedia&&!target.isData&&<button onClick={()=>onPinMedia(target)}>固定为标签</button>}{target.media==="image"&&<><button onClick={()=>action(window.grokDesktop.copyImage(src))}>复制图片</button><button onClick={()=>action(window.grokDesktop.saveImage(src))}>另存原图</button></>}{!target.isData&&<button onClick={()=>action(window.grokDesktop.openMedia(src))}>打开原文件</button>}</>}
   </div>;
   return <Dialog.Root open={expanded} onOpenChange={setExpanded}><aside className="right-utility-pane artifact-preview-pane" aria-label="产物预览">

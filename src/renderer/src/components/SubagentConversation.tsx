@@ -71,7 +71,7 @@ export function SubagentConversation({ nodeId, variant = "page", onParent, onClo
   const facts = [
     details?.type,
     details?.model,
-    details?.toolCalls !== undefined ? `${details.toolCalls} 次工具` : undefined,
+    details?.toolCalls !== undefined ? `CLI 上报 ${details.toolCalls} 次工具` : undefined,
     details?.turns !== undefined ? `${details.turns} 回合` : undefined,
     details?.durationMs !== undefined ? formatDuration(details.durationMs) : undefined,
   ].filter(Boolean);
@@ -86,7 +86,8 @@ export function SubagentConversation({ nodeId, variant = "page", onParent, onClo
         </div>
         {snapshot && <Badge tone={statusTone(snapshot.status)}>{running && <UiIcon name="loader" size={11} className="ui-spin" />}{statusText(snapshot.status)}</Badge>}
         <div className="sa-session-tools">
-          {running && <Button size="sm" variant="danger" loading={stopping} onClick={() => void stop()}>停止</Button>}
+          {running && <Button size="sm" variant="danger" disabled={!snapshot?.controls?.canCancel} title={snapshot?.controls?.cancelReason} loading={stopping} onClick={() => void stop()}>停止</Button>}
+          {snapshot?.parentCwd&&<Button size="sm" variant="secondary" onClick={()=>window.dispatchEvent(new CustomEvent("grok:compose-feedback",{detail:{sessionId:snapshot.parentSessionId,cwd:snapshot.parentCwd,text:`请跟进子智能体 ${snapshot.childSessionId||snapshot.nodeId}（${snapshot.title}）：\n`}}))}>在父会话跟进</Button>}
           <IconButton icon="refresh" label="刷新" size="sm" onClick={() => setRevision((value) => value + 1)} />
           {onClose && <IconButton icon="close" label="关闭子会话" size="sm" onClick={onClose} />}
         </div>
@@ -98,6 +99,9 @@ export function SubagentConversation({ nodeId, variant = "page", onParent, onClo
           : <>
             {error && <p role="alert" className="sa-session-note danger">{error}</p>}
             {snapshot.notice && <p className="sa-session-note">{snapshot.notice}</p>}
+            {snapshot.source==="cli-subagent-files"&&<p className="sa-session-note">任务与最终结果；当前 CLI 没有提供可读取的完整逐步转录。</p>}
+            {snapshot.projection?.events.filter(event=>event.type==="tool-call").slice(-1).map((event,index)=><p className="sa-session-note" key={index}>最近工具：{String((event.tool as {title?:string})?.title||"执行工具")}</p>)}
+            {running&&details?.startedAt&&<p className="sa-session-note">已运行 {formatDuration(Date.now()-Date.parse(details.startedAt))}</p>}
             {turns.length
               ? turns.map((turn) => <TurnCard key={turn.id} turn={turn} sessionId={snapshot.childSessionId ?? snapshot.nodeId} showThinking expandTools={false} onResolved={() => undefined} onRetry={() => undefined} />)
               : <p className="sa-session-note">{snapshot.summary || "暂无可展示的子会话正文。"}</p>}

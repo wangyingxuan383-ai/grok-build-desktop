@@ -24,7 +24,7 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } },
-  { scheme: "grok-html", privileges: {standard:true,secure:true,supportFetchAPI:true} },
+  { scheme: "grok-html", privileges: {standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
   { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
@@ -32,6 +32,7 @@ const previewIdentity = sourcePreviewIdentity({ isPackaged: app.isPackaged, appD
 app.setName(previewIdentity?.name ?? INSTALLED_APP_NAME);
 if (previewIdentity) app.setPath("userData", previewIdentity.userData);
 app.setAppUserModelId(previewIdentity?.appUserModelId ?? INSTALLED_APP_USER_MODEL_ID);
+if(app.isPackaged&&!previewIdentity&&!explicitUserDataDirectory(process.argv)&&process.env.GROK_DESKTOP_OFFLINE_SMOKE!=="1")app.setAsDefaultProtocolClient("grok-desktop");
 
 const workerIndex = process.argv.indexOf("--scheduler-worker");
 const schedulerProbeIndex = process.argv.indexOf("--scheduler-probe");
@@ -84,10 +85,12 @@ else {
     mainWindow.show();
     mainWindow.focus();
     if (commandLine.includes("--open-task-center")) mainWindow.webContents.send("grok:menu-command", "open-task-center");
+    const notice=commandLine.find(value=>value.startsWith("grok-desktop://"));if(notice)void controller?.handleNotificationUrl(notice);
   });
 
   app.whenReady().then(async () => {
     controller = new AppController(app.getPath("userData"));
+    const initialNotice=process.argv.find(value=>value.startsWith("grok-desktop://"));if(initialNotice)void controller.handleNotificationUrl(initialNotice);
     windowState = new WindowStateService(app.getPath("userData"));
     const restoredWindow = await windowState.load(screen.getAllDisplays().map((display) => display.workArea));
     const startupTheme = await controller.prepareAppearance();
