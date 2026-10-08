@@ -64,7 +64,7 @@
     "safer-buffer": "2.1.2",
     "selfsigned": "5.5.0",
     "shiki": "4.3.1",
-    "smol-toml": "1.8.0",
+    "smol-toml": "1.9.0",
     "zod": "4.4.3",
     "zustand": "5.0.14"
   },
