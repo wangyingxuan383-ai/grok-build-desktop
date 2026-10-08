@@ -3,7 +3,7 @@
 ## Proxy follow-up 0.11.6
 
 - [x] Normalize standard proxy URLs for Chromium without changing explicit direct routes or stored credentials.
-- [ ] Verify the packaged public update endpoint with the original proxy setting and publish the corrected Desktop beside the unchanged signed Android 0.3.6.
+- [x] Verify the packaged public update endpoint with the original proxy setting and publish the corrected Desktop beside the unchanged signed Android 0.3.6.
 
 ## Desktop 0.11.5 / Grok Remote 0.3.6 release review
 
