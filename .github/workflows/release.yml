@@ -3,12 +3,19 @@ name: 正式发布
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      verify_tag:
+        description: "Verify an already published Desktop/Android release"
+        required: true
+        default: "v0.11.6"
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name == 'push'
     runs-on: windows-latest
     timeout-minutes: 60
     permissions:
@@ -22,6 +29,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
@@ -37,6 +45,22 @@ jobs:
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag/package version mismatch: v$version != ${{ github.ref_name }}" }
       - run: npm ci
+      - name: Acquire the privately signed Android companion
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content apps/mobile/package.json -Raw | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force release | Out-Null
+          $complete = $false
+          for ($attempt=0; $attempt -lt 40; $attempt++) {
+            gh release download "${{ github.ref_name }}" --pattern "Grok-Remote-v$version*" --dir release --clobber
+            if ($LASTEXITCODE -ne 0) { gh release download --pattern "Grok-Remote-v$version*" --dir release --clobber }
+            if ($LASTEXITCODE -eq 0 -and (Test-Path "release/Grok-Remote-v$version.apk") -and (Test-Path "release/Grok-Remote-v$version-build.json")) { $complete=$true; break }
+            Start-Sleep -Seconds 15
+          }
+          if (-not $complete) { throw 'Stage the signed Android APK and build record, or publish an identical companion first.' }
+          ./scripts/verify-companion-release.ps1 -Directory release
       - name: Verify and package unsigned Windows artifacts
         shell: powershell
         run: .\scripts\package-win.ps1 -ReleaseArtifactsOnly
@@ -53,6 +77,8 @@ jobs:
             release/SHA256SUMS.txt
             release/*SBOM*.json
             release/THIRD_PARTY_LICENSES.json
+            release/Grok-Remote-v*.apk
+            release/Grok-Remote-v*-build.json
           if-no-files-found: error
       - name: Attest installer
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
@@ -72,12 +98,21 @@ jobs:
         run: |
           $notesPath = "docs/releases/${{ github.ref_name }}.md"
           if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) { throw "缺少当前版本的中文发布说明：$notesPath" }
-          gh release create "${{ github.ref_name }}" --draft --verify-tag --title "Grok Build Desktop ${{ github.ref_name }}｜正式版" --notes-file $notesPath `
+          gh release view "${{ github.ref_name }}" --json isDraft
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "${{ github.ref_name }}" --draft --verify-tag --title "Grok Build Desktop ${{ github.ref_name }}｜桌面与安卓" --notes-file $notesPath
+          }
+          $draft = gh release view "${{ github.ref_name }}" --json isDraft | ConvertFrom-Json
+          if (-not $draft.isDraft) { throw 'Refusing to overwrite an already published release.' }
+          gh release edit "${{ github.ref_name }}" --title "Grok Build Desktop ${{ github.ref_name }}｜桌面与安卓" --notes-file $notesPath
+          gh release upload "${{ github.ref_name }}" --clobber `
             release/Grok-Build-Desktop-Setup-*.exe `
             release/Grok-Build-Desktop-Portable-*.zip `
             release/SHA256SUMS.txt `
             release/*SBOM*.json `
-            release/THIRD_PARTY_LICENSES.json
+            release/THIRD_PARTY_LICENSES.json `
+            release/Grok-Remote-v*.apk `
+            release/Grok-Remote-v*-build.json
 
   download-verify-and-publish:
     needs: build
@@ -90,6 +125,7 @@ jobs:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
@@ -106,7 +142,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $lines = Get-Content downloaded\SHA256SUMS.txt | Where-Object { $_ -match '^([0-9a-fA-F]{64})\s+(.+)$' }
-          if ($lines.Count -lt 4) { throw 'SHA256SUMS.txt is missing release assets.' }
+          if ($lines.Count -lt 6) { throw 'SHA256SUMS.txt is missing release assets.' }
           foreach ($line in $lines) {
             $null = $line -match '^([0-9a-fA-F]{64})\s+(.+)$'
             $expected = $Matches[1].ToLowerInvariant()
@@ -119,8 +155,57 @@ jobs:
           $portable = Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1
           gh attestation verify $setup.FullName --repo "${{ github.repository }}"
           gh attestation verify $portable.FullName --repo "${{ github.repository }}"
+          $env:GITHUB_BUILD_COMMIT = '${{ github.sha }}'
+          npm ci
+          ./scripts/verify-companion-release.ps1 -Directory downloaded
       - name: 校验后发布为 Latest
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "${{ github.ref_name }}" --draft=false --latest
+
+  verify-published-release:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Independently verify published Windows and signed Android artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_RELEASE_TAG: ${{ inputs.verify_tag }}
+        run: |
+          $tag = $env:VERIFY_RELEASE_TAG
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid release tag.' }
+          $commit = git rev-parse --verify "$tag^{commit}"
+          if ($LASTEXITCODE -ne 0) { throw 'Release source commit is unavailable.' }
+          $env:GITHUB_BUILD_COMMIT = $commit.Trim()
+          New-Item -ItemType Directory -Force downloaded | Out-Null
+          gh release download $tag --dir downloaded
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed.' }
+          $lines = @(Get-Content downloaded/SHA256SUMS.txt)
+          if ($lines.Count -lt 6) { throw 'Companion assets are missing from checksums.' }
+          foreach ($line in $lines) {
+            if ($line -notmatch '^([0-9a-fA-F]{64})\s+(.+)$') { throw 'Invalid checksum manifest.' }
+            $hash = $Matches[1].ToLowerInvariant(); $name = $Matches[2].Trim()
+            if ([IO.Path]::GetFileName($name) -ne $name) { throw 'Invalid artifact name.' }
+            if ((Get-FileHash -LiteralPath (Join-Path downloaded $name) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw "Checksum mismatch: $name" }
+          }
+          ./scripts/verify-companion-release.ps1 -Directory downloaded
+          $version = $tag.Substring(1)
+          gh attestation verify "downloaded/Grok-Build-Desktop-Setup-v$version-x64.exe" --repo "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Installer provenance verification failed.' }
+          gh attestation verify "downloaded/Grok-Build-Desktop-Portable-v$version-x64.zip" --repo "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable provenance verification failed.' }
