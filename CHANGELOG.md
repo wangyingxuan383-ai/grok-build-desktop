@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.6 — proxy origin correction
+
+- Normalize a single standard proxy URL to the Chromium proxy origin; a trailing slash no longer breaks application update checks, installer downloads, inherited Provider requests, quota reads or optional push. Keep direct routes and existing multi-protocol rules intact.
+- Verify the packaged application against the public Release and APK QR endpoint with the original proxy setting.
+- Keep the signed Grok Remote 0.3.6 binary and its original source/signing record unchanged.
+
 ## 0.11.5 — Desktop and Android release
 
 - Publish the signed Grok Remote 0.3.6 APK beside Windows artifacts with source, identity, signing and checksum verification.

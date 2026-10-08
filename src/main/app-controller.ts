@@ -614,7 +614,7 @@ export class AppController {
           proxyMode === "direct"
             ? { mode: "direct" }
             : proxy
-              ? { proxyRules: proxy }
+              ? { proxyRules: electronProxyRules(proxy) }
               : { mode: "system" },
         );
         const target = input instanceof URL ? input.toString() : input;
@@ -916,7 +916,7 @@ export class AppController {
   checkAppUpdate(force = false): Promise<AppReleaseStatus> { return this.appRelease.check(force); }
   async openAppRelease(url?: string): Promise<void> { await shell.openExternal(this.appRelease.releaseUrl(url)); }
   private appInstallerService?: AppInstallerService;
-  private appInstaller(){return this.appInstallerService??=new AppInstallerService(join(this.userDataPath,"updates"),async(url,init)=>{const settings=await this.settingsStore.get();const network=remoteHttpSession.fromPartition("grok-app-releases",{cache:false});const proxy=settings.httpsProxy||settings.httpProxy;await network.setProxy(proxy?{proxyRules:proxy}:{mode:"system"});return network.fetch(url,{headers:{"User-Agent":`Grok-Build-Desktop/${this.buildInfo.version}`},redirect:"follow",signal:init.signal}) as never},state=>this.window?.webContents.send("grok:app-update-progress",state))}
+  private appInstaller(){return this.appInstallerService??=new AppInstallerService(join(this.userDataPath,"updates"),async(url,init)=>{const settings=await this.settingsStore.get();const network=remoteHttpSession.fromPartition("grok-app-releases",{cache:false});const proxy=settings.httpsProxy||settings.httpProxy;await network.setProxy(proxy?{proxyRules:electronProxyRules(proxy)}:{mode:"system"});return network.fetch(url,{headers:{"User-Agent":`Grok-Build-Desktop/${this.buildInfo.version}`},redirect:"follow",signal:init.signal}) as never},state=>this.window?.webContents.send("grok:app-update-progress",state))}
   appUpdateDownload(){return Promise.resolve(this.appInstaller().current())}
   async downloadAppUpdate(){const status=await this.appRelease.check(false);if(!status.updateAvailable||!status.latestVersion)throw Error("当前没有可下载的新版本");if(!status.installer)throw Error("此版本没有提供安装包，请打开发布页手动下载");return this.appInstaller().download(status.installer,status.latestVersion)}
   async cancelAppUpdate(){this.appInstaller().cancel()}
@@ -1349,7 +1349,7 @@ export class AppController {
   remoteLiveDevices(){return this.remoteGateway?.enabled===true?this.remoteGateway.liveDevices():0}
   private remoteWorkbench?:RemoteWorkbenchService;
   private remotePush?:RemotePushService;
-  private pushTools(){return this.remotePush??=new RemotePushService(this.userDataPath,{encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw Error("系统加密不可用");return safeStorage.encryptString(value).toString("base64")},decrypt:value=>safeStorage.decryptString(Buffer.from(value,"base64"))},async(url,init)=>{const settings=await this.settingsStore.get();const partition=remoteHttpSession.fromPartition("grok-remote-push");const proxy=settings.httpsProxy||settings.httpProxy;await partition.setProxy(proxy?{proxyRules:proxy}:{mode:"system"});return partition.fetch(url,init)})}
+  private pushTools(){return this.remotePush??=new RemotePushService(this.userDataPath,{encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw Error("系统加密不可用");return safeStorage.encryptString(value).toString("base64")},decrypt:value=>safeStorage.decryptString(Buffer.from(value,"base64"))},async(url,init)=>{const settings=await this.settingsStore.get();const partition=remoteHttpSession.fromPartition("grok-remote-push");const proxy=settings.httpsProxy||settings.httpProxy;await partition.setProxy(proxy?{proxyRules:electronProxyRules(proxy)}:{mode:"system"});return partition.fetch(url,init)})}
   remotePushStatus(deviceId?:string){return this.pushTools().status(deviceId)}
   registerRemotePush(deviceId:string,token:string){return this.pushTools().register(deviceId,token)}
   unregisterRemotePush(deviceId:string){return this.pushTools().unregister(deviceId)}
@@ -4427,3 +4427,4 @@ function waitForAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     );
   });
 }
+import { electronProxyRules } from "./services/electron-proxy";
