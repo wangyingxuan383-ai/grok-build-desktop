@@ -7,5 +7,5 @@ it("normalizes URL origins for Chromium without a path", () => {
   expect(electronProxyRules("http://[::1]:3128/")).toBe("http://[::1]:3128");
 });
 it("preserves existing Chromium rules and never silently discards credentials or a path", () => {
-  for (const value of ["proxy.example.invalid:3128", "http=proxy.example.invalid:3128;https=proxy.example.invalid:3128", "http://user:pass@proxy.example.invalid:3128/", "http://proxy.example.invalid/path", "http://proxy.example.invalid/?key=value"]) expect(electronProxyRules(value)).toBe(value);
+  for (const value of ["proxy.example.invalid:3128", "http=proxy.example.invalid:3128;https=proxy.example.invalid:3128", "http://user:pass@example.invalid:3128/", "http://proxy.example.invalid/path", "http://proxy.example.invalid/?key=value"]) expect(electronProxyRules(value)).toBe(value);
 });
