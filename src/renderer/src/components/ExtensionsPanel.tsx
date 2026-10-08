@@ -15,7 +15,7 @@ export function ExtensionsPanel({ onClose, onUseSkill, confirmAction, setError }
   const [busy, setBusy] = useState(false);
   return <PanelSurface className="modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
     <section className="control-panel extensions-panel" role="dialog" aria-modal="true" aria-labelledby="extensions-title" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2 id="extensions-title">Grok 扩展中心</h2><small>插件、Skills、MCP 与实验性 Computer Use</small></div><button disabled={busy} onClick={onClose}>×</button></header>
+      <header><div><h2 id="extensions-title">Grok 扩展中心</h2><small>插件、Skills、MCP 与实验性 Computer Use</small></div><button data-panel-close disabled={busy} onClick={onClose}>×</button></header>
       <div className="extensions-layout">
         <nav><input aria-label="搜索扩展分类" placeholder="搜索扩展…" value={query} onChange={event=>setQuery(event.target.value)}/>{([['plugins','插件'],['marketplace','市场'],['skills','Skills'],['mcp','MCP'],['hooks','Hooks'],['computer','Computer Use'],['codex','Codex 兼容']] as Array<[Tab,string]>).filter(([id,label])=>`${id} ${label}`.toLowerCase().includes(query.trim().toLowerCase())).map(([id, label]) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}</nav>
         <div className="extensions-content">

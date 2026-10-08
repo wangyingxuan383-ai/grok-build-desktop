@@ -230,6 +230,10 @@
 .update-status { min-height: 1.4em; padding: var(--space-2) var(--space-3); border-radius: var(--radius-control); background: var(--input-bg); color: var(--text-secondary); overflow-wrap: anywhere; }
 .update-badge { flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 3px 8px; color: var(--muted); font-size: .72rem; }
 .update-badge.available { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); background: var(--accent-soft); }
+.update-installer { display: grid; gap: var(--space-2); }
+.update-installer .update-status.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.update-progress { height: 6px; border-radius: 999px; background: var(--input-bg); overflow: hidden; }
+.update-progress > span { display: block; height: 100%; background: var(--accent); transition: width .2s ease; }
 .update-history, .app-changelog { border-top: 1px solid var(--border); padding-top: var(--space-2); }
 .update-history > summary, .app-changelog > summary { cursor: pointer; font-weight: 600; padding: var(--space-2) 0; }
 
@@ -300,3 +304,7 @@
 .run-status.warning{color:var(--warning);background:color-mix(in srgb,var(--warning) 14%,transparent)}
 .automation-runs .task-center-actions{display:flex;flex-wrap:wrap;align-items:end;gap:8px}
 .automation-runs .task-center-actions label{display:flex;flex-direction:column;gap:4px}
+.remote-mobile-download { display: flex; align-items: center; gap: 20px; padding: 18px; margin: 16px 0; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+.remote-mobile-download > div { flex: 1; min-width: 0; }
+.remote-mobile-download img { flex-shrink: 0; border-radius: 12px; }
+@media (max-width: 640px) { .remote-mobile-download { flex-wrap: wrap; } }

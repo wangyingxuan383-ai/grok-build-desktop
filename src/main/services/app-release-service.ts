@@ -2,6 +2,17 @@ import { net, session } from "electron";
 import type { AppReleaseStatus, AppSettings, BuildInfo } from "../../shared/types";
 import type { LogService } from "./log-service";
 import { parseVersion } from "./cli-locator";
+import { installerAssetFrom } from "./app-installer-service";
+
+/** "sha256  file" / "file: sha256" lines that releases publish in their notes. */
+export function checksumsFromNotes(notes: string): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const line of notes.split(/\r?\n/)) {
+    const hash = /\b([0-9a-f]{64})\b/i.exec(line)?.[1], file = /([\w.-]+\.(?:exe|zip|apk))/i.exec(line)?.[1];
+    if (hash && file) result.set(file.toLowerCase(), hash.toLowerCase());
+  }
+  return result;
+}
 
 interface GitHubRelease {
   tag_name?: string;
@@ -10,6 +21,7 @@ interface GitHubRelease {
   body?: string;
   draft?: boolean;
   prerelease?: boolean;
+  assets?: Array<{ name?: string; browser_download_url?: string; size?: number; digest?: string | null }>;
 }
 
 /** Isolated from provider/direct partitions; re-read proxy settings on retry. */
@@ -80,16 +92,27 @@ export function parseGitHubRelease(value: unknown, build: BuildInfo, checkedAt =
   const release = value as GitHubRelease;
   if (!release || release.draft || release.prerelease || !release.tag_name || !release.html_url) throw new Error("GitHub Release 响应无有效稳定版本");
   const latestVersion = release.tag_name.replace(/^v/i, "");
+  const companion = release.assets?.flatMap(asset => {
+    const version = /^Grok-Remote-v(\d+\.\d+\.\d+)(?:-preview)?\.apk$/i.exec(asset.name || "")?.[1];
+    if (!version || !asset.browser_download_url || !build.repository) return [];
+    let url: URL; try { url = new URL(asset.browser_download_url); } catch { return []; }
+    if (url.protocol !== "https:" || url.hostname !== "github.com" || !url.pathname.toLowerCase().startsWith(`/${build.repository.toLowerCase()}/releases/download/`)) return [];
+    const digest = /^sha256:([0-9a-f]{64})$/i.exec(asset.digest || "")?.[1] ?? checksumsFromNotes(String(release.body || "")).get(asset.name!.toLowerCase());
+    return [{ version, downloadUrl: url.href, name: asset.name!, ...(asset.size ? { size: asset.size } : {}), ...(digest ? { sha256: digest.toLowerCase() } : {}) }];
+  }).sort((a,b) => compareVersions(b.version,a.version))[0];
+  const installer = build.repository ? installerAssetFrom(release.assets, latestVersion, build.repository, checksumsFromNotes(String(release.body || ""))) : undefined;
   return {
     configured: true,
     currentVersion: build.version,
     latestVersion,
+    ...(installer ? { installer } : {}),
     updateAvailable: compareVersions(latestVersion, build.version) > 0,
     currentAhead: compareVersions(build.version, latestVersion) > 0,
     checkedAt,
     publishedAt: release.published_at,
     releaseUrl: release.html_url,
     notes: String(release.body || "").slice(0, 20_000),
+    ...(companion ? { companion } : {}),
   };
 }
 

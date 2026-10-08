@@ -4,6 +4,7 @@ import { isExpiredInteractionError } from "./interaction-utils";
 import { useOverlayFocusTrap } from "../hooks/use-overlay-focus-trap";
 import { lazy, memo, Suspense, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { requestQuote } from "./QuoteSelection";
 import type { EditorDocument, EditorOpenResult, NavigationIntent, ToolCallState, TurnFailure } from "../../../shared/types";
 import type { UiMessage } from "../store";
 import { summarizeTurnFailure } from "../../../shared/turn-failure";
@@ -147,6 +148,7 @@ function UserMessageCard({ message, onRetry, sessionId }: { sessionId?: string; 
         {message.delivery && message.delivery !== "sent" && <span className={`delivery-state ${message.delivery}`}>{message.delivery === "failed" ? "发送失败" : message.delivery === "queued" ? "已排队" : "发送中"}</span>}
         {message.delivery === "failed" && onRetry && <button type="button" className="retry-message" onClick={() => onRetry(message)}>恢复到输入框</button>}
         {message.text && <button type="button" title="复制消息" aria-label="复制消息" onClick={() => void navigator.clipboard.writeText(message.text)}>复制</button>}
+        {message.text && <button type="button" title="把这条消息作为引用加入输入框" aria-label="引用消息" onClick={() => requestQuote(message.text)}>引用</button>}
       </div>
     </div>
     {preview && createPortal(<ImageLightbox label={preview.name} caption={preview.name} src={preview.src} onClose={() => setPreview(undefined)} actions={<><button onClick={() => void window.grokDesktop.copyImage(preview.src)}>复制图片</button><button onClick={() => void window.grokDesktop.saveImage(preview.src)}>另存为</button></>} />, document.body)}

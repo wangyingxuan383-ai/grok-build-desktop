@@ -1,0 +1,58 @@
+{
+  "name": "grok-desktop-companion",
+  "version": "0.3.6",
+  "private": true,
+  "license": "MIT",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "prebuild": "expo prebuild --platform android --no-install",
+    "preprebuild": "npm run check:native",
+    "typecheck": "tsc --noEmit",
+    "check:native": "node scripts/check-native-dependencies.cjs",
+    "test:startup": "node --test scripts/startup.test.cjs",
+    "test:workflow": "node --test scripts/remote-workflow.test.cjs",
+    "test:ui": "node --test scripts/ui-workflow.test.cjs",
+    "test": "node --experimental-strip-types --test src/remote-model.test.ts src/app-model.test.ts src/connection-errors.test.ts src/connection.test.ts src/experience-model.test.ts src/cache-policy.test.ts src/mobile-update-model.test.ts",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "54.0.37",
+    "expo-asset": "~12.0.13",
+    "expo-audio": "~1.1.1",
+    "expo-camera": "17.0.10",
+    "expo-clipboard": "8.0.8",
+    "expo-crypto": "15.0.9",
+    "expo-document-picker": "~14.0.8",
+    "expo-file-system": "~19.0.24",
+    "expo-image-picker": "~17.0.11",
+    "expo-notifications": "^0.32.17",
+    "expo-secure-store": "15.0.8",
+    "expo-sharing": "~14.0.8",
+    "expo-sqlite": "~16.0.10",
+    "expo-status-bar": "3.0.9",
+    "expo-system-ui": "~6.0.9",
+    "expo-video": "~3.0.16",
+    "markdown-it": "14.1.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "5.6.2",
+    "react-native-url-polyfill": "^4.0.0",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.1.2",
+    "@types/react": "19.1.10",
+    "react-test-renderer": "19.1.0",
+    "semver": "7.7.3",
+    "typescript": "5.9.3"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  }
+}

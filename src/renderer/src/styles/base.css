@@ -315,7 +315,7 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .attachment-row > span { display: flex; gap: 5px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); background: var(--chip-bg); border-radius: 7px; font-size: .6875em; }
 .attachment-row button { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .slash-menu { position: absolute; z-index: 20; left: max(24px, calc((100% - var(--content-width)) / 2)); right: max(24px, calc((100% - var(--content-width)) / 2)); bottom: calc(100% - 4px); padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--elevated); box-shadow: 0 12px 40px #0008; }
-.scroll-to-bottom { position: absolute; right: max(30px, calc((100% - var(--content-width)) / 2 + 6px)); bottom: 14px; z-index: 12; border: 1px solid var(--border-strong); border-radius: 18px; padding: 7px 12px; background: var(--elevated); color: var(--accent); box-shadow: 0 8px 28px var(--shadow); cursor: pointer; }
+.scroll-to-bottom { position: absolute; left: 50%; transform: translateX(-50%); bottom: 14px; z-index: 12; border: 1px solid var(--border-strong); border-radius: 18px; padding: 5px 12px; font-size: var(--text-caption); background: var(--elevated); color: var(--accent); box-shadow: 0 8px 28px var(--shadow); cursor: pointer; }
 .slash-menu button { width: 100%; display: flex; gap: 12px; border: 0; background: transparent; padding: 8px; border-radius: 6px; cursor: pointer; text-align: left; }
 .slash-menu button:hover { background: var(--hover); }
 .slash-menu span { color: var(--muted); }
@@ -377,6 +377,14 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .automation-grid .wide { grid-column: 1 / -1; }
 .automation-grid textarea { min-height: 90px; resize: vertical; }
 .weekly-schedule { display: grid; gap: 8px; align-content: start; }
+.remote-settings { max-width: 850px; }
+.remote-settings p, .remote-settings small { color: var(--text-secondary); line-height: 1.7; }
+.remote-controls, .remote-device { display:flex; align-items:center; gap:12px; margin:16px 0; }
+.remote-controls label { display:flex; gap:8px; align-items:center; }.remote-controls input { width:100px; }
+.remote-status { padding:5px 9px; border-radius:8px; background:var(--hover); }.remote-status.online { color:var(--success); }
+.remote-addresses { display:grid; gap:8px; margin:18px 0; }.remote-addresses code { user-select:text; overflow-wrap:anywhere; }
+.remote-pairing { display:flex; align-items:center; gap:22px; flex-wrap:wrap; margin:18px 0; padding:18px; border:1px solid var(--border); border-radius:12px; }.remote-pairing img { border-radius:8px; }.remote-pairing > div { flex:1;min-width:220px; }
+.remote-device { padding:14px; border:1px solid var(--border); border-radius:10px; }.remote-device > div { flex:1;min-width:0; }.remote-device span {display:block;color:var(--text-secondary);font-size:.8em;margin-top:4px;}.remote-device.pending {border-color:var(--accent);}.remote-error {color:var(--danger)!important;}
 .weekday-picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .automation-grid .weekday-picker label.check { display: inline-flex; align-items: center; gap: 5px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; white-space: nowrap; cursor: pointer; }
 .automation-grid .weekday-picker input { width: 14px; height: 14px; min-height: 0; margin: 0; }
@@ -790,7 +798,7 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .button-row .spacer { flex: 1; }
 
 .onboarding-panel { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
-.onboarding-steps { display: grid; grid-template-columns: repeat(6, 1fr); border-bottom: 1px solid var(--border); background: var(--panel); }
+.onboarding-steps { display: grid; grid-template-columns: repeat(8, 1fr); border-bottom: 1px solid var(--border); background: var(--panel); }
 .onboarding-steps button { display: grid; justify-items: center; gap: 4px; border: 0; padding: 9px 3px; background: transparent; color: var(--muted); cursor: pointer; font-size: .75em; }
 .onboarding-steps button span { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #46505a; border-radius: 50%; }
 .onboarding-steps button.active { color: var(--text); background: var(--accent-soft); }
@@ -803,6 +811,18 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .onboarding-summary .ok > span, .success-text { color: var(--success); }
 .onboarding-summary .warning > span, .warning-text { color: var(--warning); }
 .onboarding-summary .error > span { color: var(--danger); }
+.onboarding-steps button.todo span { border-color: var(--warning); color: var(--warning); }
+.onboarding-steps button small { font-size: .85em; opacity: .7; }
+.onboarding-callout { display: grid; gap: 8px; margin-top: 16px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 10px; background: var(--accent-soft); }
+.onboarding-content details { margin-top: 12px; }
+.onboarding-content details > summary { cursor: pointer; color: var(--muted); }
+.onboarding-mobile { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: center; margin: 12px 0; }
+.onboarding-qr img, .onboarding-qr-placeholder { display: block; width: 180px; height: 180px; border-radius: 10px; background: #fff; }
+.onboarding-qr-placeholder { display: grid; place-items: center; background: var(--input-bg); color: var(--muted); font-size: .85em; }
+.onboarding-mobile ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+.onboarding-mobile small { color: var(--muted); }
+.onboarding-tips { display: grid; gap: 8px; padding-left: 1.2em; }
+.muted-text { color: var(--muted); }
 
 @media (max-width: 960px) {
   .app-shell { --sidebar-width: 220px; }
@@ -949,3 +969,11 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
   .theme-color-grid { grid-template-columns: 1fr; }
   .automation-policy-grid, .automation-grid, .automation-options { grid-template-columns: 1fr; }
 }
+
+/* Floating "引用 / 复制" bar shown above a text selection in the conversation. */
+.quote-selection-bar { position: fixed; z-index: 60; display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: 0 8px 24px rgb(0 0 0 / .28); animation: quote-bar-in .12s ease-out; }
+.quote-selection-bar button { border: 0; border-radius: 7px; padding: 6px 10px; background: transparent; color: var(--text); font-size: .82rem; cursor: pointer; }
+.quote-selection-bar button:first-child { color: var(--accent); font-weight: 600; }
+.quote-selection-bar button:hover, .quote-selection-bar button:focus-visible { background: var(--accent-soft); }
+@keyframes quote-bar-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .quote-selection-bar { animation: none; } }

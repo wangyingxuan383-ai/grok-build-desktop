@@ -4,11 +4,17 @@
 
 Grok Build Desktop 是面向 Windows 用户的 Grok Build CLI 图形客户端。在一个工作台里管理代码会话、独立图像创作、项目文件、产物预览和持久定时任务。应用通过 ACP 连接你安装的 Grok CLI，沿用其原生模型、工具与子智能体机制。
 
-[下载稳定版](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest) · [界面展示](docs/SHOWCASE.md) · [功能与边界](docs/FEATURE_MATRIX.md) · [CLI 兼容说明](docs/CLI_COMPATIBILITY.md) · [反馈问题](https://github.com/wangyingxuan383-ai/grok-build-desktop/issues)
+[下载桌面与安卓](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest) · [界面展示](docs/SHOWCASE.md) · [功能与边界](docs/FEATURE_MATRIX.md) · [CLI 兼容说明](docs/CLI_COMPATIBILITY.md) · [反馈问题](https://github.com/wangyingxuan383-ai/grok-build-desktop/issues)
 
 ![编程工作台：项目、会话、标签与消息](docs/assets/coding-workspace.png)
 
-以下功能与截图以 0.10.4 为准。截图使用隔离演示数据；示例文字与插画不代表真实模型生成或性能结果。公开安装包以 Releases 中的版本为准。
+当前桌面版本为 0.11.5，配套 Grok Remote 为 0.3.6；下方桌面截图展示 0.10.4 的工作流。截图使用隔离演示数据；示例文字与插画不代表真实模型生成或性能结果。公开安装包以 Releases 中的版本为准。
+
+## 手机连接与更新
+
+[下载 Android APK 0.3.6](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.11.5/Grok-Remote-v0.3.6.apk)。手机安装后，在电脑“设置 → 手机连接”开启配对，手机扫码并由电脑允许。支持局域网或已有 VPN；电脑负责模型和任务执行。手机提供会话、任务、作品与设备四个入口，以及收藏、长按菜单和全屏看图。
+
+桌面安装版可在应用内下载安装更新；手机 0.3.6 可独立检查和下载 APK，校验后打开系统安装确认。覆盖安装保留数据，便携版通过替换目录升级。详见[手机指南](apps/mobile/README.md)。
 
 ## 工作流
 

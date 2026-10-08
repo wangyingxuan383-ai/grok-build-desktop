@@ -1,0 +1,2 @@
+export const CACHE_BYTE_LIMIT=100*1024*1024;
+export const CACHE_EVICTION_SQL="DELETE FROM cache WHERE key IN (SELECT key FROM (SELECT key,SUM(length(CAST(body AS BLOB))) OVER (ORDER BY updated DESC ROWS UNBOUNDED PRECEDING) AS bytes FROM cache) WHERE bytes>?)";

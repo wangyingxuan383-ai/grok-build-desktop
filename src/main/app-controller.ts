@@ -4,6 +4,9 @@ import { recordOwnedMediaFile, removeProvenMediaFiles } from "./services/media-f
 import { mergeTurnUsage } from "../shared/turn-usage";
 import { readWorkspaceArtifact } from "./services/workspace-artifact-service";
 import { mediaRequestSession } from "../shared/media-scope";
+import { RemoteWorkbenchService } from "./services/remote-workbench-service";
+import { RemotePushService } from "./services/remote-push-service";
+import{session as remoteHttpSession}from"electron";
 import { ImageWorkspaceService } from "./services/image-workspace-service";
 import type { ImageSubmit } from "../shared/image-workspace";
 import { WorkspaceBrowserService } from "./services/workspace-browser-service";
@@ -14,9 +17,13 @@ import { NativeAgentCapabilities } from "./services/native-agent-capabilities";
 import { DesktopToolAuthority } from "./services/desktop-tool-authority";
 import { DesktopToolsService } from "./services/desktop-tools-service";
 import { SessionRelayService } from "./services/session-relay-service";
+import { RemoteGatewayService } from "./services/remote-gateway-service";
+import type { RemoteCommand, RemoteSession, RemoteSnapshot, RemoteOptions } from "../shared/remote";
+import { remotePendingInteractions, sanitizeRemoteEvent } from "./services/remote-history";
+import { toDataURL as qrDataUrl } from "qrcode";
 import { SubagentConversationService } from "./services/subagent-conversation-service";
 import type { CliUpdateInput, CliUpdatePolicy, CliUpdateAction } from "../shared/types";
-import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
+import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, safeStorage, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -195,7 +202,7 @@ import { LogService, redactLogText, redactSecrets } from "./services/log-service
 import { SessionCatalog } from "./services/session-catalog";
 import { CodexSessionCatalog } from "./services/codex-session-catalog";
 import { ClaudeSessionCatalog } from "./services/claude-session-catalog";
-import { WorkspaceCatalog } from "./services/workspace-catalog";
+import { WorkspaceCatalog, isImageConversationFolder } from "./services/workspace-catalog";
 import { GrokQuotaService } from "./services/grok-quota-service";
 import { UiStateService } from "./services/ui-state-service";
 import { resolveProjectIdentity } from "./services/project-identity";
@@ -207,6 +214,7 @@ import { loadAppConfig, createBuildInfo, type PublicAppConfig } from "./services
 import { OnboardingService } from "./services/onboarding-service";
 import { DiagnosticsService } from "./services/diagnostics-service";
 import { AppReleaseService, createAppReleaseFetcher } from "./services/app-release-service";
+import { AppInstallerService } from "./services/app-installer-service";
 import { WorkspaceFileService } from "./services/workspace-file-service";
 import { ExternalOpenToolService } from "./services/external-open-tool-service";
 import { inspectAttachmentPrivacy } from "./services/attachment-privacy-service";
@@ -303,6 +311,7 @@ export class AppController {
   private readonly nativeAgentCapabilities = new NativeAgentCapabilities();
   private readonly desktopTools: DesktopToolsService;
   private readonly sessionRelay: SessionRelayService;
+  private remoteGateway?: RemoteGatewayService;
   private readonly extensionLeases = new Map<string, { computer?: string; desktop: string; sessionId?: string; authority: DesktopToolAuthority }>();
   private readonly automationSessionReservations = new Set<string>();
   private readonly inbox: NotificationInboxService;
@@ -337,7 +346,7 @@ export class AppController {
   async testDesktopNotification(){await this.notices().show(`test:${crypto.randomUUID()}`,"completion","Grok 通知测试","点击返回应用。系统通知可在 Windows 设置中管理。",{kind:"automation",id:"test"},true)}
   async navigateNotification(target:NotificationTarget){
     if(this.window&&!this.window.isDestroyed()){if(this.window.isMinimized())this.window.restore();this.window.show();this.window.focus();}
-    if(target.kind==="session"){const session=this.processes.snapshot(target.id)??await this.sessionRuntime.get(target.id);if(!session)throw Error("通知所属会话已不存在");this.window?.webContents.send("grok:navigate-session",{sessionId:target.id,cwd:session.cwd});}
+    if(target.kind==="session"){const session=this.processes.snapshot(target.id)??await this.sessionRuntime.get(target.id)??(await this.remoteSessions().catch(()=>[])).find(row=>row.id===target.id);if(!session){this.window?.webContents.send("grok:notification-target",{kind:"missing-session",id:target.id});throw Error("通知所属会话已不存在");}this.window?.webContents.send("grok:navigate-session",{sessionId:target.id,cwd:session.cwd});}
     else this.window?.webContents.send("grok:notification-target",target);
   }
   handleNotificationUrl(value:string){const target=parseNotificationUrl(value);if(target){this.pendingNotice=target;if(this.window&&this.rendererNoticeReady)return this.navigateNotification(target).then(()=>{this.pendingNotice=undefined})}return Promise.resolve()}
@@ -758,6 +767,17 @@ export class AppController {
     return { path, mimeType, size: info.size };
   }
 
+  /** Remote tickets use the stored handle owner, never the desktop's focused view. */
+  async resolveRemoteMediaRequest(source: string): Promise<{ path: string; mimeType: string; size: number; sessionId: string }> {
+    const record = await this.mediaAccess.resolve(source);
+    if (this.deletingSessions.has(record.sessionId)) throw new Error("所属会话正在删除");
+    const scoped = new URL(source);
+    const expected = scoped.searchParams.get("session");
+    if (expected && expected !== record.sessionId) throw new Error("媒体访问句柄不属于指定会话");
+    scoped.searchParams.set("session", record.sessionId);
+    return { ...await this.resolveMediaRequest(scoped.href), sessionId: record.sessionId };
+  }
+
   private async loadTrustedImage(source: string): Promise<Electron.NativeImage> {
     if (source.startsWith("data:image/")) {
       if (source.length > 28 * 1024 * 1024) throw new Error("图片数据超过复制限制");
@@ -895,6 +915,12 @@ export class AppController {
   }
   checkAppUpdate(force = false): Promise<AppReleaseStatus> { return this.appRelease.check(force); }
   async openAppRelease(url?: string): Promise<void> { await shell.openExternal(this.appRelease.releaseUrl(url)); }
+  private appInstallerService?: AppInstallerService;
+  private appInstaller(){return this.appInstallerService??=new AppInstallerService(join(this.userDataPath,"updates"),async(url,init)=>{const settings=await this.settingsStore.get();const network=remoteHttpSession.fromPartition("grok-app-releases",{cache:false});const proxy=settings.httpsProxy||settings.httpProxy;await network.setProxy(proxy?{proxyRules:proxy}:{mode:"system"});return network.fetch(url,{headers:{"User-Agent":`Grok-Build-Desktop/${this.buildInfo.version}`},redirect:"follow",signal:init.signal}) as never},state=>this.window?.webContents.send("grok:app-update-progress",state))}
+  appUpdateDownload(){return Promise.resolve(this.appInstaller().current())}
+  async downloadAppUpdate(){const status=await this.appRelease.check(false);if(!status.updateAvailable||!status.latestVersion)throw Error("当前没有可下载的新版本");if(!status.installer)throw Error("此版本没有提供安装包，请打开发布页手动下载");return this.appInstaller().download(status.installer,status.latestVersion)}
+  async cancelAppUpdate(){this.appInstaller().cancel()}
+  async installAppUpdate(){if(this.hasWorking())throw Error("有会话正在运行，请等待完成或停止后再安装更新");await this.appInstaller().install();setTimeout(()=>app.quit(),400)}
 
   async chooseWorkspace(): Promise<string | null> {
     const result = await dialog.showOpenDialog(this.window!, { title: "选择工作区", properties: ["openDirectory", "createDirectory"] });
@@ -1289,7 +1315,177 @@ export class AppController {
   clearAgentDashboardRecord(nodeId?: string): Promise<void> { return this.dashboard.clear(nodeId); }
   async inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]> { return inspectAttachmentPrivacy(cwd, attachments); }
 
-  async createSession(input: string | ExecutionProfileLaunchInput): Promise<SessionLaunchResult> {
+  private getRemoteGateway(): RemoteGatewayService {
+    return this.remoteGateway ??= new RemoteGatewayService(this.userDataPath, {
+      sessions: () => this.remoteSessions(), snapshot: (id,before,around) => this.remoteSnapshot(id,before,around), options:(refresh,modelsOnly)=>this.remoteOptions(refresh,modelsOnly),perform: (command,deviceId) => this.performRemoteCommand(command,deviceId),
+      query:(params,deviceId)=>this.remoteTools().query(params,deviceId),upload:(body,deviceId)=>this.remoteTools().files.upload(body,deviceId,id=>this.remoteTools().known(id)),resource:(ticket,suffix,deviceId)=>this.remoteTools().resource(ticket,suffix,deviceId),
+      tick:(computer,devices)=>this.pushTools().poll(()=>this.listInbox(),computer,devices),
+    }, {
+      encrypt: value => { if (!safeStorage.isEncryptionAvailable()) throw Error("系统加密不可用，暂时不能开启手机连接"); return safeStorage.encryptString(value).toString("base64"); },
+      decrypt: value => safeStorage.decryptString(Buffer.from(value,"base64")),
+    }, () => { this.window?.webContents.send("grok:remote-state"); });
+  }
+  /** Download link + QR for the companion APK attached to the latest public release. */
+  async getMobileDownload():Promise<{version?:string;url?:string;qrDataUrl?:string;error?:string}>{
+    const status=await this.appRelease.check(false);
+    if(!status.configured)return {error:status.error||"本地构建，未配置公开更新源"};
+    if(!status.companion)return {error:status.error||"最新发布中没有手机安装包"};
+    return {version:status.companion.version,url:status.companion.downloadUrl,qrDataUrl:await qrDataUrl(status.companion.downloadUrl,{width:220,margin:2})};
+  }
+  /** Opens a visible PowerShell window running xAI's official installer; only on an explicit click. */
+  async installCliInteractive(){
+    if(process.platform!=="win32")throw Error("一键安装仅支持 Windows，请按官方文档安装");
+    // detached on Windows gives the child its own visible console window.
+    const child=spawn("powershell.exe",["-NoExit","-NoProfile","-ExecutionPolicy","Bypass","-Command","Write-Host '正在运行 xAI 官方安装脚本 https://x.ai/cli/install.ps1 ...';irm https://x.ai/cli/install.ps1 | iex; Write-Host '';Write-Host '完成后回到 Grok Build Desktop 点击“重新检测”。'"],{detached:true,stdio:"ignore",windowsHide:false});
+    child.unref();
+  }
+  async getRemoteState() { const state=await this.getRemoteGateway().state();return {...state,qrDataUrl:state.pairing?await qrDataUrl(state.pairing.uri,{width:280,margin:2}):undefined}; }
+  async setRemoteEnabled(enabled:boolean,port?:number) { await this.getRemoteGateway().setEnabled(enabled,port);return this.getRemoteState(); }
+  async beginRemotePairing(address?:string) { await this.getRemoteGateway().beginPairing(address);return this.getRemoteState(); }
+  async decideRemotePair(id:string,approve:boolean) { await this.getRemoteGateway().decidePair(id,approve);return this.getRemoteState(); }
+  async revokeRemoteDevice(id:string) { await this.getRemoteGateway().revoke(id);await this.pushTools().unregister(id);return this.getRemoteState(); }
+  startRemoteIfEnabled() { return this.getRemoteGateway().startIfEnabled(); }
+  remoteKeepAlive(){return this.remoteGateway?.enabled===true}
+  remoteLiveDevices(){return this.remoteGateway?.enabled===true?this.remoteGateway.liveDevices():0}
+  private remoteWorkbench?:RemoteWorkbenchService;
+  private remotePush?:RemotePushService;
+  private pushTools(){return this.remotePush??=new RemotePushService(this.userDataPath,{encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw Error("系统加密不可用");return safeStorage.encryptString(value).toString("base64")},decrypt:value=>safeStorage.decryptString(Buffer.from(value,"base64"))},async(url,init)=>{const settings=await this.settingsStore.get();const partition=remoteHttpSession.fromPartition("grok-remote-push");const proxy=settings.httpsProxy||settings.httpProxy;await partition.setProxy(proxy?{proxyRules:proxy}:{mode:"system"});return partition.fetch(url,init)})}
+  remotePushStatus(deviceId?:string){return this.pushTools().status(deviceId)}
+  registerRemotePush(deviceId:string,token:string){return this.pushTools().register(deviceId,token)}
+  unregisterRemotePush(deviceId:string){return this.pushTools().unregister(deviceId)}
+  async configureRemotePush(){const picked=await dialog.showOpenDialog(this.window!,{title:"选择 Firebase 服务账号与 Android 配置 JSON（共两个）",properties:["openFile","multiSelections"],filters:[{name:"JSON",extensions:["json"]}]});if(picked.canceled)return this.remotePushStatus();if(picked.filePaths.length!==2)throw Error("需要服务账号凭据与同项目的 google-services.json");const first=JSON.parse(await readFile(picked.filePaths[0]!,"utf8"));return first.type==="service_account"?this.pushTools().configure(picked.filePaths[0]!,picked.filePaths[1]!):this.pushTools().configure(picked.filePaths[1]!,picked.filePaths[0]!)}
+  private remoteTools(){return this.remoteWorkbench??=new RemoteWorkbenchService(this,this.userDataPath)}
+  async trustRemoteAttachments(attachments:Attachment[]){for(const attachment of attachments){if(!attachment.path)throw Error("附件缺少已上传文件");rememberCanonicalPath(this.trustedPickedPaths,await canonicalExistingPath(attachment.path,attachment.kind==="folder"?"directory":"file"))}}
+  async trustRemoteWorkspace(id:string){const session=await this.requireRemoteSession(id);rememberCanonicalPath(this.trustedWorkspacePaths,await canonicalExistingPath(session.cwd,"directory"))}
+  private async remoteReferences(references:NonNullable<RemoteCommand["references"]>):Promise<Attachment[]>{const workspaces=(await this.remoteOptions()).workspaces;const paths=await Promise.all(references.map(async reference=>{const workspace=workspaces.find(w=>w.id===reference.workspaceId);if(!workspace?.path)throw Error("引用所属项目已不可用");const path=await resolveTrustedRendererPath(reference.path,{roots:[workspace.path],kind:reference.kind==="folder"?"directory":"file"});rememberCanonicalPath(this.trustedPickedPaths,path);return path}));return this.buildAttachmentsFromPaths(paths)}
+  private remoteConfigFlights=new Set<string>();
+  private async remoteRuntime(id:string):Promise<import("../shared/remote").RemoteRuntime>{
+    const preferences=await this.sessionRuntime.get(id);const live=this.processes.snapshot(id);let adapter:ReturnType<GrokProcessManager["get"]>|undefined;try{adapter=this.processes.get(id)}catch{}
+    const config={modelId:live?.modelId??preferences?.modelId,providerId:preferences?.providerId,effort:live?.effort??preferences?.effort??"",mode:live?.mode??preferences?.mode??"agent"};
+    const queue=adapter?.queuedPrompts().filter(row=>row.state==="queued")??[];const busy=Boolean(adapter?.working||adapter?.needsUser||queue.length||this.remoteConfigFlights.has(id));
+    return {...config,revision:createHash("sha256").update(JSON.stringify(config)).digest("hex"),models:adapter?.models??[],mutable:!busy,reason:busy?"本轮运行、待确认或队列尚未结束，已提交任务保持原配置":undefined,interjectSupported:adapter?.runtimeHandshake?.extensions.includes("x.ai/interject")===true,commands:adapter?.commands??[]};
+  }
+  private remoteListFlight?:Promise<RemoteSession[]>;
+  private remoteListCache?:RemoteSession[];
+  private remoteChildren=new Map<string,RemoteSession>();
+  private remoteListExpires=0;
+  private invalidateRemoteList(){this.remoteListCache=undefined;this.remoteListExpires=0;}
+  async remoteOptions(refreshModels=false,modelsOnly=false):Promise<RemoteOptions>{
+    const settings=await this.settingsStore.get();
+    const notices:string[]=[];
+    const workspaces:RemoteOptions["workspaces"]=[];
+    if(!modelsOnly){
+      const discovered=await this.discoverWorkspaces().catch(()=>{notices.push("项目列表暂未同步，仍可选择模型；请刷新项目列表。");return []});
+      const roots=[...new Set([settings.activeWorkspace,...settings.recentWorkspaces,...discovered.map(w=>w.cwd)].filter(Boolean))].slice(0,100);
+      const results=await Promise.all(roots.filter(cwd=>!this.deletingWorkspaces.has(normalizePathKey(cwd))).map(async cwd=>{
+        try{
+          const profiles=await this.listExecutionProfiles(cwd);
+          return {id:createHash("sha256").update(normalizePathKey(cwd)).digest("hex").slice(0,24),name:cwd.split(/[\\/]/).filter(Boolean).at(-1)||cwd,path:cwd,profiles:profiles.map(p=>({id:p.id,name:p.name,mode:p.mode,worktree:Boolean(p.worktree),modelId:p.modelId,effort:p.effort}))};
+        }catch{return undefined}
+      }));
+      for(const result of results)if(result)workspaces.push(result);
+      if(results.some(result=>!result))notices.push("部分项目目录或配置档暂不可用，已从新建选项中略去；原会话和文件未删除。");
+    }
+    // Catalog discovery can wait on login/network. Return known options now,
+    // and let clients poll the refresh state instead of timing out this route.
+    if ((refreshModels || !this.modelCatalogProbedAt) && !this.modelCatalogRefreshFlight) {
+      const flight = this.listModelCatalog(true);
+      this.modelCatalogRefreshFlight = flight;
+      void flight.finally(()=>{if(this.modelCatalogRefreshFlight===flight)this.modelCatalogRefreshFlight=undefined}).catch(()=>undefined);
+    }
+    const models=await this.listModelCatalog(false);
+    const availableProviders=await this.listProviders().catch(error=>{notices.push("Provider 目录暂不可用："+(error instanceof Error?error.message:String(error)));return []});
+    const imageModels=availableProviders.filter(p=>p.enabled!==false).flatMap(p=>p.models.filter(m=>m.enabled!==false).map(m=>({modelId:m.id,providerId:p.id,name:`${p.name} · ${m.name||m.model}`,image:Object.values(m.capabilities?.protocols??{}).some(value=>value?.imageGeneration===true),video:Object.values(m.capabilities?.protocols??{}).some(value=>value?.videoGeneration===true)})));
+    const modelId=models.some(model=>model.modelId===settings.defaultModel)?settings.defaultModel:models.find(model=>model.defaultForCli&&!model.providerId)?.modelId??settings.defaultModel;
+    return {capabilities:["session.create","session.rename","session.archive","queue.remove","session.configure","session.compact","session.fork","session.delete","queue.edit","queue.move","queue.clear","workbench","attachments.upload"],workspaces,models,imageModels,modelCatalog:{refreshing:Boolean(this.modelCatalogRefreshFlight||this.modelCatalogProbe),checkedAt:this.modelCatalogProbedAt||undefined,reason:this.modelCatalogError},...(notices.length?{notices}:{}),defaults:{modelId,effort:settings.defaultEffort,mode:settings.defaultMode}};
+  }
+  async remoteSessions():Promise<RemoteSession[]> {
+    if(this.remoteListCache&&Date.now()<this.remoteListExpires)return this.remoteListCache.map(row=>({...row,status:this.processes.liveStatuses().get(row.id)||row.status}));
+    if(this.remoteListFlight)return this.remoteListFlight;
+    return this.remoteListFlight=this.loadRemoteSessions().then(rows=>{this.remoteListCache=rows;this.remoteListExpires=Date.now()+1500;return rows}).finally(()=>{this.remoteListFlight=undefined});
+  }
+  private async loadRemoteSessions():Promise<RemoteSession[]>{
+    const [settings,assignments,workspaces]=await Promise.all([this.settingsStore.get(),this.profiles.listAssignments(),this.discoverWorkspaces()]);
+    const roots=[...new Set([settings.activeWorkspace,...settings.recentWorkspaces,...assignments.map(a=>a.cwd),...workspaces.map(w=>w.cwd)].filter(cwd=>cwd&&!isImageConversationFolder(cwd)))].slice(0,100);
+    const rows=(await Promise.all(roots.map(cwd=>this.catalog.list(cwd,"",this.processes.liveStatuses()).catch(()=>[])))).flat();
+    const byId=new Map(rows.map(row=>[row.id,row]));
+    const cwds=[...new Set(rows.map(row=>row.cwd))];const missing=new Set((await Promise.all(cwds.map(async cwd=>(await stat(cwd).then(info=>info.isDirectory(),()=>false))?"":cwd))).filter(Boolean));
+    const projected:RemoteSession[]=[...byId.values()].map(row=>({...(missing.has(row.cwd)?{projectMissing:true}:{}),id:row.id,cwd:row.cwd,title:row.title,projectName:row.cwd.split(/[\\/]/).filter(Boolean).at(-1)||row.cwd,updatedAt:row.updatedAt,archived:row.archived,preview:row.preview,parentSessionId:row.parentSessionId,status:row.status,modelId:this.processes.snapshot(row.id)?.modelId||row.modelId,mode:this.processes.snapshot(row.id)?.mode,canSend:!row.parentSessionId&&(row.originKind!=="automation"||Boolean(this.processes.snapshot(row.id)))}));
+    for(const [id,child]of this.remoteChildren){if(!byId.has(child.parentSessionId??""))this.remoteChildren.delete(id);else if(!byId.has(id))projected.push(child)}return projected.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
+  }
+  private async requireRemoteSession(id:string):Promise<RemoteSession>{const row=(await this.remoteSessions()).find(s=>s.id===id);if(!row||this.deletingSessions.has(id)||this.deletingWorkspaces.has(normalizePathKey(row.cwd)))throw Error("会话已删除、迁移或不属于已知项目，请刷新手机列表");return row;}
+  async inspectRemoteChild(parentId:string,childId:string){
+    const parent=await this.requireRemoteSession(parentId);const projection=await this.inspectSession(parent.cwd,parentId);
+    const proven=(projection?.events??[]).some(event=>{if(event.type!=="subagent")return false;const update=event.update as Record<string,unknown>|undefined;return update&&[update.child_session_id,update.childSessionId].includes(childId)});
+    if(!proven||childId===parentId)throw Error("没有可核验的父子身份；未打开其他会话替代");
+    const child=await this.conversationProjections.inspect(childId);if(!child)throw Error("CLI 尚未提供完整子会话历史，当前仅可查看父会话摘要");
+    const row:RemoteSession={id:childId,cwd:(await this.sessionRuntime.get(childId))?.cwd||parent.cwd,title:`子会话 · ${childId.slice(0,10)}`,projectName:parent.projectName,updatedAt:child.updatedAt,status:"cold",canSend:false,parentSessionId:parentId};
+    this.remoteChildren.set(childId,row);
+    this.remoteListCache=[...(await this.remoteSessions()).filter(s=>s.id!==childId),row];this.remoteListExpires=Date.now()+60_000;return row;
+  }
+  async remoteSnapshot(id:string,before?:number,around?:number):Promise<Omit<RemoteSnapshot,"cursor"|"epoch">>{
+    const session=await this.requireRemoteSession(id);const projection=await this.inspectSession(session.cwd,id);
+    const events=(projection?.events??[]) as ChatEvent[];const end=Math.min(before??events.length,events.length);let start=end;let bytes=0;
+    const visible:ChatEvent[]=[];const allowed=new Set(["user-message","user-message-status","interjection","message-chunk","thought-chunk","tool-call","subagent","error","status","turn-started","turn-completed","session-reset","plan","question","permission","interaction-resolved","prompt-queue","media","computer-state","computer-permission","computer-risk","compact-status","session-recap","command-output","turn-retry","follow-ups","commands","meta","mode","runtime-update"]);
+    if(around!==undefined){
+      if(!Number.isSafeInteger(around)||around<0||around>=events.length)throw Error("消息位置已变化，请刷新跳转列表");
+      start=around;let cursor=around;
+      while(cursor<events.length&&cursor-around<2000){const event=events[cursor]!;if(cursor>around&&event.type==="user-message")break;cursor++;if(!allowed.has(event.type))continue;const safe={...sanitizeRemoteEvent(event),remoteIndex:cursor-1};const size=Buffer.byteLength(JSON.stringify(safe));if(bytes+size>2*1024*1024&&visible.length)break;bytes+=size;visible.push(safe);}
+      return {session,events:visible,totalEvents:events.length,before:start||undefined,truncated:start>0,pending:[...remotePendingInteractions(events),...this.computer.pendingForSession(id)],runtime:await this.remoteRuntime(id)};
+    }
+    while(start>0&&end-start<2000){const event=events[start-1]!;if(!allowed.has(event.type)){start--;continue;}const safe={...sanitizeRemoteEvent(event),remoteIndex:start-1};const size=Buffer.byteLength(JSON.stringify(safe));if(bytes+size>2*1024*1024&&visible.length)break;bytes+=size;visible.unshift(safe);start--;if(end-start>=250&&(event.type==="user-message"||event.type==="turn-started"))break;}
+    const pending=[...remotePendingInteractions(events),...this.computer.pendingForSession(id)];
+    return {session,events:visible,totalEvents:events.length,before:start||undefined,truncated:start>0,pending,runtime:await this.remoteRuntime(id)};
+  }
+  private async performRemoteCommand(command:RemoteCommand,deviceId?:string):Promise<{state:"queued"|"completed";message?:string;resultSessionId?:string}> {
+    if(command.action==="workbench"){if(!deviceId)throw Error("设备身份无效");return this.remoteTools().mutate(command.mutation!,deviceId,command.operationId)}
+    if(command.action==="create"){
+      const options=await this.remoteOptions();const workspace=options.workspaces.find(w=>w.id===command.workspaceId);if(!workspace)throw Error("项目已不可用，请刷新项目列表");
+      if(command.profileId&&!workspace.profiles.some(p=>p.id===command.profileId))throw Error("配置档不属于所选项目");
+      const settings=await this.settingsStore.get();const discovered=await this.discoverWorkspaces();const cwd=[settings.activeWorkspace,...settings.recentWorkspaces,...discovered.map(w=>w.cwd)].find(path=>createHash("sha256").update(normalizePathKey(path)).digest("hex").slice(0,24)===workspace.id);if(!cwd)throw Error("项目已不可用");
+      const created=await this.createSession({workspacePath:cwd,profileId:command.profileId,modelId:command.modelId,providerId:command.providerId,effort:command.effort,mode:command.mode},false);this.invalidateRemoteList();return {state:"completed",resultSessionId:created.sessionId};
+    }
+    const session=await this.requireRemoteSession(command.sessionId);
+    if(command.action==="rename"){await this.renameSession(session.id,command.title!);this.invalidateRemoteList();return {state:"completed"};}
+    if(command.action==="archive"){await this.archiveSession(session.id,command.archived!);this.invalidateRemoteList();return {state:"completed"};}
+    if(command.action==="delete"){await this.deleteSession(session.cwd,session.id);this.invalidateRemoteList();return {state:"completed"};}
+    if(!session.canSend)throw Error("此会话由子智能体或任务 Worker 管理，手机首版仅支持查看");
+    if(["send","interject","configure","compact","fork"].includes(command.action)){
+      if(!this.processes.snapshot(session.id)){const result=await this.openSession(session.cwd,session.id,false);if(result.sessionId!==session.id||result.hydration!=="ready")throw Error(result.message||"原会话暂时无法继续，未创建新会话");}
+    }
+    if(command.action==="configure"){
+      return this.configurationMutation(session.id,async()=>{if(this.remoteConfigFlights.has(session.id))throw Error("配置正在修改，请刷新后重试");const current=await this.remoteRuntime(session.id);if(current.revision!==command.revision)throw Error("配置已被其他端修改，请刷新后再选择");if(!current.mutable)throw Error(current.reason);
+      const fields=["modelId","effort","mode"].filter(key=>command[key as "modelId"]!==undefined);if(fields.length!==1)throw Error("每次只能修改一个配置项");
+      this.remoteConfigFlights.add(session.id);try{if(command.modelId!==undefined)await this.setModelNow(session.id,command.modelId);if(command.effort!==undefined)await this.setEffortNow(session.id,command.effort);if(command.mode!==undefined)await this.processes.setMode(session.id,command.mode)}finally{this.remoteConfigFlights.delete(session.id)}return {state:"completed",message:"配置已应用"};});
+    }
+    if(command.action==="compact"){await this.compactSession(session.id);return {state:"completed"};}
+    if(command.action==="fork"){const launch=command.profileId||command.modelId||command.effort!==undefined||command.mode?{workspacePath:session.cwd,profileId:command.profileId,modelId:command.modelId,providerId:command.providerId,effort:command.effort,mode:command.mode}:undefined;const result=await this.forkSession(session.id,command.pointId,launch);this.invalidateRemoteList();return {state:"completed",resultSessionId:result.sessionId};}
+    if(command.action==="queue-edit"){await this.editQueuedPrompt(session.id,command.queueId!,command.text!);return {state:"completed"};}
+    if(command.action==="queue-move"){await this.reorderQueuedPrompt(session.id,command.queueId!,command.position!);return {state:"completed"};}
+    if(command.action==="queue-clear"){await this.clearPromptQueue(session.id);return {state:"completed"};}
+    if(command.action==="send"||command.action==="interject"){
+      const adapter=this.processes.get(session.id);
+      if(adapter.needsUser)throw Error("会话正在等待回答，请先处理确认或问题");
+      const attachments=[...(command.attachmentIds?.length?await this.remoteTools().files.attachments(command.attachmentIds,deviceId??"",session.id):[]),...(command.references?.length?await this.remoteReferences(command.references):[])];await this.trustRemoteAttachments(attachments);
+      if(command.action==="interject"){await this.interjectPrompt(session.id,command.text!,attachments,command.operationId.slice(14),undefined,undefined,command.toolSelection);return {state:"completed"};}
+      if(adapter.working){await this.enqueuePrompt(session.id,command.text!,attachments,command.operationId.slice(14),undefined,undefined,command.toolSelection);return {state:"queued",message:"消息已进入当前会话队列"};}
+      await this.sendPrompt(session.id,command.text!,attachments,command.operationId.slice(14),undefined,undefined,command.toolSelection);return {state:"completed"};
+    }
+    if(command.action==="cancel"){if(!this.processes.snapshot(session.id))throw Error("此会话当前未运行");await this.cancelSession(session.id);return {state:"completed"};}
+    if(command.action==="queue-remove"){if(!this.processes.snapshot(session.id))throw Error("此会话当前未运行");await this.removeQueuedPrompt(session.id,command.queueId!);return {state:"completed"};}
+    const snapshot=await this.remoteSnapshot(session.id);const pending=snapshot.pending.find(event=>{
+      if(command.action==="permission")return event.type==="permission"&&event.request.requestId===command.requestId;
+      if(command.action==="question")return event.type==="question"&&event.requestId===command.requestId;
+      return event.type==="plan"&&event.requestId===command.requestId;
+    });
+    if(!pending)throw Error("该请求已处理或已失效，请刷新会话");
+    if(command.action==="permission"){if(pending.type!=="permission"||!pending.request.options.some(option=>option.optionId===command.optionId))throw Error("权限选项无效");await this.respondPermission(session.id,command.requestId!,command.optionId!);}
+    else if(command.action==="question")await this.respondQuestion(session.id,command.requestId!,command.answers!);
+    else await this.respondPlan(session.id,command.requestId,command.verdict!);
+    return {state:"completed"};
+  }
+
+  async createSession(input: string | ExecutionProfileLaunchInput,activate=true): Promise<SessionLaunchResult> {
     const launch = typeof input === "string" ? { workspacePath: input } : input;
     if (this.deletingWorkspaces.has(normalizePathKey(launch.workspacePath))) throw new Error("此项目正在删除，暂时不能创建会话");
     const workspace = (await resolveExistingWorkspacePath(launch.workspacePath, ".", true)).path;
@@ -1313,7 +1509,7 @@ export class AppController {
       throw error;
     }
     void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew"]).catch((error) => this.log.log(error));
-    this.focusedSessionId = result.sessionId;
+    if(activate)this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
     const assignment: SessionExecutionAssignment = { sessionId: result.sessionId, sourceWorkspacePath: workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
     await this.profiles.assign(assignment);
@@ -1361,26 +1557,25 @@ export class AppController {
     return projection;
   }
 
-  async openSession(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
+  async openSession(cwd: string, sessionId: string, activate = true): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
     if (this.deletingSessions.has(sessionId)) throw new Error("此会话正在删除，暂时不能打开");
     const pending = this.sessionOpenFlights.get(sessionId);
-    if (pending) return pending;
-    const flight = this.openSessionOwned(cwd, sessionId).finally(() => {
+    if (pending) { if (activate) { this.focusedSessionId = sessionId; await this.catalog.markRead(sessionId); } return pending; }
+    const flight = this.openSessionOwned(cwd, sessionId, activate).finally(() => {
       if (this.sessionOpenFlights.get(sessionId) === flight) this.sessionOpenFlights.delete(sessionId);
     });
     this.sessionOpenFlights.set(sessionId, flight);
     return flight;
   }
 
-  private async openSessionOwned(cwd: string, sessionId: string): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
+  private async openSessionOwned(cwd: string, sessionId: string, activate = true): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
     const generation = ++this.nextHydrationGeneration;
     this.sessionHydrationGenerations.set(sessionId, generation);
     const emitHydration = (state: import("../shared/types").SessionHydrationState, message?: string): void => {
       if (this.sessionHydrationGenerations.get(sessionId) !== generation) return;
       this.window?.webContents.send("grok:event", { type: "session-hydration", sessionId, state, generation, message } satisfies ChatEvent);
     };
-    this.focusedSessionId = sessionId;
-    await this.catalog.markRead(sessionId);
+    if (activate) { this.focusedSessionId = sessionId; await this.catalog.markRead(sessionId); }
     const assignment = await this.profiles.assignment(sessionId);
     const targetCwd = assignment?.cwd ?? cwd;
     const presentations = await this.turnPresentations.list(sessionId);
@@ -1407,6 +1602,7 @@ export class AppController {
       const result = assignment
         ? await this.openAssignedSession(assignment)
         : await this.processes.open(cwd, sessionId);
+      await this.eventFlights.get(sessionId);
       emitHydration("synchronizing");
       const replayed = [...(this.projectionReplayBuffers.get(sessionId) ?? [])];
       if (replayed.length) {
@@ -1910,8 +2106,13 @@ export class AppController {
     if (!session) throw new Error("会话当前未加载");
     if (submittedCwd !== undefined && session.cwd !== submittedCwd) throw new Error("媒体生成前会话项目已改变，请重新提交");
     const executionCwd = session.cwd;
-    const modelId = request.modelId || imageSession?.execution?.modelId || session.modelId || settings.defaultModel;
-    if (!modelId) throw new Error("请明确选择 CLI 调度模型后生成图片");
+    const catalog = await this.listModelCatalog();
+    const boundModel=request.modelId||imageSession?.execution?.modelId||session.modelId;
+    const modelId=boundModel||(catalog.some(model=>model.modelId===settings.defaultModel)?settings.defaultModel:catalog.find(model=>model.defaultForCli&&!model.providerId)?.modelId);
+    if (!modelId) throw new Error("尚未取得 CLI 默认模型；请刷新模型列表或明确选择后生成图片");
+    if (this.modelCatalogProbedAt && !catalog.some(model => model.modelId === modelId)) {
+      throw new Error(`调度模型“${modelId}”已不在当前 CLI 的可用目录中。请打开模型选择，刷新后选择可用模型再生成；本次没有提交生图请求。`);
+    }
     const providerId = await this.resolveManagedProviderSelection(modelId);
     const accountId = (await this.vault.active())?.profile.id;
     if(imageSession)await this.imageWorkspace.execution(imageSession.id,{modelId,providerId,accountId});
@@ -2297,6 +2498,11 @@ export class AppController {
   }
 
   async setModel(sessionId: string, modelId: string): Promise<void> {
+    return this.configurationMutation(sessionId,()=>this.setModelNow(sessionId,modelId));
+  }
+  private configurationQueues=new Map<string,Promise<unknown>>();
+  private async configurationMutation<T>(id:string,operation:()=>Promise<T>):Promise<T>{const previous=this.configurationQueues.get(id)??Promise.resolve();const next=previous.catch(()=>undefined).then(operation);this.configurationQueues.set(id,next);try{return await next}finally{if(this.configurationQueues.get(id)===next)this.configurationQueues.delete(id)}}
+  private async setModelNow(sessionId:string,modelId:string):Promise<void>{
     const providerId = await this.resolveManagedProviderSelection(modelId);
     const previous = await this.sessionRuntime.get(sessionId);
     const snapshot = this.processes.snapshot(sessionId);
@@ -2318,12 +2524,15 @@ export class AppController {
   }
 
   async setEffort(sessionId: string, effort: ReasoningEffort): Promise<void> {
+    return this.configurationMutation(sessionId,()=>this.setEffortNow(sessionId,effort));
+  }
+  private async setEffortNow(sessionId:string,effort:ReasoningEffort):Promise<void>{
     if (!REASONING_EFFORTS.includes(effort)) throw new Error("不支持的推理强度");
     await this.processes.setEffort(sessionId, effort);
   }
 
   async setMode(sessionId: string, mode: SessionMode): Promise<void> {
-    await this.processes.setMode(sessionId, mode);
+    await this.configurationMutation(sessionId,()=>this.processes.setMode(sessionId, mode));
   }
 
   async pickAttachments(): Promise<Attachment[]> {
@@ -2548,11 +2757,20 @@ export class AppController {
 
   private modelCatalog: ModelInfo[] = [];
   private modelCatalogProbe?: Promise<ModelInfo[]>;
+  private modelCatalogRefreshFlight?: Promise<ModelInfo[]>;
   private modelCatalogProbedAt = 0;
+  private modelCatalogAttemptedAt = 0;
+  private modelCatalogError?: string;
+  private modelCatalogRevision = 0;
+  private invalidateModelCatalog(): void {
+    this.modelCatalogRevision=(this.modelCatalogRevision??0)+1;
+    this.modelCatalog=[];this.modelCatalogProbedAt=0;this.modelCatalogAttemptedAt=0;this.modelCatalogError=undefined;
+    this.modelCatalogProbe=undefined;this.modelCatalogRefreshFlight=undefined;
+  }
 
-  async listModelCatalog(): Promise<ModelInfo[]> {
+  async listModelCatalog(refresh=true): Promise<ModelInfo[]> {
     const live = this.processes.listKnownModels();
-    if (live.length) {
+    if (live.length && !this.modelCatalogProbedAt) {
       const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
       for (const model of live) byId.set(model.modelId, model);
       this.modelCatalog = [...byId.values()];
@@ -2560,20 +2778,32 @@ export class AppController {
     const settings = await this.settingsStore.get();
     // Refresh at most once per minute unless a live session already supplied
     // newer data. Concurrent settings/new-task requests share one ACP probe.
-    if (settings.activeWorkspace && (!this.modelCatalogProbedAt || Date.now() - this.modelCatalogProbedAt >= 60_000)) {
+    const probeCwd = settings.activeWorkspace && await stat(settings.activeWorkspace).then(info=>info.isDirectory()).catch(()=>false)
+      ? settings.activeWorkspace : app.getPath("userData");
+    if (refresh && (this.modelCatalogProbe || !this.modelCatalogAttemptedAt || Date.now() - this.modelCatalogAttemptedAt >= 60_000)) {
       if (!this.modelCatalogProbe) {
-        this.modelCatalogProbedAt = Date.now();
-        this.modelCatalogProbe = this.processes.probeModelCatalog(settings.activeWorkspace)
+        const revision=this.modelCatalogRevision;
+        this.modelCatalogAttemptedAt = Date.now();
+        const probe = this.processes.probeModelCatalog(probeCwd)
+          .then(models => {
+            if(revision!==this.modelCatalogRevision)return [];
+            if (!models.length) throw new Error("CLI 尚未返回可用模型；请检查登录和网络后刷新。");
+            // A successful new declaration replaces the old native catalog.
+            this.modelCatalog = models;
+            this.modelCatalogProbedAt = Date.now();
+            this.modelCatalogError = undefined;
+            return models;
+          })
           .catch(async (error) => {
+            if(revision!==this.modelCatalogRevision)return [];
+            this.modelCatalogError = error instanceof Error ? error.message : String(error);
             await this.log.log(`读取 ACP 模型目录失败：${error instanceof Error ? error.message : String(error)}`);
             return [];
           })
-          .finally(() => { this.modelCatalogProbe = undefined; });
+          .finally(() => { if(this.modelCatalogProbe===probe)this.modelCatalogProbe = undefined; });
+        this.modelCatalogProbe=probe;
       }
-      const probed = await this.modelCatalogProbe;
-      const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
-      for (const model of probed) byId.set(model.modelId, model);
-      this.modelCatalog = [...byId.values()];
+      await this.modelCatalogProbe;
     }
     const providers = await this.providers.list().catch(() => []);
     const byId = new Map(this.modelCatalog.map((model) => [model.modelId, model]));
@@ -2645,13 +2875,26 @@ export class AppController {
     });
   }
   async createAutomation(input: AutomationTaskInput): Promise<AutomationTask[]> { return this.automations.create(await this.applyExecutionProfileToAutomation(input)); }
-  async updateAutomation(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> {
-    if (!("executionProfileId" in patch) && !patch.workspace && !patch.profile) return this.automations.update(id, patch);
+  async createRemoteAutomation(input:AutomationTaskInput,overrides?:Partial<Pick<AutomationTaskInput["profile"],"modelId"|"providerId"|"mode"|"effort">>){
+    if(input.destination==="current-session"){
+      const session=await this.requireRemoteSession(input.targetSessionId??"");if(!session.canSend)throw Error("请选择可继续的主会话");const snapshot=this.processes.snapshot(session.id),runtime=await this.sessionRuntime.get(session.id),assignment=await this.profiles.assignment(session.id);if(!snapshot&&!runtime)throw Error("原会话执行配置尚未记录，请先连接原会话读取配置");const account=await this.vault.active();
+      const modelId=snapshot?.modelId??runtime?.modelId;if(!modelId)throw Error("原会话模型尚未确认，请先连接原会话");const mode=snapshot?.mode??runtime!.mode;
+      input={...input,workspace:session.cwd,contextPolicy:"reuse",frozenExecutionProfile:assignment?.profile,profile:{modelId,effort:snapshot?.effort??runtime!.effort,mode,permissionPolicy:mode==="auto"?"auto":mode==="plan"?"read-only":"agent",computerEnabled:input.profile.computerEnabled,providerId:runtime?.providerId,accountId:account?.profile.id}};
+    }
+    if(input.destination!=="current-session" && input.executionProfileId && overrides){
+      const compiled=await this.compileExecutionProfile(input.workspace,input.executionProfileId);
+      const profile={...input.profile,...overrides};
+      input={...input,profile,frozenExecutionProfile:automationRuntimeProfile(profile,compiled.profile)};
+    }
+    return this.automations.createOne(await this.applyExecutionProfileToAutomation(input));
+  }
+  async updateAutomation(id: string, patch: Partial<AutomationTaskInput>,expectedRevision?:number): Promise<AutomationTask[]> {
+    if (!("executionProfileId" in patch) && !patch.workspace && !patch.profile) return this.automations.update(id, patch,expectedRevision);
     const current = (await this.automations.list()).find((value) => value.id === id);
     if (!current) throw new Error("持久任务不存在");
     const merged = { ...current, ...patch, profile: { ...current.profile, ...patch.profile }, schedule: patch.schedule ?? current.schedule, prompt: patch.prompt } as AutomationTaskInput;
     const profiled = await this.applyExecutionProfileToAutomation({ ...merged, frozenExecutionProfile: "executionProfileId" in patch && patch.executionProfileId !== current.executionProfileId ? undefined : current.frozenExecutionProfile });
-    return this.automations.update(id, { ...patch, executionProfileId: profiled.executionProfileId, profile: profiled.profile, frozenExecutionProfile: profiled.frozenExecutionProfile });
+    return this.automations.update(id, { ...patch, executionProfileId: profiled.executionProfileId, profile: profiled.profile, frozenExecutionProfile: profiled.frozenExecutionProfile },expectedRevision);
   }
   deleteAutomation(id: string): Promise<AutomationTask[]> { return this.automations.delete(id); }
   pauseAutomation(id: string, paused: boolean): Promise<AutomationTask[]> { return this.automations.pause(id, paused); }
@@ -3265,7 +3508,7 @@ export class AppController {
   async loginDevice() { return this.withMediaCredentialChange(() => this.auth.loginDevice()); }
   async loginApiKey(label: string, key: string) { return this.withMediaCredentialChange(() => this.auth.addApiKey(label, key)); }
   async logout() { return this.withMediaCredentialChange(() => this.auth.logout()); }
-  async switchAccount(id: string) { return this.withMediaCredentialChange(() => this.auth.switchAccount(id)); }
+  async switchAccount(id: string) { return this.withMediaCredentialChange(()=>this.auth.switchAccount(id)); }
   async removeAccount(id: string) {
     const active = await this.vault.active();
     return active?.profile.id === id ? this.withMediaCredentialChange(() => this.auth.removeAccount(id)) : this.auth.removeAccount(id);
@@ -3284,7 +3527,7 @@ export class AppController {
         const active=runs.some(run=>["queued","running","awaiting-confirmation"].includes(run.status)&&tasks.some(task=>task.id===run.taskId&&!task.profile.providerId&&(!task.profile.accountId||task.profile.accountId===account?.profile.id)));
         if(active)throw Error("当前账号还有定时任务运行或等待确认。请先完成或停止任务，再变更账号。");
       }
-      const result = await operation(); this.quota.clear(); return result;
+      const result = await operation(); this.quota.clear(); this.invalidateModelCatalog(); return result;
     } finally { this.mediaCredentialChanges--; }
   }
 
@@ -3479,6 +3722,7 @@ export class AppController {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    await this.remoteGateway?.dispose();
     for(const timer of this.pullRequestWatches.values())clearInterval(timer);this.pullRequestWatches.clear();
     this.workspaceTerminals.dispose();
     this.workspaceBrowser?.dispose();
@@ -3646,7 +3890,20 @@ export class AppController {
     }
   }
 
-  private async handleEvent(event: ChatEvent): Promise<void> {
+  private eventFlights = new Map<string, Promise<void>>();
+  private handleEvent(event: ChatEvent): Promise<void> {
+    // Preparing attachments performs I/O. Preserve ACP order across that await,
+    // otherwise a sent status or terminal update can overtake its user bubble.
+    const key = event.sessionId || "global";
+    const flights = this.eventFlights ??= new Map();
+    const next = (flights.get(key) ?? Promise.resolve()).catch(() => undefined)
+      .then(() => this.handleOrderedEvent(event));
+    flights.set(key, next);
+    void next.finally(() => { if (flights.get(key) === next) flights.delete(key); }).catch(() => undefined);
+    return next;
+  }
+
+  private async handleOrderedEvent(event: ChatEvent): Promise<void> {
     const replayingAtEntry=Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId));
     this.nativeAgentCapabilities.record(event, { replaying: Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId)) });
     if (!replayingAtEntry && event.type === "session-title") {
@@ -3751,6 +4008,7 @@ export class AppController {
       await this.conversationProjections.record(event)
         .catch((error) => this.log.log(`会话可见内容投影失败：${error instanceof Error ? error.message : String(error)}`));
     }
+    if (!replayingAtEntry && !this.projectionReplaying.has(sessionId)) this.remoteGateway?.observe(event);
     if (replayingAtEntry || this.projectionReplaying.has(sessionId)) return;
     await this.dashboard.record(event).catch((error) => this.log.log(`Agent Dashboard 记录失败：${error instanceof Error ? error.message : String(error)}`));
     if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
@@ -3798,7 +4056,9 @@ export class AppController {
     if (event.type === "error" && event.sessionId) await this.computer.settleSession(event.sessionId, "error", event.message).catch(() => undefined);
     if (event.type === "status" && event.status === "error") await this.computer.settleSession(event.sessionId, "error", event.text || "Grok 进程异常，Computer Use 已清理").catch(() => undefined);
     if (event.type === "status" && event.status === "error" && event.text) this.captureQuotaSignal(event.text, this.processes.snapshot(event.sessionId)?.modelId);
-    if (event.type === "status" && (event.status === "working" || event.status === "needs-user")) this.runningSessions.add(event.sessionId);
+    // Only a live prompt turn counts as "work finished". Model/effort/mode switches and
+    // session restore also toggle working→idle and must not raise completion notices.
+    if (!replayingAtEntry && event.type === "turn-started") this.runningSessions.add(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && this.runningSessions.delete(event.sessionId)) {
       if(this.visibleConversationId!==event.sessionId||!this.window?.isFocused())await this.catalog.markUnread(event.sessionId, event.status === "error");
       await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "会话失败" : "会话已完成", detail: event.text, sessionId: event.sessionId });

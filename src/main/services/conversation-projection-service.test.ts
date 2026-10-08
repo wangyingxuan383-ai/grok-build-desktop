@@ -14,6 +14,14 @@ async function tempRoot(): Promise<string> {
 }
 
 describe("ConversationProjectionService", { timeout: 60_000 }, () => {
+  it("displays a delivery status that overtook an older user echo without altering its journal",async()=>{
+    const root=await tempRoot(),service=new ConversationProjectionService(root);
+    await service.record({type:"user-message-status",sessionId:"delivery",clientMessageId:"client",delivery:"sent"});
+    await service.record({type:"user-message",sessionId:"delivery",clientMessageId:"client",text:"你好",delivery:"sending"});
+    const projection=await service.restore("delivery");
+    expect(projection?.events.find(event=>event.type==="user-message")).toMatchObject({delivery:"sent",text:"你好"});
+    await service.dispose();
+  });
   it("does not persist process-local MCP elicitation requests or authorization URLs", async () => {
     const root = await tempRoot();
     const service = new ConversationProjectionService(root);

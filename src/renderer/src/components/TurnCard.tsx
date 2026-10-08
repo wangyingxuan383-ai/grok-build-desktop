@@ -4,6 +4,7 @@ import type { UiChatTurn, UiMessage } from "../store";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 import { GeneratedMediaGallery, MessageCard } from "./MessageCard";
 import { SubagentCard } from "./SubagentCard";
+import { requestQuote } from "./QuoteSelection";
 
 export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot, showThinking, expandTools, onResolved, onDiagnose, onRetry, onNavigate, onOpenReview, onFork }: {
   turn: UiChatTurn;
@@ -56,7 +57,7 @@ export const TurnCard = memo(function TurnCard({ turn, sessionId, navigationRoot
     </details>}
     {subagents.length > 0 && <div className="sa-list">{subagents.map((message) => <SubagentCard key={message.id} tool={message.tool} sessionId={sessionId} />)}</div>}
     {turn.pending.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onResolved={onResolved} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
-    {turn.final && <div className="final-answer"><div className="final-answer-toolbar"><span>{turn.running ? "正在生成" : "最终回答"}</span><div><button title="复制最终回答" aria-label="复制最终回答" onClick={() => void navigator.clipboard.writeText(turn.final!.text)}>复制</button>{onFork && <button title="从当前任务末尾创建真实分叉" aria-label="从当前任务末尾创建真实分叉" onClick={onFork}>从这里分叉</button>}</div></div>{turn.running ? <pre className="streaming-answer">{turn.final.text}</pre> : <LazyMarkdownView text={turn.final.text} />}{turn.presentation && <TurnMetrics presentation={turn.presentation}/>}</div>}
+    {turn.final && <div className="final-answer"><div className="final-answer-toolbar"><span>{turn.running ? "正在生成" : "最终回答"}</span><div><button title="复制最终回答" aria-label="复制最终回答" onClick={() => void navigator.clipboard.writeText(turn.final!.text)}>复制</button>{!turn.running && <button title="把整条回答作为引用加入输入框；也可以先选中一段文字再引用" aria-label="引用整条回答" onClick={() => requestQuote(turn.final!.text)}>引用</button>}{onFork && <button title="从当前任务末尾创建真实分叉" aria-label="从当前任务末尾创建真实分叉" onClick={onFork}>从这里分叉</button>}</div></div>{turn.running ? <pre className="streaming-answer">{turn.final.text}</pre> : <LazyMarkdownView text={turn.final.text} />}{turn.presentation && <TurnMetrics presentation={turn.presentation}/>}</div>}
     {mediaResults.length > 0 && <GeneratedMediaGallery messages={mediaResults} sessionId={sessionId} />}
     {nonMediaTrailing.map((message) => <MessageCard key={message.id} message={message} sessionId={sessionId} navigationRoot={navigationRoot} showThinking={showThinking} expandTools={expandTools} onDiagnose={onDiagnose} onNavigate={onNavigate} />)}
     {/* Never leave timing/token metrics floating without a visible result.

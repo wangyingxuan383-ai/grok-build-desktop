@@ -20,6 +20,6 @@ export default defineConfig({
     sourcemap: profile === "local",
     target: "node24",
     lib: { entry: {index:resolve("src/main/index.ts"),"token-activity-worker":resolve("src/main/token-activity-worker.ts")}, formats: ["es"], fileName: (_format,name) => `${name}.js` },
-    rollupOptions: { external: ["electron", "iconv-lite", "node-pty", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
+    rollupOptions: { external: ["electron", "iconv-lite", "node-pty", "selfsigned", "qrcode", "bonjour-service", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
   },
 });

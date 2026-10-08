@@ -130,9 +130,10 @@ export class AutomationService {
     return stripPrompt(task, this.now());
   }
 
-  async update(id: string, patch: Partial<AutomationTaskInput>): Promise<AutomationTask[]> {
+  async update(id: string, patch: Partial<AutomationTaskInput>,expectedRevision?:number): Promise<AutomationTask[]> {
     await this.definitionTransaction(id, async () => {
     const current = await this.readTask(id);
+    if(expectedRevision!==undefined&&(current.revision??0)!==expectedRevision)throw new Error("任务已被其他端修改，请刷新后再保存");
     const workspaceKey = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
     const workspaceChanged = Boolean(patch.workspace && workspaceKey(patch.workspace) !== workspaceKey(current.workspace));
     if (current.projectRemoved) patch = { ...patch, projectRemoved: true };

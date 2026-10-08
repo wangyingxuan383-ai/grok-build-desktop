@@ -54,10 +54,23 @@ describe("Grok ACP process arguments", () => {
     expect(buildAcpClientCapabilities()).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
   });
 
+  it("preserves active-turn exit evidence while keeping idle disconnects out of task failures",()=>{
+    const adapter:any=Object.create(GrokAcpAdapter.prototype);
+    Object.assign(adapter,{sessionId:"s",sessionMcpTools:{reset:vi.fn()},clearFirstEventWatchdog:vi.fn(),flushProviderText:vi.fn(),rememberSettledTurn:vi.fn(),persistActiveQueueTerminal:vi.fn(),settlePromptRequestFromTerminal:vi.fn(),buildFailure:()=>({classification:"process-exit"}),emitEvent:vi.fn(),failAll:vi.fn(),emitClosed:vi.fn()});
+    adapter.onProcessExit(0);expect(adapter.emitEvent).toHaveBeenLastCalledWith(expect.objectContaining({type:"status",sessionId:"s"}));
+    adapter.activeTurn={turnId:"turn-one",monotonicStartedAt:performance.now()};adapter.onProcessExit(1);expect(adapter.emitEvent).toHaveBeenLastCalledWith(expect.objectContaining({type:"error",failure:expect.objectContaining({turnId:"turn-one"})}));
+    adapter.emitEvent.mockClear();
+    adapter.cancelRequested=true;adapter.activeTurn={turnId:"turn-two",monotonicStartedAt:performance.now()};adapter.onProcessExit(1);
+    expect(adapter.cancelRequested).toBe(false);
+    expect(adapter.emitEvent).toHaveBeenCalledWith(expect.objectContaining({type:"turn-completed",presentation:expect.objectContaining({outcome:"cancelled"})}));
+    expect(adapter.emitEvent).not.toHaveBeenCalledWith(expect.objectContaining({type:"error"}));
+    expect(adapter.emitEvent).toHaveBeenLastCalledWith(expect.objectContaining({type:"status",text:"本次执行已停止。"}));
+  });
   it("reads initialize model capabilities without creating a session", async () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     adapter.launchAndInitialize = vi.fn().mockResolvedValue(undefined);
     adapter.runtimeHandshake = {
+      currentModelId:"grok-4.6",
       models: [
         { modelId: "grok-4.6", name: "Grok 4.6", reasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"], acceptsImages: true },
         { modelId: "future-model", name: "Future" },
@@ -65,7 +78,7 @@ describe("Grok ACP process arguments", () => {
     };
     adapter.request = vi.fn();
     await expect(adapter.probeModelCatalog()).resolves.toEqual([
-      expect.objectContaining({ modelId: "grok-4.6", name: "Grok 4.6", supportsReasoningEffort: true, acceptsImages: true, reasoningEfforts: expect.arrayContaining([{ value: "xhigh", label: "xhigh" }]) }),
+      expect.objectContaining({ modelId: "grok-4.6", name: "Grok 4.6", defaultForCli:true, supportsReasoningEffort: true, acceptsImages: true, reasoningEfforts: expect.arrayContaining([{ value: "xhigh", label: "xhigh" }]) }),
       expect.objectContaining({ modelId: "future-model", name: "Future" }),
     ]);
     expect(adapter.launchAndInitialize).toHaveBeenCalledTimes(1);

@@ -852,7 +852,15 @@ function dedupeProjectionRecords(records: ProjectionRecord[]): ProjectionRecord[
 }
 
 function visibleProjectionEvents(sessionId: string, records: ProjectionRecord[], truncatedEventCount: number): ChatEvent[] {
-  const events = records.map((record) => record.event);
+  // Old projections can contain a status before a slow attachment-bearing echo.
+  // Reconcile the display by identity without rewriting the original journal.
+  const deliveries = new Map<string, Extract<ChatEvent, { type: "user-message-status" }>["delivery"]>();
+  for (const { event } of records) if (event.type === "user-message-status") deliveries.set(event.clientMessageId, event.delivery);
+  const events = records.map(({ event }) => {
+    if (event.type !== "user-message") return event;
+    const delivery = deliveries.get(event.clientMessageId || event.id || "");
+    return delivery ? { ...event, delivery } : event;
+  });
   if (!truncatedEventCount) return events;
   return [{
     type: "history-recovery",

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { Attachment, CustomProviderProfile, MediaAccessHandle, MediaAspectRatio } from "../../../../shared/types";
 import { UiIcon } from "../../ui-icons";
 import { ActionMenu, type UiAction } from "../ui/ActionMenu";
-import { Button } from "../ui/Button";
+import { Button, IconButton } from "../ui/Button";
 import { artworkSrc, ASPECT_OPTIONS } from "./image-model";
 
 export interface ProviderModelOption { value: string; label: string }
@@ -23,6 +23,8 @@ export function ImageComposer(props: {
   state: ComposerState;
   models: ProviderModelOption[];
   cliModels?:ProviderModelOption[];
+  modelsLoading?:boolean;
+  onRefreshModels?():void;
   busy: boolean;
   hero?: boolean;
   codeImages?: MediaAccessHandle[];
@@ -43,7 +45,8 @@ export function ImageComposer(props: {
   }, [state.draft]);
   const hasReference = state.references.length > 0 || state.sources.length > 0;
   const providerBlocked = state.route === "provider" && (!state.model || hasReference);
-  const canSend = !busy && state.draft.trim().length > 0 && !providerBlocked;
+  const cliModelInvalid=state.route==="cli"&&!props.cliModels?.some(model=>model.value===state.cliModel);
+  const canSend = !busy && !props.modelsLoading && state.draft.trim().length > 0 && !providerBlocked && !cliModelInvalid;
   const addMenu: UiAction[] = [
     { id: "file", label: "从电脑选择参考图", icon: <UiIcon name="folder" />, run: props.onPickReferences },
     { id: "code", label: "从代码会话的图片中选择", icon: <UiIcon name="code" />, run: props.onPickFromCode },
@@ -92,7 +95,7 @@ export function ImageComposer(props: {
           </select>
         </label>
         <label className="im-select"><span className="visually-hidden">生成路由</span>
-          <select aria-label="生成路由" value={state.route} disabled={busy} onChange={(event) => props.onChange({ route: event.target.value as ImageRoute })}>
+          <select aria-label="生成路由" title={state.route === "cli" ? "调度模型负责调用 CLI 的生图工具；图片后端由 CLI 配置决定。使用当前账号，不会自动切换到 Provider 生图。" : "Provider 路由每次都是独立请求，不会续接这个会话的上一轮内容。"} value={state.route} disabled={busy} onChange={(event) => props.onChange({ route: event.target.value as ImageRoute })}>
             <option value="cli">Grok CLI</option>
             <option value="provider">自定义 Provider</option>
           </select>
@@ -105,13 +108,12 @@ export function ImageComposer(props: {
             </select>
           </label>
         )}
-        {state.route==="cli"&&<label className="im-select"><span className="visually-hidden">CLI 调度模型</span><select aria-label="CLI 调度模型" value={state.cliModel} disabled={busy} onChange={event=>props.onChange({cliModel:event.target.value})}><option value="">选择调度模型</option>{state.cliModel&&!props.cliModels?.some(model=>model.value===state.cliModel)&&<option value={state.cliModel}>{state.cliModel}</option>}{props.cliModels?.map(model=><option key={model.value} value={model.value}>{model.label}</option>)}</select></label>}
+        {state.route==="cli"&&<><label className="im-select"><span className="visually-hidden">CLI 调度模型</span><select aria-label="CLI 调度模型" value={state.cliModel} disabled={busy||props.modelsLoading} onChange={event=>props.onChange({cliModel:event.target.value})}><option value="">选择调度模型</option>{state.cliModel&&cliModelInvalid&&<option disabled value={state.cliModel}>{state.cliModel}（当前不可用）</option>}{props.cliModels?.map(model=><option key={model.value} value={model.value}>{model.label}</option>)}</select></label><IconButton icon="refresh" label={props.modelsLoading?"正在读取模型…":"刷新模型"} className={props.modelsLoading?"is-spinning":undefined} disabled={busy||props.modelsLoading} onClick={props.onRefreshModels}/></>}
         <span className="im-spacer" />
         <Button variant="primary" loading={busy} disabled={!canSend} onClick={props.onSubmit}>{busy ? "生成中" : "生成"}</Button>
       </div>
-      {state.route === "provider" && hasReference && <p className="im-note">此 Provider 的图片编辑接口尚未接入；请改用 Grok CLI，或移除参考图。</p>}
-      {state.route === "provider" && !hasReference && <p className="im-note">Provider 路由每次都是独立请求，不会续接这个会话的上一轮内容。</p>}
-      {state.route==="cli"&&<p className="im-note">调度模型负责调用 CLI 的生图工具；图片后端由 CLI 配置决定。使用当前账号，不会自动切换到 Provider 生图。</p>}
+      {state.route === "provider" && hasReference && <p className="im-note warn" role="status">此 Provider 的图片编辑接口尚未接入；请改用 Grok CLI，或移除参考图。</p>}
+      {cliModelInvalid&&!props.modelsLoading&&<p className="im-note warn" role="status">{state.cliModel?`原选择 ${state.cliModel} 已不在当前目录中，请重新选择。`:"请选择当前可用的调度模型。"}</p>}
     </section>
   );
 }

@@ -1,0 +1,5 @@
+import {defineConfig} from "vite";
+import react from "@vitejs/plugin-react";
+import {resolve} from "node:path";
+const mobile=resolve("apps/mobile"),acceptance=resolve(mobile,"acceptance");
+export default defineConfig({root:acceptance,plugins:[react()],server:{host:"127.0.0.1",port:5186,strictPort:true,fs:{allow:[resolve(".")]}},resolve:{extensions:[".web.tsx",".web.ts",".web.js",".tsx",".ts",".jsx",".js",".json"],alias:[{find:/^(?:\.\/src\/transport|\.\/transport)$/,replacement:resolve(acceptance,"transport.ts")},{find:/^(react-native-safe-area-context|expo-crypto|expo-camera|expo-status-bar|expo-clipboard|@react-native-async-storage\/async-storage)$/,replacement:resolve(acceptance,"native.tsx")},{find:"expo-secure-store",replacement:resolve(acceptance,"secure-store.ts")},{find:/^react-native$/,replacement:resolve(mobile,"node_modules/react-native-web")},{find:/^react$/,replacement:resolve(mobile,"node_modules/react")},{find:/^react-dom(.*)$/,replacement:resolve(mobile,"node_modules/react-dom")+"$1"}],dedupe:["react","react-dom"]},define:{__DEV__:true,"process.env.EXPO_OS":JSON.stringify("web")}});

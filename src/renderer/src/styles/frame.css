@@ -191,3 +191,5 @@ button.primary, .settings-dialog > footer button.primary, .request-card-actions 
 button.primary:hover:not(:disabled) { opacity: .88; }
 input[type="range"] { accent-color: var(--color-fg-subtle); }
 .workbench-page-surface > section:not(.settings-dialog) { max-width: 1040px; margin: 0 auto; }
+/* Page panels use the top bar's 返回会话 and Esc. Only explicitly marked close controls are hidden. */
+.workbench-page-surface > section > header > button[data-panel-close] { display: none; }

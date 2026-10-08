@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ImageConversation, ImageRecord, ImageWorkspace } from "../../../shared/image-workspace";
-import type { CustomProviderProfile, MediaAccessHandle, MediaArtifact } from "../../../shared/types";
+import type { CustomProviderProfile, MediaAccessHandle, MediaArtifact, ModelInfo } from "../../../shared/types";
 import type { ArtifactPreviewTarget } from "../artifact-preview";
 import { UiIcon } from "../ui-icons";
 import { useAppStore } from "../store";
@@ -32,8 +32,9 @@ type Pending =
  */
 export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers" | "about"): void; onNotice?(message: string): void }): React.JSX.Element {
   const defaultCliModel=useAppStore(state=>state.settings?.defaultModel||"");
-  const declaredModels=useAppStore(state=>state.views[state.activeSessionId]?.models);
-  const cliModels=(declaredModels??[]).map(model=>({value:model.modelId,label:model.name||model.modelId}));
+  const [declaredModels,setDeclaredModels]=useState<ModelInfo[]>([]);
+  const [modelsLoading,setModelsLoading]=useState(false);
+  const cliModels=declaredModels.map(model=>({value:model.modelId,label:model.name||model.modelId}));
   const cachedComposers=useRef<Record<string,ImageComposerDraft>>((()=>{try{return JSON.parse(localStorage.getItem(FULL_DRAFT_KEY)||"{}")}catch{return {}}})());
   const [data, setData] = useState<ImageWorkspace>();
   const [active, setActive] = useState(()=>localStorage.getItem("grok.image-notification-target")||"");
@@ -76,6 +77,12 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
   const workCount = useMemo(() => collectWorks(conversations).length, [conversations]);
 
   const fail = useCallback((value: unknown): void => { if (alive.current) setError(value instanceof Error ? value.message : String(value)); }, []);
+  const refreshModels=useCallback(async()=>{
+    setModelsLoading(true);
+    try { const models=await window.grokDesktop.listModelCatalog(); if(alive.current)setDeclaredModels(models); }
+    catch(error){fail(error)}
+    finally {if(alive.current)setModelsLoading(false)}
+  },[fail]);
   useEffect(()=>{
     if(!data)return;
     setPinned(values=>{const valid=values.filter(target=>data.conversations.some(row=>row.id===target.sessionId&&row.jobs.some(record=>record.job.artifacts.some(artifact=>artifact.id===target.messageId))));return valid.length===values.length?values:valid;});
@@ -91,6 +98,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
   useEffect(() => {
     alive.current = true;
     void refresh().catch(fail);
+    void refreshModels();
     void window.grokDesktop.listProviders().then(setProviders).catch(fail);
     const off = window.grokDesktop.onMediaGenerationProgress((job) => setData((value) => value ? {
       ...value,
@@ -99,7 +107,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
         : conversation),
     } : value));
     return () => { alive.current = false; clearTimeout(saveTimer.current); off(); };
-  }, [fail, refresh]);
+  }, [fail, refresh, refreshModels]);
 
   const changeDraft = (value: string): void => {
     if (!active) { try { localStorage.setItem(NEW_DRAFT_KEY, value); } catch { /* the draft just isn't remembered */ } }
@@ -322,6 +330,8 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
               state={composer}
               models={models}
               cliModels={cliModels}
+              modelsLoading={modelsLoading}
+              onRefreshModels={()=>void refreshModels()}
               busy={busy}
               hero={!row?.jobs.length}
               codeImages={codeImages}

@@ -243,6 +243,17 @@ export interface AppReleaseStatus {
   releaseUrl?: string;
   notes?: string;
   error?: string;
+  companion?: { version: string; downloadUrl: string; name: string; size?: number; sha256?: string };
+  /** Official Setup asset for in-app download; sha256 comes from release metadata when published. */
+  installer?: AppInstallerAsset;
+}
+export interface AppInstallerAsset { name: string; downloadUrl: string; size?: number; sha256?: string }
+export interface AppUpdateDownloadState {
+  phase: "idle" | "downloading" | "ready" | "error";
+  version?: string; name?: string; received: number; total?: number;
+  path?: string; sha256?: string; verified?: boolean; error?: string;
+  /** False for ZIP/portable copies: those are replaced by hand, not by the installer. */
+  installable?: boolean;
 }
 
 export interface AutomaticUpdateCheckResult {
@@ -1367,6 +1378,8 @@ export interface ComputerCapability {
 }
 
 export interface ModelInfo {
+  /** Default explicitly advertised by this native CLI handshake. */
+  defaultForCli?: boolean;
   modelId: string;
   name: string;
   /** Desktop-managed Provider identity. Official ACP models omit this. */
@@ -2143,6 +2156,12 @@ export interface OfflineUiFixture {
 }
 
 export interface GrokDesktopApi {
+  getRemoteState():Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
+  setRemoteEnabled(enabled:boolean,port?:number):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
+  beginRemotePairing(address?:string):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
+  configureRemotePush():Promise<{configured:boolean}>;
+  decideRemotePair(id:string,approve:boolean):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
+  revokeRemoteDevice(id:string):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
   listWorkspaceBrowserTabs():Promise<import("./workspace-tools").WorkspaceBrowserTab[]>;
   createWorkspaceBrowserTab(url:string,context?:{sessionId?:string;workspace?:string}):Promise<import("./workspace-tools").WorkspaceBrowserTab>;
   previewConfigurations(workspace:string):Promise<string[]>;
@@ -2182,6 +2201,13 @@ export interface GrokDesktopApi {
   exportSessionTrace(sessionId: string): Promise<string | null>;
   checkAppUpdate(force?: boolean): Promise<AppReleaseStatus>;
   openAppRelease(url?: string): Promise<void>;
+  downloadAppUpdate(): Promise<AppUpdateDownloadState>;
+  getMobileDownload(): Promise<{ version?: string; url?: string; qrDataUrl?: string; error?: string }>;
+  installCliInteractive(): Promise<void>;
+  cancelAppUpdate(): Promise<void>;
+  getAppUpdateDownload(): Promise<AppUpdateDownloadState>;
+  installAppUpdate(): Promise<void>;
+  onAppUpdateProgress(listener: (state: AppUpdateDownloadState) => void): () => void;
   chooseWorkspace(): Promise<string | null>;
   createTemporaryWorkspace(): Promise<string>;
   setWorkspace(cwd: string): Promise<SessionSummary[]>;
@@ -2410,7 +2436,7 @@ export interface GrokDesktopApi {
   openInboxItem(id:string):Promise<void>;
   setVisibleConversation(id:string):Promise<void>;
   testDesktopNotification():Promise<void>;
-  onNotificationTarget(listener:(target:{kind:"image"|"automation";id:string})=>void):()=>void;
+  onNotificationTarget(listener:(target:{kind:"image"|"automation"|"missing-session";id:string})=>void):()=>void;
   markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]>;
   clearInbox(): Promise<NotificationInboxItem[]>;
   getDraft(key: string): Promise<ComposerDraftState | null>;

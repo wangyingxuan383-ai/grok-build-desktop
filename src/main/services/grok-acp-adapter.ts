@@ -586,6 +586,7 @@ export class GrokAcpAdapter extends EventEmitter {
       return {
         modelId: model.modelId,
         name: model.name || model.modelId,
+        ...(model.modelId===this.runtimeHandshake?.currentModelId?{defaultForCli:true}:{}),
         ...(reasoningEfforts.length ? { supportsReasoningEffort: true, reasoningEfforts } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
         ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
@@ -632,22 +633,7 @@ export class GrokAcpAdapter extends EventEmitter {
     this.process.stderr.on("data", (data) => void this.options.log.log(`[grok stderr] ${data.toString()}`));
     this.process.stdin.on("error", (error) => void this.options.log.log(`[grok stdin] ${error.message}`));
     this.process.on("error", (error) => this.failAll(error));
-    this.process.on("exit", (code) => {
-      this.sessionMcpTools.reset();
-      const activeTurnId = this.activeTurn?.turnId;
-      const terminalOutcome: TurnOutcome = this.cancelRequested ? "cancelled" : "interrupted";
-      this.working = false;
-      this.needsUser = false;
-      this.finishTurn(terminalOutcome);
-      this.persistActiveQueueTerminal(terminalOutcome);
-      if (activeTurnId) this.settlePromptRequestFromTerminal(activeTurnId, terminalOutcome);
-      if (!this.disposed) {
-        const message = `Grok 进程已退出（代码 ${String(code)}）`;
-        this.emitEvent({ type: "error", sessionId: this.sessionId || undefined, message, failure: this.buildFailure(message, { processExitCode: code ?? undefined, cancelled: this.cancelRequested }) });
-      }
-      this.failAll(new Error(`Grok process exited (${String(code)})`));
-      this.emitClosed();
-    });
+    this.process.on("exit", (code) => this.onProcessExit(code));
 
     const initializeResult = await this.request(acpMethods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
@@ -656,6 +642,26 @@ export class GrokAcpAdapter extends EventEmitter {
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
     this.emit("runtime-handshake", this.runtimeHandshake);
+  }
+
+  private onProcessExit(code:number|null):void {
+      this.sessionMcpTools.reset();
+      const activeTurnId = this.activeTurn?.turnId;
+      const cancelled = this.cancelRequested;
+      const terminalOutcome: TurnOutcome = cancelled ? "cancelled" : "interrupted";
+      this.working = false;
+      this.needsUser = false;
+      this.finishTurn(terminalOutcome);
+      this.persistActiveQueueTerminal(terminalOutcome);
+      if (activeTurnId) this.settlePromptRequestFromTerminal(activeTurnId, terminalOutcome);
+      if (!this.disposed && activeTurnId && !cancelled) {
+        const message = `Grok 进程已退出（代码 ${String(code)}）`;
+        this.emitEvent({ type: "error", sessionId: this.sessionId || undefined, message, failure: {...this.buildFailure(message, { processExitCode: code ?? undefined, cancelled }),turnId:activeTurnId} });
+      } else if (!this.disposed && this.sessionId) {
+        this.emitEvent({type:"status",sessionId:this.sessionId,status:"idle",text:cancelled?"本次执行已停止。":"连接已结束；发送消息时将重新连接原会话。"});
+      }
+      this.failAll(new Error(`Grok process exited (${String(code)})`));
+      this.emitClosed();
   }
 
   private async completeSessionAttach(response: SessionResponse, resumeSessionId?: string): Promise<void> {

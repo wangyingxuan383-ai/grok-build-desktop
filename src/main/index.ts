@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, screen, shell,Tray,Menu } from "electron";
+import { trayIcon } from "./tray-icon";
 import type { Event as ElectronEvent } from "electron";
 import { createReadStream } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -20,6 +21,7 @@ let controller: AppController | undefined;
 let computerOverlay: ComputerUseOverlay | undefined;
 let windowState: WindowStateService | undefined;
 let quitting = false;
+let tray:Tray|undefined;
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 protocol.registerSchemesAsPrivileged([
@@ -94,6 +96,7 @@ else {
     windowState = new WindowStateService(app.getPath("userData"));
     const restoredWindow = await windowState.load(screen.getAllDisplays().map((display) => display.workArea));
     const startupTheme = await controller.prepareAppearance();
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE!=="1") void controller.startRemoteIfEnabled().catch(()=>undefined);
     protocol.handle("grok-html", request => controller?.htmlPreviewResponse(request.url) ?? new Response("Not found",{status:404}));
     protocol.handle("grok-theme", async (request) => {
       if (!isAllowedThemeBackgroundUrl(request.url)) return new Response("Not found", { status: 404 });
@@ -204,6 +207,7 @@ else {
     });
     mainWindow.on("close", (event) => {
       if (quitting) return;
+      if(controller?.remoteKeepAlive()){event.preventDefault();mainWindow?.hide();return;}
       if (controller?.hasCliUpdateInProgress()) {
         event.preventDefault();
         dialog.showMessageBoxSync(mainWindow!, {
@@ -231,6 +235,7 @@ else {
         mainWindow?.webContents.focus();
       }
     });
+    if(process.env.GROK_DESKTOP_OFFLINE_SMOKE!=="1"){try{const show=()=>{mainWindow?.show();mainWindow?.focus()};tray=new Tray(trayIcon());tray.setToolTip("Grok Build Desktop");let phones=-1;const refreshTray=()=>{const count=controller?.remoteLiveDevices()??0;if(!tray||tray.isDestroyed()||count===phones)return;phones=count;tray.setImage(trayIcon(count>0));tray.setToolTip(count?`Grok Build Desktop · 已连接 ${count} 台手机`:"Grok Build Desktop");tray.setContextMenu(Menu.buildFromTemplate([{label:"打开 Grok Build Desktop",click:show},{label:count?`手机连接：${count} 台在线`:"手机连接：无在线设备",enabled:false},{type:"separator"},{label:"退出应用",click:()=>app.quit()}]))};setInterval(refreshTray,4000).unref();refreshTray();tray.on("double-click",show)}catch{}}
     mainWindow.once("ready-to-show", () => mainWindow?.show());
     await loadRenderer().catch((error) => showStartupError(error instanceof Error ? error.message : String(error)));
     if (openTaskCenterOnReady && !showingStartupError) {
@@ -240,6 +245,7 @@ else {
 
   app.on("before-quit", (event) => {
     if (quitting) return;
+    if(controller?.hasWorking()&&mainWindow&&!mainWindow.isDestroyed()){const choice=dialog.showMessageBoxSync(mainWindow,{type:"question",title:"仍有任务运行",message:"退出会停止当前编程、媒体任务和手机连接。",buttons:["继续运行","停止并退出"],defaultId:0,cancelId:0});if(choice===0){event.preventDefault();mainWindow.show();return}}
     if (controller?.hasCliUpdateInProgress()) {
       event.preventDefault();
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -257,6 +263,7 @@ else {
     }
     event.preventDefault();
     quitting = true;
+    tray?.destroy();tray=undefined;
     computerOverlay?.dispose();
     computerOverlay = undefined;
     globalShortcut.unregisterAll();
