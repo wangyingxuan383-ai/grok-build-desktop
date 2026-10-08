@@ -38,3 +38,9 @@ The application uses the Agent Client Protocol TypeScript SDK, Electron, React, 
 - **smol-toml** (1.7.0, BSD-3-Clause): parses and serializes only the application-owned Grok model configuration block. Surrounding user configuration and comments are retained as text.
 - **xAI Grok Build**: protocol compatibility reference commit `ba76b0a683fa52e4e60685017b85905451be17bc` for prompt queue, interjection, fork, rewind, background-task and sub-Agent extension shapes. The CLI remains separately installed and is not redistributed.
 - Windows Task Scheduler, DPAPI and user-environment storage use public Windows APIs. Scheduled task prompts and pending confirmations are encrypted for the current Windows user.
+
+## Android companion preview
+
+The adapted Paseo pairing helper and Android dependency attribution are documented in apps/mobile/THIRD_PARTY_NOTICES.md, with the complete Apache-2.0 license alongside it. No HAPI AGPL implementation is incorporated. The Desktop gateway additionally uses selfsigned and qrcode under their distributed licenses.
+
+LAN discovery uses bonjour-service 1.4.2 under its MIT license and multicast-dns under its MIT license. Their dependency notices are included in the installed packages.

@@ -64,3 +64,5 @@ describe("application releases", () => {
     expect((await service.check(true)).error).toContain("2 MiB");
   });
 });
+
+describe("Android companion release metadata",()=>{it("takes the newest APK only from the configured repository",()=>{const current={...build,repository:"demo/desktop"};const status=parseGitHubRelease({tag_name:"v0.11.1",html_url:"https://github.com/demo/desktop/releases/tag/v0.11.1",assets:[{name:"Grok-Remote-v0.3.1.apk",browser_download_url:"https://github.com/demo/desktop/releases/download/v0.11.1/remote.apk"},{name:"Grok-Remote-v99.0.0.apk",browser_download_url:"https://example.invalid/remote.apk"},{name:"Grok-Remote-v0.2.0-preview.apk",browser_download_url:"invalid"}]},current);expect(status.companion).toMatchObject({version:"0.3.1",downloadUrl:"https://github.com/demo/desktop/releases/download/v0.11.1/remote.apk"});expect(parseGitHubRelease({tag_name:"v0.11.1",html_url:"https://github.com/demo/desktop/releases/tag/v0.11.1"},current).companion).toBeUndefined();})});

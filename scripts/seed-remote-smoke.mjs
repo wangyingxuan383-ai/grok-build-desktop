@@ -1,0 +1,17 @@
+import{mkdir,writeFile}from"node:fs/promises";
+import{join,resolve}from"node:path";
+import{createHash}from"node:crypto";
+const root=resolve(process.argv[2]||"");if(!root.includes("Grok-Build-Desktop-smoke-"))throw Error("Remote smoke must use an isolated profile");
+const workspace=join(root,"Remote Demo");await mkdir(workspace,{recursive:true});
+await writeFile(join(root,"settings.json"),JSON.stringify({activeWorkspace:workspace,recentWorkspaces:[workspace,join(root,"Removed Project")],automaticUpdateChecks:false}));await writeFile(join(root,"onboarding.json"),JSON.stringify({version:1,completed:false,skipped:true,currentStep:0}));
+const id="remote-smoke-session";const native=join(root,"offline-cli","sessions",encodeURIComponent(workspace),id);await mkdir(native,{recursive:true});await writeFile(join(native,"summary.json"),JSON.stringify({generated_title:"远程连接验收",created_at:new Date().toISOString(),num_chat_messages:2}));
+const projection=join(root,"conversation-projections");await mkdir(projection,{recursive:true});const hash=createHash("sha256").update(id).digest("hex");
+await writeFile(join(projection,`${hash}.snapshot.json`),JSON.stringify({version:2,sessionId:id,updatedAt:new Date().toISOString(),events:[{type:"user-message",sessionId:id,clientMessageId:"remote-user",text:"检查远程历史",delivery:"sent"},{type:"message-chunk",sessionId:id,text:"这是隔离数据的历史回答。"},{type:"turn-completed",sessionId:id}]}));
+const imageOwner="image-remote-smoke",handleId="00000000-0000-4000-8000-000000000091",source=`grok-media://access/${handleId}`;
+const imageCwd=join(root,"Smoke Pictures"),cache=join(root,"session-media",createHash("sha256").update(imageOwner).digest("hex").slice(0,32));
+await mkdir(cache,{recursive:true});await mkdir(imageCwd,{recursive:true});
+const imagePath=join(cache,"fixture.png"),timestamp=new Date().toISOString();
+await writeFile(imagePath,Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=","base64"));
+await writeFile(join(root,"media-access.json"),JSON.stringify({version:1,records:{[handleId]:{id:handleId,sessionId:imageOwner,media:"image",mimeType:"image/png",name:"fixture.png",url:source,path:imagePath,cacheKind:"media",createdAt:timestamp}}}));
+await writeFile(join(root,"image-workspace.json"),JSON.stringify({version:1,outputRoot:imageCwd,conversations:[{id:imageOwner,title:"隔离图片读取",cwd:imageCwd,createdAt:timestamp,updatedAt:timestamp,draft:"",jobs:[{requestId:"fixture-request",prompt:"预览现有作品",job:{jobId:"fixture-image",sessionId:imageOwner,kind:"image",status:"completed",startedAt:timestamp,updatedAt:timestamp,artifacts:[{id:"fixture-artifact",media:"image",source,isData:false,mimeType:"image/png"}]}}]}]}));
+console.log("REMOTE_SMOKE_SEEDED");

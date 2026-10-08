@@ -15,6 +15,10 @@ $Executable = [System.IO.Path]::GetFullPath($Executable)
 if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) { throw "Executable not found: $Executable" }
 $ProfileRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) ("Grok-Build-Desktop-smoke-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString('N').Substring(0,8))))
 [IO.Directory]::CreateDirectory($ProfileRoot) | Out-Null
+if ($ProbeScript -eq 'probe-remote-companion.mjs') {
+    & node (Join-Path $PSScriptRoot 'seed-remote-smoke.mjs') $ProfileRoot
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to seed remote smoke data.' }
+}
 if ($ProbeScript -eq 'probe-updates-showcase.mjs') {
     & node (Join-Path $PSScriptRoot 'seed-showcase.mjs') $ProfileRoot
     if ($LASTEXITCODE -ne 0) { throw 'Failed to seed isolated showcase data.' }

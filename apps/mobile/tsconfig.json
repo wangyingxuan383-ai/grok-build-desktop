@@ -1,0 +1,1 @@
+{"extends":"expo/tsconfig.base","compilerOptions":{"strict":true,"noUncheckedIndexedAccess":true},"include":["**/*.ts","**/*.tsx"],"exclude":["node_modules","android","src/*.test.ts"]}

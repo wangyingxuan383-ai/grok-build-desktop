@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "Grok Remote",
+    "slug": "grok-desktop-companion",
+    "version": "0.3.6",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "scheme": "grokremote",
+    "newArchEnabled": true,
+    "android": {
+      "package": "io.github.grokbuilddesktop.companion",
+      "versionCode": 11,
+      "permissions": [
+        "INTERNET",
+        "CAMERA"
+      ],
+      "allowBackup": false,
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "用于扫描电脑端配对二维码。",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      "expo-secure-store",
+      "./plugins/with-release-signing.cjs",
+      "./plugins/with-notices.cjs",
+      "./plugins/with-native-dependency-check.cjs",
+      "./plugins/with-runtime-host.cjs",
+      [
+        "expo-image-picker",
+        {
+          "microphonePermission": false,
+          "cameraPermission": "拍摄任务材料或参考图。",
+          "photosPermission": "选择图片作为任务材料或参考图。"
+        }
+      ],
+      "expo-sqlite",
+      "expo-notifications",
+      "./plugins/with-share-intents.cjs",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "web": {
+      "bundler": "metro"
+    },
+    "icon": "./assets/icon.png"
+  }
+}

@@ -23,6 +23,15 @@ function apply(state: any, event: ChatEvent): any {
 }
 
 describe("session event reducer", () => {
+  it("does not downgrade a sent message when a slow echo arrives and clears a recovered offline banner",()=>{
+    let state=apply(baseState(),{type:"user-message",sessionId:"session",clientMessageId:"one",text:"你好",delivery:"sent"});
+    state=apply(state,{type:"user-message",sessionId:"session",clientMessageId:"one",text:"你好",delivery:"sending"});
+    expect(state.views.session.messages[0].delivery).toBe("sent");
+    state=apply(state,{type:"session-hydration",sessionId:"session",generation:1,state:"offline",message:"old error"});
+    state=apply(state,{type:"session-ready",sessionId:"session",models:[],currentModelId:"native",effort:""});
+    expect(state.views.session).toMatchObject({hydration:"ready",hydrationGeneration:1});
+    expect(state.views.session.hydrationMessage).toBeUndefined();
+  });
   it("does not let an all-zero Compact placeholder erase known prompt usage", () => {
     expect(mergePromptMeta({ totalTokens: 120, inputTokens: 100, outputTokens: 20 }, { totalTokens: 0 })).toEqual({ totalTokens: 120, inputTokens: 100, outputTokens: 20 });
     expect(mergePromptMeta({}, { totalTokens: 0 })).toEqual({ totalTokens: 0 });

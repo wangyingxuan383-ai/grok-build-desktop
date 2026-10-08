@@ -64,7 +64,7 @@ export function DiagnosticsPanel({ onClose, confirmAction }: { onClose(): void; 
   // Every sibling panel (AppAuxiliaryPanels, TaskCenterPanel) closes on a
   // backdrop press; this one was the only modal with no way out but its button.
   return <PanelSurface className="modal-backdrop" onMouseDown={onClose}><section className="control-panel diagnostics-panel" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-    <header><div><h2>兼容诊断中心</h2><p>只执行无模型消耗的能力探测；额度与真实会话不会被读取。</p></div><button className="icon-button" aria-label="关闭诊断中心" onClick={onClose}>×</button></header>
+    <header><div><h2>兼容诊断中心</h2><p>只执行无模型消耗的能力探测；额度与真实会话不会被读取。</p></div><button data-panel-close className="icon-button" aria-label="关闭诊断中心" onClick={onClose}>×</button></header>
     <div className="panel-scroll">
       <div className={`diagnostic-overall ${report?.overall || "checking"}`}>{busy ? "正在检查…" : report ? ({ ready: "可以使用", limited: "部分能力受限", blocked: "核心能力不可用" }[report.overall]) : "等待检查"}</div>
       <div className="diagnostic-list">{report?.items.map((item) => <article className={`diagnostic-item ${item.status}`} key={item.id}><span className="diagnostic-dot"/><div><strong>{item.label}</strong><p>{item.summary}</p>{item.details?.map((line) => <code key={line}>{line}</code>)}</div></article>)}</div>

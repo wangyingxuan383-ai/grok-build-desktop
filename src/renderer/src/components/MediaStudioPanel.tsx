@@ -85,7 +85,7 @@ export function MediaStudioPanel({ sessionId, initialPrompt = "", hasGrokConvers
 
   return <PanelSurface className="modal-backdrop" role="presentation" onMouseDown={() => !busy && onClose()}>
     <section className="control-panel media-studio" role="dialog" aria-modal="true" aria-labelledby="media-studio-title" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div><h2 id="media-studio-title">Grok 媒体创作</h2><small>媒体生成 · 结果附回当前会话</small></div><button disabled={busy} onClick={onClose}>×</button></header>
+      <header><div><h2 id="media-studio-title">Grok 媒体创作</h2><small>媒体生成 · 结果附回当前会话</small></div><button data-panel-close disabled={busy} onClick={onClose}>×</button></header>
       <div className="panel-body media-studio-body">
         {contextChanged && <p role="alert" className="error-text">当前会话已切换。为避免将图片发送到错误会话，请关闭后从目标会话重新打开。</p>}
         {submitting && <p role="status">正在提交媒体任务，请勿重复提交…</p>}

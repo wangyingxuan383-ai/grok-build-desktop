@@ -15,6 +15,12 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   };
 
   handle("workspace-artifact:pick",(cwd:string)=>controller.pickWorkspaceArtifact(cwd));
+  handle("remote:state",()=>controller.getRemoteState());
+  handle("remote:enable",(enabled:boolean,port?:number)=>controller.setRemoteEnabled(enabled,port));
+  handle("remote:pair",(address?:string)=>controller.beginRemotePairing(address));
+  handle("remote:push-configure",()=>controller.configureRemotePush());
+  handle("remote:decide",(id:string,approve:boolean)=>controller.decideRemotePair(id,approve));
+  handle("remote:revoke",(id:string)=>controller.revokeRemoteDevice(id));
   handle("workspace-artifact:save",(cwd:string,path:string)=>controller.saveWorkspaceArtifact(cwd,path));
   handle("workspace-artifact:read",(cwd:string,path:string)=>controller.readWorkspaceArtifact(cwd,path));
   handle("workspace-terminal:list",(cwd:string)=>controller.listWorkspaceTerminals(cwd));
@@ -49,6 +55,12 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("diagnostics:trace-export", (sessionId: string) => controller.exportSessionTrace(sessionId));
   handle("app-update:check", (force?: boolean) => controller.checkAppUpdate(force));
   handle("app-update:open", (url?: string) => controller.openAppRelease(url));
+  handle("app-update:download", () => controller.downloadAppUpdate());
+  handle("onboarding:mobile-download", () => controller.getMobileDownload());
+  handle("onboarding:install-cli", () => controller.installCliInteractive());
+  handle("app-update:cancel", () => controller.cancelAppUpdate());
+  handle("app-update:state", () => controller.appUpdateDownload());
+  handle("app-update:install", () => controller.installAppUpdate());
   handle("workspace:choose", () => controller.chooseWorkspace());
   handle("workspace:create-temporary", () => controller.createTemporaryWorkspace());
   handle("workspace:set", (cwd: string) => controller.setWorkspace(cwd));

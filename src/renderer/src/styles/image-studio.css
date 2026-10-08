@@ -39,6 +39,8 @@
 .im-turn-actions { display: flex; gap: 2px; margin-left: -8px; }
 .im-note { margin: 0; color: var(--color-fg-subtlest); font-size: var(--text-sm); }
 .im-note.warn { color: var(--color-warning); }
+.im-options .is-spinning svg { animation: im-spin 1s linear infinite; }
+@keyframes im-spin { to { transform: rotate(360deg); } }
 
 /* ---- Composer ---- */
 .im-composer { flex: 0 0 auto; width: calc(100% - 32px); max-width: 780px; margin: 0 auto 14px; padding: 10px 12px 8px; display: grid; gap: 6px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-2xl); background: var(--color-card); }

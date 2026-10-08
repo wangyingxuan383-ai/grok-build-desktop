@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildCliMediaArgs, cliMediaTurnUsage, mediaCliFailureMessage, runCliMediaProcess } from "./media-cli-runner";
 
@@ -18,10 +19,21 @@ async function fixture(source: string): Promise<{ root: string; script: string }
 describe("runCliMediaProcess", () => {
   it("passes the explicit dispatch model for both new and resumed work",()=>{for(const resume of [false,true]){const args=buildCliMediaArgs("draw","id","image_gen",resume,"explicit-model");expect(args.slice(-2)).toEqual(["--model","explicit-model"]);}});
   it("extends the same running process and accepts a buffered tool response",async()=>{
-    const {root,script}=await fixture("console.log(JSON.stringify({type:'tool_use',name:'image_gen'}));setTimeout(()=>console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})),240);");
-    let timer:ReturnType<typeof setTimeout>|undefined;
-    const result=await runCliMediaProcess({executable:process.execPath,args:[script,join(root,"buffered.png")],cwd:root,env:process.env,media:"image",signal:new AbortController().signal,idleTimeoutMs:80,generationTimeoutMs:170,onWaitControl:extend=>{timer=setTimeout(extend,150)}});
-    clearTimeout(timer);expect(result).toHaveLength(1);
+    const {root,script}=await fixture("console.log(JSON.stringify({type:'tool_use',name:'image_gen'}));process.stdin.once('data',()=>{process.stdout.write(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}}));process.stdin.destroy()});process.stdin.resume();");
+    let child: ChildProcessWithoutNullStreams | undefined, extend: (() => void) | undefined, spawns=0;
+    let generating!: () => void;
+    const ready = new Promise<void>(resolve => { generating = resolve; });
+    vi.useFakeTimers();
+    try {
+      const running = runCliMediaProcess({executable:process.execPath,args:[script,join(root,"buffered.png")],cwd:root,env:process.env,media:"image",signal:new AbortController().signal,idleTimeoutMs:80,generationTimeoutMs:170,
+        onSpawn:value=>{child=value;spawns++;}, onWaitControl:value=>{extend=value;}, onProgress:value=>{if(value?.stage==="generating")generating();}});
+      await ready;
+      await vi.advanceTimersByTimeAsync(150); extend!();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(child!.killed).toBe(false); expect(spawns).toBe(1);
+      child!.stdin.end("finish\n");
+      expect(await running).toHaveLength(1);
+    } finally { child?.kill(); vi.useRealTimers(); }
   });
   it("records only explicit invocation-final usage, never sums per-message notifications or invents totals",async()=>{
     const {root,script}=await fixture("console.log(JSON.stringify({type:'usage',usage:{input_tokens:80,output_tokens:20}})); console.log(JSON.stringify({type:'tool_result',name:'image_gen',result:{path:process.argv[2]}})); console.log(JSON.stringify({type:'end',usage:{inputTokens:80,outputTokens:20,totalTokens:100},modelUsage:{actual:{}}}));");

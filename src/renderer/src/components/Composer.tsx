@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { Attachment, CommandInfo, McpToolSelection, SessionMcpToolSnapshot, ComposerCapabilitySelection, ComputerTaskState, ModelInfo, NewTaskDraft, PromptQueueEntry, ReasoningEffort, SessionMode, SkillSummary, WorkspaceFileCandidate } from "../../../shared/types";
 import { normalizeSkillCommand } from "../../../shared/composer-capability";
 import { effortControlState } from "../model-capabilities";
+import { SESSION_MODE_OPTIONS } from "../session-mode-labels";
 import type { ReviewCommentDraft } from "../review-comments";
 import { useAppStore } from "../store";
 import { UiIcon } from "../ui-icons";
@@ -114,7 +115,7 @@ function DraftModelControls({ draft, models, loading, disabled, onRefresh, onCha
       onChange({ modelId, providerId: selected?.providerId, effort: draft.effort && nextEffort.options.some((item) => item.value === draft.effort) ? draft.effort : undefined });
     }}><option value="">{loading && !values.length ? "正在读取模型目录…" : "桌面默认模型"}</option>{values.map((model) => <option key={model.modelId} value={model.modelId}>{model.name}</option>)}</select>
     <select aria-label="草稿推理强度" className="effort-select" disabled={disabled || !effort.supported} title={effort.reason} value={draft.effort ?? ""} onChange={(event) => onChange({ effort: event.target.value as ReasoningEffort })}><option value="">CLI 默认</option>{effort.options.map((item) => <option key={item.value} value={item.value} title={item.description}>{item.label}</option>)}</select>
-    <select aria-label="草稿执行模式" className={`mode-select ${draft.mode ?? "agent"}`} disabled={disabled} value={draft.mode ?? "agent"} onChange={(event) => onChange({ mode: event.target.value as SessionMode })}><option value="agent">Agent</option><option value="plan">Plan</option><option value="auto">自动批准</option></select>
+    <select aria-label="草稿执行模式" className={`mode-select ${draft.mode ?? "agent"}`} disabled={disabled} value={draft.mode ?? "agent"} onChange={(event) => onChange({ mode: event.target.value as SessionMode })}>{SESSION_MODE_OPTIONS.map(option => <option key={option.value} value={option.value} title={option.description}>{option.label}</option>)}</select>
     {onRefresh && <button type="button" className="icon-button" title={loading ? "正在刷新模型目录" : "刷新模型目录"} aria-label={loading ? "正在刷新模型目录" : "刷新模型目录"} disabled={loading || disabled} onClick={onRefresh}><UiIcon name="refresh" size={13}/></button>}
   </div>;
 }
@@ -224,7 +225,7 @@ function ModelControls({ sessionId, view, disabled, onSettled }: { sessionId: st
   return <div className="model-controls" aria-busy={switching !== null}>
     <select aria-label="模型" title={switching === "model" ? "正在切换模型…" : "模型"} className="model-select" disabled={locked} value={view.currentModelId} onChange={(event) => void run("model", () => window.grokDesktop.setModel(sessionId, event.target.value))}>{view.models.map((model) => <option value={model.modelId} key={model.modelId}>{model.name}</option>)}</select>
     <select aria-label="推理强度" title={switching === "effort" ? "正在应用推理强度…" : effortControl.reason} className="effort-select" disabled={locked || !effortControl.supported} value={view.effort || ""} onChange={(event) => { const effort = event.target.value as ReasoningEffort; void run("effort", async () => { await window.grokDesktop.setEffort(sessionId, effort); setSettings(await window.grokDesktop.getSettings()); }); }}><option value="" disabled={view.effort !== ""}>CLI 默认</option>{effortControl.options.map((item) => <option key={item.value} value={item.value} title={item.description}>{item.label}</option>)}</select>
-    <select aria-label="执行模式" title={switching === "mode" ? "正在切换模式…" : "执行模式"} className={`mode-select ${view.mode}`} disabled={locked} value={view.mode} onChange={(event) => { const mode = event.target.value as SessionMode; void run("mode", () => window.grokDesktop.setMode(sessionId, mode)); }}><option value="agent">Agent（询问）</option><option value="plan">Plan（自动批准）</option><option value="auto">自动批准</option></select>
+    <select aria-label="执行模式" title={switching === "mode" ? "正在切换模式…" : "执行模式"} className={`mode-select ${view.mode}`} disabled={locked} value={view.mode} onChange={(event) => { const mode = event.target.value as SessionMode; void run("mode", () => window.grokDesktop.setMode(sessionId, mode)); }}>{SESSION_MODE_OPTIONS.map(option => <option key={option.value} value={option.value} title={option.description}>{option.label}</option>)}</select>
     {switching && <span className="control-progress">应用中…</span>}
   </div>;
 }

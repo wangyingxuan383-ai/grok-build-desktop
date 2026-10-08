@@ -239,6 +239,10 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       next.messages.push({ id: `history-recovery-${sessionId}`, kind: "recovery", status: event.status, text: event.message });
       break;
     case "session-ready":
+      if (next.hydration === "offline" || next.hydration === "failed") {
+        next.hydration = "ready";
+        next.hydrationMessage = undefined;
+      }
       next.models = event.models;
       next.currentModelId = event.currentModelId || next.currentModelId;
       next.effort = event.effort ?? next.effort;
@@ -262,7 +266,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
           text: event.text || current.text,
           clientMessageId: event.clientMessageId || current.clientMessageId,
           attachments: attachmentEcho ? current.attachments : mergeAttachmentPreviews(current.attachments, event.attachments),
-          delivery: event.delivery || current.delivery,
+          delivery: event.delivery === "sending" && current.delivery === "sent" ? "sent" : event.delivery || current.delivery,
         };
       } else if (event.text || event.attachments?.length) {
         next.messages.push({ id: event.id || event.clientMessageId || crypto.randomUUID(), kind: "user", clientMessageId: event.clientMessageId, text: event.text, attachments: event.attachments, delivery: event.delivery });

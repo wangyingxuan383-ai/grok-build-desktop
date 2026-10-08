@@ -233,6 +233,8 @@ export class ComputerUseService {
     await pending.onDecision?.(approved); pending.resolve?.(approved);
   }
 
+  pendingForSession(sessionId:string):import("../../shared/types").ChatEvent[]{return [...[...this.pendingPermissions.values()].filter(value=>value.request.sessionId===sessionId).map(value=>({type:"computer-permission" as const,sessionId,request:structuredClone(value.request)})),...[...this.pendingRisks.values()].filter(value=>value.request.sessionId===sessionId).map(value=>({type:"computer-risk" as const,sessionId,request:structuredClone(value.request)}))]}
+
   respondRisk(requestId: string, approved: boolean): void { const pending = this.pendingRisks.get(requestId); if (!pending) throw new Error("风险确认已失效"); this.pendingRisks.delete(requestId); pending.resolve(approved); }
 
   /**

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { SESSION_MODE_OPTIONS } from "../session-mode-labels";
 import type { ExecutionProfileLaunchInput, ExecutionProfileValidation, SessionExecutionProfile } from "../../../shared/types";
 
 interface Dialogs {
@@ -75,7 +76,7 @@ export function ExecutionProfileWorkbench({ workspace, dialogs }: { workspace: s
         <label>Agent<input disabled={draft.readOnly} value={draft.agentId ?? ""} placeholder="继承默认 Agent" onChange={(event) => patch({ agentId: event.target.value || undefined })}/></label>
         <label>模型<input disabled={draft.readOnly} value={draft.modelId ?? ""} placeholder="桌面/CLI 默认" onChange={(event) => patch({ modelId: event.target.value || undefined })}/></label>
         <label>推理强度<select disabled={draft.readOnly} value={draft.effort} onChange={(event) => patch({ effort: event.target.value as SessionExecutionProfile["effort"] })}><option value="">桌面/CLI 默认</option>{["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"].map((value) => <option key={value}>{value}</option>)}</select></label>
-        <label>模式<select disabled={draft.readOnly} value={draft.mode} onChange={(event) => patch({ mode: event.target.value as SessionExecutionProfile["mode"] })}><option value="agent">Agent</option><option value="plan">Plan</option><option value="auto">自动批准</option></select></label>
+        <label>模式<select disabled={draft.readOnly} value={draft.mode} onChange={(event) => patch({ mode: event.target.value as SessionExecutionProfile["mode"] })}>{SESSION_MODE_OPTIONS.map(option => <option key={option.value} value={option.value} title={option.description}>{option.label}</option>)}</select></label>
         <label>Sandbox<input disabled={draft.readOnly} value={draft.sandbox ?? ""} placeholder="workspace / read-only / strict" onChange={(event) => patch({ sandbox: event.target.value || undefined })}/></label>
         <label>联网搜索<select disabled={draft.readOnly} value={draft.webSearch} onChange={(event) => patch({ webSearch: event.target.value as SessionExecutionProfile["webSearch"] })}><option value="default">继承 CLI</option><option value="enabled">启用</option><option value="disabled">禁用</option></select></label>
         <label className="wide">允许工具<input disabled={draft.readOnly} value={draft.allowTools.join(", ")} placeholder="留空表示 Agent 默认工具" onChange={(event) => patch({ allowTools: csv(event.target.value) })}/></label>

@@ -28,6 +28,16 @@ interface MutableWorkspace extends WorkspaceSummary {
   claudeIds: Set<string>;
 }
 
+/**
+ * Image conversations run the CLI inside their own `image-<uuid>` output folder, so the
+ * CLI records them as ordinary sessions. They belong to the image workspace only and must
+ * never surface as coding projects (including folders of already-deleted conversations).
+ */
+export function isImageConversationFolder(cwd: string): boolean {
+  const name = cwd.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) ?? "";
+  return /^image-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name);
+}
+
 export class WorkspaceCatalog {
   private readonly metadata: JsonStore<WorkspaceMetadata>;
   private cache?: { at: number; rows: WorkspaceSummary[] };
@@ -79,6 +89,7 @@ export class WorkspaceCatalog {
     const rows = new Map<string, MutableWorkspace>();
     for (const { observation, identity } of resolvedObservations) {
       if (metadata.removed?.[identity.id]) continue;
+      if (isImageConversationFolder(observation.cwd) || isImageConversationFolder(identity.canonicalPath)) continue;
       const current = rows.get(identity.id) ?? {
         projectId: identity.id,
         cwd: identity.canonicalPath,

@@ -1,0 +1,8 @@
+import {describe,expect,it}from "vitest";
+import type{ChatEvent}from "../../shared/types";
+import{remotePendingInteractions,sanitizeRemoteEvent}from "./remote-history";
+describe("remote history",()=>{
+ it("closes only the interaction answered on another device",()=>{const events:ChatEvent[]=[{type:"question",sessionId:"s",requestId:"q",questions:[{question:"why"}]},{type:"permission",sessionId:"s",request:{requestId:"p",sessionId:"s",toolCall:{},options:[]}},{type:"interaction-resolved",sessionId:"s",interaction:"question",requestId:"q"}];expect(remotePendingInteractions(events).map(e=>e.type)).toEqual(["permission"]);expect(remotePendingInteractions([...events,{type:"turn-completed",sessionId:"s"}])).toEqual([])});
+ it("keeps bounded text while excluding inline attachment payloads",()=>{const event:ChatEvent={type:"user-message",sessionId:"s",text:"x".repeat(40000),attachments:[]};const remote=sanitizeRemoteEvent(event);expect(remote.type==="user-message"&&remote.text.length).toBeLessThan(34000);expect(remote.type==="user-message"&&remote.attachments).toBeUndefined();expect(event.text.length).toBe(40000)});
+ it("preserves readable permission fields even when the raw JSON summary is truncated",()=>{const event:ChatEvent={type:"permission",sessionId:"s",request:{sessionId:"s",requestId:"p",options:[],toolCall:{title:"Run project command",rawInput:{command:"git status",context:"x".repeat(10000)}}}};const result=sanitizeRemoteEvent(event);expect(result.type==="permission"&&result.request.toolCall).toMatchObject({title:"Run project command",rawInput:"git status"});expect(JSON.stringify(result).length).toBeLessThan(5000)});
+});

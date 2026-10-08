@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppSettings, ClaudeSessionSummary, CodexSessionSummary } from "../../shared/types";
-import { WorkspaceCatalog } from "./workspace-catalog";
+import { WorkspaceCatalog, isImageConversationFolder } from "./workspace-catalog";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -28,6 +28,21 @@ describe("workspace catalog", () => {
     const [pinned] = await catalog.pin(project, true, settings);
     expect(pinned?.pinned).toBe(true);
     expect(pinned?.sources).toContain("pinned");
+  });
+
+  it("keeps image conversation folders (live or deleted) out of coding projects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-workspaces-image-")); roots.push(root);
+    const project = join(root, "Project");
+    const image = join(root, "Grok Images", "image-0f8fad5b-d9cb-469f-a165-70867728950e");
+    const deleted = join(root, "Grok Images", "image-7c9e6679-7425-40de-944b-e07fc1f90ae7");
+    const grokHome = join(root, ".grok");
+    await mkdir(project, { recursive: true }); await mkdir(image, { recursive: true });
+    for (const cwd of [project, image, deleted]) await mkdir(join(grokHome, "sessions", encodeURIComponent(cwd), "s"), { recursive: true });
+    const catalog = new WorkspaceCatalog(root, { listAll: async () => [] } as never, { listAll: async () => [] } as never, grokHome);
+    const rows = await catalog.discover({ recentWorkspaces: [], activeWorkspace: "" } as unknown as AppSettings, true);
+    expect(rows.map((row) => row.name)).toEqual(["Project"]);
+    expect(isImageConversationFolder(image + "\\")).toBe(true);
+    expect(isImageConversationFolder(join(root, "image-tools"))).toBe(false);
   });
 
   it("deduplicates case, trailing separators and resolvable junction aliases", async () => {

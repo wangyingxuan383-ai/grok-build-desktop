@@ -14,6 +14,12 @@ const isAbsoluteWindowsPath = (value: string): boolean => win32.isAbsolute(value
 type Rule = (args: unknown[]) => void;
 
 const RULES: Record<string, Rule> = {
+  "remote:state":noArgs,
+  "remote:enable":args=>{if(typeof args[0]!=="boolean")throw Error("手机连接开关无效");if(args[1]!==undefined&&(!Number.isInteger(args[1])||(args[1] as number)<1024||(args[1] as number)>65535))throw Error("手机连接端口无效")},
+  "remote:pair":args=>{if(args[0]!==undefined)stringArg(args,0,512)},
+  "remote:decide":args=>{idArg(args,0);if(typeof args[1]!=="boolean")throw Error("配对选择无效")},
+  "remote:revoke":args=>idArg(args,0),
+  "remote:push-configure":noArgs,
   "workspace-artifact:pick":args=>absoluteFilesystemPathArg(args,0,"产物工作区"),
   "workspace-artifact:save":args=>{absoluteFilesystemPathArg(args,0,"产物工作区");absoluteFilesystemPathArg(args,1,"产物路径")},
   "workspace-artifact:read":args=>{absoluteFilesystemPathArg(args,0,"产物工作区");absoluteFilesystemPathArg(args,1,"产物路径")},
@@ -49,6 +55,12 @@ const RULES: Record<string, Rule> = {
   "diagnostics:trace-export": (args) => idArg(args, 0),
   "app-update:check": (args) => optionalBooleanArg(args, 0),
   "app-update:open": (args) => optionalHttpUrlArg(args, 0),
+  "app-update:download": noArgs,
+  "onboarding:mobile-download": noArgs,
+  "onboarding:install-cli": noArgs,
+  "app-update:cancel": noArgs,
+  "app-update:state": noArgs,
+  "app-update:install": noArgs,
   "workspace:choose": noArgs,
   "workspace:create-temporary": noArgs,
   "workspace:set": (args) => absoluteFilesystemPathArg(args, 0, "工作区"),

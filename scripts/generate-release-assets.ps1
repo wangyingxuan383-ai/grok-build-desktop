@@ -44,6 +44,10 @@ $ExpectedNames = @(
     "Grok-Build-Desktop-$Version-SBOM.cdx.json",
     'THIRD_PARTY_LICENSES.json'
 )
+$MobileVersion = (Get-Content (Join-Path $Root 'apps/mobile/package.json') -Raw | ConvertFrom-Json).version
+$CompanionName = "Grok-Remote-v$MobileVersion.apk"
+if (Test-Path -LiteralPath (Join-Path $Release $CompanionName) -PathType Leaf) { $ExpectedNames += $CompanionName }
+if (Test-Path -LiteralPath (Join-Path $Release "Grok-Remote-v$MobileVersion-build.json") -PathType Leaf) { $ExpectedNames += "Grok-Remote-v$MobileVersion-build.json" }
 $Artifacts = foreach ($Name in $ExpectedNames) {
     $Path = Join-Path $Release $Name
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "当前版本发布文件缺失：$Name" }

@@ -5,6 +5,8 @@ release/
 coverage/
 .vite/
 playwright-report/
+.playwright-mcp/
+/output/playwright/
 test-results/
 
 # Local development configuration and environment
@@ -54,3 +56,5 @@ docs/AUDIT_FIXES_*.md
 docs/design/
 _SESSION_HANDOFF.md
 _tmp_*
+/.playwright-cli/
+/output/playwright/
