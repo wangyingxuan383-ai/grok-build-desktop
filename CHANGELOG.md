@@ -2,7 +2,8 @@
 
 ## 0.11.5 — Desktop and Android release
 
-- Publish the signed Grok Remote 0.3.6 APK beside Windows artifacts and require companion identity, signing and checksum verification before release publication.
+- Publish the signed Grok Remote 0.3.6 APK beside Windows artifacts with source, identity, signing and checksum verification.
+- Patch MCP SDK, proxy-addr, http-cache-semantics and source-map-js vulnerabilities without changing CLI or native mobile SDK versions.
 - Add independent Android update checks, verified APK downloads with progress/cancel, package/signature checks and explicit system installation consent.
 - Provide persistent download links and QR codes in Desktop onboarding and phone connection settings; show updates before mobile pairing as well.
 - Preserve the gallery segment style while keeping both view controls visible on narrow screens; cards open the album viewer, favorites retain the viewed photo, and rotation keeps its position.

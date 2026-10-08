@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.2.1",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@monaco-editor/react": "4.7.0",
     "@noble/hashes": "2.2.0",
     "@radix-ui/react-context-menu": "^2.3.7",
@@ -83,6 +83,9 @@
     "vitest": "4.1.11"
   },
   "overrides": {
+    "http-cache-semantics": "4.3.0",
+    "proxy-addr": "2.0.8",
+    "source-map-js": "1.2.2",
     "@xmldom/xmldom": "0.9.12",
     "@hono/node-server": "2.0.11",
     "dompurify": "3.4.16",

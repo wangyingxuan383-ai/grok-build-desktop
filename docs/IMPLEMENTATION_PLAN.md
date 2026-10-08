@@ -7,7 +7,8 @@
 - [x] Add independent Android update downloads and explicit system installation with hash, size, package and signing checks.
 - [x] Fix Desktop installer concurrency, filesystem/launch failures and media-task update protection.
 - [x] Provide phone downloads in Desktop onboarding/settings and mobile updates before pairing.
-- [x] Add mobile CI checks and signed APK staging/signature/checksum gates to public releases.
+- [x] Add mobile regression checks and signed APK source/identity/signature/checksum verification scripts.
+- [ ] Enable companion staging and mobile checks in the hosted release workflow.
 - [ ] Complete final artifact verification and publish Windows plus Android attachments together.
 - [ ] Record physical Android keyboard/gesture/system-install acceptance separately.
 
