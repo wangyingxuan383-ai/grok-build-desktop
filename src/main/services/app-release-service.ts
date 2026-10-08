@@ -3,6 +3,7 @@ import type { AppReleaseStatus, AppSettings, BuildInfo } from "../../shared/type
 import type { LogService } from "./log-service";
 import { parseVersion } from "./cli-locator";
 import { installerAssetFrom } from "./app-installer-service";
+import { electronProxyRules } from "./electron-proxy";
 
 /** "sha256  file" / "file: sha256" lines that releases publish in their notes. */
 export function checksumsFromNotes(notes: string): Map<string, string> {
@@ -30,7 +31,7 @@ export function createAppReleaseFetcher(build: BuildInfo, getSettings: () => Pro
     const settings = await getSettings();
     const network = session.fromPartition("grok-app-releases", { cache: false });
     const proxy = settings.httpsProxy || settings.httpProxy;
-    await network.setProxy(proxy ? { proxyRules: proxy } : { mode: "system" });
+    await network.setProxy(proxy ? { proxyRules: electronProxyRules(proxy) } : { mode: "system" });
     return network.fetch(url, {
       headers: { Accept: "application/vnd.github+json", "User-Agent": `Grok-Build-Desktop/${build.version}` },
       redirect: "error", signal: init?.signal,

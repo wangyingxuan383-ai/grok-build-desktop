@@ -1,5 +1,10 @@
 # Development roadmap
 
+## Proxy follow-up 0.11.6
+
+- [x] Normalize standard proxy URLs for Chromium without changing explicit direct routes or stored credentials.
+- [ ] Verify the packaged public update endpoint with the original proxy setting and publish the corrected Desktop beside the unchanged signed Android 0.3.6.
+
 ## Desktop 0.11.5 / Grok Remote 0.3.6 release review
 
 - [x] Review completion gating, image isolation, phone gestures, gallery layout and update entry points.
@@ -9,7 +14,7 @@
 - [x] Provide phone downloads in Desktop onboarding/settings and mobile updates before pairing.
 - [x] Add mobile regression checks and signed APK source/identity/signature/checksum verification scripts.
 - [ ] Enable companion staging and mobile checks in the hosted release workflow.
-- [ ] Complete final artifact verification and publish Windows plus Android attachments together.
+- [x] Complete final artifact verification and publish Windows plus Android attachments together.
 - [ ] Record physical Android keyboard/gesture/system-install acceptance separately.
 
 ## Feedback candidate 0.11.4 / Grok Remote 0.3.5

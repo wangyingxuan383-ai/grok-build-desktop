@@ -324,7 +324,7 @@ function parseOAuthCredential(raw: string): { token: string; userId: string } | 
 
 async function electronRequest(url: string, headers: Record<string, string>, proxy: string): Promise<BillingPayload> {
   const partition = session.fromPartition("grok-quota", { cache: false });
-  await partition.setProxy(proxy ? { proxyRules: proxy } : { mode: "system" });
+  await partition.setProxy(proxy ? { proxyRules: electronProxyRules(proxy) } : { mode: "system" });
   const response = await partition.fetch(url, { method: "GET", headers });
   const text = await response.text();
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 240)}`);
@@ -360,3 +360,4 @@ function stringValue(value: unknown): string | undefined { return typeof value =
 function booleanValue(value: unknown): boolean | undefined { return typeof value === "boolean" ? value : undefined; }
 
 export { WEEKLY_URL };
+import { electronProxyRules } from "./electron-proxy";

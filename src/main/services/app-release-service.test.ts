@@ -8,6 +8,11 @@ const network = vi.hoisted(() => ({ setProxy: vi.fn(async () => undefined), fetc
 vi.mock("electron", () => ({ net: { fetch: vi.fn() }, session: { fromPartition: vi.fn(() => network) } }));
 
 describe("application releases", () => {
+  it("accepts a normal proxy URL ending in a slash", async () => {
+    const fetcher = createAppReleaseFetcher(build, async () => ({ httpsProxy: "http://proxy.example.invalid:3128/" } as AppSettings));
+    await fetcher("https://api.github.com/repos/owner/repo/releases/latest");
+    expect(network.setProxy).toHaveBeenLastCalledWith({ proxyRules: "http://proxy.example.invalid:3128" });
+  });
   it("routes release requests via current app proxy and returns to system proxy when cleared", async () => {
     const settings = { httpsProxy: "http://127.0.0.1:12345", httpProxy: "http://127.0.0.1:23456" } as AppSettings;
     const fetcher = createAppReleaseFetcher(build, async () => settings);
