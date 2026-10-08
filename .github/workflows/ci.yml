@@ -10,6 +10,29 @@ permissions:
   contents: read
 
 jobs:
+  verify-mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - run: npm ci
+      - run: npm run check:native
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:workflow
+      - run: npm run test:ui
+      - run: npm run test:startup
+
   verify-windows:
     runs-on: windows-latest
     timeout-minutes: 45

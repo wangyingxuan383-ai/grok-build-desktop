@@ -46,6 +46,7 @@
   "devDependencies": {
     "@types/markdown-it": "14.1.2",
     "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.11",
     "react-test-renderer": "19.1.0",
     "semver": "7.7.3",
     "typescript": "5.9.3"
