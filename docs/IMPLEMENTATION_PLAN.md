@@ -12,7 +12,8 @@
 - [x] Check 600 and 2000 gallery items against viewport bounds and preserve the segment layout at 320–768 px.
 - [x] Review final visual consistency and proxy/quota guidance; honor foreground notification rules and application-lock privacy.
 - [x] Patch Desktop parser dependencies and retain public-safety and dependency gates.
-- [ ] Complete final signed APK and Windows Setup/Portable artifact verification.
+- [x] Complete final signed APK and Windows Setup/Portable artifact verification.
+- [x] Publish the paired release with source/checksum/signature/provenance checks and inspect public downloads for private data and unnecessary debug/test files.
 - [ ] Record physical-device keyboard, gestures, biometrics, background/FCM and system-installer results separately.
 
 The existing virtualized conversation list retains its tested chronological/history-anchor behavior. The gallery uses FlashList; conversation inversion and wholesale navigation replacement are not prerequisites for this candidate. Remote file-size indexing, multi-computer live aggregation, Quick Settings tiles and notification-bar approvals remain separate future work.

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.0 — Grok Remote 0.4.0 candidate
+## 0.12.0 — Grok Remote 0.4.0
 
 - Add explicit foreground read acknowledgements while retaining passive history reads for monitoring and locked/background screens.
 - Version cloud notification delivery: new companions receive data-only event IDs and share one native reminder ledger with foreground polling and LAN monitoring; previously registered companions retain their compatible delivery format.
@@ -15,6 +15,7 @@
 - Honor system-only foreground reminder rules, retain notifications from other computers and hide notification details/recent-app previews when application lock is enabled.
 - Clarify HTTPS-request proxy configuration and provide actionable quota connection errors; align the official usage link and help text.
 - Patch KaTeX and TOML parser advisories across the Desktop dependency tree, and Markdown parser advisories on Android.
+- Publish a Chinese-first mobile guide and paired verified artifacts; omit terminal dependency source maps, tests and maintenance scripts.
 
 ## 0.11.6 — proxy origin correction
 
