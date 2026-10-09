@@ -3,7 +3,32 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SQLite from "expo-sqlite";
 import {CACHE_BYTE_LIMIT,CACHE_EVICTION_SQL} from "./cache-policy";
 let opening:Promise<SQLite.SQLiteDatabase>|undefined;
-async function database(){return opening??=SQLite.openDatabaseAsync("grok-remote-cache.db").then(async db=>{await db.execAsync("PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY,body TEXT NOT NULL,updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS saved(key TEXT PRIMARY KEY,body TEXT NOT NULL);");return db})}
+let health:{ok:boolean;error?:string;attempts:number}={ok:true,attempts:0};
+const SCHEMA="PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS cache(key TEXT PRIMARY KEY,body TEXT NOT NULL,updated INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS saved(key TEXT PRIMARY KEY,body TEXT NOT NULL);";
+const pause=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
+/** Opens the cache with bounded retries; a failed open is forgotten so a later call can recover without restarting the app. */
+async function openWithRetry(){
+ let last:unknown;
+ for(let attempt=1;attempt<=3;attempt++){
+  try{const db=await SQLite.openDatabaseAsync("grok-remote-cache.db");await db.execAsync(SCHEMA);health={ok:true,attempts:attempt};return db}
+  catch(error){last=error;health={ok:false,attempts:attempt,error:error instanceof Error?error.message:String(error)};if(attempt<3)await pause(attempt*400)}
+ }
+ throw last instanceof Error?last:Error(String(last));
+}
+async function database(){
+ const current=opening??=openWithRetry();
+ try{return await current}catch(error){if(opening===current)opening=undefined;throw error}
+}
+/** Local storage health for the diagnostics page. */
+export function storageStatus(){return {...health}}
+/** Drops and recreates the cache database. Saved drafts live in the same file, so callers must confirm first. */
+export async function rebuildStorage(){
+ if(Platform.OS==="web")return;
+ const previous=opening;opening=undefined;
+ try{const db=await previous;await db?.closeAsync()}catch{}
+ try{await SQLite.deleteDatabaseAsync("grok-remote-cache.db")}catch{}
+ await database();
+}
 export async function cacheRead<T>(key:string):Promise<{value:T;updated:number}|undefined>{
  if(Platform.OS==="web"){const raw=await AsyncStorage.getItem("cache:"+key);return raw?JSON.parse(raw):undefined}
  const row=await(await database()).getFirstAsync<{body:string;updated:number}>("SELECT body,updated FROM cache WHERE key=?",key);return row?{value:JSON.parse(row.body),updated:row.updated}:undefined;

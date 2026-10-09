@@ -1,4 +1,6 @@
 import React, { useEffect, useState } from "react";
+import { BookmarksSheet, SnippetsSheet, type Bookmark } from "./library";
+import { insertSnippet } from "./library-model";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Clipboard from "expo-clipboard";
@@ -14,9 +16,10 @@ import type { useRemote } from "./use-remote";
 import type { RemoteReceipt, RemoteSession } from "../../../src/shared/remote";
 import type { PromptQueueEntry } from "../../../src/shared/types";
 type Client = ReturnType<typeof useRemote>;
-export type Sheet = "new" | "manage" | "find" | "pending" | "queue" | "children" | "details" | "config" | "attachments" | "actions" | "tools" | "files" | "review" | "usage" | "context" | "code-image" | null;
-const titles: Record<NonNullable<Sheet>, string> = { new: "新建会话", manage: "会话操作", find: "搜索当前消息", pending: "待处理请求", queue: "消息队列", children: "子会话", details: "会话信息", config: "模型与配置", attachments: "材料与附件", actions: "会话工具", tools: "命令与能力", context: "上下文与分支", files: "项目文件", review: "代码改动", usage: "用量统计", "code-image": "编程时生成图片" };
-export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected, rows, queue, children, actionsDisabled, preferences, setPreferences, openSession, openFile, density, setDensity, onCreated, onForked }: {
+export type Sheet = "snippets" | "bookmarks" | "new" | "manage" | "find" | "pending" | "queue" | "children" | "details" | "config" | "attachments" | "actions" | "tools" | "files" | "review" | "usage" | "context" | "code-image" | null;
+const titles: Record<NonNullable<Sheet>, string> = { snippets: "提示词片段", bookmarks: "消息书签", new: "新建会话", manage: "会话操作", find: "搜索当前消息", pending: "待处理请求", queue: "消息队列", children: "子会话", details: "会话信息", config: "模型与配置", attachments: "材料与附件", actions: "会话工具", tools: "命令与能力", context: "上下文与分支", files: "项目文件", review: "代码改动", usage: "用量统计", "code-image": "编程时生成图片" };
+export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected, rows, queue, children, actionsDisabled, preferences, setPreferences, openSession, openFile, density, setDensity, onCreated, onForked, onBookmark }: {
+    onBookmark: (bookmark: Bookmark) => void;
     sheet: Sheet;
     setSheet: (sheet: Sheet) => void;
     /** App-level open: dismisses the keyboard and prefetches options where needed. */
@@ -60,6 +63,8 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
           <ScrollView keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }} contentContainerStyle={{ gap: space.md, paddingBottom: space.sm }}>
             {sheet === "new" ? <NewSession client={client} theme={theme} disabled={actionsDisabled} close={close} created={onCreated} /> : null}
             {sheet === "config" ? <ConfigurationPicker client={client} theme={theme} /> : null}
+            {sheet === "snippets" ? <SnippetsSheet theme={theme} onInsert={text => { client.setDraft(insertSnippet(client.draft, text)); close(); }} /> : null}
+            {sheet === "bookmarks" ? <BookmarksSheet storageKey={client.host ? client.host.fingerprint + ":bookmarks" : undefined} theme={theme} onOpen={bookmark => { close(); onBookmark(bookmark); }} /> : null}
             {sheet === "actions" ? <ToolsMenu theme={theme} open={go} childCount={children.length} /> : null}
             {sheet === "code-image" ? <CodeImage client={client} theme={theme} /> : null}
             {sheet === "attachments" ? <AttachmentsPanel client={client} theme={theme} /> : null}
@@ -92,6 +97,7 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
 }
 function ToolsMenu({ theme, open, childCount }: { theme: Theme; open: (sheet: Sheet) => void; childCount: number }) {
     return <Section theme={theme}>
+      <ListRow theme={theme} title="提示词片段" detail="插入常用指令，编辑后再发送" onPress={() => open("snippets")} />
       <ListRow theme={theme} title="命令与能力" detail="斜杠命令、Skills 与 MCP 工具" onPress={() => open("tools")} />
       <ListRow theme={theme} title="项目文件" detail="浏览、预览并引用到本条消息" onPress={() => open("files")} />
       <ListRow theme={theme} title="生成项目图片" detail="在当前编程会话中生成图片" onPress={() => open("code-image")} />

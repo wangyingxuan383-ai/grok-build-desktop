@@ -2,14 +2,14 @@
   "expo": {
     "name": "Grok Remote",
     "slug": "grok-desktop-companion",
-    "version": "0.3.6",
+    "version": "0.4.0",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "scheme": "grokremote",
     "newArchEnabled": true,
     "android": {
       "package": "io.github.grokbuilddesktop.companion",
-      "versionCode": 11,
+      "versionCode": 12,
       "permissions": [
         "INTERNET",
         "CAMERA"
@@ -42,12 +42,14 @@
       "expo-sqlite",
       "expo-notifications",
       "./plugins/with-share-intents.cjs",
+      "./plugins/with-app-shortcuts.cjs",
       [
         "expo-audio",
         {
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-font"
     ],
     "web": {
       "bundler": "metro"

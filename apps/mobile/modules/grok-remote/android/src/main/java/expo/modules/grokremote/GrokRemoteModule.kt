@@ -22,6 +22,8 @@ import androidx.core.content.ContextCompat
 class GrokRemoteModule : Module() {
   private val executor = Executors.newFixedThreadPool(4)
   private val downloads = Executors.newFixedThreadPool(2)
+  private val downloadCalls = java.util.concurrent.ConcurrentHashMap<String,Call>()
+  private val cancelledDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private var eventCall: Call? = null
   private var activeStreamId = ""
   private var clientKey = ""
@@ -29,9 +31,20 @@ class GrokRemoteModule : Module() {
   private val tls12Hosts = mutableSetOf<String>()
   override fun definition() = ModuleDefinition {
     Name("GrokRemote")
-    Events("remoteEvent", "mobileUpdate")
+    Events("remoteEvent", "mobileUpdate", "remoteTransfer")
+    OnActivityEntersForeground { RemoteHealth.foreground = true; appContext.reactContext?.let { RemoteHealth.protectPreview(it, appContext.currentActivity, false) }; ReceiptWatchdog.cancel() }
+    OnActivityEntersBackground { RemoteHealth.foreground = false; appContext.reactContext?.let { RemoteHealth.protectPreview(it, appContext.currentActivity, true) } }
+    AsyncFunction("foregroundComputer") { computer: String -> RemoteHealth.foregroundComputer = computer }
+    AsyncFunction("configurePrivacy") { locked: Boolean, secure: Boolean -> RemoteHealth.configurePrivacy(appContext.reactContext ?: error("应用不可用"), appContext.currentActivity, locked, secure) }
+    AsyncFunction("claimNotices") {computer:String,ids:List<String> -> RemoteHealth.claim(appContext.reactContext?:error("应用不可用"),computer,ids)}
+    AsyncFunction("baselineNotices") {computer:String,ids:List<String> -> RemoteHealth.baseline(appContext.reactContext?:error("应用不可用"),computer,ids)}
+    AsyncFunction("cancelDownload") {id:String -> cancelledDownloads.add(id); downloadCalls[id]?.cancel()}
+    AsyncFunction("watchReceipt") {host:String,pin:String,token:String,operation:String,session:String -> ReceiptWatchdog.schedule(appContext.reactContext?:error("应用不可用"),host,pin,token,operation,session)}
+    AsyncFunction("cancelReceiptWatch") { ReceiptWatchdog.cancel() }
+    AsyncFunction("pickDate") {value:String,promise:Promise -> RemotePickers.date(appContext.currentActivity,value,promise)}
+    AsyncFunction("pickTime") {value:String,promise:Promise -> RemotePickers.time(appContext.currentActivity,value,promise)}
     AsyncFunction("publicRelease") { promise: Promise -> executor.execute { try { promise.resolve(RemoteUpdater.release()) } catch (error: Exception) { promise.reject("ERR_UPDATE", error.message, error) } } }
-    AsyncFunction("mobileUpdateStatus") { RemoteUpdater.status() }
+    AsyncFunction("mobileUpdateStatus") { RemoteUpdater.restore(appContext.reactContext?:throw IllegalStateException("应用不可用")) }
     AsyncFunction("cancelMobileUpdate") { RemoteUpdater.cancel() }
     AsyncFunction("downloadMobileUpdate") { url: String, sha256: String, size: Double, version: String, promise: Promise -> downloads.execute { try {
       val context = appContext.reactContext ?: error("应用不可用")
@@ -49,15 +62,62 @@ class GrokRemoteModule : Module() {
     AsyncFunction("discover") {promise:Promise -> val context=appContext.reactContext?:throw IllegalStateException("应用不可用");RemoteDiscovery.discover(context,promise)}
     View(RemotePreviewView::class) { Prop("source") { view:RemotePreviewView,source:Map<String,String> -> view.source(source) } }
     AsyncFunction("download") { host:String,fingerprint:String,token:String,path:String,destination:String,promise:Promise ->
-      downloads.execute { try { val context=appContext.reactContext?:throw IllegalStateException("应用不可用");val target=File(android.net.Uri.parse(destination).path?:"").canonicalFile;require(target.path.startsWith(context.cacheDir.canonicalPath+File.separator)){"下载仅可保存到应用缓存"};target.parentFile?.mkdirs();val request=buildRequest(host,fingerprint,token,path,"GET","");client(host,fingerprint).newCall(request).execute().use{response->require(response.isSuccessful){"文件下载失败 (${response.code})"};val body=response.body?:throw IllegalStateException("文件无内容");require(body.contentLength()<=50L*1024*1024){"文件超过下载上限"};var total=0L;body.byteStream().use{input->FileOutputStream(target).use{output->val buffer=ByteArray(65536);while(true){val count=input.read(buffer);if(count<0)break;total+=count;require(total<=50L*1024*1024){"文件超过下载上限"};output.write(buffer,0,count)}}}};RemoteCache.prune(context,target);promise.resolve(android.net.Uri.fromFile(target).toString())}catch(error:Exception){promise.reject("ERR_REMOTE_DOWNLOAD",error.message,error)} }
+      downloads.execute {
+        var partial:File?=null
+        try {
+          check(!cancelledDownloads.remove(destination)){"下载已取消"}
+          val context=appContext.reactContext?:error("应用不可用")
+          val target=File(android.net.Uri.parse(destination).path?:"").canonicalFile
+          require(target.path.startsWith(context.cacheDir.canonicalPath+File.separator)){"下载仅可保存到应用缓存"}
+          target.parentFile?.mkdirs()
+          val request=buildRequest(host,fingerprint,token,path,"GET","")
+          val call=client(host,fingerprint).newCall(request)
+          check(downloadCalls.putIfAbsent(destination,call)==null){"同一文件正在下载"}
+          partial=File(target.path+".part")
+          RemoteCache.pin(context,destination,true)
+          call.execute().use { response ->
+            require(response.isSuccessful){"文件下载失败 (${response.code})"}
+            val body=response.body?:error("文件无内容");val expected=body.contentLength()
+            require(expected<=50L*1024*1024){"文件超过下载上限"}
+            var total=0L;var progressAt=0L
+            body.byteStream().use { input -> FileOutputStream(partial).use { output ->
+              val buffer=ByteArray(65536)
+              while(true){
+                check(!cancelledDownloads.contains(destination)){"下载已取消"}
+                val count=input.read(buffer);if(count<0)break
+                total+=count;require(total<=50L*1024*1024){"文件超过下载上限"};output.write(buffer,0,count)
+                if(System.currentTimeMillis()-progressAt>=200){progressAt=System.currentTimeMillis();sendEvent("remoteTransfer",mapOf("id" to destination,"received" to total.toDouble(),"total" to expected.toDouble()))}
+              }
+              output.fd.sync()
+            } }
+            require(total>0 && (expected<0 || total==expected)){"下载不完整，请重试"}
+            require(partial!!.renameTo(target)){"无法保存下载文件"}
+          }
+          RemoteCache.prune(context,target)
+          promise.resolve(android.net.Uri.fromFile(target).toString())
+        } catch(error:Exception){partial?.delete();promise.reject("ERR_REMOTE_DOWNLOAD",error.message,error)}
+        finally{if(partial!=null){downloadCalls.remove(destination);val context=appContext.reactContext;if(context!=null)RemoteCache.pin(context,destination,false)};cancelledDownloads.remove(destination)}
+      }
     }
     AsyncFunction("setMonitoring") {host:String,fingerprint:String,token:String,name:String,enabled:Boolean ->
       val context=appContext.reactContext?:throw IllegalStateException("应用不可用");val intent=Intent(context,RemoteMonitor::class.java);if(enabled){intent.putExtra("host",host).putExtra("pin",fingerprint).putExtra("token",token).putExtra("name",name);ContextCompat.startForegroundService(context,intent)}else context.stopService(intent)
     }
     AsyncFunction("monitoringStatus") { RemoteMonitor.following }
+    AsyncFunction("monitoringDetail") { mapOf("following" to RemoteMonitor.following,"phase" to RemoteMonitor.phase,"attempts" to RemoteMonitor.attempts,"lastSync" to RemoteMonitor.lastSync.toDouble(),"computer" to RemoteMonitor.computer,"stopReason" to RemoteMonitor.stopReason) }
+    AsyncFunction("monitorMode") {mode:String -> RemoteHealth.setMode(appContext.reactContext?:throw IllegalStateException("应用不可用"),mode)}
+    AsyncFunction("quietHours") {enabled:Boolean,start:Int,end:Int,allowAttention:Boolean -> RemoteHealth.setQuietHours(appContext.reactContext?:throw IllegalStateException("应用不可用"),enabled,start,end,allowAttention)}
+    AsyncFunction("noticesSeen") {computer:String -> RemoteHealth.seen(appContext.reactContext?:throw IllegalStateException("应用不可用"),computer)}
+    AsyncFunction("markNoticesSeen") {computer:String,ids:List<String> -> RemoteHealth.markSeen(appContext.reactContext?:throw IllegalStateException("应用不可用"),computer,ids)}
+    AsyncFunction("notificationHealth") { RemoteHealth.notificationHealth(appContext.reactContext?:throw IllegalStateException("应用不可用")) }
+    AsyncFunction("openNotificationSettings") {channel:String -> RemoteHealth.openNotificationSettings(appContext.reactContext?:throw IllegalStateException("应用不可用"),channel)}
+    AsyncFunction("requestBatteryExemption") { RemoteHealth.requestBatteryExemption(appContext.reactContext?:throw IllegalStateException("应用不可用")) }
+    AsyncFunction("testNotice") {computer:String -> RemoteHealth.testNotice(appContext.reactContext?:throw IllegalStateException("应用不可用"),computer)}
+    AsyncFunction("setSecureWindow") {enabled:Boolean -> RemoteHealth.secureWindow(appContext.currentActivity,enabled)}
     AsyncFunction("noticePolicy") {computer:String,completed:Boolean,failed:Boolean,attention:Boolean,muted:List<String> -> val context=appContext.reactContext?:throw IllegalStateException("应用不可用");context.getSharedPreferences("grok-notice-policy",android.content.Context.MODE_PRIVATE).edit().putBoolean("$computer:completed",completed).putBoolean("$computer:failed",failed).putBoolean("$computer:attention",attention).putStringSet("$computer:muted",muted.take(1000).toSet()).apply()}
     AsyncFunction("cachePin") {path:String,active:Boolean -> val context=appContext.reactContext?:throw IllegalStateException("应用不可用");RemoteCache.pin(context,path,active)}
-    AsyncFunction("cacheUsage") { clear:Boolean -> val context=appContext.reactContext?:throw IllegalStateException("应用不可用");val files=context.cacheDir.listFiles()?.filter{it.isFile&&(it.name.startsWith("grok-thumb-")||it.name.startsWith("grok-download-")||it.name.startsWith("grok-full-"))}?:emptyList();val bytes=files.sumOf{it.length()};if(clear)files.forEach{it.delete()};bytes.toDouble() }
+    AsyncFunction("cacheUsage") {clear:Boolean -> RemoteCache.usage(appContext.reactContext?:error("应用不可用"),clear).toDouble()}
+    AsyncFunction("cacheSummary") { RemoteCache.summary(appContext.reactContext?:error("应用不可用")) }
+    AsyncFunction("wifiAvailable") { RemoteHealth.allowed(appContext.reactContext?:error("应用不可用"),"wifi") }
     AsyncFunction("normalizeImage") {uri:String,name:String,promise:Promise -> downloads.execute{try{val context=appContext.reactContext?:throw IllegalStateException("应用不可用");val source=File(android.net.Uri.parse(uri).path?:"").canonicalFile;require(source.path.startsWith(context.cacheDir.canonicalPath+File.separator)||source.path.startsWith(context.filesDir.canonicalPath+File.separator));val bounds=android.graphics.BitmapFactory.Options().apply{inJustDecodeBounds=true};android.graphics.BitmapFactory.decodeFile(source.path,bounds);require(bounds.outWidth>0&&bounds.outHeight>0){"系统无法解码此图片，请选择 PNG / JPEG / WebP"};var sample=1;while(bounds.outWidth/sample>4096||bounds.outHeight/sample>4096)sample*=2;val options=android.graphics.BitmapFactory.Options().apply{inSampleSize=sample};val bitmap=if(android.os.Build.VERSION.SDK_INT>=28)android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(source)){decoder,_,_->decoder.allocator=android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE;decoder.setTargetSampleSize(sample)}else android.graphics.BitmapFactory.decodeFile(source.path,options)?:throw IllegalStateException("图片转换失败");val target=File(context.cacheDir,"grok-share-"+java.util.UUID.randomUUID()+".jpg");FileOutputStream(target).use{bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,92,it)};bitmap.recycle();promise.resolve(mapOf("uri" to android.net.Uri.fromFile(target).toString(),"name" to name.substringBeforeLast('.',name)+".jpg","size" to target.length().toDouble(),"mimeType" to "image/jpeg"))}catch(error:Exception){promise.reject("ERR_REMOTE_IMAGE",error.message,error)}} }
     AsyncFunction("pdfPages") {path:String,start:Int,promise:Promise -> executor.execute{try{val context=appContext.reactContext?:throw IllegalStateException("应用不可用");val file=File(android.net.Uri.parse(path).path?:"").canonicalFile;require(file.path.startsWith(context.cacheDir.canonicalPath+File.separator));android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(file,android.os.ParcelFileDescriptor.MODE_READ_ONLY)).use{renderer->val pages=mutableListOf<Map<String,Any>>();for(index in start.coerceAtLeast(0) until (start+3).coerceAtMost(renderer.pageCount)){renderer.openPage(index).use{page->val width=1400;val height=(page.height.toDouble()/page.width*width).toInt();val bitmap=android.graphics.Bitmap.createBitmap(width,height,android.graphics.Bitmap.Config.ARGB_8888);bitmap.eraseColor(android.graphics.Color.WHITE);page.render(bitmap,null,null,android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);val target=File(context.cacheDir,file.name+"-page-$index.png");FileOutputStream(target).use{bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};bitmap.recycle();pages.add(mapOf("index" to index,"uri" to android.net.Uri.fromFile(target).toString(),"width" to width,"height" to height))}};promise.resolve(mapOf("total" to renderer.pageCount,"pages" to pages))}}catch(error:Exception){promise.reject("ERR_REMOTE_PDF",error.message,error)}} }
     AsyncFunction("saveDownload") {path:String,name:String,mimeType:String,promise:Promise -> executor.execute{try{val context=appContext.reactContext?:throw IllegalStateException("应用不可用");val source=File(android.net.Uri.parse(path).path?:"").canonicalFile;require(source.path.startsWith(context.cacheDir.canonicalPath+File.separator));require(android.os.Build.VERSION.SDK_INT>=29){"此系统请使用分享入口保存文件"};val values=android.content.ContentValues().apply{put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,name);put(android.provider.MediaStore.MediaColumns.MIME_TYPE,mimeType);put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,if(mimeType.startsWith("image/"))"Pictures/Grok Remote" else "Download/Grok Remote");put(android.provider.MediaStore.MediaColumns.IS_PENDING,1)};val collection=if(mimeType.startsWith("image/"))android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI else android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI;val uri=context.contentResolver.insert(collection,values)?:throw IllegalStateException("系统未提供保存位置");try{context.contentResolver.openOutputStream(uri)?.use{output->source.inputStream().use{it.copyTo(output)}}?:throw IllegalStateException("无法保存");values.clear();values.put(android.provider.MediaStore.MediaColumns.IS_PENDING,0);context.contentResolver.update(uri,values,null,null);promise.resolve(uri.toString())}catch(error:Exception){context.contentResolver.delete(uri,null,null);throw error}}catch(error:Exception){promise.reject("ERR_REMOTE_SAVE",error.message,error)}} }

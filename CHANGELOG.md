@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.12.0 — Grok Remote 0.4.0 candidate
+
+- Add explicit foreground read acknowledgements while retaining passive history reads for monitoring and locked/background screens.
+- Version cloud notification delivery: new companions receive data-only event IDs and share one native reminder ledger with foreground polling and LAN monitoring; previously registered companions retain their compatible delivery format.
+- Grok Remote: native gesture and animation primitives, image decoding, a virtual gallery, vector icons, optional application lock and independent screenshot protection.
+- Reorganize device settings into searchable, scoped pages with notification/channel/battery health, connection tests, reading previews, quiet hours and per-computer reminder rules.
+- Preserve original task workspace bindings and in-progress edits; provide a four-step task editor, native date/time selection, draft retention and a saved-task summary.
+- Add inline pending interactions and decision history, send/queue/stop controls, multi-selection, undo actions, message bookmarks, recipes, snippets and launcher shortcuts.
+- Use atomic verified media downloads, bounded thumbnail/original caches and request priorities; expose transfer progress, cancellation/retry, cache categories and Wi-Fi-only adjacent-original prefetch.
+- Recover from failed database opens, late preferences/update snapshots, cleaned APK downloads and broken-image decoding without repeated automatic downloads.
+- Validate 600/2000-image viewport loading, narrow gallery controls, light/dark rendered flows and automated regressions. Native keyboard, touch, biometric, background and system-install behavior require separate physical-device acceptance.
+- Preserve the compact mobile styling with consistent headers, switches, search fields, selection marks and action rows; keep gallery view controls visible on narrow screens.
+- Honor system-only foreground reminder rules, retain notifications from other computers and hide notification details/recent-app previews when application lock is enabled.
+- Clarify HTTPS-request proxy configuration and provide actionable quota connection errors; align the official usage link and help text.
+- Patch KaTeX and TOML parser advisories across the Desktop dependency tree, and Markdown parser advisories on Android.
+
 ## 0.11.6 — proxy origin correction
 
 - Normalize a single standard proxy URL to the Chromium proxy origin; a trailing slash no longer breaks application update checks, installer downloads, inherited Provider requests, quota reads or optional push. Keep direct routes and existing multi-protocol rules intact.

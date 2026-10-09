@@ -1,5 +1,22 @@
 # Development roadmap
 
+## Desktop 0.12.0 / Grok Remote 0.4.0 candidate
+
+- [x] Integrate SDK-compatible gesture, animation, virtual-gallery, image, haptics, authentication and icon dependencies; compile their native Android modules.
+- [x] Fix task workspace preservation, delayed form/recipe/favorite restoration, cache completeness, database reopening, update-state ordering and missing-install recovery.
+- [x] Share event identities between foreground, native monitoring and new-protocol FCM, preserve older companion delivery and defer notification navigation behind the application lock.
+- [x] Add keyboard modes, nested back handling, native photo gestures, bounded gallery rendering, selection and explicit failed-image retry.
+- [x] Add scoped/searchable settings, notification and connection health, app lock, screenshot protection, quiet hours and reading presets.
+- [x] Add inline pending requests/decision history, three-state composer actions, selection, undo, bookmarks, snippets, recipes, native date/time pickers and launcher shortcuts.
+- [x] Wire actual upload/download/update transfers, native receipt checks, cache categories and Wi-Fi-only original prefetch.
+- [x] Check 600 and 2000 gallery items against viewport bounds and preserve the segment layout at 320–768 px.
+- [x] Review final visual consistency and proxy/quota guidance; honor foreground notification rules and application-lock privacy.
+- [x] Patch Desktop parser dependencies and retain public-safety and dependency gates.
+- [ ] Complete final signed APK and Windows Setup/Portable artifact verification.
+- [ ] Record physical-device keyboard, gestures, biometrics, background/FCM and system-installer results separately.
+
+The existing virtualized conversation list retains its tested chronological/history-anchor behavior. The gallery uses FlashList; conversation inversion and wholesale navigation replacement are not prerequisites for this candidate. Remote file-size indexing, multi-computer live aggregation, Quick Settings tiles and notification-bar approvals remain separate future work.
+
 ## Proxy follow-up 0.11.6
 
 - [x] Normalize standard proxy URLs for Chromium without changing explicit direct routes or stored credentials.
@@ -13,7 +30,7 @@
 - [x] Fix Desktop installer concurrency, filesystem/launch failures and media-task update protection.
 - [x] Provide phone downloads in Desktop onboarding/settings and mobile updates before pairing.
 - [x] Add mobile regression checks and signed APK source/identity/signature/checksum verification scripts.
-- [ ] Enable companion staging and mobile checks in the hosted release workflow.
+- [x] Enable companion staging and mobile checks in the hosted release workflow.
 - [x] Complete final artifact verification and publish Windows plus Android attachments together.
 - [ ] Record physical Android keyboard/gesture/system-install acceptance separately.
 

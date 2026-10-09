@@ -22,8 +22,22 @@ object RemoteUpdater {
     .readTimeout(30, TimeUnit.SECONDS).callTimeout(15, TimeUnit.MINUTES).build()
   @Volatile private var call: Call? = null
   @Volatile private var cancelled = false
-  @Volatile private var state: Map<String, Any> = mapOf("phase" to "idle", "received" to 0)
+  @Volatile private var state: Map<String, Any> = mapOf("phase" to "idle", "received" to 0, "revision" to 0.0)
+  @Volatile private var revision = 0L
+  /** Every state carries an increasing revision so a late snapshot can never overwrite newer progress. */
   @Synchronized fun status(): Map<String, Any> = state.toMap()
+  /** After a restart, a verified download (APK + its record) is offered again instead of downloading twice. */
+  @Synchronized fun restore(context: Context): Map<String, Any> {
+    if (state["phase"] != "idle") return status()
+    val file = target(context); val record = File(file.path + ".json")
+    if (!file.isFile || !record.isFile) return status()
+    try {
+      val saved = org.json.JSONObject(record.readText())
+      val version = saved.getString("version"); val sha256 = saved.getString("sha256")
+      if (digest(file) == sha256) { revision++; state = mapOf("phase" to "ready", "received" to file.length(), "total" to file.length(), "version" to version, "sha256" to sha256, "revision" to revision.toDouble()) }
+    } catch (_: Exception) {}
+    return status()
+  }
   fun cancel() { cancelled = true; call?.cancel() }
   fun release(): String {
     val request = Request.Builder().url("https://api.github.com/repos/$REPOSITORY/releases/latest")
@@ -42,7 +56,8 @@ object RemoteUpdater {
       return bytes.toString(Charsets.UTF_8)
     }
   }
-  private fun update(next: Map<String, Any>, emit: (Map<String, Any>) -> Unit) { state = next; emit(next) }
+  @Synchronized private fun stamp(next: Map<String, Any>): Map<String, Any> { revision++; val stamped = next + ("revision" to revision.toDouble()); state = stamped; return stamped }
+  private fun update(next: Map<String, Any>, emit: (Map<String, Any>) -> Unit) { emit(stamp(next)) }
   private fun target(context: Context) = File(context.cacheDir, "grok-updates/update.apk")
   private fun digest(file: File): String {
     val hash = MessageDigest.getInstance("SHA-256")
@@ -105,6 +120,7 @@ object RemoteUpdater {
             check(!cancelled) { "已取消下载" }
             check(!file.exists() || file.delete()) { "无法清理旧更新" }
             check(partial.renameTo(file)) { "无法保存已校验更新" }
+            try { File(target(context).path + ".json").writeText(org.json.JSONObject(mapOf("version" to version, "sha256" to sha256)).toString()) } catch (_: Exception) {}
             update(mapOf("phase" to "ready", "received" to size, "total" to size, "version" to version, "sha256" to sha256), emit)
             completed = true
           }
@@ -121,7 +137,12 @@ object RemoteUpdater {
   fun install(context: Context): String {
     val ready = status(); check(ready["phase"] == "ready") { "请先下载更新" }
     val file = target(context)
-    check(file.isFile && digest(file) == ready["sha256"]) { "更新文件已改变，请重新下载" }
+    if (!file.isFile || digest(file) != ready["sha256"]) {
+      // The system may clear app cache: move to a recoverable state that offers a fresh download.
+      file.delete(); File(file.path + ".json").delete()
+      stamp(mapOf("phase" to "error", "received" to 0, "version" to (ready["version"] ?: ""), "error" to "已下载的更新文件已被系统清理或改变，请重新下载", "redownload" to true))
+      error("已下载的更新文件已被系统清理或改变，请重新下载")
+    }
     validate(context, file, ready["version"] as String)
     if (Build.VERSION.SDK_INT >= 26 && !context.packageManager.canRequestPackageInstalls()) {
       context.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

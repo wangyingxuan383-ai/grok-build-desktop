@@ -34,3 +34,16 @@ test("interleaved progress leaves one readable answer and keeps child identity/t
 test("a parent id reported in an update is never offered as a child transcript",()=>{const rows=messagesFromEvents([{type:"subagent",sessionId:"parent",update:{subagent_id:"agent",session_id:"parent",description:"Review"}}]);assert.equal(rows[0]?.childSessionId,undefined)});
 
 test("child usage remains a separately reported counter and tool search anchors retain IDs",()=>{const rows=messagesFromEvents([{type:"subagent",sessionId:"parent",update:{subagent_id:"a",child_session_id:"child",tokens_used:100,status:"running"}},{type:"subagent",sessionId:"parent",update:{subagent_id:"a",tokens_used:120,status:"completed"}},{type:"tool-call",remoteIndex:8,tool:{toolCallId:"t",title:"ordinary",status:"completed",output:"file"}}]);assert.equal(rows[0]?.childTokens,120);assert.equal(rows[0]?.childSessionId,"child");assert.equal(rows.filter(r=>r.role==="agent").length,1);assert.equal(rows[1]?.remoteIndex,8);});
+
+test("resolved approvals stay visible in history with what was decided", async () => {
+  const { messagesFromEvents, decisionLabel } = await import("./remote-model.ts");
+  const rows = messagesFromEvents([
+    { type: "permission", sessionId: "s", request: { requestId: 7, toolCall: { title: "运行 npm test" }, options: [] }, remoteIndex: 1 },
+    { type: "interaction-resolved", sessionId: "s", interaction: "permission", requestId: 7, outcome: "allow_once", remoteIndex: 2 },
+  ] as never);
+  const record = rows.find(row => row.id.startsWith("resolved:"));
+  assert.equal(record?.title, "审批记录");
+  assert.equal(record?.text, "已允许：运行 npm test");
+  assert.equal(decisionLabel("permission", "reject_once"), "已拒绝");
+  assert.equal(decisionLabel("permission", "allow_always"), "已始终允许");
+});

@@ -4,7 +4,7 @@ import { Linking, Platform, ScrollView, Switch, Text, TextInput, View } from "re
 import * as FS from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import * as Notifications from "expo-notifications";
-import { Button, Card, ui, type Theme } from "./ui";
+import { Button, Card, ui, type Theme, SearchField } from "./ui";
 import { clearCache, savedRead, savedWrite } from "./cache";
 import { setMonitoring, monitoringStatus, discoverComputers, api, pushToken, cacheUsage, type HostConnection } from "./transport";
 import { mobileVersionIsNewer } from "./experience-model";
@@ -59,7 +59,7 @@ catch (e) {
 }
 finally {
     setLoading(false);
-} }; return <View style={{ gap: 12 }}><TextInput accessibilityLabel="搜索完整会话" value={q} onChangeText={setQ} placeholder="搜索电脑保存的完整历史" placeholderTextColor={theme.muted} style={[ui.field, { color: theme.text, borderColor: theme.border }]}/><Button title={loading ? "搜索中…" : "搜索完整历史"} theme={theme} disabled={loading || !q.trim()} onPress={() => void search()}/>{error ? <Text style={{ color: theme.danger }}>{error}</Text> : null}{results?.length === 0 ? <Text style={{ color: theme.muted }}>未找到匹配内容。</Text> : null}{results?.map(result => <Card key={result.index} theme={theme}><Text selectable style={{ color: theme.text, lineHeight: 23 }}>{result.text}</Text><View style={ui.row}><Button compact title="定位到会话" theme={theme} onPress={() => void client.loadAround(result.index).then(close).catch(e => setError(String(e)))}/><Button compact title="引用到输入框" theme={theme} onPress={() => { client.setDraft(client.draft + `\n\n> ${result.text.replaceAll("\n", "\n> ")}\n`); close(); }}/></View></Card>)}</View>; }
+} }; return <View style={{ gap: 12 }}><SearchField theme={theme} accessibilityLabel="搜索完整会话" value={q} onChangeText={setQ} placeholder="搜索电脑保存的完整历史" /><Button title={loading ? "搜索中…" : "搜索完整历史"} theme={theme} disabled={loading || !q.trim()} onPress={() => void search()}/>{error ? <Text style={{ color: theme.danger }}>{error}</Text> : null}{results?.length === 0 ? <Text style={{ color: theme.muted }}>未找到匹配内容。</Text> : null}{results?.map(result => <Card key={result.index} theme={theme}><Text selectable style={{ color: theme.text, lineHeight: 23 }}>{result.text}</Text><View style={ui.row}><Button compact title="定位到会话" theme={theme} onPress={() => void client.loadAround(result.index).then(close).catch(e => setError(String(e)))}/><Button compact title="引用到输入框" theme={theme} onPress={() => { client.setDraft(client.draft + `\n\n> ${result.text.replaceAll("\n", "\n> ")}\n`); close(); }}/></View></Card>)}</View>; }
 export function UsagePanel({ client, theme }: {
     client: Client;
     theme: Theme;

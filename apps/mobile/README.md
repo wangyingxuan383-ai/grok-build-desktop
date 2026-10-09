@@ -1,69 +1,105 @@
-# Grok Remote Android companion
+# Grok Remote 手机使用指南
 
-Grok Remote 0.3.6 pairs with Grok Build Desktop 0.11.5. The phone follows and controls the computer's existing Grok execution owner. Credentials and model execution remain on Windows; no Expo Go or developer address is required. Install over the existing app to retain pairing and drafts. This candidate adds a compact composer, grouped navigation/settings, history refresh and safer asynchronous navigation between paired computers.
+简体中文 · [English / 开发者构建说明](README.en.md)
 
-## Download and updates
+Grok Remote **0.4.0** 是 Grok Build Desktop **0.12.0** 的 Android 客户端。电脑运行 Grok CLI，手机负责查看、输入与控制。模型账号和执行凭据留在电脑上，不需要 Expo Go。
 
-[Download the signed Android APK](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.11.5/Grok-Remote-v0.3.6.apk) or find Windows and Android together on the [latest release](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest). Desktop onboarding and connection settings show download QR codes.
+## 下载与安装
 
-From 0.3.6, the Devices screen and unpaired welcome screen can check public updates without an online computer. APK downloads report progress, support cancellation and require SHA-256, size, package, version and original signing identity verification before Android asks for installation consent. Pairing and drafts remain when updating with the same signature. Older clients can install this APK manually first.
+- [手机 APK 0.4.0](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.12.0/Grok-Remote-v0.4.0.apk)
+- [配套电脑安装包与便携版](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.12.0)
+- [最新版本](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest)
 
-## Install and connect
+APK 支持 arm64-v8a / x86_64。Android 可能要求允许浏览器或文件管理器“安装未知应用”，按系统提示确认。使用同签名 APK 覆盖安装保留配对、草稿和设置。SHA-256 位于同一 Release 的 `SHA256SUMS.txt`。
 
-1. Install the matching Desktop package and the signed Android APK. Upgrading an existing phone installation requires the same signing identity.
-2. On Windows, open Settings → 手机连接 and enable the gateway. Generate a QR, scan it in Grok Remote, and approve the phone on the computer. Advanced address and port selection is optional.
-3. Both devices must share a reachable LAN or an existing VPN. Addresses are discovered at runtime. If the address changes, use Device → rediscover or scan a fresh QR; the original computer certificate remains the identity.
-4. Choose a known project and conversation, or create a new conversation. A new Windows installation needs a separately installed CLI, a usable account and a project configured on the computer.
+建议电脑与手机一起升级。先在电脑首次引导中完成 CLI、账号和项目配置。
 
-Windows network permission and guest-network isolation can affect reachability. The computer must be awake. With phone access enabled, closing the Desktop window keeps it in the tray; choose Exit to end connectivity. Running tasks use the existing shutdown confirmation.
+## 首次配对
 
-## Four work areas
+1. 电脑打开设置中的“手机连接”，启用服务并生成配对二维码。
+2. 手机扫码，再在电脑上批准这部手机。
+3. 两端使用可互通的局域网或已有 VPN，电脑保持开机。访客 Wi-Fi、网络隔离或防火墙可能阻止连接。
+4. 连接后打开已有会话，或选择电脑项目新建会话。
 
-- **Conversations:** project groups, recent/favorite/archive filters, independent model/mode/effort overrides, actual effective configuration, readable plans and native progress. Create, rename, archive, delete, quote, search and branch through the original owner. Read-only history never starts a second process or changes Desktop focus.
-- **Tasks:** active sessions and background jobs, confirmations, scheduled definitions and run history. Create/edit schedules, time zones, workspace, account, profile, context and notification choices; pause, run or cancel explicitly. A saved definition with failed scheduler registration retains its ID and is not reported as success.
-- **Works:** independent image conversations and successful-picture gallery, explicit failed/all/code-artifact views, local favorites and two-picture comparison. Continue from a generated reference, reuse parameters, cancel or delete records. Original-file deletion requires a separate confirmation. Coding-image generation stays in its code project.
-- **Devices:** paired computers, identity-preserving rediscovery, accounts, optional notifications, cache cleanup, redacted diagnostic export, versions and Desktop/CLI update status. Phone APK checks are enabled by default and can be disabled; only actual APK assets in the configured public Release can produce an update notice. Account credentials, login and installation remain on the computer.
+地址变化时，在“设备 → 连接与诊断”重新发现地址，或重新扫码。应用核验原电脑证书，不仅依赖 IP。启用手机连接后关闭电脑主窗口会保留托盘服务；从托盘退出将停止连接。
 
-## Materials and results
+## 四个工作区
 
-Upload files, photos or camera captures in resumable chunks. System sharing first asks for a destination conversation and adds materials to its draft; it never submits a model request automatically. Files, directories, declared CLI commands, Skills and connected MCP tools remain distinct selections. Computer selection does not grant permission or prove an operation occurred.
+| 页面 | 常用操作 |
+|---|---|
+| 会话 | 最近、进行中、收藏和归档；搜索、新建、改名、引用、分叉与删除 |
+| 任务 | 执行状态、待回应事项、定时任务配置与运行记录 |
+| 作品 | 独立图像创作、网格/卡片、收藏、全屏相册与代码产物 |
+| 设备 | 电脑切换与诊断、账号、手机外观/通知/安全/存储/更新 |
 
-Project files and changes use original Desktop services. Images support zoom, system save and share; text/Markdown, isolated HTML, PDF pages and audio/video use suitable viewers. Office previews extract text and retain external-opening access. Large binaries load on demand, with a 50 MB transfer limit; they are not embedded in each history snapshot.
+顶栏电脑名称打开切换器。新建会话的项目、配置、模型/强度按需展开，以电脑返回的实际配置为准。
 
-Tool updates use real call IDs. Child views use verified child IDs and are read-only unless an original native operation is actually exposed. Child Token reports remain separate; missing parent-inclusion evidence is never filled by adding counters. Computer state distinguishes observations, window control and application operations.
+### 会话与消息
 
-## Recovery and notifications
+- 会话右滑收藏，左滑露出归档和删除；长按打开更多操作。归档、收藏等可撤销，删除需再次确认。
+- 输入文字时主按钮为发送或加入队列；输入为空且执行中才显示停止。发送结果未知时先核对回执，不自动重发。
+- 消息长按复制、引用、多选或加入书签。普通回答可滑动引用，代码块/表格从菜单引用。
+- 待回应卡片显示权限、问题或计划，决定保留在历史；扩大权限的选项有额外确认。
+- 会话工具提供提示词片段；配方用于支持整组配置的表单。插入后仍需手动发送，失效模型不会自动替换。
+- 从消息书签返回原文；打开会话同步电脑已读状态。
 
-Drafts, materials, per-computer preferences and uncertain receipts survive navigation. Cached history is marked with its timestamp. Reconnection only restores reads; a model submission with unknown outcome retains the same operation ID for explicit reconciliation.
+### 定时任务
 
-Android uses its normal multiline keyboard and one resize path. Foreground refresh does not recreate the composer. Offline history uses a bounded SQLite cache; preview copies use a 200 MB eviction budget, excluding an actively opened file. Clear-cache keeps drafts, receipts, uploads and computer originals.
+按“做什么 → 在哪里执行 → 何时执行 → 检查并保存”配置。日期/时间使用系统选择器，保存前检查项目、账号、模型、模式和时区。编辑旧任务保留原项目；不可用时需明确改选，不自动绑定其他项目。
 
-Enable **background follow-up** explicitly for a visible Android foreground service over LAN/VPN. Completion, failure and attention channels can be managed in system notification settings; local follow-up also honors app/session notification choices. The service is not a public relay and does not wake the computer. Re-enable it after the system stops it.
+下次执行时间由电脑计算，注册失败单独显示。电脑需开机，Computer 操作需活动且解锁的桌面；离开未保存表单会提示。
 
-Optional FCM requires a Firebase project with Android configuration on the computer and Google Play services on the phone. Select the service-account and Android configuration JSON files only in Desktop advanced connection settings; private credentials are encrypted there. Register the phone separately. Cloud messages contain generic event notifications and original target IDs, not conversation bodies. Cloud notifications do not make the computer reachable from the internet; their channels are managed by Android.
+### 图片与作品
 
-## Requirements and evidence
+网格/卡片支持列数、排序、收藏、多选保存及两图对照；独立图像作品和代码产物分开。
 
-Windows 11 x64; Android API 24+ on ARM64 or x86-64. Modern Android is the primary target; system save uses Android 10+ MediaStore, with sharing as the fallback on older versions. Notification permission is requested when needed.
+点开图片进入全屏：左右翻页、双击/双指缩放、单击显隐工具、下滑关闭。放大时禁止翻页。底部可收藏、保存、分享、再创作和查看提示词；再创作先加入参考材料，不立即发送生图请求。
 
-Version 0.3.1 passed physical-device cold startup and user verification that Conversations, Tasks, Works and Devices open normally. Version 0.3.2 retains the signing identity, passes native startup checks and adds packaged thumbnail/original transfer and browser-rendered reading checks. These remain separate evidence: they do not prove a particular Android IME, background policy, Google account or authenticated model behavior. No paid model call or real scheduled trigger is required for offline acceptance. Native child messaging, direct phone terminal/mouse control, automatic CLI upgrades and a hosted relay are outside this client contract.
+图片按视窗加载，失败可点按重试。删除记录与删除电脑原文件分别处理，原文件删除需单独确认。
 
-## Build
+## 设置与安全
 
-Use Node 24, JDK 17 and an Android SDK/NDK compatible with Expo SDK 54. On Windows the SDK path should contain no spaces.
+设备页分“这台电脑”和“这部手机”，搜索可直接进入对应页面。
 
-```powershell
-npm ci
-npm run typecheck
-npm run test:startup
-npm test
-npm run prebuild
-cd android
-.\gradlew.bat :app:assembleRelease '-PreactNativeArchitectures=arm64-v8a,x86_64'
-```
+- **连接与诊断**：状态、延迟、地址和电脑身份；测试/诊断不调用模型。
+- **通知与后台**：系统权限、渠道、电池限制和实际跟进状态；完成/失败/待回应规则及免打扰。
+- **阅读与外观**：主题、阅读字号和回答详细程度。
+- **手势与触感**：操作说明与触感开关。
+- **安全**：应用锁默认关闭，开启前验证指纹、面容或锁屏密码。开启后系统通知隐藏详情，后台预览受保护；防截屏可独立开启。
+- **存储与传输**：分类缓存、最大的缓存文件和上传/原图/APK 进度，取消/重试传输。清理保留草稿、待处理材料和电脑原文件。
+- **关于与诊断**：版本、诊断信息及键盘动画/兼容模式。
 
-Set `JAVA_HOME`, `ANDROID_HOME` and optionally `GRADLE_USER_HOME`. For a private stable signature, provide `GROK_ANDROID_KEYSTORE`, `GROK_ANDROID_STORE_PASSWORD` and `GROK_ANDROID_KEY_PASSWORD`; alias `grokremote`. Keep keys outside source control. Metro reads pure shared command helpers from the repository's shared directory; Desktop process code is not bundled into the phone.
+后台跟进需主动启用，通过可见的 Android 常驻服务工作，可选始终、仅亮屏或仅 Wi-Fi。系统可能停止服务，需重新启用。应用不会唤醒电脑或建立公网中继。
 
-Prebuild and Gradle preBuild verify the selected native dependencies against Expo's installed SDK matrix, including transitive modules. Use compatible Expo packages rather than upgrading a wildcard peer dependency independently. After packaging, run `node ../../scripts/check-mobile-artifact.mjs <APK>` to check missing Expo core type definitions and bundled notices; `scripts/build-android.ps1` performs this automatically. Native crashes before React starts cannot be caught by the JavaScript recovery screen; a physical-device cold-start check is required separately.
+可选 FCM 需电脑配置 Firebase 项目，手机有 Google Play 服务。配置及服务账号留在私有环境；无 FCM 也可通过局域网/VPN 跟进。
 
-See [third-party notices](THIRD_PARTY_NOTICES.md). Public examples and artifacts exclude personal addresses, private handovers and signing material.
+## 在线升级
+
+从 0.3.6 起，“设备 → 手机更新”和未配对首页可检查公开 Release，无需电脑在线。
+
+1. 检查后下载，页面显示进度并可取消。
+2. 应用校验 SHA-256、大小、包名、版本和原签名。
+3. 点击安装；若系统要求允许 Grok Remote 安装应用，授权后返回再点击安装。
+4. Android 系统确认覆盖安装，不静默安装。
+
+文件被系统清理后可重新下载。旧于 0.3.6 的手机可先手动安装当前 APK。电脑安装版可在应用内下载、校验并启动安装器，便携版替换解压目录升级。CLI 更新在电脑端明确操作。
+
+## 常见问题
+
+| 现象 | 处理方式 |
+|---|---|
+| 连接失败或断开 | 检查电脑睡眠、托盘服务及网络；测试或重新发现地址 |
+| 项目路径不存在 | 电脑确认目录是否移动/删除；可隐藏失效项目或明确改选执行项目 |
+| 消息结果未知 | 核对同一操作的回执，避免盲目重发 |
+| 键盘遮挡或抬升异常 | 在关于与诊断切换兼容模式，记录输入法和横竖屏/分屏情况 |
+| 通知延迟 | 检查系统渠道、电池限制、跟进模式及实际服务状态 |
+| 图片打不开 | 点按重试，传输中心查看失败原因 |
+| 更新不能安装 | 按系统要求允许安装，文件丢失时重新下载 |
+
+离线可阅读已有缓存，不能执行新请求。单个媒体传输上限 50 MB，大文件在电脑处理。
+
+## 验证与开发
+
+类型、单元、界面回归、原生构建及包身份/签名检查已通过；模拟覆盖浅深色与窄屏。真实输入法、手势、生物识别、后台/FCM 和系统覆盖安装仍需具体手机检验。
+
+开发、签名与构建见 [English README](README.en.md)，协议见 [远程文档](../../docs/MOBILE_REMOTE.md)，许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -1317,7 +1317,7 @@ export class AppController {
 
   private getRemoteGateway(): RemoteGatewayService {
     return this.remoteGateway ??= new RemoteGatewayService(this.userDataPath, {
-      sessions: () => this.remoteSessions(), snapshot: (id,before,around) => this.remoteSnapshot(id,before,around), options:(refresh,modelsOnly)=>this.remoteOptions(refresh,modelsOnly),perform: (command,deviceId) => this.performRemoteCommand(command,deviceId),
+      sessions: () => this.remoteSessions(), snapshot: (id,before,around,read) => this.remoteSnapshot(id,before,around,read), options:(refresh,modelsOnly)=>this.remoteOptions(refresh,modelsOnly),perform: (command,deviceId) => this.performRemoteCommand(command,deviceId),
       query:(params,deviceId)=>this.remoteTools().query(params,deviceId),upload:(body,deviceId)=>this.remoteTools().files.upload(body,deviceId,id=>this.remoteTools().known(id)),resource:(ticket,suffix,deviceId)=>this.remoteTools().resource(ticket,suffix,deviceId),
       tick:(computer,devices)=>this.pushTools().poll(()=>this.listInbox(),computer,devices),
     }, {
@@ -1351,7 +1351,7 @@ export class AppController {
   private remotePush?:RemotePushService;
   private pushTools(){return this.remotePush??=new RemotePushService(this.userDataPath,{encrypt:value=>{if(!safeStorage.isEncryptionAvailable())throw Error("系统加密不可用");return safeStorage.encryptString(value).toString("base64")},decrypt:value=>safeStorage.decryptString(Buffer.from(value,"base64"))},async(url,init)=>{const settings=await this.settingsStore.get();const partition=remoteHttpSession.fromPartition("grok-remote-push");const proxy=settings.httpsProxy||settings.httpProxy;await partition.setProxy(proxy?{proxyRules:electronProxyRules(proxy)}:{mode:"system"});return partition.fetch(url,init)})}
   remotePushStatus(deviceId?:string){return this.pushTools().status(deviceId)}
-  registerRemotePush(deviceId:string,token:string){return this.pushTools().register(deviceId,token)}
+  registerRemotePush(deviceId:string,token:string,deliveryVersion=1){return this.pushTools().register(deviceId,token,deliveryVersion)}
   unregisterRemotePush(deviceId:string){return this.pushTools().unregister(deviceId)}
   async configureRemotePush(){const picked=await dialog.showOpenDialog(this.window!,{title:"选择 Firebase 服务账号与 Android 配置 JSON（共两个）",properties:["openFile","multiSelections"],filters:[{name:"JSON",extensions:["json"]}]});if(picked.canceled)return this.remotePushStatus();if(picked.filePaths.length!==2)throw Error("需要服务账号凭据与同项目的 google-services.json");const first=JSON.parse(await readFile(picked.filePaths[0]!,"utf8"));return first.type==="service_account"?this.pushTools().configure(picked.filePaths[0]!,picked.filePaths[1]!):this.pushTools().configure(picked.filePaths[1]!,picked.filePaths[0]!)}
   private remoteTools(){return this.remoteWorkbench??=new RemoteWorkbenchService(this,this.userDataPath)}
@@ -1423,8 +1423,10 @@ export class AppController {
     this.remoteChildren.set(childId,row);
     this.remoteListCache=[...(await this.remoteSessions()).filter(s=>s.id!==childId),row];this.remoteListExpires=Date.now()+60_000;return row;
   }
-  async remoteSnapshot(id:string,before?:number,around?:number):Promise<Omit<RemoteSnapshot,"cursor"|"epoch">>{
-    const session=await this.requireRemoteSession(id);const projection=await this.inspectSession(session.cwd,id);
+  async remoteSnapshot(id:string,before?:number,around?:number,read=false):Promise<Omit<RemoteSnapshot,"cursor"|"epoch">>{
+    let session=await this.requireRemoteSession(id);
+    // Opening a conversation on the phone counts as reading it, like opening it here does.
+    if(read&&before===undefined&&around===undefined&&session.status==="unread"){await this.catalog.markRead(id).catch(()=>undefined);session={...session,status:"idle"};}const projection=await this.inspectSession(session.cwd,id);
     const events=(projection?.events??[]) as ChatEvent[];const end=Math.min(before??events.length,events.length);let start=end;let bytes=0;
     const visible:ChatEvent[]=[];const allowed=new Set(["user-message","user-message-status","interjection","message-chunk","thought-chunk","tool-call","subagent","error","status","turn-started","turn-completed","session-reset","plan","question","permission","interaction-resolved","prompt-queue","media","computer-state","computer-permission","computer-risk","compact-status","session-recap","command-output","turn-retry","follow-ups","commands","meta","mode","runtime-update"]);
     if(around!==undefined){

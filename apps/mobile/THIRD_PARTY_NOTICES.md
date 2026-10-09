@@ -9,3 +9,5 @@ Paseo informed the device-pairing and conversation workflow. HAPI was reviewed f
 React, React Native, Expo, react-native-url-polyfill, react-native-safe-area-context and AsyncStorage retain their respective license notices in their packages. OkHttp is Apache-2.0. Distribution should preserve the dependency inventory and notices alongside the APK.
 
 Markdown rendering uses markdown-it 14.1.0 (MIT), copyright 2014 Vitaly Puzrin and Alex Kocharin. Clipboard access uses Expo Clipboard (MIT). The Android build includes `GROK_REMOTE_NOTICES.txt` in its assets, with these notices, the adapted helper's Apache-2.0 license and available dependency licenses.
+
+The 0.4 interaction layer uses React Native Gesture Handler, Reanimated, Worklets, Shopify FlashList, Expo Image, Haptics, Local Authentication and Vector Icons. Their packaged license texts are included in GROK_REMOTE_NOTICES.txt. Android cloud delivery uses Firebase Messaging under its distributed license terms. The design study of other apps informed interaction rules only; no AGPL source code was copied.

@@ -17,7 +17,7 @@ const dataSchemas:Record<RemoteMutation["kind"],z.ZodType>={
  "automation.create":z.object({workspaceId:id,input:z.record(z.string(),z.unknown()),configuration:z.object({modelId:id.optional(),providerId:id.optional(),effort:z.enum(REASONING_EFFORTS).optional(),mode:z.enum(["auto","agent","plan"]).optional()}).strict().optional()}).strict(),"automation.update":z.object({revision:z.number().int(),workspaceId:id.optional(),patch:z.record(z.string(),z.unknown())}).strict(),
  "automation.pause":z.object({paused:flag}).strict(),"automation.delete":z.object({}).strict(),"automation.run":z.object({}).strict(),"automation.cancel":z.object({}).strict(),"automation.confirm":z.object({approved:flag}).strict(),
  "inbox.read":z.object({read:flag}).strict(),"computer.permission":z.object({decision:z.enum(["once","always","deny"])}).strict(),"computer.risk":z.object({approved:flag}).strict(),"task.cancel":z.object({}).strict(),"account.switch":z.object({}).strict(),
- "notification.register":z.object({token:z.string().min(1).max(4096)}).strict(),"notification.unregister":z.object({}).strict(),
+ "notification.register":z.object({token:z.string().min(1).max(4096),deliveryVersion:z.literal(2).optional()}).strict(),"notification.unregister":z.object({}).strict(),
  "session.compaction":z.object({mode:z.enum(["inherit","custom"]),thresholdPercent:z.number().int().min(60).max(95).optional()}).strict(),
 };
 /** The remote surface delegates to the original services; it stores only transfer tickets. */
@@ -105,7 +105,7 @@ export class RemoteWorkbenchService {
    case "computer.risk":await c.respondComputerRisk(target,data.approved===true);break;
    case "task.cancel":await c.killBackgroundTask(target);break;
    case "account.switch":await c.switchAccount(target);break;
-   case "notification.register":await c.registerRemotePush(owner,String(data.token));break;
+   case "notification.register":await c.registerRemotePush(owner,String(data.token),data.deliveryVersion===2?2:1);break;
    case "notification.unregister":await c.unregisterRemotePush(owner);break;
   }
   return {state:"completed",resultSessionId};
