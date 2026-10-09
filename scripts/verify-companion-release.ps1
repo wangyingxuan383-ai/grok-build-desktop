@@ -2,7 +2,7 @@
 param([string]$Directory='release', [string]$SdkRoot=$env:ANDROID_HOME)
 $ErrorActionPreference='Stop'
 $Root=Split-Path -Parent $PSScriptRoot
-$Config=(Get-Content -LiteralPath (Join-Path $Root 'apps/mobile/app.json') -Raw | ConvertFrom-Json).expo
+$Config=(Get-Content -LiteralPath (Join-Path $Root 'apps/mobile/app.json') -Raw -Encoding UTF8 | ConvertFrom-Json).expo
 $Apk=Join-Path $Directory "Grok-Remote-v$($Config.version).apk"
 node (Join-Path $PSScriptRoot 'verify-companion-release.mjs') $Directory
 if($LASTEXITCODE -ne 0){throw 'Companion source/checksum scan failed.'}

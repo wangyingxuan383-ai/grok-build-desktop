@@ -29,7 +29,8 @@ const initialConnection: ConnectionState = {
   failures: 0,
 };
 const message = (error: unknown) => readableActionError(error);
-export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostConnection)=>Promise<void>) {
+export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostConnection)=>Promise<void>, visible=true) {
+  const visibleRef=useRef(visible);visibleRef.current=visible;
   const [cachedAt,setCachedAt]=useState<number>(),[composer,setComposerState]=useState<NonNullable<Outgoing["composer"]>>({attachmentIds:[],attachments:[]});
   const composerRef=useRef(composer);composerRef.current=composer;
   const composerRevision=useRef(0);
@@ -108,7 +109,8 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
     try {
       const value = await api<RemoteSnapshot>(
         target.host,
-        `/v1/sessions/${encodeURIComponent(target.sessionId)}`,
+        // read=1: viewing it here clears the computer's unread mark too (only while on screen).
+        `/v1/sessions/${encodeURIComponent(target.sessionId)}${visibleRef.current && AppState.currentState === "active" ? "?read=1" : ""}`,
       );
       if (value.session.id !== target.sessionId)
         throw Object.assign(

@@ -426,6 +426,9 @@ button.danger { color: var(--danger); border-color: color-mix(in srgb, var(--dan
 .quota-panel h3 { margin: 0 0 2px; }
 .quota-panel small { color: var(--muted); font-size: .6875em; }
 .quota-panel button { border: 1px solid var(--border); background: var(--button-bg); border-radius: 7px; padding: 6px 10px; cursor: pointer; }
+.quota-official-link { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 10px 0 14px; }
+.quota-official-link button { flex: 0 0 auto; min-height: 34px; }
+.quota-official-link small { flex: 1 1 240px; line-height: 1.6; }
 .quota-grid { display: grid; gap: 8px; }
 .quota-card { padding: 10px; border: 1px solid var(--hover); border-radius: 8px; background: var(--input-bg); }
 .quota-card > div:last-of-type { display: flex; justify-content: space-between; gap: 8px; margin: 6px 0 3px; }

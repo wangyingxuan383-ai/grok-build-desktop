@@ -1,16 +1,20 @@
 import { GalleryToolbar } from "./GalleryToolbar";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Image, Pressable, RefreshControl, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, TextInput, View, useWindowDimensions } from "react-native";
+import { Image } from "expo-image";
+import { FlashList } from "@shopify/flash-list";
+import { cachedFile, invalidateCached, useThumbnail } from "./media-cache";
+import { haptic } from "./haptics";
+import { useBackLayer } from "./back-layers";
+import { applyToggles, galleryPhotos, galleryRecords, tileSize, toggleSelection, type GalleryFilter, type GalleryPhoto, type GalleryView } from "./gallery-model";
 import { PhotoTile, PhotoViewer, type Photo } from "./photo-viewer";
 import { ActionMenu, useMenuTarget } from "./gestures";
 import * as DocumentPicker from "expo-document-picker";
-import * as Crypto from "expo-crypto";
-import * as FS from "expo-file-system/legacy";
 import { Button, Card, Chip, EmptyState, Segmented, space, ui, type Theme } from "./ui";
 import { ConfigurationPicker, uploadPicked, type Configuration, type RemoteAsset } from "./workbench";
 import { useOverview } from "./task-workspace";
 import { savedRead, savedWrite } from "./cache";
-import { downloadAsset } from "./transport";
+import { saveDownload } from "./transport";
 import { confirm } from "./forms";
 import type { useRemote } from "./use-remote";
 import type { ImageConversation, ImageComposerDraft } from "../../../src/shared/image-workspace";
@@ -22,73 +26,120 @@ export function RemotePicture({ client, source, theme, onPress }: {
     theme: Theme;
     onPress?: () => void;
 }) {
-    const [uri,setUri]=useState(""),[error,setError]=useState(""),[retry,setRetry]=useState(0);
-    useEffect(()=>{
-        let disposed=false;setUri("");setError("");
-        if(!client.host)return;const host=client.host;
-        void(async()=>{
-            const thumb=new URL(source);thumb.searchParams.set("variant","thumbnail");
-            const identity=await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256,host.fingerprint+":"+thumb.href);
-            const path=FS.cacheDirectory+"grok-thumb-"+identity+".jpg";
-            if(retry)await FS.deleteAsync(path,{idempotent:true});
-            const cached=await FS.getInfoAsync(path);
-            if(cached.exists&&"size" in cached&&cached.size>0){if(!disposed)setUri(path);return}
-            const asset=await client.query<RemoteAsset>("media",{source:thumb.href});
-            const result=await downloadAsset(host,`/v1/preview/${asset.ticket}/file`,path);
-            if(!disposed)setUri(result);
-        })().catch(e=>{if(!disposed)setError(e instanceof Error?e.message:String(e))});
-        return()=>{disposed=true};
-    },[client.host?.fingerprint,client.host?.host,source,retry]);
-    return <View style={{gap:6}}><Pressable onPress={onPress} accessibilityLabel="打开图片产物" style={{height:210,borderRadius:12,overflow:"hidden",backgroundColor:theme.raised,justifyContent:"center",alignItems:"center"}}>{uri?<Image source={{uri}} style={{width:"100%",height:"100%"}} resizeMode="contain" onError={()=>{setUri("");setError("缩略图文件无法显示，请重试读取。")}}/>:error?<Text numberOfLines={3} style={{color:theme.muted,padding:12}}>{error}</Text>:<ActivityIndicator color={theme.accent}/>}</Pressable>{error?<Button compact title="重试缩略图" theme={theme} onPress={()=>setRetry(value=>value+1)}/>:null}</View>;
+    const [retry, setRetry] = useState(0), [broken, setBroken] = useState(false);
+    useEffect(() => { setRetry(0); setBroken(false); }, [source]);
+    const { uri, error } = useThumbnail(client, source, retry);
+    return <View style={{ gap: 6 }}><Pressable onPress={onPress} accessibilityLabel="打开图片产物" style={{ height: 210, borderRadius: 12, overflow: "hidden", backgroundColor: theme.raised, justifyContent: "center", alignItems: "center" }}>
+      {uri && !broken ? <Image source={{ uri }} style={{ width: "100%", height: "100%" }} contentFit="contain" recyclingKey={source} onError={() => { setBroken(true); void invalidateCached(uri); }} />
+        : error || broken ? <Text style={{ color: theme.muted, padding: 12, textAlign: "center" }}>{error || "图片无法显示，请重试"}</Text> : <ActivityIndicator color={theme.accent} />}
+    </Pressable>{error || broken ? <Button compact title="重试缩略图" theme={theme} onPress={() => { setBroken(false); setRetry(v => v + 1); }} /> : null}</View>;
 }
+
+type GalleryItem = { kind: "photo"; photo: GalleryPhoto; index: number } | { kind: "record"; key: string; row: ImageConversation; record: ImageConversation["jobs"][number] } | { kind: "conversation"; row: ImageConversation } | { kind: "code"; artifact: MediaArtifact & { sessionId: string } };
+
 export function ImageWorkspaceScreen({ client, theme, onAsset, initialConversation }: {
     client: Client;
     theme: Theme;
     onAsset: (source: string) => void;
     initialConversation?: string;
 }) {
-    const overview = useOverview(client), [refreshing, setRefreshing] = useState(false), [selected, setSelected] = useState<string | undefined>(initialConversation), [filter, setFilter] = useState("pictures"), [scope, setScope] = useState<"images" | "code">("images"), [code, setCode] = useState<Array<MediaArtifact & {
-        sessionId: string;
-    }>>([]);
-    useEffect(() => { if (initialConversation)
-        setSelected(initialConversation); }, [initialConversation]);
-    const [favorites,setFavorites]=useState<string[]>([]),[comparison,setComparison]=useState<string[]>([]);
-    const [layout, setLayout] = useState<"grid" | "cards">("grid"), [viewer, setViewer] = useState<{ photos: Photo[]; index: number }>();
-    const photoMenu = useMenuTarget<Photo & { conversation: string }>();
-    const { width: screen } = useWindowDimensions(), tile = Math.floor((screen - space.lg * 2 + space.xs * 2 - 6) / 3);
-    const layoutTouched = useRef(false);
-    useEffect(() => { let active = true; void savedRead<"grid" | "cards">("image-layout").then(value => { if (active && value && !layoutTouched.current) setLayout(value); }); return () => { active = false; }; }, []);const favoriteKey=client.host?.fingerprint+":image-favorites";
-    useEffect(()=>{let active=true;setFavorites([]);setComparison([]);void savedRead<string[]>(favoriteKey).then(value=>{if(active)setFavorites(value||[]);});return()=>{active=false;};},[favoriteKey]);
-    const favorite=(source:string)=>{const next=favorites.includes(source)?favorites.filter(item=>item!==source):[...favorites,source];setFavorites(next);void savedWrite(favoriteKey,next);};
+    const overview = useOverview(client), [refreshing, setRefreshing] = useState(false), [selected, setSelected] = useState<string | undefined>(initialConversation), [filter, setFilter] = useState<GalleryFilter>("pictures"), [scope, setScope] = useState<"images" | "code">("images"), [code, setCode] = useState<Array<MediaArtifact & { sessionId: string }>>([]);
+    useEffect(() => { if (initialConversation) setSelected(initialConversation); }, [initialConversation]);
+    const [favorites, setFavorites] = useState<string[]>([]), [comparison, setComparison] = useState<string[]>([]);
+    const [view, setView] = useState<GalleryView>({ layout: "grid", sort: "newest", columns: 3 }), [viewer, setViewer] = useState<{ photos: Photo[]; index: number }>();
+    const [selection, setSelection] = useState<string[] | undefined>(), [busy, setBusy] = useState("");
+    const photoMenu = useMenuTarget<GalleryPhoto>();
+    const { width: screen } = useWindowDimensions(), tile = tileSize(screen, view.columns, space.lg, 3);
+    const viewTouched = useRef(false);
+    useEffect(() => { let active = true; void savedRead<GalleryView | "grid" | "cards">("image-layout").then(value => { if (!active || !value || viewTouched.current) return; setView(typeof value === "string" ? { layout: value, sort: "newest", columns: 3 } : { layout: value.layout || "grid", sort: value.sort || "newest", columns: [3, 4, 5].includes(value.columns) ? value.columns : 3 }); }); return () => { active = false; }; }, []);
+    const changeView = (patch: Partial<GalleryView>) => { viewTouched.current = true; setView(previous => { const next = { ...previous, ...patch }; void savedWrite("image-layout", next); return next; }); };
+    const favoriteKey = client.host?.fingerprint + ":image-favorites";
+    // Favorites restore once per computer; changes made before it lands are merged, never overwritten.
+    const favoriteOps = useRef<Array<{ source: string; add: boolean }> | undefined>([]);
+    useEffect(() => { let active = true; setFavorites([]); setComparison([]); favoriteOps.current = []; void savedRead<string[]>(favoriteKey).then(value => { if (!active) return; const ops = favoriteOps.current || []; favoriteOps.current = undefined; const merged=applyToggles(value || [], ops); setFavorites(merged); if(ops.length) void savedWrite(favoriteKey,merged); }).catch(() => { if(active) { favoriteOps.current=undefined; client.setError("收藏恢复失败，请重试打开作品页"); } }); return () => { active = false; }; }, [favoriteKey]);
+    const setFavorite = (source: string, add: boolean) => {
+        favoriteOps.current?.push({ source, add });
+        setFavorites(previous => { const next = add ? (previous.includes(source) ? previous : [...previous, source]) : previous.filter(item => item !== source); if (!favoriteOps.current) void savedWrite(favoriteKey, next); return next; });
+    };
+    const favorite = (source: string) => setFavorite(source, !favorites.includes(source));
     const images = overview.value?.images?.conversations ?? [], current = images.find(row => row.id === selected), disabled = client.busy || !!client.unknown || client.connection.phase !== "online";
     useEffect(() => {
         let active = true; void client.loadOptions().catch(() => undefined);
         if (scope === "code") void client.query<typeof code>("code-images").then(value => { if (active) setCode(value); }).catch(e => { if (active) client.setError(String(e)); });
         return () => { active = false; };
-    }, [scope, client.host?.host]);
+    }, [scope, client.host?.fingerprint]);
     useEffect(() => { if (client.receipt?.action === "workbench" && client.receipt.resultSessionId?.startsWith("image-") && client.receipt.state === "completed") {
         setSelected(client.receipt.resultSessionId);
         void overview.refresh();
     } }, [client.receipt?.operationId, client.receipt?.state]);
-    const photos = useMemo<Array<Photo & { conversation: string }>>(() => images.flatMap(row => row.jobs.flatMap(record => record.job.artifacts.filter(a => a.media === "image" && (filter !== "favorites" || favorites.includes(a.source))).map(a => ({ source: a.source, name: a.name, prompt: record.prompt, detail: row.title, conversation: row.id })))), [images, filter, favorites]);
-    const openPhoto = (index: number) => { if (index >= 0 && index < photos.length) setViewer({ photos: [...photos], index }); };
-    if (current)
-        return <ImageConversationView key={current.id} row={current} client={client} theme={theme} back={() => setSelected(undefined)} onAsset={onAsset} refresh={overview.refresh}/>;
+    const showsPhotos = scope === "images" && (filter === "pictures" || filter === "favorites");
+    const photos = useMemo(() => galleryPhotos(images, { filter, favorites, sort: view.sort }), [images, filter, favorites, view.sort]);
+    const openPhoto = (source: string) => { const index = photos.findIndex(photo => photo.source === source); if (index >= 0) setViewer({ photos: [...photos], index }); };
+    useEffect(() => { if (!showsPhotos || view.layout !== "grid") setSelection(undefined); }, [showsPhotos, view.layout]);
+    useBackLayer(Boolean(selection), () => { setSelection(undefined); });
     const failedCount = images.reduce((count, row) => count + row.jobs.filter(record => record.job.status === "failed").length, 0);
-    return <ScrollView contentContainerStyle={ui.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void overview.refresh().finally(() => setRefreshing(false)); }}/>}><Button title="新建图像会话" primary theme={theme} disabled={disabled} onPress={() => void client.mutate("image.create", "new")}/><Segmented theme={theme} value={scope} onChange={setScope} items={[["images", "图像作品"], ["code", "代码产物"]] as const}/>{scope === "images" ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.sm }}>{[["pictures", "图片"], ["favorites", favorites.length ? `收藏 ${favorites.length}` : "收藏"], ["conversations", "创作会话"], ["all", "全部记录"], ["failed", failedCount ? `失败 ${failedCount}` : "失败记录"]].map(([id, label]) => <Chip key={id} label={label!} selected={filter === id} theme={theme} onPress={() => setFilter(id!)}/>)}</ScrollView> : null}{scope === "images" && (filter === "pictures" || filter === "favorites") ? <GalleryToolbar count={photos.length} theme={theme} layout={layout} onChange={value => { layoutTouched.current = true; setLayout(value); void savedWrite("image-layout", value); }}/> : null}{overview.error ? <Text style={[ui.hint, { color: theme.muted }]}>{overview.error}</Text> : null}
-  {comparison.length ? <Card theme={theme}><Text style={[ui.title,{color:theme.text}]}>作品对照 {comparison.length}/2</Text><Text style={[ui.hint,{color:theme.muted}]}>点击预览原图。这里只比较已生成作品，不产生新请求。</Text>{comparison.map(source=><RemotePicture key={source} source={source} client={client} theme={theme} onPress={()=>onAsset(source)}/>)}<Button compact title="清空对照" theme={theme} onPress={()=>setComparison([])}/></Card> : null}
-  {scope === "code" ? code.map(artifact => <Card key={artifact.id} theme={theme}><RemotePicture client={client} theme={theme} source={artifact.source} onPress={() => onAsset(artifact.source)}/><Text style={[ui.hint, { color: theme.muted }]}>{artifact.name || "代码产物"} · {artifact.sessionId}</Text></Card>) : filter === "conversations" ? images.map(row => <Card key={row.id} theme={theme}><Button title={row.title} theme={theme} onPress={() => setSelected(row.id)}/><Text style={[ui.hint, { color: theme.muted }]}>{row.jobs.length} 条创作记录 · {new Date(row.updatedAt).toLocaleString()}</Text><Button compact title="删除会话记录" theme={theme} danger disabled={disabled} onPress={() => confirm("删除图像会话记录？", "电脑原文件保留，可另行选择删除原文件。", () => void client.mutate("image.delete", row.id, { deleteFiles: false }))}/></Card>) : layout === "grid" && (filter === "pictures" || filter === "favorites") ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 3, marginHorizontal: -space.xs }}>{photos.map((photo, i) => <PhotoTile key={photo.source + ":" + i} client={client} source={photo.source} size={tile} favorite={favorites.includes(photo.source)} onPress={() => openPhoto(i)} onLongPress={() => photoMenu.open(photo)}/>)}</View> : images.flatMap(row => row.jobs.filter(record => filter === "failed" ? record.job.status === "failed" : filter === "pictures" ? record.job.artifacts.some(a => a.media === "image") : filter === "favorites" ? record.job.artifacts.some(a=>favorites.includes(a.source)) : true).map(record => <Card key={row.id + record.requestId} theme={theme}><Pressable onPress={() => setSelected(row.id)}><Text style={[ui.title, { color: theme.text }]}>{record.prompt}</Text><Text style={[ui.hint, { color: theme.muted }]}>{row.title} · {record.job.status}</Text></Pressable>{record.job.artifacts.filter(a => a.media === "image" && (filter!=="favorites" || favorites.includes(a.source))).map(artifact => <View key={artifact.id} style={{gap:8}}><RemotePicture client={client} theme={theme} source={artifact.source} onPress={() => openPhoto(photos.findIndex(photo => photo.source === artifact.source))}/><View style={[ui.row,{gap:space.sm}]}><Chip label={favorites.includes(artifact.source)?"★ 已收藏":"☆ 收藏"} selected={favorites.includes(artifact.source)} theme={theme} onPress={()=>favorite(artifact.source)}/><Chip label={comparison.includes(artifact.source)?"移出对照":"加入对照"} selected={comparison.includes(artifact.source)} theme={theme} disabled={comparison.length>=2&&!comparison.includes(artifact.source)} onPress={()=>setComparison(comparison.includes(artifact.source)?comparison.filter(source=>source!==artifact.source):[...comparison,artifact.source])}/></View></View>)}{record.job.error ? <Text style={[ui.hint, { color: theme.danger }]}>{record.job.error}</Text> : null}<View style={[ui.row, { flexWrap: "wrap" }]}><Button compact ghost title="进入创作会话 ›" theme={theme} onPress={() => setSelected(row.id)}/><View style={{ flex: 1 }}/><Button compact ghost title="删除记录" theme={theme} danger disabled={disabled} onPress={() => confirm("删除这条记录？", "保留电脑原文件。运行中的任务需先取消。", () => void client.mutate("image.record.delete", row.id, { jobId: record.job.jobId, deleteFiles: false }))}/></View></Card>))}
-  {scope === "images" && filter === "favorites" && !photos.length ? <EmptyState theme={theme} title="还没有收藏图片" hint="长按图片或在全屏查看时点收藏。"/> : null}
-  {!images.length && scope === "images" ? <EmptyState theme={theme} title={overview.loading ? "正在读取作品…" : "开始一次图像创作"} hint="无需选择代码项目。默认通过电脑 CLI 生成，作品保存到电脑配置的图片目录。"/> : null}{scope === "code" && !code.length ? <EmptyState theme={theme} title="没有代码会话产物" hint="编程会话中生成的图片会出现在这里。"/> : null}
-  {viewer ? <PhotoViewer client={client} photos={viewer.photos} index={viewer.index} onClose={() => setViewer(undefined)} favorites={favorites} onFavorite={favorite} onNotice={text => client.setNotice(text)}/> : null}
-  <ActionMenu visible={Boolean(photoMenu.target)} theme={theme} title={photoMenu.target?.prompt || "图片"} subtitle={photoMenu.target?.detail} onClose={photoMenu.close} items={photoMenu.target ? [
-      { label: "全屏查看", onPress: () => openPhoto(photos.findIndex(p => p.source === photoMenu.target!.source)) },
-      { label: favorites.includes(photoMenu.target.source) ? "取消收藏" : "收藏", onPress: () => favorite(photoMenu.target!.source) },
-      { label: comparison.includes(photoMenu.target.source) ? "移出对照" : "加入对照", disabled: comparison.length >= 2 && !comparison.includes(photoMenu.target.source), onPress: () => { const source = photoMenu.target!.source; setComparison(comparison.includes(source) ? comparison.filter(item => item !== source) : [...comparison, source]); } },
-      { label: "进入创作会话", detail: "继续修改或基于这张图再创作", onPress: () => setSelected(photoMenu.target!.conversation) },
-      { label: "原图详情 / 保存 / 分享", onPress: () => onAsset(photoMenu.target!.source) },
-  ] : []}/>
- </ScrollView>;
+    const items = useMemo<GalleryItem[]>(() => scope === "code" ? code.map(artifact => ({ kind: "code" as const, artifact }))
+        : filter === "conversations" ? images.map(row => ({ kind: "conversation" as const, row }))
+            : showsPhotos && view.layout === "grid" ? photos.map((photo, index) => ({ kind: "photo" as const, photo, index }))
+                : galleryRecords(images, filter, favorites, view.sort).map(({ row, record }) => ({ kind: "record" as const, key: row.id + record.requestId, row: row as ImageConversation, record: record as ImageConversation["jobs"][number] })),
+        [scope, code, filter, images, showsPhotos, view.layout, photos, favorites, view.sort]);
+    const grid = showsPhotos && view.layout === "grid" && scope === "images";
+    const bulk = async (label: string, action: (source: string) => Promise<unknown>) => {
+        if (!selection?.length || busy) return; setBusy(label);
+        let failed = 0;
+        for (const source of selection) { try { await action(source); } catch { failed++; } }
+        setBusy(""); haptic(failed ? "error" : "success");
+        client.setNotice(failed ? `${selection.length - failed} 张完成，${failed} 张失败（可在传输中心重试）` : `已处理 ${selection.length} 张`);
+        setSelection(undefined);
+    };
+    if (current)
+        return <ImageConversationView key={current.id} row={current} client={client} theme={theme} back={() => setSelected(undefined)} onAsset={onAsset} refresh={overview.refresh} />;
+    const header = <View style={{ gap: space.md, paddingBottom: space.sm }}>
+      <Segmented theme={theme} value={scope} onChange={setScope} items={[["images", "图像作品"], ["code", "代码产物"]] as const} />
+      {scope === "images" ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.sm }}>{([["pictures", "图片"], ["favorites", favorites.length ? `收藏 ${favorites.length}` : "收藏"], ["conversations", "创作会话"], ["all", "全部记录"], ["failed", failedCount ? `失败 ${failedCount}` : "失败记录"]] as const).map(([id, label]) => <Chip key={id} label={label} selected={filter === id} theme={theme} onPress={() => setFilter(id)} />)}</ScrollView> : null}
+      {showsPhotos ? <GalleryToolbar count={photos.length} theme={theme} view={view} onChange={changeView} selecting={Boolean(selection)} onSelect={() => { haptic("selection"); setSelection(selection ? undefined : []); }} /> : null}
+      {selection ? <View style={[ui.row, { gap: space.sm, flexWrap: "wrap", padding: space.sm, borderRadius: 12, backgroundColor: theme.accentSoft }]}>
+          <Text style={{ color: theme.text, fontWeight: "600", flexGrow: 1 }}>{busy || `已选 ${selection.length} 张`}</Text>
+          <Chip label="全选" theme={theme} onPress={() => setSelection(photos.map(photo => photo.source))} />
+          <Chip label="收藏" theme={theme} disabled={!selection.length || Boolean(busy)} onPress={() => { for (const source of selection) setFavorite(source, true); haptic("success"); client.setNotice(`已收藏 ${selection.length} 张`); setSelection(undefined); }} />
+          <Chip label="保存" theme={theme} disabled={!selection.length || Boolean(busy)} onPress={() => void bulk("正在保存…", async source => { const file = await cachedFile(client, source, "original"); await saveDownload(file.uri, file.asset?.name || "grok-image.png", file.asset?.mimeType || "image/png"); })} />
+          <Chip label="对照" theme={theme} disabled={selection.length !== 2} onPress={() => { setComparison(selection.slice(0, 2)); setSelection(undefined); }} />
+        </View> : null}
+      {overview.error ? <Text style={[ui.hint, { color: theme.muted }]}>{overview.error}</Text> : null}
+      {comparison.length ? <Card theme={theme}><Text style={[ui.title, { color: theme.text }]}>作品对照 {comparison.length}/2</Text><Text style={[ui.hint, { color: theme.muted }]}>点击预览原图。这里只比较已生成作品，不产生新请求。</Text>{comparison.map(source => <RemotePicture key={source} source={source} client={client} theme={theme} onPress={() => onAsset(source)} />)}<Button compact title="清空对照" theme={theme} onPress={() => setComparison([])} /></Card> : null}
+    </View>;
+    const empty = scope === "code" ? <EmptyState theme={theme} title="没有代码会话产物" hint="编程会话中生成的图片会出现在这里。" />
+        : !images.length ? <EmptyState theme={theme} title={overview.loading ? "正在读取作品…" : "开始一次图像创作"} hint="无需选择代码项目。默认通过电脑 CLI 生成，作品保存到电脑配置的图片目录。" action={overview.loading ? undefined : <Button title="新建图像会话" primary theme={theme} disabled={disabled} onPress={() => void client.mutate("image.create", "new")} />} />
+            : filter === "favorites" ? <EmptyState theme={theme} title="还没有收藏图片" hint="长按图片或在全屏查看时点收藏。" /> : <EmptyState theme={theme} title="这里没有内容" />;
+    const renderItem = ({ item }: { item: GalleryItem }) => {
+        if (item.kind === "photo") return <View style={{ padding: 1.5 }}><PhotoTile client={client} source={item.photo.source} size={tile} favorite={favorites.includes(item.photo.source)} selected={selection ? selection.includes(item.photo.source) : undefined}
+          onPress={() => { if (selection) { haptic("selection"); setSelection(toggleSelection(selection, item.photo.source)); } else openPhoto(item.photo.source); }}
+          onLongPress={() => { haptic("longPress"); if (selection) setSelection(toggleSelection(selection, item.photo.source)); else photoMenu.open(item.photo); }} /></View>;
+        if (item.kind === "code") return <Card theme={theme} style={{ marginBottom: space.md }}><RemotePicture client={client} theme={theme} source={item.artifact.source} onPress={() => onAsset(item.artifact.source)} /><Text style={[ui.hint, { color: theme.muted }]}>{item.artifact.name || "代码产物"} · {item.artifact.sessionId}</Text></Card>;
+        if (item.kind === "conversation") return <Card theme={theme} style={{ marginBottom: space.md }}><Button title={item.row.title} theme={theme} onPress={() => setSelected(item.row.id)} /><Text style={[ui.hint, { color: theme.muted }]}>{item.row.jobs.length} 条创作记录 · {new Date(item.row.updatedAt).toLocaleString()}</Text><Button compact title="删除会话记录" theme={theme} danger disabled={disabled} onPress={() => confirm("删除图像会话记录？", "电脑原文件保留，可另行选择删除原文件。", () => void client.mutate("image.delete", item.row.id, { deleteFiles: false }))} /></Card>;
+        const { row, record } = item;
+        return <Card theme={theme} style={{ marginBottom: space.md }}><Pressable onPress={() => setSelected(row.id)}><Text style={[ui.title, { color: theme.text }]}>{record.prompt}</Text><Text style={[ui.hint, { color: theme.muted }]}>{row.title} · {record.job.status}</Text></Pressable>
+          {record.job.artifacts.filter(a => a.media === "image" && (filter !== "favorites" || favorites.includes(a.source))).map(artifact => <View key={artifact.id} style={{ gap: 8 }}><RemotePicture client={client} theme={theme} source={artifact.source} onPress={() => openPhoto(artifact.source)} /><View style={[ui.row, { gap: space.sm }]}><Chip label={favorites.includes(artifact.source) ? "★ 已收藏" : "☆ 收藏"} selected={favorites.includes(artifact.source)} theme={theme} onPress={() => favorite(artifact.source)} /><Chip label={comparison.includes(artifact.source) ? "移出对照" : "加入对照"} selected={comparison.includes(artifact.source)} theme={theme} disabled={comparison.length >= 2 && !comparison.includes(artifact.source)} onPress={() => setComparison(comparison.includes(artifact.source) ? comparison.filter(source => source !== artifact.source) : [...comparison, artifact.source])} /></View></View>)}
+          {record.job.error ? <Text style={[ui.hint, { color: theme.danger }]}>{record.job.error}</Text> : null}
+          <View style={[ui.row, { flexWrap: "wrap" }]}><Button compact ghost title="进入创作会话 ›" theme={theme} onPress={() => setSelected(row.id)} /><View style={{ flex: 1 }} /><Button compact ghost title="删除记录" theme={theme} danger disabled={disabled} onPress={() => confirm("删除这条记录？", "保留电脑原文件。运行中的任务需先取消。", () => void client.mutate("image.record.delete", row.id, { jobId: record.job.jobId, deleteFiles: false }))} /></View></Card>;
+    };
+    return <View style={{ flex: 1 }}>
+      <FlashList key={grid ? "grid-" + view.columns : "list"} data={items} numColumns={grid ? view.columns : 1} renderItem={renderItem}
+        keyExtractor={item => item.kind === "photo" ? "p:" + item.photo.source : item.kind === "record" ? "r:" + item.key : item.kind === "conversation" ? "c:" + item.row.id : "a:" + item.artifact.id}
+        getItemType={item => item.kind} ListHeaderComponent={header} ListEmptyComponent={empty} drawDistance={grid ? tile * 2 : 600}
+        contentContainerStyle={{ paddingHorizontal: grid ? space.lg - 1.5 : space.lg, paddingTop: space.lg, paddingBottom: space.xxl }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void overview.refresh().finally(() => setRefreshing(false)); }} />} />
+      {viewer ? <PhotoViewer client={client} photos={viewer.photos} index={viewer.index} onClose={() => setViewer(undefined)} favorites={favorites} onFavorite={favorite} onNotice={text => client.setNotice(text)}
+        onReuse={photo => { const target = photos.find(p => p.source === photo.source); setViewer(undefined); if (target) { void savedWrite(client.host!.fingerprint + ":image-reuse", photo.source); setSelected(target.conversation); } }} /> : null}
+      <ActionMenu visible={Boolean(photoMenu.target)} theme={theme} title={photoMenu.target?.prompt || "图片"} subtitle={photoMenu.target?.detail} onClose={photoMenu.close} items={photoMenu.target ? [
+          { label: "全屏查看", onPress: () => openPhoto(photoMenu.target!.source) },
+          { label: favorites.includes(photoMenu.target.source) ? "取消收藏" : "收藏", onPress: () => favorite(photoMenu.target!.source) },
+          { label: "多选", detail: "批量收藏、保存或对照", onPress: () => setSelection([photoMenu.target!.source]) },
+          { label: comparison.includes(photoMenu.target.source) ? "移出对照" : "加入对照", disabled: comparison.length >= 2 && !comparison.includes(photoMenu.target.source), onPress: () => { const source = photoMenu.target!.source; setComparison(comparison.includes(source) ? comparison.filter(item => item !== source) : [...comparison, source]); } },
+          { label: "进入创作会话", detail: "继续修改或基于这张图再创作", onPress: () => setSelected(photoMenu.target!.conversation) },
+          { label: "原图详情 / 保存 / 分享", onPress: () => onAsset(photoMenu.target!.source) },
+      ] : []} />
+    </View>;
 }
 function ImageConversationView({ row, client, theme, back, onAsset, refresh }: {
     row: ImageConversation;
@@ -116,6 +167,10 @@ function ImageConversationView({ row, client, theme, back, onAsset, refresh }: {
         void savedWrite(key, latest.current); }; }, [key]);
     useEffect(() => { if (!hydrated.current)
         return; const timer = setTimeout(() => void savedWrite(key, latest.current), 250); return () => clearTimeout(timer); }, [draft, ratio, config, route, attachments, sources]);
+    // Android back returns to the gallery (not the conversation home), keeping the draft.
+    useBackLayer(true, () => { void savedWrite(key, latest.current); back(); });
+    // "Use as reference" from the full-screen viewer hands the picture over through storage.
+    useEffect(() => { const reuseKey = client.host!.fingerprint + ":image-reuse"; let active = true; void savedRead<string>(reuseKey).then(source => { if (!active || !source) return; void savedWrite(reuseKey, ""); touched.current = true; setSources(previous => [...new Set([...previous, source])]); setDraft(previous => previous || "修改这张图片："); }); return () => { active = false; }; }, []);
     const [pendingOperation,setPendingOperation]=useState<string>();
     useEffect(()=>{if(!pendingOperation||client.receipt?.operationId!==pendingOperation)return;const state=client.receipt.state;if(state==="failed"||state==="cancelled"){setBusy(false);return;}if(state==="completed"){let active=true;void refresh().finally(()=>{if(active)setBusy(false);});return()=>{active=false;};}},[pendingOperation,client.receipt?.state]);
     const disabled = client.busy || !!client.unknown || client.connection.phase !== "online" || busy;

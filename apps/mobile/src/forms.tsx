@@ -3,7 +3,7 @@ import { Alert, Linking, Platform, Pressable, ScrollView, Text, TextInput, View,
 import { SafeAreaView } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { StatusBar } from "expo-status-bar";
-import { Button, Card, font, radius, space, ui, palettes, type Theme } from "./ui";
+import { Button, Card, font, radius, space, ui, palettes, type Theme, SearchField } from "./ui";
 import { configSummary, orderWorkspaces } from "./app-model";
 import { Markdown } from "./markdown";
 import { api, type HostConnection } from "./transport";
@@ -310,7 +310,7 @@ export function NewSession({ client, theme, disabled, close, created, }: {
     return (<View style={{ gap: space.sm }}>
       {stepRow("project", "项目", current?.name || "选择电脑上的项目", current?.path)}
       {step === "project" ? <View style={{ gap: 2, paddingBottom: space.xs }}>
-          {(client.options?.workspaces.length ?? 0) > 6 ? <TextInput accessibilityLabel="搜索项目" value={query} onChangeText={setQuery} placeholder="搜索项目名称或路径" placeholderTextColor={theme.muted} style={[ui.field, { minHeight: 42, paddingVertical: 8, marginBottom: space.xs, color: theme.text, borderColor: theme.border }]} /> : null}
+          {(client.options?.workspaces.length ?? 0) > 6 ? <SearchField theme={theme} accessibilityLabel="搜索项目" value={query} onChangeText={setQuery} placeholder="搜索项目名称或路径" style={{ marginBottom: space.xs }} /> : null}
           {ordered.rows.map(w => option(w.id, workspace === w.id, w.name, w.path, () => { draftTouched.current = true; setWorkspace(w.id); setProfile(""); setStep(null); setQuery(""); }))}
           {ordered.hidden ? <Pressable accessibilityRole="button" onPress={() => setShowAll(true)} style={{ padding: space.md }}><Text style={{ color: theme.accent, fontWeight: "600" }}>显示全部项目（另有 {ordered.hidden} 个）⌄</Text></Pressable> : null}
           {query && !ordered.rows.length ? <Text style={[ui.hint, { color: theme.muted, padding: space.md }]}>没有匹配的项目。</Text> : null}
@@ -375,10 +375,14 @@ export function Interaction({ event, theme, disabled, submit, }: {
       {event.type === "permission" ? (<>
           <PermissionDetails raw={event.request.toolCall} theme={theme}/>
           <View style={[ui.row, { flexWrap: "wrap" }]}>
-            {event.request.options.map((option) => (<Button compact key={option.optionId} title={option.name || option.kind || option.optionId} theme={theme} disabled={disabled} onPress={() => submit("permission", {
-                    requestId: event.request.requestId,
-                    optionId: option.optionId,
-                })}/>))}
+            {event.request.options.map((option) => {
+                const send = () => submit("permission", { requestId: event.request.requestId, optionId: option.optionId });
+                // Options that widen permissions beyond this one call ask again, so they are never a slip of the thumb.
+                const widening = /always|session/i.test(String(option.kind || "")) || /始终|总是|本会话/.test(option.name || "");
+                const rejecting = /reject|deny/i.test(String(option.kind || ""));
+                return <Button compact key={option.optionId} danger={rejecting} primary={!widening && !rejecting} title={option.name || option.kind || option.optionId} theme={theme} disabled={disabled}
+                  onPress={() => widening ? confirm("扩大授权范围？", `「${option.name || option.kind}」之后同类操作将不再逐项询问。只想允许这一次，请选“允许”。`, send) : send()}/>;
+            })}
           </View>
         </>) : null}
       {event.type === "plan" ? (<>

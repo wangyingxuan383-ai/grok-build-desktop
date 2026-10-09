@@ -339,6 +339,7 @@ function classifyError(label: string, error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/HTTP 401/.test(message)) return `${label}：登录已失效（401），请重新登录。`;
   if (/HTTP 403/.test(message)) return `${label}：当前账号无权访问额度接口（403）。`;
+  if (/ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED/i.test(message)) return `${label}：无法连接代理，请检查代理软件、端口和地址协议。HTTPS 请求也可使用 http:// 开头的代理地址；仅代理本身支持 TLS 时才使用 https://。在设置 → 项目与 Git 中检查后重新刷新。`;
   if (/timeout|timed out|ERR_TIMED_OUT/i.test(message)) return `${label}：请求超时，请检查代理。`;
   return `${label}：${message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]").slice(0, 300)}`;
 }

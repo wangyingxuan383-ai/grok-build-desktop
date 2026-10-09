@@ -1,4 +1,6 @@
+import { trackTransfer } from "./transfers";
 import React, { useEffect, useState, useRef } from "react";
+import { RecipeBar } from "./library";
 import { ActivityIndicator, FlatList, Image, Modal, Platform, Pressable, ScrollView, Text, TextInput, View, PanResponder } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
@@ -6,7 +8,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as FS from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { NativeHtmlPreview } from "./native-preview";
-import { Button, Card, ui, type Theme } from "./ui";
+import { Button, Card, ui, type Theme, SearchField } from "./ui";
 import { Markdown } from "./markdown";
 import { api, downloadAsset, pdfPages, saveDownload, normalizeImage, cachePin } from "./transport";
 import { savedRead, savedWrite, savedDelete } from "./cache";
@@ -44,12 +46,14 @@ export function ConfigurationPicker({ client, theme, value, onChange, base, mode
     else if (runtime)
         void client.perform("configure", { ...patch, revision: runtime.revision }); };
     return <View style={{ gap: 12 }}><Text style={[ui.title, { color: theme.text }]}>模型与执行配置</Text>
+  {onChange && !modelOnly ? <RecipeBar storageKey={prefix ? prefix + ":recipes" : undefined} theme={theme} current={selected} available={(modelId, providerId) => !modelId || models.some(m => m.modelId === modelId && (m.providerId || "") === (providerId || ""))}
+    apply={recipe => onChange({ ...value, modelId: recipe.modelId, providerId: recipe.providerId, effort: (recipe.effort ?? "") as ReasoningEffort, mode: recipe.mode as Configuration["mode"] })} /> : null}
   <Text style={[ui.hint, { color: theme.muted }]}>{onChange ? "用于当前表单的任务 / 消息，不修改电脑全局默认。" : runtime?.reason || "空闲时切换，实际生效结果从电脑同步。"}</Text>
   {client.options?.notices?.map(notice=><Text key={notice} style={[ui.hint,{color:theme.danger}]}>{notice}</Text>)}<Text style={[ui.hint, { color: theme.accent }]}>{current?.name || selected.modelId || "电脑默认模型"}{modelOnly ? "" : ` · ${selected.mode || "agent"} · 推理 ${selected.effort || "默认"}`}</Text>
   {client.optionsLoading || client.options?.modelCatalog?.refreshing ? <Text style={[ui.hint, { color: theme.muted }]}>正在刷新实际模型目录…已有选择与草稿保留。</Text> : null}
   {client.options?.modelCatalog?.reason?<Text style={[ui.hint,{color:theme.danger}]}>{client.options.modelCatalog.reason}</Text>:null}
   {!!selected.modelId&&models.length>0&&!current?<Text style={[ui.hint,{color:theme.danger}]}>原选择 {selected.modelId} 当前不可用，请选择目录中的模型。</Text>:null}
-  <TextInput accessibilityLabel="搜索模型" placeholder="搜索模型 / Provider" placeholderTextColor={theme.muted} value={search} onChangeText={setSearch} style={[ui.field, { color: theme.text, borderColor: theme.border }]}/>
+  <SearchField theme={theme} accessibilityLabel="搜索模型" value={search} onChangeText={setSearch} placeholder="搜索模型 / Provider" />
   {client.optionsError?<Text accessibilityRole="alert" style={[ui.hint,{color:theme.danger}]}>{client.optionsError}。已有选项和草稿保留，可重试刷新。</Text>:null}
   <View style={ui.row}><Button compact title="刷新模型" theme={theme} disabled={client.optionsLoading} onPress={() => void client.loadOptions(true).catch(()=>undefined)}/>{onChange ? <Button compact title="沿用默认" theme={theme} onPress={() => onChange({})}/> : null}</View>
   {!models.length ? <Text style={[ui.hint, { color: theme.muted }]}>尚未取得模型目录。可沿用电脑配置，也可刷新；登录问题需在电脑处理。</Text> : null}
@@ -84,6 +88,10 @@ export async function uploadPicked(client: Client, picked: Picked, sessionId: st
     if (!size || size > 50 * 1024 * 1024)
         throw Error("请选择不超过 50 MB 的文件");
     const localKey = `${client.host.fingerprint}:transfer:${sessionId}:${picked.uri}:${size}`;
+    let stopped = false;
+    const label = `${client.host.name} · ${picked.name}`;
+    trackTransfer(localKey, "upload", label, "running", undefined, undefined, {received:0,total:size}, () => {stopped=true;});
+    try {
     let upload = await savedRead<{
         id: string;
     }>(localKey);
@@ -96,16 +104,25 @@ export async function uploadPicked(client: Client, picked: Picked, sessionId: st
         offset: number;
     }>(client.host, "/v1/uploads", { id: upload!.id });
     while (state.offset < size) {
-        if (cancelled()) {
+        if ((cancelled() || stopped)) {
             await api(client.host, "/v1/uploads", { id: upload!.id, cancel: true });
             await savedDelete(localKey);
             throw Error("上传已取消，草稿保持");
         }
+        trackTransfer(localKey, "upload", label, "running", undefined, undefined, {received:state.offset,total:size}, () => {stopped=true;});
         onProgress(`${picked.name} · ${Math.round(state.offset / size * 100)}%`);
         const base64 = await FS.readAsStringAsync(picked.uri, { encoding: FS.EncodingType.Base64, position: state.offset, length: Math.min(256 * 1024, size - state.offset) });
         state = await api(client.host, "/v1/uploads", { id: upload!.id, offset: state.offset, data: base64 });
     }
+    trackTransfer(localKey, "upload", label, "done", undefined, undefined, {received:size,total:size});
     return { id: upload!.id, name: picked.name, size };
+    } catch(error) {
+        trackTransfer(localKey,"upload",label,(stopped||cancelled())?"cancelled":"failed",String(error),() => {
+            void uploadPicked(client,picked,sessionId,() => undefined).then(() => client.setNotice("文件已传好；回到材料页重新选择同一文件即可附加，不会自动发送。")).catch(() => undefined);
+        });
+        throw error;
+    }
+
 }
 export function AttachmentsPanel({ client, theme, sessionId }: {
     client: Client;

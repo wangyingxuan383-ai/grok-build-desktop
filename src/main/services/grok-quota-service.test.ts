@@ -83,6 +83,17 @@ describe("Grok quota requests", () => {
     expect(calls).toBe(1);
   });
 
+  it("explains proxy protocol failures without exposing the configured address or credentials", async () => {
+    const service = new GrokQuotaService(vault, settings, async () => "1.0.40", {} as never, async () => {
+      throw new Error("net::ERR_PROXY_CONNECTION_FAILED at https://user:private@example.invalid:8443");
+    }, async () => auth());
+    const value = await service.get(true);
+    expect(value.partial).toBe(true);
+    expect(value.currentAllowance).toBeUndefined();
+    expect(value.diagnostics.join(" ")).toContain("HTTPS 请求也可使用 http://");
+    expect(value.diagnostics.join(" ")).not.toContain("private@");
+  });
+
   it("prefers the live x.ai/billing extension and does not call the HTTP fallback", async () => {
     let httpCalls = 0;
     const service = new GrokQuotaService(vault, settings, async () => "1.0.3", {} as never, async () => {

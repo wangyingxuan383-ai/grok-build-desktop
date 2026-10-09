@@ -34,7 +34,7 @@ export function mergeEventWindows(...windows:WireEvent[][]):WireEvent[]{
  for(const[index,event]of [...indexed.entries()].sort(([a],[b])=>a-b)){const gap=markers.get(index);if(gap!==undefined)result.push({type:"history-gap",remoteIndex:gap,text:"中间还有未加载的记录，以下是另一个历史片段。"});result.push(event)}return result;
 }
 export function messagesFromEvents(events:WireEvent[]):MobileMessage[] {
-  const messages:MobileMessage[]=[];const tools=new Map<string,number>();const users=new Map<string,number>();let assistantIndex:number|undefined,thoughtIndex:number|undefined,turnActive=false;
+  const messages:MobileMessage[]=[];const tools=new Map<string,number>();const requests=new Map<string,string>();const users=new Map<string,number>();let assistantIndex:number|undefined,thoughtIndex:number|undefined,turnActive=false;
   for(let i=0;i<events.length;i++){
     const event=events[i]!;
     if(event.type==="user-message"||event.type==="interjection"){const id=event.clientMessageId||event.id||`user:${event.remoteIndex??i}`;const old=users.get(id);const row:MobileMessage={id,role:"user",text:event.text||"",...(event.remoteIndex!==undefined?{remoteIndex:event.remoteIndex,remoteEnd:event.remoteIndex}:{})};if(old===undefined){assistantIndex=undefined;thoughtIndex=undefined;users.set(id,messages.length);messages.push(row)}else messages[old]=row;}
@@ -51,7 +51,10 @@ export function messagesFromEvents(events:WireEvent[]):MobileMessage[] {
     }
     else if(event.type==="status"&&event.text)messages.push({id:`status:${event.remoteIndex??i}`,role:"status",title:"连接记录",text:event.text,remoteIndex:event.remoteIndex});
     else if(event.type==="plan"){assistantIndex=undefined;thoughtIndex=undefined;const request=(event as WireEvent&{requestId?:string|number;remoteEnd?:number}).requestId;messages.push({id:`plan:${event.remoteIndex??i}`,role:"plan",text:event.text||"",title:"执行计划",requestId:request,remoteIndex:event.remoteIndex});}
-    else if(event.type==="interaction-resolved"){const resolved=event as WireEvent&{requestId?:string|number;interaction?:string;outcome?:string};if(resolved.interaction==="plan")for(const row of messages)if(row.role==="plan"&&row.requestId===resolved.requestId)row.status=resolved.outcome||"已处理";}
+    else if(event.type==="permission"||event.type==="question"){const raw=event as WireEvent&{requestId?:string|number;request?:{requestId?:string|number;toolCall?:{title?:string}};questions?:Array<{question?:string}>};const id=raw.request?.requestId??raw.requestId;if(id!==undefined)requests.set(String(id),event.type==="permission"?raw.request?.toolCall?.title||"操作授权":raw.questions?.[0]?.question||"问题");}
+    else if(event.type==="interaction-resolved"){const resolved=event as WireEvent&{requestId?:string|number;interaction?:string;outcome?:string};if(resolved.interaction==="plan")for(const row of messages)if(row.role==="plan"&&row.requestId===resolved.requestId)row.status=resolved.outcome||"已处理";
+      // Keep what was decided visible in history, not only while the request was open.
+      if(resolved.interaction==="permission"||resolved.interaction==="question"){const subject=requests.get(String(resolved.requestId))||(resolved.interaction==="question"?"问题":"操作授权");messages.push({id:`resolved:${event.remoteIndex??i}`,role:"status",title:resolved.interaction==="question"?"回答记录":"审批记录",text:`${decisionLabel(resolved.interaction,resolved.outcome)}：${subject}`,remoteIndex:event.remoteIndex});}}
     else if(["compact-status","session-recap","turn-retry","command-output"].includes(event.type)){const value=event as WireEvent&{output?:string;status?:string;reason?:string;command?:string};messages.push({id:`status:${event.remoteIndex??i}`,role:"status",title:({"compact-status":"上下文压缩","session-recap":"会话摘要","turn-retry":"重试等待","command-output":"命令输出"}as Record<string,string>)[event.type],text:value.output||value.text||value.reason||value.status||"",remoteIndex:event.remoteIndex});}
     else if(event.type==="media"){const value=event as WireEvent&{source?:string};messages.push({id:`media:${event.remoteIndex??i}`,role:"media",text:"点击查看实际产物",source:value.source,remoteIndex:event.remoteIndex});}
   }
@@ -67,3 +70,13 @@ export function conversationRows(messages:MobileMessage[]):ConversationRow[]{
 }
 export function sessionStatusLabel(status:string,canSend=true){if(!canSend&&["idle","cold"].includes(status))return "只读";return ({working:"执行中","needs-user":"待确认",queued:"已排队",error:"上次未完成"} as Record<string,string>)[status]||"";}
 export function operationStateLabel(state:string):string {return ({accepted:"电脑已接收",queued:"已排队",running:"执行中",completed:"已完成",failed:"执行失败",cancelled:"本轮已停止",unknown:"结果待确认"} as Record<string,string>)[state]||state;}
+
+/** Human wording for a resolved permission or question. */
+export function decisionLabel(interaction:string,outcome?:string){
+  if(interaction==="question")return outcome&&/cancel/i.test(outcome)?"已取消回答":"已回答";
+  if(!outcome)return "已处理";
+  if(/reject|deny|denied/i.test(outcome))return "已拒绝";
+  if(/cancel/i.test(outcome))return "已取消";
+  if(/always/i.test(outcome))return "已始终允许";
+  return "已允许";
+}

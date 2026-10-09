@@ -1,6 +1,6 @@
 {
   "name": "grok-build-desktop",
-  "version": "0.11.6",
+  "version": "0.12.0",
   "private": true,
   "description": "Windows desktop GUI for the local Grok Build CLI",
   "main": "out/main/index.js",
@@ -47,7 +47,7 @@
     "bonjour-service": "^1.4.2",
     "fflate": "0.8.3",
     "iconv-lite": "0.7.3",
-    "katex": "0.17.0",
+    "katex": "0.18.2",
     "lucide-react": "1.48.0",
     "mermaid": "11.16.1",
     "monaco-editor": "0.56.0",
@@ -64,7 +64,7 @@
     "safer-buffer": "2.1.2",
     "selfsigned": "5.5.0",
     "shiki": "4.3.1",
-    "smol-toml": "1.8.0",
+    "smol-toml": "1.9.1",
     "zod": "4.4.3",
     "zustand": "5.0.14"
   },
@@ -98,7 +98,8 @@
     "nanoid": "3.3.18",
     "js-yaml": "4.3.2",
     "undici": "7.29.1",
-    "tar": "7.5.22"
+    "tar": "7.5.22",
+    "katex": "$katex"
   },
   "build": {
     "appId": "io.github.grokbuilddesktop.community",
@@ -118,7 +119,11 @@
       "README.md",
       "SECURITY.md",
       "!node_modules/node-pty/build/**",
-      "!node_modules/node-pty/**/*.pdb"
+      "!node_modules/node-pty/**/*.pdb",
+      "!node_modules/node-pty/**/*.map",
+      "!node_modules/node-pty/lib/**/*.test.js",
+      "!node_modules/node-pty/src/**",
+      "!node_modules/node-pty/deps/winpty/misc/**"
     ],
     "win": {
       "target": [

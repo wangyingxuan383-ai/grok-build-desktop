@@ -5,6 +5,15 @@ import type Token from "markdown-it/lib/token.mjs";
 import * as Clipboard from "expo-clipboard";
 import { Button, type Theme, ui } from "./ui";
 const parser = new MarkdownIt({ html: false, linkify: true, breaks: true });
+
+/** Reading size presets (Settings → 阅读与外观). Body/line heights scale together with code. */
+export type ReadingSize = "compact" | "standard" | "comfortable";
+export const readingScales: Record<ReadingSize, { body: number; line: number; code: number; codeLine: number }> = {
+    compact: { body: 15, line: 23, code: 12, codeLine: 19 },
+    standard: { body: 16, line: 26, code: 13, codeLine: 21 },
+    comfortable: { body: 18, line: 29, code: 14, codeLine: 23 },
+};
+export const ReadingScale = React.createContext(readingScales.standard);
 function inline(tokens: Token[], theme: Theme, onLink?: (url: string) => void): React.ReactNode[] {
     let bold = false, italic = false, strike = false, href = "";
     return tokens.map((token, index) => {
@@ -55,6 +64,7 @@ export const Markdown = React.memo(function Markdown({ value, theme, onLink }: {
     onLink?: (url: string) => void;
 }) {
     const tokens = useMemo(() => parser.parse(value, {}), [value]);
+    const scale = React.useContext(ReadingScale);
     let depth = 0, ordered = 0, item = false, quote = 0, heading = 0;
     const rows: React.ReactNode[] = [];
     for (let i = 0; i < tokens.length; i++) {
@@ -90,9 +100,9 @@ export const Markdown = React.memo(function Markdown({ value, theme, onLink }: {
             continue;
         }
         if (token.type === "fence" || token.type === "code_block")
-            rows.push(<View key={i} style={{ borderRadius: 12, backgroundColor: theme.raised, marginVertical: 8, overflow: "hidden" }}><View style={[ui.row, { paddingHorizontal: 12, paddingTop: 8, justifyContent: "space-between" }]}><Text style={{ color: theme.muted, fontSize: 12 }}>{token.info || "代码"}</Text><Button compact title="复制代码" theme={theme} onPress={() => void Clipboard.setStringAsync(token.content)}/></View><ScrollView horizontal contentContainerStyle={{ padding: 14 }}><Text selectable style={{ fontFamily: "monospace", fontSize: 13, lineHeight: 21, color: theme.text }}>{token.content.trimEnd()}</Text></ScrollView></View>);
+            rows.push(<View key={i} style={{ borderRadius: 12, backgroundColor: theme.raised, marginVertical: 8, overflow: "hidden" }}><View style={[ui.row, { paddingHorizontal: 12, paddingTop: 8, justifyContent: "space-between" }]}><Text style={{ color: theme.muted, fontSize: 12 }}>{token.info || "代码"}</Text><Button compact title="复制代码" theme={theme} onPress={() => void Clipboard.setStringAsync(token.content)}/></View><ScrollView horizontal contentContainerStyle={{ padding: 14 }}><Text selectable style={{ fontFamily: "monospace", fontSize: scale.code, lineHeight: scale.codeLine, color: theme.text }}>{token.content.trimEnd()}</Text></ScrollView></View>);
         else if (token.type === "inline")
-            rows.push(<View key={i} style={{ flexDirection: "row", marginVertical: heading ? 9 : 5, marginLeft: Math.max(0, depth - 1) * 14, paddingLeft: quote ? 12 : 0, borderLeftWidth: quote ? 3 : 0, borderColor: theme.border }}>{item ? <Text style={{ color: theme.muted, marginRight: 8, lineHeight: 25 }}>{ordered ? `${ordered++}.` : "•"}</Text> : null}<Text selectable style={{ flexShrink: 1, fontSize: heading ? Math.max(17, 26 - heading * 2) : 16, fontWeight: heading ? "700" : "400", lineHeight: heading ? 30 : 26, color: theme.text }}>{inline(token.children ?? [], theme, onLink)}</Text></View>);
+            rows.push(<View key={i} style={{ flexDirection: "row", marginVertical: heading ? 9 : 5, marginLeft: Math.max(0, depth - 1) * 14, paddingLeft: quote ? 12 : 0, borderLeftWidth: quote ? 3 : 0, borderColor: theme.border }}>{item ? <Text style={{ color: theme.muted, marginRight: 8, lineHeight: scale.line - 1 }}>{ordered ? `${ordered++}.` : "•"}</Text> : null}<Text selectable style={{ flexShrink: 1, fontSize: heading ? Math.max(scale.body + 1, scale.body + 10 - heading * 2) : scale.body, fontWeight: heading ? "700" : "400", lineHeight: heading ? scale.line + 4 : scale.line, color: theme.text }}>{inline(token.children ?? [], theme, onLink)}</Text></View>);
         else if (token.type === "paragraph_close")
             item = false;
         else if (token.type === "hr")

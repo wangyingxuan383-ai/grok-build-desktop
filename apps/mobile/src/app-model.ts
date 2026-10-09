@@ -122,3 +122,17 @@ export function orderWorkspaces<T extends WorkspaceChoice>(workspaces: T[], sess
     if (needle || ranked.length <= limit + 1) return { rows: ranked, hidden: 0 };
     return { rows: ranked.slice(0, limit), hidden: ranked.length - limit };
 }
+
+/**
+ * The composer's single main button. With text typed it always sends (queued while a turn
+ * runs) so a quick type-then-tap never stops the run by accident; stop is offered only when
+ * the input is empty and the computer is working.
+ */
+export type PrimaryAction = "send" | "queue" | "stop" | "none";
+export function primaryAction(input: { draft: string; working: boolean; readOnly: boolean; pending: number; busy: boolean; disabled: boolean }): { action: PrimaryAction; enabled: boolean } {
+  if (input.readOnly) return { action: "none", enabled: false };
+  const text = input.draft.trim().length > 0;
+  if (text) return { action: input.working ? "queue" : "send", enabled: !input.disabled && !input.busy && input.pending === 0 };
+  if (input.working) return { action: "stop", enabled: !input.disabled };
+  return { action: "send", enabled: false };
+}

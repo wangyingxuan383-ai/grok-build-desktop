@@ -63,3 +63,13 @@ test("new-session project picker puts recent projects first, searches paths and 
     assert.deepEqual(orderWorkspaces(workspaces, sessions, "p9").rows.map(w => w.id), ["w9"]);
     assert.equal(orderWorkspaces(workspaces.slice(0, 7), []).hidden, 0);
 });
+
+test("the composer button never turns typed text into a stop", async () => {
+  const { primaryAction } = await import("./app-model.ts");
+  const base = { draft: "", working: false, readOnly: false, pending: 0, busy: false, disabled: false };
+  assert.deepEqual(primaryAction(base), { action: "send", enabled: false });
+  assert.deepEqual(primaryAction({ ...base, working: true }), { action: "stop", enabled: true });
+  assert.deepEqual(primaryAction({ ...base, working: true, draft: "补充" }), { action: "queue", enabled: true });
+  assert.deepEqual(primaryAction({ ...base, draft: "问题", pending: 1 }), { action: "send", enabled: false });
+  assert.deepEqual(primaryAction({ ...base, readOnly: true, draft: "x" }), { action: "none", enabled: false });
+});

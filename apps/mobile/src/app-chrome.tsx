@@ -1,18 +1,28 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { Icon } from "./icons";
 import { Pressable, Text, View, StyleSheet } from "react-native";
-import { Banner, Button, Card, IconButton, font, radius, space, ui, type Theme } from "./ui";
+import { Banner, Button, Card, IconButton, font, iconName, radius, space, ui, type Theme } from "./ui";
 import { pickBanners, type BannerInput, type Tab } from "./app-model";
 
 export interface HeaderAction { label: string; icon: string; onPress: () => void; badge?: number; disabled?: boolean }
 /** One header for every screen: back or app mark, title with a status line, up to three icon actions. */
-export function AppHeader({ theme, title, subtitle, subtitleTone = "muted", onBack, actions = [] }: { theme: Theme; title: string; subtitle?: string; subtitleTone?: "success" | "muted" | "warning"; onBack?: () => void; actions?: HeaderAction[] }) {
+export function AppHeader({ theme, title, subtitle, subtitleTone = "muted", onBack, actions = [], onLogo, logoLabel = "G" }: { theme: Theme; title: string; subtitle?: string; subtitleTone?: "success" | "muted" | "warning"; onBack?: () => void; actions?: HeaderAction[]; /** Opens the computer switcher. */ onLogo?: () => void; logoLabel?: string }) {
   const color = subtitleTone === "success" ? theme.success : subtitleTone === "warning" ? theme.warning : theme.muted;
+  const switcher = Boolean(onLogo) && !onBack;
+  const titleBlock = <View style={{ flex: 1, minWidth: 0, paddingLeft: onBack ? 0 : space.xs }}>
+    <Text numberOfLines={1} style={[ui.title, { color: theme.text }]}>{title}</Text>
+    {subtitle ? <View style={styles.subtitle}>
+      {switcher ? <View style={[styles.statusDot, { backgroundColor: color }]} /> : null}
+      <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: font.caption, color: switcher && subtitleTone === "success" ? theme.muted : color }}>{subtitle}</Text>
+      {switcher ? <Icon name="expand" size={12} color={theme.muted} /> : null}
+    </View> : null}
+  </View>;
   return <View style={[ui.header, { borderBottomColor: theme.border, backgroundColor: theme.bg }]}>
-    {onBack ? <IconButton label="返回" icon="‹" theme={theme} onPress={onBack} /> : <View style={[styles.logo, { backgroundColor: theme.raised }]}><Text style={{ color: theme.text, fontSize: 17, fontWeight: "700" }}>G</Text></View>}
-    <View style={{ flex: 1, paddingLeft: onBack ? 0 : space.xs }}>
-      <Text numberOfLines={1} style={[ui.title, { color: theme.text }]}>{title}</Text>
-      {subtitle ? <Text numberOfLines={1} style={{ fontSize: font.caption, color, marginTop: 1 }}>{subtitle}</Text> : null}
-    </View>
+    {onBack ? <><IconButton label="返回" icon="‹" theme={theme} onPress={onBack} />{titleBlock}</>
+      : <Pressable accessibilityRole="button" accessibilityLabel="切换电脑" accessibilityHint={subtitle} disabled={!onLogo} onPress={onLogo} hitSlop={4} style={({ pressed }) => [styles.switcher, { opacity: pressed ? .6 : 1 }]}>
+        <View style={[styles.logo, { backgroundColor: theme.raised }]}><Text style={{ color: theme.text, fontSize: 16, fontWeight: "700" }}>{logoLabel}</Text></View>
+        {titleBlock}
+      </Pressable>}
     {actions.map(action => <IconButton key={action.label} label={action.label} icon={action.icon} badge={action.badge} disabled={action.disabled} theme={theme} onPress={action.onPress} />)}
   </View>;
 }
@@ -25,7 +35,7 @@ export function TabBar({ theme, value, onChange, badges = {} }: { theme: Theme; 
       const active = value === id, badge = badges[id];
       return <Pressable key={id} accessibilityRole="tab" accessibilityLabel={label} accessibilityState={{ selected: active }} onPress={() => onChange(id)} style={styles.tab}>
         <View style={[styles.tabIcon, active && { backgroundColor: theme.accentSoft }]}>
-          <Text style={{ fontSize: 19, color: active ? theme.accent : theme.muted }}>{icon}</Text>
+          <Icon name={iconName(icon) || "settings"} size={21} color={active ? theme.accent : theme.muted} />
           {badge ? <View style={[styles.badge, { backgroundColor: theme.primary }]}><Text style={{ color: "#fff", fontSize: 10, fontWeight: "700" }}>{badge > 99 ? "99+" : badge}</Text></View> : null}
         </View>
         <Text style={{ fontSize: 11, fontWeight: active ? "700" : "500", color: active ? theme.accent : theme.muted }}>{label}</Text>
@@ -45,8 +55,19 @@ export function StatusBanners({ theme, input, onReconnect, onDismissError, onNot
   onShowShare: () => void;
   unknown?: { busy: boolean; check: () => void; retry: () => void; acknowledge: () => void };
 }) {
+  const connected = useRef(false), interrupted = useRef(false);
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    if (input.phase !== "online") { if (connected.current && ["offline", "reconnecting", "blocked"].includes(input.phase)) interrupted.current = true; setRestored(false); return; }
+    connected.current = true;
+    if (!interrupted.current) return;
+    interrupted.current = false; setRestored(true);
+    const timer = setTimeout(() => setRestored(false), 2000);
+    return () => clearTimeout(timer);
+  }, [input.phase]);
   const banners = pickBanners(input);
   return <>
+    {restored ? <Banner theme={theme} tone="success" text="已恢复连接" /> : null}
     {unknown ? <Card theme={theme} style={{ margin: space.md, padding: space.md, borderColor: theme.warning }}>
       <Text style={[ui.hint, { color: theme.text }]}>上次提交结果待确认，草稿已保留。先核对，避免重复执行。</Text>
       <View style={[ui.row, { flexWrap: "wrap" }]}>
@@ -69,6 +90,9 @@ export function StatusBanners({ theme, input, onReconnect, onDismissError, onNot
 }
 const styles = StyleSheet.create({
   logo: { height: 34, width: 34, borderRadius: 10, alignItems: "center", justifyContent: "center", marginLeft: space.sm, marginRight: 2 },
+  switcher: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: 4, minHeight: 44 },
+  subtitle: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 1 },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
   tab: { flex: 1, minHeight: 54, alignItems: "center", justifyContent: "center", gap: 2 },
   tabIcon: { minWidth: 52, height: 28, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
   badge: { position: "absolute", top: -3, right: 6, minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 3, alignItems: "center", justifyContent: "center" },
