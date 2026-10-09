@@ -121,7 +121,9 @@
       "!node_modules/node-pty/build/**",
       "!node_modules/node-pty/**/*.pdb",
       "!node_modules/node-pty/**/*.map",
-      "!node_modules/node-pty/lib/**/*.test.js"
+      "!node_modules/node-pty/lib/**/*.test.js",
+      "!node_modules/node-pty/src/**",
+      "!node_modules/node-pty/deps/winpty/misc/**"
     ],
     "win": {
       "target": [
