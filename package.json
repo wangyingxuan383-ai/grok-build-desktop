@@ -119,7 +119,9 @@
       "README.md",
       "SECURITY.md",
       "!node_modules/node-pty/build/**",
-      "!node_modules/node-pty/**/*.pdb"
+      "!node_modules/node-pty/**/*.pdb",
+      "!node_modules/node-pty/**/*.map",
+      "!node_modules/node-pty/lib/**/*.test.js"
     ],
     "win": {
       "target": [
