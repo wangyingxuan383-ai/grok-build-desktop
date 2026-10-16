@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../shared/types";
 import { normalizeNativeRunWire, type NativeRunControlInput, type NativeRunSnapshot } from "../../shared/native-runs";
-import { NativeRunService, type NativeRunConnection } from "./native-run-service";
+import { bindNativeRunEventOwner, NativeRunService, type NativeRunConnection } from "./native-run-service";
 
 function setup(saved: NativeRunSnapshot[] = [], timeoutMs = 100) {
   const state = { owner: {}, verified: true, commands: ["goal", "workflow"], working: false, needsUser: false, queued: false, activeTurnId: "turn-a", controlBusy: false };
@@ -87,5 +87,11 @@ describe("native run controls",()=>{
     const old=f.input(await f.row("wf-one"),"pause");f.record("workflow","wf-one","active",2);
     await expect(f.service.control(old)).rejects.toThrow("状态已变化");expect(f.prompt).not.toHaveBeenCalled();
     await f.service.forget("session-a");expect(await f.service.list()).toEqual([]);
+  });
+  it("ignores a native update queued by the previous connection",async()=>{
+    const f=setup();f.record("workflow","wf-one","active",1);
+    const event:ChatEvent={type:"runtime-update",sessionId:"session-a",update:{kind:"workflow",name:"workflow_updated",at:new Date().toISOString(),data:{nativeRun:normalizeNativeRunWire("workflow",{run_id:"wf-one",status:"user_paused",revision:2})!}}};
+    bindNativeRunEventOwner(event,f.state.owner);f.state.owner={};f.service.record(event);
+    expect(await f.row("wf-one")).toMatchObject({status:"running",stale:true,actions:[]});
   });
 });

@@ -4,7 +4,7 @@ import { mergeTurnUsage } from "../../shared/turn-usage";
 import { SessionMcpTools } from "./session-mcp-tools";
 import { readCliBinaryIdentity, type CliBinaryIdentity } from "./cli-binary-identity";
 import { normalizeNativeRunWire } from "../../shared/native-runs";
-import { hasNativeRunControlProof } from "./native-run-service";
+import { bindNativeRunEventOwner, hasNativeRunControlProof } from "./native-run-service";
 import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
@@ -2768,6 +2768,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private emitEvent(event: ChatEvent): void {
+    bindNativeRunEventOwner(event, this);
     if (event.type === "prompt-queue") {
       const persist = this.options.onPromptQueueChanged;
       if (persist) void Promise.resolve(persist(event.sessionId, event.entries.map((entry) => ({ ...entry })))).catch((error: unknown) => {

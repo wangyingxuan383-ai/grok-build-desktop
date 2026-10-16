@@ -1023,8 +1023,9 @@ export class AppController {
     await this.cliCapabilities.recordRuntimeSupport(names, true, undefined, owner);
   }
 
-  getCliSessionInfo(sessionId: string): Promise<CliSessionInfo> {
-    return this.processes.sessionInfo(sessionId);
+  async getCliSessionInfo(sessionId: string): Promise<CliSessionInfo> {
+    try { return await this.processes.sessionInfo(sessionId); }
+    catch { return { sessionId, supported: false, source: "unsupported" }; }
   }
 
   getCliSessionUsage(sessionId: string): Promise<CliSessionUsage> {

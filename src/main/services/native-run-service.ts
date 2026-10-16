@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 import type { ChatEvent } from "../../shared/types";
 import { nativeRunIdValid, nativeRunKey, type NativeRunAction, type NativeRunControlInput, type NativeRunControlReceipt, type NativeRunSnapshot, type NativeRunWire } from "../../shared/native-runs";
 
+// Private process ownership survives the controller's asynchronous event queue.
+// It never becomes part of IPC, history or persisted task summaries.
+const eventOwners = new WeakMap<ChatEvent, object>();
+export function bindNativeRunEventOwner(event: ChatEvent, owner: object): void { eventOwners.set(event, owner); }
+
 /** Windows stable binary exercised against a loopback-only provider, never an account model. */
 export function hasNativeRunControlProof(identity?: { version?: string; sha256?: string }): boolean {
   return identity?.version === "1.0.60" && identity.sha256 === "cce3a54d95128ca57d78ecbf0accde92dd08a185a2552e267700a98c32f4198f";
@@ -38,6 +43,8 @@ export class NativeRunService {
   record(event: ChatEvent, replaying = false): void {
     if (!event.sessionId) return;
     const sessionId = event.sessionId, connection = this.options.connection(sessionId);
+    const sourceOwner = eventOwners.get(event);
+    if (sourceOwner && sourceOwner !== connection?.owner && !replaying) return;
     if (event.type === "user-message" && !replaying && connection?.activeTurnId && /^\/goal\s+(?!status(?:\s|$)|pause(?:\s|$)|clear(?:\s|$))\S/i.test(event.text)) {
       this.candidates.set(sessionId, { owner: connection.owner, turn: connection.activeTurnId });
     }

@@ -1,6 +1,11 @@
 import {expect,it,vi} from "vitest";
 vi.mock("electron",()=>({app:{},clipboard:{},desktopCapturer:{},dialog:{},Menu:{},nativeImage:{},nativeTheme:{},Notification:class{},session:{},shell:{},safeStorage:{}}));
 import {AppController} from "./app-controller";
+it("quietly returns unknown context when a read-only session query cannot run",async()=>{
+ const sessionInfo=vi.fn(async()=>{throw Error("session not loaded")});
+ expect(await AppController.prototype.getCliSessionInfo.call({processes:{sessionInfo}} as any,"cold-session")).toEqual({sessionId:"cold-session",supported:false,source:"unsupported"});
+ expect(sessionInfo).toHaveBeenCalledOnce();
+});
 it("replayed tools and turns do not mutate statistics, Computer state or change snapshots",async()=>{
  const record=vi.fn(),settle=vi.fn(),observe=vi.fn();
  const controller:any={projectionReplaying:new Set(["s"]),projectionReplayBuffers:new Map([["s",[]]]),nativeAgentCapabilities:{record:vi.fn()},prepareVisibleEvent:async(event:unknown)=>event,turnFileChanges:{observe},dashboard:{record},tokenActivity:{record},computer:{settleSession:settle},conversationProjections:{record},turnPresentations:{recordForSession:record}};

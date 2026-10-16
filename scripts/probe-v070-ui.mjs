@@ -215,6 +215,7 @@ try {
   const historyCountBeforeDraft = await evaluate("document.querySelectorAll('.sb-project .sb-session:not(.draft)').length");
   if (!(await clickText('.sb-nav-row.is-primary', '新建会话'))) throw new Error('New-task button did not open the local draft');
   await waitFor(() => evaluate("!document.querySelector('.sb-session.active:not(.draft)') && document.querySelector('.composer textarea')?.value === '0.8.1 本地草稿（尚未启动 CLI）'"), "New task did not hydrate the persisted local draft");
+  await waitFor(() => evaluate("document.querySelector('.draft-model-controls select')?.value === 'fixture-draft-model'"), "Draft model selection did not hydrate");
   const draftState = await evaluate(`({
     historyCount: document.querySelectorAll('.sb-project .sb-session:not(.draft)').length,
     stop: Boolean(document.querySelector('.send-button.stop')),
