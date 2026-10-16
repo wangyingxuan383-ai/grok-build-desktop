@@ -25,7 +25,13 @@ try {
  npm run test:ui;if($LASTEXITCODE -ne 0){throw 'Mobile UI workflow checks failed.'}
  npm run prebuild;if($LASTEXITCODE -ne 0){throw 'Android prebuild failed.'}
  Push-Location -LiteralPath (Join-Path $Mobile 'android')
- try{& .\gradlew.bat :app:assembleRelease "-PreactNativeArchitectures=$Architectures" --no-daemon --console=plain;if($LASTEXITCODE -ne 0){throw 'Android build failed.'}}finally{Pop-Location}
+ try{
+  # Windows PowerShell promotes native stderr warnings to terminating errors.
+  # Gradle's exit code is authoritative, including for harmless SDK XML warnings.
+  $PreviousErrorAction=$ErrorActionPreference
+  try{$ErrorActionPreference='Continue';& .\gradlew.bat :app:assembleRelease "-PreactNativeArchitectures=$Architectures" --no-daemon --console=plain;$BuildExit=$LASTEXITCODE}finally{$ErrorActionPreference=$PreviousErrorAction}
+  if($BuildExit -ne 0){throw 'Android build failed.'}
+ }finally{Pop-Location}
  $Version=(Get-Content -LiteralPath (Join-Path $Mobile 'package.json') -Raw | ConvertFrom-Json).version
  $Artifacts=Join-Path $Root 'out\android-companion'
  [IO.Directory]::CreateDirectory($Artifacts)|Out-Null

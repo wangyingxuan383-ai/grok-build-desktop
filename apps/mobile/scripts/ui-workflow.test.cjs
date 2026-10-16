@@ -32,6 +32,25 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const host = (fingerprint = "a", address = "https://a.example.invalid") => ({ id: fingerprint, fingerprint: fingerprint.repeat(64), host: address, token: "fixture", name: fingerprint });
 const native = { View: "View", Text: "Text", Pressable: "Pressable", ScrollView: "ScrollView", TextInput: "TextInput", FlatList: "FlatList", KeyboardAvoidingView: "KeyboardAvoidingView", ActivityIndicator: "ActivityIndicator", Platform: { OS: "android" }, Keyboard: { dismiss() {} }, Vibration: { vibrate() {} }, StyleSheet: { create: x => x, hairlineWidth: 1 }, useColorScheme: () => "light", AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } };
 
+test("native task controls stay collapsed, bind the owner and prevent duplicate requests", async () => {
+  const shared=load("../../src/shared/native-runs.ts",{}), calls=[], pending=deferred();
+  const {NativeRunCards}=load("src/native-runs.tsx",{"react-native":native,"./ui":{Button:"Button",Card:"Card",ui:{section:{},title:{},hint:{},row:{}}},"./forms":{confirm:(_a,_b,run)=>run()},"../../../src/shared/native-runs":shared});
+  const row={id:"wf-one",kind:"workflow",title:"Existing native task",status:"running",nativeStatus:"active",sessionId:"session-owner",revision:"a".repeat(64),observedAt:"now",stale:false,actions:["pause","stop"]};
+  const client={sessions:[{id:"session-owner",title:"Owner"}],mutate:(...args)=>{calls.push(args);return pending.promise;}};
+  let tree,opened;
+  try {
+    await renderer.act(()=>{tree=renderer.create(React.createElement(NativeRunCards,{rows:[row],client,theme:{},disabled:false,refresh:async()=>{},open:id=>{opened=id;}}));});
+    assert.equal(calls.length,0);assert.equal(tree.root.findAllByType("Button").length,0);
+    await renderer.act(()=>tree.root.findByType("Pressable").props.onPress());
+    const buttons=tree.root.findAllByType("Button");await renderer.act(()=>buttons.find(b=>b.props.title==="查看会话").props.onPress());assert.equal(opened,"session-owner");assert.equal(calls.length,0);
+    const pause=buttons.find(b=>b.props.title==="暂停");await renderer.act(()=>{pause.props.onPress();pause.props.onPress();});
+    assert.equal(calls.length,1);assert.deepEqual(calls[0],["native-run.control","wf-one",{sessionId:"session-owner",kind:"workflow",revision:row.revision,action:"pause"}]);
+    await renderer.act(async()=>{pending.resolve({message:"已暂停"});await settle();});
+    await renderer.act(()=>tree.update(React.createElement(NativeRunCards,{rows:[],client,theme:{},disabled:false,refresh:async()=>{},open(){}})));
+    assert.equal(tree.toJSON(),null);
+  } finally {if(tree)await renderer.act(()=>tree.unmount());}
+});
+
 test("overview ignores late responses after switching computers, including manual refresh", async () => {
   let current = host(), hook, calls = 0; const pending = [deferred(), deferred()], writes = [];
   const query = () => pending[calls++].promise;

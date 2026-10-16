@@ -27,9 +27,9 @@ app.whenReady().then(async()=>{
     const key=async(key,code)=>{await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code});await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code});await wait()};
     if (process.env.REGRESSION_SCOPE !== 'automation') {
     await run('fixture.menus()'); await wait();
-    await run('document.querySelectorAll(".session-actions")[0].focus()'); await key('ArrowDown','ArrowDown');
+    await run('document.querySelectorAll(".sb-session-more")[0].focus()'); await key('ArrowDown','ArrowDown');
     assert(await run('document.activeElement.getAttribute("role")==="menuitem"'),'menu arrow focus');
-    await key('Escape','Escape');assert(await run('document.activeElement.classList.contains("session-actions") && !document.querySelector("[role=menu]")'),'menu Escape restore');
+    await key('Escape','Escape');assert(await run('document.activeElement.classList.contains("sb-session-more") && !document.querySelector("[role=menu]")'),'menu Escape restore');
     await run('Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:()=>Promise.reject(Error("denied"))}});fixture.toast("first")');await wait();
     await run('document.querySelector(".toast-actions button").click()');await wait();
     assert(await run('document.querySelector(".toast-actions button").textContent.includes("复制失败")'),'copy failure feedback');

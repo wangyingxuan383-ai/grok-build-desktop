@@ -8,10 +8,10 @@ import type { AppSettings, CliVersionStatus } from "../../shared/types";
 const execFileAsync = promisify(execFile);
 const effortFlags = new Map<string, "--effort" | "--reasoning-effort">();
 export const CLI_CHANGELOG_URL = "https://x.ai/build/changelog";
-// Highest public release observed in the official changelog when this build
+// Highest stable release observed in the official distribution when this build
 // was cut. It is display-only: it does not prove wire compatibility, and the
 // CLI stable feed remains the sole authority for an installable target.
-export const KNOWN_PUBLIC_CLI_VERSION = "1.0.44";
+export const KNOWN_PUBLIC_CLI_VERSION = "1.0.60";
 
 export interface GrokConfigSourceDiagnostic {
   kind: "default" | "path" | "inline" | "multiple";

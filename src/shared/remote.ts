@@ -34,7 +34,7 @@ export interface RemoteSnapshot {
   runtime?:RemoteRuntime;
 }
 export interface RemoteRuntime { revision:string; modelId?:string; providerId?:string;effort:ReasoningEffort;mode:SessionMode;models:ModelInfo[];mutable:boolean;reason?:string;interjectSupported?:boolean;commands:Array<{name:string;description?:string}> }
-export const REMOTE_MUTATIONS=["image.create","image.rename","image.submit","code.image.submit","image.cancel","image.delete","image.record.delete","automation.create","automation.update","automation.pause","automation.delete","automation.run","automation.cancel","automation.confirm","inbox.read","computer.permission","computer.risk","task.cancel","account.switch","notification.register","notification.unregister","session.compaction"] as const;
+export const REMOTE_MUTATIONS=["image.create","image.rename","image.submit","code.image.submit","image.cancel","image.delete","image.record.delete","automation.create","automation.update","automation.pause","automation.delete","automation.run","automation.cancel","automation.confirm","inbox.read","computer.permission","computer.risk","task.cancel","account.switch","notification.register","notification.unregister","session.compaction","native-run.control"] as const;
 export type RemoteMutationKind=typeof REMOTE_MUTATIONS[number];
 export interface RemoteMutation {kind:RemoteMutationKind;target?:string;data?:Record<string,unknown>}
 export type RemoteAction = "send" | "cancel" | "permission" | "question" | "plan" | "create" | "rename" | "archive" | "queue-remove" | "queue-edit" | "queue-move" | "queue-clear" | "interject" | "configure" | "compact" | "fork" | "delete" | "workbench";

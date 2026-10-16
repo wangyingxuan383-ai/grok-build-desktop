@@ -1692,6 +1692,17 @@ describe("forward lifecycle compatibility", () => {
     expect(logs.join("\n")).not.toContain("child-only");
   });
 
+  it("replays a history frame above 4 MiB without truncation or leaking its body to diagnostics",async()=>{
+    const {adapter,events,logs}=lifecycleAdapter();
+    adapter.providerThinking={pending:"",thought:false};
+    const body="history-line ".repeat(400_000)+"HISTORY_END_SENTINEL";
+    const wire=JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{sessionId:"session-1",update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:body}}}});
+    expect(Buffer.byteLength(wire)).toBeGreaterThan(4*1024*1024);
+    await adapter.onLine(wire);
+    const output=events.filter((event:any)=>event.type==="message-chunk").map((event:any)=>event.text).join("");
+    expect(output).toBe(body);expect(logs.join("\n")).not.toContain("HISTORY_END_SENTINEL");
+  });
+
   it("keeps interleaved parent controls and child MCP status under their declared owners", async () => {
     const { adapter, events } = lifecycleAdapter();
     adapter.commands = [];

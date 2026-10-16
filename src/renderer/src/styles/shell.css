@@ -308,3 +308,15 @@
 .remote-mobile-download > div { flex: 1; min-width: 0; }
 .remote-mobile-download img { flex-shrink: 0; border-radius: 12px; }
 @media (max-width: 640px) { .remote-mobile-download { flex-wrap: wrap; } }
+
+.native-run-list{display:grid;gap:8px;margin-bottom:16px;min-width:0}
+.native-run-item{border:1px solid var(--border);border-radius:8px;padding:10px 12px;min-width:0}
+.native-run-item summary{display:flex;align-items:baseline;gap:12px;cursor:pointer;list-style:none}
+.native-run-title{flex:1;min-width:0;display:grid;gap:4px;overflow-wrap:anywhere}
+.native-run-title strong{font-size:13px}
+.native-run-title small{color:var(--muted);font-size:12px}
+.native-run-item summary>span{color:var(--muted);font-size:12px;flex-shrink:0}
+.native-run-item summary::before{content:"›";color:var(--muted);transition:transform .15s}
+.native-run-item[open] summary::before{transform:rotate(90deg)}
+.native-run-note{margin:8px 0;color:var(--muted);font-size:var(--text-caption);line-height:1.5;overflow-wrap:anywhere}
+.native-run-item .button-row{flex-wrap:wrap}

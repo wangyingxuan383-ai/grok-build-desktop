@@ -18,6 +18,10 @@ it("configuration switches do not raise completion notices; only live turns do",
  await emit({type:"status",sessionId:"s",status:"working",text:"正在切换推理强度…"});
  await emit({type:"status",sessionId:"s",status:"idle",text:"推理强度已更新"});
  expect(show).not.toHaveBeenCalled();expect(add).not.toHaveBeenCalled();expect(markUnread).not.toHaveBeenCalled();
+ await emit({type:"turn-started",sessionId:"s",presentation:{turnId:"native-control",ordinal:0,startedAt:"now",origin:"native-control"}});
+ await emit({type:"status",sessionId:"s",status:"working"});
+ await emit({type:"status",sessionId:"s",status:"idle"});
+ expect(show).not.toHaveBeenCalled();expect(add).not.toHaveBeenCalled();
  await emit({type:"turn-started",sessionId:"s",presentation:{turnId:"t",ordinal:0,startedAt:"now"}});
  await emit({type:"status",sessionId:"s",status:"working"});
  await emit({type:"status",sessionId:"s",status:"idle"});

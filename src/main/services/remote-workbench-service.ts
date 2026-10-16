@@ -11,6 +11,7 @@ import { RemoteFiles } from "./remote-files";
 interface Asset {owner:string;path?:string;html?:string;mimeType:string;name:string;expires:number;sessionId:string}
 const text=z.string().min(1).max(65536),id=z.string().min(1).max(256),flag=z.boolean();
 const dataSchemas:Record<RemoteMutation["kind"],z.ZodType>={
+ "native-run.control":z.object({sessionId:id,kind:z.enum(["goal","workflow"]),revision:z.string().regex(/^[a-f0-9]{64}$/),action:z.enum(["pause","resume","stop"])}).strict(),
  "image.create":z.object({}).strict(),"image.rename":z.object({title:z.string().min(1).max(80)}).strict(),
  "image.submit":z.object({request:z.object({kind:z.enum(["image","video"]),prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),route:z.enum(["cli","provider"]).optional(),modelId:id.optional(),providerId:id.optional(),duration:z.number().optional(),resolution:z.enum(["480p","720p"]).optional()}).strict(),attachmentIds:z.array(id).max(12).optional(),referenceSources:z.array(z.string().max(4096)).max(12).optional()}).strict(),
  "code.image.submit":z.object({prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),modelId:id.optional(),attachmentIds:z.array(id).max(12).optional()}).strict(),"image.cancel":z.object({}).strict(),"image.delete":z.object({deleteFiles:flag.optional()}).strict(),"image.record.delete":z.object({jobId:id,deleteFiles:flag.optional()}).strict(),
@@ -33,8 +34,8 @@ export class RemoteWorkbenchService {
   if(kind==="notifications")return {serverTime:Date.now(),items:(await this.controller.listInbox()).filter(item=>!item.read).slice(0,50)};
   if(kind==="push-status")return this.controller.remotePushStatus(owner);
   if(kind==="overview"){
-   const keys=["tasks","automations","runs","inbox","images","accounts"];
-   const results=await Promise.allSettled([this.controller.listBackgroundTasks(),this.controller.listAutomations(),this.controller.listAutomationRuns(),this.controller.listInbox(),this.controller.listImageWorkspace(),this.controller.listAccounts()]);
+   const keys=["tasks","automations","runs","inbox","images","accounts","nativeRuns"];
+   const results=await Promise.allSettled([this.controller.listBackgroundTasks(),this.controller.listAutomations(),this.controller.listAutomationRuns(),this.controller.listInbox(),this.controller.listImageWorkspace(),this.controller.listAccounts(),this.controller.listNativeRuns?.() ?? []]);
    const output:Record<string,unknown>={serverTime:Date.now(),errors:[]};results.forEach((result,index)=>{if(result.status==="fulfilled")output[keys[index]!]=result.value;else(output.errors as string[]).push(`${keys[index]}: ${result.reason instanceof Error?result.reason.message:String(result.reason)}`)});return output;
   }
   if(kind==="automation"){const target=params.get("target")??"";const row=(await this.controller.listAutomations()).find(t=>t.id===target);if(!row)throw Error("定时任务已不存在");return {task:row,prompt:await this.controller.readAutomationInstructions(target),runs:await this.controller.listAutomationRuns(target)}}
@@ -82,7 +83,7 @@ export class RemoteWorkbenchService {
   if(asset.html&&suffix!=="file"){const original=new URL(asset.html);if(suffix&&suffix!=="index.html")original.pathname+="/assets/"+suffix.replace(/^assets\//,"");const response=await this.controller.htmlPreviewResponse(original.href);const mimeType=response.headers.get("content-type")??"text/html";const body=mimeType.startsWith("text/html")?Buffer.from((await response.text()).replaceAll(new URL(asset.html).href+"/assets/",`/v1/preview/${ticket}/assets/`)):new Uint8Array(await response.arrayBuffer());return {body,mimeType,status:response.status,headers:{"Content-Security-Policy":"sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; form-action 'none'; object-src 'none'"}}}
   if(!asset.path)throw Error("文件已不可用");const info=await stat(asset.path);if(info.size>50*1024*1024)throw Error("此文件超过手机预览上限，可在电脑查看");const {readFile}=await import("node:fs/promises");return {body:await readFile(asset.path),mimeType:asset.mimeType};
  }
- async mutate(mutation:RemoteMutation,owner:string,operationId:string):Promise<{state:"completed";resultSessionId?:string;message?:string}>{
+ async mutate(mutation:RemoteMutation,owner:string,operationId:string):Promise<{state:"completed"|"failed"|"unknown";resultSessionId?:string;message?:string}>{
   const parsed=dataSchemas[mutation.kind].safeParse(mutation.data??{});if(!parsed.success)throw Error("操作参数无效："+parsed.error.issues.map(i=>i.path.join(".")+" "+i.message).join("；"));
   const data=parsed.data as Record<string,unknown>,target=mutation.target??"",c=this.controller;let resultSessionId:string|undefined;
   switch(mutation.kind){
@@ -103,6 +104,7 @@ export class RemoteWorkbenchService {
    case "inbox.read":await c.markInboxRead(target,data.read===true);break;
    case "computer.permission":await c.respondComputerAppPermission(target,data.decision as "once"|"always"|"deny");break;
    case "computer.risk":await c.respondComputerRisk(target,data.approved===true);break;
+   case "native-run.control": { const receipt=await c.controlNativeRun({sessionId:String(data.sessionId),kind:data.kind as "goal"|"workflow",runId:target,revision:String(data.revision),action:data.action as "pause"|"resume"|"stop",operationId}); return {state:receipt.state,message:receipt.message}; }
    case "task.cancel":await c.killBackgroundTask(target);break;
    case "account.switch":await c.switchAccount(target);break;
    case "notification.register":await c.registerRemotePush(owner,String(data.token),data.deliveryVersion===2?2:1);break;

@@ -33,6 +33,8 @@ const api = {
   getAutomationGlobalPolicy: async () => ({ defaultProfile: automation.profile, maxConcurrentRuns: 2, confirmationTimeoutMinutes: 30, inactivityTimeoutMinutes: 0, notifyOnSuccess: true, notifyOnFailure: true }),
   listBackgroundTasks: async () => [], listInbox: async () => [], listProviders: async () => [], listExecutionProfiles: async () => [],
   onAutomationEvent: () => noop,
+  onEvent: () => noop, listNativeRuns: async () => [],
+  readAutomationInstructions: async () => "Fixture instructions",
   updateAutomation: async (_id: string, input: unknown) => { savedAutomation = input; return [automation]; },
   getDraft: (key: string) => new Promise<ComposerDraftState | null>((resolve) => waiting.push({ key, resolve })),
   setDraft: async () => undefined,

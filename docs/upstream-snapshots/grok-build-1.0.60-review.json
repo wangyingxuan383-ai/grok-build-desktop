@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-17",
+  "runtimeVersion": "1.0.60",
+  "platform": "win32-x64",
+  "sha256": "cce3a54d95128ca57d78ecbf0accde92dd08a185a2552e267700a98c32f4198f",
+  "evidence": {
+    "initialize": true,
+    "protocolVersion": 1,
+    "localProviderNativeControls": [
+      {
+        "kind": "goal",
+        "action": "pause",
+        "state": "completed"
+      },
+      {
+        "kind": "goal",
+        "action": "resume",
+        "state": "completed"
+      },
+      {
+        "kind": "goal",
+        "action": "stop",
+        "state": "completed"
+      },
+      {
+        "kind": "workflow",
+        "action": "pause",
+        "state": "completed"
+      },
+      {
+        "kind": "workflow",
+        "action": "resume",
+        "state": "completed"
+      },
+      {
+        "kind": "workflow",
+        "action": "stop",
+        "state": "completed"
+      },
+      {
+        "kind": "workflow",
+        "action": "stop",
+        "state": "completed"
+      }
+    ],
+    "independentWorkflowIsolation": true,
+    "exclusiveConnection": true
+  },
+  "scope": "Actual CLI and Desktop adapter with an isolated loopback-only provider; no account model or billing verification.",
+  "notVerified": [
+    "physical Android interaction",
+    "authenticated official inference",
+    "Computer Use isolation",
+    "large live session model behavior"
+  ]
+}

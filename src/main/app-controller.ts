@@ -228,6 +228,8 @@ import { NotificationInboxService } from "./services/notification-inbox";
 import {readPullRequest} from "./services/pull-request-service";
 import {DesktopNotifications,parseNotificationUrl,type NotificationTarget} from "./services/desktop-notifications";
 import { CliCapabilityService } from "./services/cli-capability-service";
+import { NativeRunService } from "./services/native-run-service";
+import type { NativeRunControlInput } from "../shared/native-runs";
 import { WorkspaceTreeService } from "./services/workspace-tree-service";
 import { EditorService } from "./services/editor-service";
 import { GitService } from "./services/git-service";
@@ -316,6 +318,7 @@ export class AppController {
   private readonly automationSessionReservations = new Set<string>();
   private readonly inbox: NotificationInboxService;
   private readonly cliCapabilities: CliCapabilityService;
+  private readonly nativeRuns: NativeRunService;
   private readonly workspaceTree = new WorkspaceTreeService();
   private readonly editor = new EditorService();
   private readonly git: GitService;
@@ -517,6 +520,20 @@ export class AppController {
       (state) => this.window?.webContents.send("grok:login", state),
     );
     this.cliCapabilities = new CliCapabilityService(() => this.settingsStore.get(), () => this.auth.activeApiKey());
+    this.nativeRuns = new NativeRunService({
+      connection: (id) => {
+        if (!this.processes.snapshot(id)) return undefined;
+        const adapter = this.processes.get(id);
+        return { owner: adapter, verified: adapter.nativeRunControlVerified, commands: adapter.commands.map(c => c.name.replace(/^\//, "")), working: adapter.working, needsUser: adapter.needsUser,
+          queued: adapter.queuedPrompts().length > 0, activeTurnId: adapter.activeTurnId, controlBusy: adapter.nativeRunControlBusy,
+          reserve: () => adapter.reserveNativeRunControl(), cancel: () => adapter.cancel(),
+          prompt: (text, performsWork) => adapter.prompt(text, [], null, { nativeControl: true, suppressCompletion: !performsWork }),
+        };
+      },
+      saved: () => this.sessionRuntime.nativeRunSummaries(),
+      save: async (id, nativeRuns) => { await this.sessionRuntime.patch(id, { nativeRuns }); },
+      onControlStart: (input) => { if (input.action !== "resume") this.runningSessions.delete(input.sessionId); },
+    });
     this.updater = new CliUpdateService(
       userDataPath,
       () => this.settingsStore.get(),
@@ -1367,7 +1384,7 @@ export class AppController {
   private async remoteRuntime(id:string):Promise<import("../shared/remote").RemoteRuntime>{
     const preferences=await this.sessionRuntime.get(id);const live=this.processes.snapshot(id);let adapter:ReturnType<GrokProcessManager["get"]>|undefined;try{adapter=this.processes.get(id)}catch{}
     const config={modelId:live?.modelId??preferences?.modelId,providerId:preferences?.providerId,effort:live?.effort??preferences?.effort??"",mode:live?.mode??preferences?.mode??"agent"};
-    const queue=adapter?.queuedPrompts().filter(row=>row.state==="queued")??[];const busy=Boolean(adapter?.working||adapter?.needsUser||queue.length||this.remoteConfigFlights.has(id));
+    const queue=adapter?.queuedPrompts().filter(row=>row.state==="queued")??[];const busy=Boolean(adapter?.working||adapter?.needsUser||adapter?.nativeRunControlBusy||queue.length||this.remoteConfigFlights.has(id));
     return {...config,revision:createHash("sha256").update(JSON.stringify(config)).digest("hex"),models:adapter?.models??[],mutable:!busy,reason:busy?"本轮运行、待确认或队列尚未结束，已提交任务保持原配置":undefined,interjectSupported:adapter?.runtimeHandshake?.extensions.includes("x.ai/interject")===true,commands:adapter?.commands??[]};
   }
   private remoteListFlight?:Promise<RemoteSession[]>;
@@ -1402,7 +1419,7 @@ export class AppController {
     const availableProviders=await this.listProviders().catch(error=>{notices.push("Provider 目录暂不可用："+(error instanceof Error?error.message:String(error)));return []});
     const imageModels=availableProviders.filter(p=>p.enabled!==false).flatMap(p=>p.models.filter(m=>m.enabled!==false).map(m=>({modelId:m.id,providerId:p.id,name:`${p.name} · ${m.name||m.model}`,image:Object.values(m.capabilities?.protocols??{}).some(value=>value?.imageGeneration===true),video:Object.values(m.capabilities?.protocols??{}).some(value=>value?.videoGeneration===true)})));
     const modelId=models.some(model=>model.modelId===settings.defaultModel)?settings.defaultModel:models.find(model=>model.defaultForCli&&!model.providerId)?.modelId??settings.defaultModel;
-    return {capabilities:["session.create","session.rename","session.archive","queue.remove","session.configure","session.compact","session.fork","session.delete","queue.edit","queue.move","queue.clear","workbench","attachments.upload"],workspaces,models,imageModels,modelCatalog:{refreshing:Boolean(this.modelCatalogRefreshFlight||this.modelCatalogProbe),checkedAt:this.modelCatalogProbedAt||undefined,reason:this.modelCatalogError},...(notices.length?{notices}:{}),defaults:{modelId,effort:settings.defaultEffort,mode:settings.defaultMode}};
+    return {capabilities:["native-runs","session.create","session.rename","session.archive","queue.remove","session.configure","session.compact","session.fork","session.delete","queue.edit","queue.move","queue.clear","workbench","attachments.upload"],workspaces,models,imageModels,modelCatalog:{refreshing:Boolean(this.modelCatalogRefreshFlight||this.modelCatalogProbe),checkedAt:this.modelCatalogProbedAt||undefined,reason:this.modelCatalogError},...(notices.length?{notices}:{}),defaults:{modelId,effort:settings.defaultEffort,mode:settings.defaultMode}};
   }
   async remoteSessions():Promise<RemoteSession[]> {
     if(this.remoteListCache&&Date.now()<this.remoteListExpires)return this.remoteListCache.map(row=>({...row,status:this.processes.liveStatuses().get(row.id)||row.status}));
@@ -1444,7 +1461,7 @@ export class AppController {
     const pending=[...remotePendingInteractions(events),...this.computer.pendingForSession(id)];
     return {session,events:visible,totalEvents:events.length,before:start||undefined,truncated:start>0,pending,runtime:await this.remoteRuntime(id)};
   }
-  private async performRemoteCommand(command:RemoteCommand,deviceId?:string):Promise<{state:"queued"|"completed";message?:string;resultSessionId?:string}> {
+  private async performRemoteCommand(command:RemoteCommand,deviceId?:string):Promise<{state:"queued"|"completed"|"failed"|"unknown";message?:string;resultSessionId?:string}> {
     if(command.action==="workbench"){if(!deviceId)throw Error("设备身份无效");return this.remoteTools().mutate(command.mutation!,deviceId,command.operationId)}
     if(command.action==="create"){
       const options=await this.remoteOptions();const workspace=options.workspaces.find(w=>w.id===command.workspaceId);if(!workspace)throw Error("项目已不可用，请刷新项目列表");
@@ -1632,6 +1649,7 @@ export class AppController {
       }
       this.finishProjectionReplay(sessionId);
       this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
+      await this.processes.get(sessionId).refreshNativeGoalState?.().catch(() => undefined);
       emitHydration("ready");
       void this.recordSessionCapabilities(sessionId, ["acp.initialize"]).catch((error) => this.log.log(error));
       return { ...result, hydration: "ready" };
@@ -1708,6 +1726,7 @@ export class AppController {
   }
 
   private async cleanupSessionState(sessionId: string, forgetTokens = true): Promise<void> {
+    await this.nativeRuns?.forget(sessionId);
     await this.uiState.clearDraft(sessionId);
     this.sessionHydrationGenerations.delete(sessionId);
     await this.profiles.removeAssignment(sessionId);
@@ -3390,6 +3409,9 @@ export class AppController {
     for (const task of await this.automations.list()) output.push({ id: `automation:${task.id}`, kind: "automation", title: task.name, status: task.enabled ? "queued" : "cancelled", updatedAt: task.updatedAt, detail: task.registrationStatus });
     return output;
   }
+
+  listNativeRuns(sessionId?: string) { return this.nativeRuns.list(sessionId); }
+  controlNativeRun(input: NativeRunControlInput) { return this.nativeRuns.control(input); }
   async killBackgroundTask(id: string): Promise<void> { if (/(?:^|:)unidentified-/.test(id)) throw new Error("CLI 未提供可取消的原生任务 ID"); const separator = id.indexOf(":"); if (separator < 1) throw new Error("后台任务标识无效"); await this.processes.killBackgroundTask(id.slice(0, separator), id.slice(separator + 1)); }
   async listInbox(): Promise<NotificationInboxItem[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
@@ -3912,6 +3934,7 @@ export class AppController {
 
   private async handleOrderedEvent(event: ChatEvent): Promise<void> {
     const replayingAtEntry=Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId));
+    this.nativeRuns?.record(event, replayingAtEntry);
     this.nativeAgentCapabilities.record(event, { replaying: Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId)) });
     if (!replayingAtEntry && event.type === "session-title") {
       await this.catalog.syncOfficialTitle(event.sessionId, event.title, event.manual);
@@ -4065,7 +4088,7 @@ export class AppController {
     if (event.type === "status" && event.status === "error" && event.text) this.captureQuotaSignal(event.text, this.processes.snapshot(event.sessionId)?.modelId);
     // Only a live prompt turn counts as "work finished". Model/effort/mode switches and
     // session restore also toggle working→idle and must not raise completion notices.
-    if (!replayingAtEntry && event.type === "turn-started") this.runningSessions.add(event.sessionId);
+    if (!replayingAtEntry && event.type === "turn-started" && event.presentation.origin !== "native-control") this.runningSessions.add(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && this.runningSessions.delete(event.sessionId)) {
       if(this.visibleConversationId!==event.sessionId||!this.window?.isFocused())await this.catalog.markUnread(event.sessionId, event.status === "error");
       await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "会话失败" : "会话已完成", detail: event.text, sessionId: event.sessionId });

@@ -1,10 +1,13 @@
 # Changelog
 
-## Unreleased — CLI compatibility and native tasks
+## 0.12.1 candidate — Grok Remote 0.4.1
 
 - Preserve CLI-declared model context capacity in new-task catalogs and resume fallbacks, without inventing missing limits.
 - Display current context occupancy independently of token usage; share event-driven reads and ignore responses from older session/configuration generations.
 - Treat missing legacy Memory flags as unknown support and bind optional capability evidence to the executable that produced it.
+- Show existing native Goal/Workflow tasks in the current Desktop and phone task areas, with collapsed summaries, separate Token/Agent budgets and read-only restored state.
+- Bind native control to full task IDs, live revisions and a verified CLI identity. Wait for actual native confirmation, coalesce retries and keep control acknowledgements out of completion notifications.
+- Verify native pause/resume/end against the actual Windows 1.0.60 binary with an isolated loopback provider; keep unverified binaries read-only. Physical Android acceptance and public release remain separate.
 
 ## 0.12.0 — Grok Remote 0.4.0
 

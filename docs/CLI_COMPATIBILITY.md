@@ -20,6 +20,8 @@ Optional capability probes are cached by canonical executable path, normalized v
 
 Native tools own subagent lifecycle. Child usage is displayed separately while parent inclusion is uncertain. Desktop history inspection does not launch a CLI or reconcile pending interactions.
 
+On October 17, native Goal pause/resume/clear and Workflow pause/resume/stop passed against the actual Windows 1.0.60 binary through the Desktop adapter, using an isolated loopback provider. Two identically titled workflows retained independent full IDs and controls. Only this recorded executable identity enables controls; other identities retain known state read-only. Desktop uses an exclusive CLI connection for the verified identity, and never adopts independent terminal sessions. See the [redacted behavior record](upstream-snapshots/grok-build-1.0.60-review.json). This evidence does not certify authenticated official-model execution or physical Android behavior.
+
 ## Revalidation
 
 Use the update center to preview, verify or roll back a specific version. CLI replacement invalidates identity-bound caches. Never infer successful GUI operations from tool selection, replayed messages or display titles.
