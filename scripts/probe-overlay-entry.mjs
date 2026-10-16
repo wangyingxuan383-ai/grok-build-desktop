@@ -2,30 +2,20 @@ const endpoint = process.argv[2];
 const entrySelector = process.argv[3];
 if (!endpoint || !entrySelector) throw new Error("CDP endpoint and overlay entry selector are required");
 const panelSelector = ({ ".task-entry": ".task-center", ".extensions-entry": ".extensions-panel", ".media-entry": ".media-studio" })[entrySelector] || ".control-panel";
-const expandProjectTools = {
-  act: `(() => { if (!document.querySelector('.project-tools nav')) document.querySelector('.project-tools-heading')?.click(); return true; })()`,
-  ready: `Boolean(document.querySelector('.project-tools nav'))`,
-};
 const mappedEntries = {
-  // These entries live in the collapsed 开发工具 section, so both the existence
-  // check and the click have to expand it first. There is no .sidebar-primary-nav
-  // in the renderer; only an orphaned rule for it survives in styles.css.
-  // Expanding 开发工具 is a React state change, so it gets its own evaluation
-  // and its own wait. Folding it into the retried `exists` check would re-click
-  // the heading on every attempt and toggle the section shut again.
+  // Current public navigation: sidebar pages and the Radix workspace menu.
   ".task-entry": {
-    prepare: expandProjectTools,
-    exists: `Boolean([...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '任务'))`,
-    click: `(() => { [...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '任务')?.click(); return true; })()`,
+    exists: `Boolean([...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '定时任务'))`,
+    click: `(() => { [...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '定时任务')?.click(); return true; })()`,
   },
   ".extensions-entry": {
-    prepare: expandProjectTools,
-    exists: `Boolean([...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '扩展'))`,
-    click: `(() => { [...document.querySelectorAll('.project-tools nav button')].find(node => node.textContent?.trim() === '扩展')?.click(); return true; })()`,
+    exists: `Boolean([...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '技能与扩展'))`,
+    click: `(() => { [...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '技能与扩展')?.click(); return true; })()`,
   },
   ".media-entry": {
-    exists: `Boolean([...document.querySelectorAll('.topbar-more button')].find(node => node.textContent?.trim() === '创作'))`,
-    click: `(() => { const menu = document.querySelector('.topbar-more'); if (menu) menu.open = true; [...(menu?.querySelectorAll('button') ?? [])].find(node => node.textContent?.trim() === '创作')?.click(); return true; })()`,
+    prepare: {act:`(() => {const trigger=document.querySelector('[aria-label="更多工作区操作"]');trigger?.focus();trigger?.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));return true;})()`,ready:`Boolean(document.querySelector('[role="menu"]'))`},
+    exists: `Boolean([...document.querySelectorAll('[role="menuitem"]')].find(node => node.textContent?.trim() === '创作'))`,
+    click: `(() => { [...document.querySelectorAll('[role="menuitem"]')].find(node => node.textContent?.trim() === '创作')?.click(); return true; })()`,
   },
 };
 
@@ -78,20 +68,23 @@ try {
   }
   await waitFor(() => evaluate(mapped?.exists ?? `Boolean(document.querySelector(${JSON.stringify(entrySelector)}))`), `${entrySelector} entry did not render`);
   await evaluate(mapped?.click ?? `document.querySelector(${JSON.stringify(entrySelector)})?.click(); true`);
-  await waitFor(() => evaluate(`Boolean(document.querySelector('#overlay-root ${panelSelector}'))`), `${entrySelector} panel did not open in overlay root`);
-  await waitFor(() => evaluate("Boolean(document.activeElement?.closest?.('#overlay-root .control-panel'))"), `${entrySelector} panel did not establish focus`);
+  await waitFor(() => evaluate(`Boolean(document.querySelector('${panelSelector}'))`), `${entrySelector} panel did not open`);
+  const isPage = await evaluate(`Boolean(document.querySelector('${panelSelector}')?.closest('.workbench-page-surface'))`);
+  // Pages keep normal application navigation; only modal dialogs require a focus trap.
+  if (!isPage) await waitFor(() => evaluate(`Boolean(document.activeElement?.closest?.('${panelSelector}'))`), `${entrySelector} panel did not establish focus`);
   const state = await evaluate(`(() => {
     const root = document.querySelector('#overlay-root');
-    const panel = root?.querySelector('.control-panel');
+    const panel = document.querySelector('${panelSelector}');
     const backdrop = root?.querySelector('.modal-backdrop');
-    if (!panel || !backdrop) return null;
+    if (!panel) return null;
     const rect = panel.getBoundingClientRect();
-    return { parent: panel.closest('#overlay-root') === root, position: getComputedStyle(backdrop).position, focused: Boolean(document.activeElement?.closest?.('#overlay-root .control-panel')), left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight };
+    const page = Boolean(panel.closest('.workbench-page-surface'));
+    return { page, parent: page || panel.closest('#overlay-root') === root, position: backdrop ? getComputedStyle(backdrop).position : null, focused: Boolean(document.activeElement?.closest?.('${panelSelector}')), left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight };
   })()`);
-  if (!state?.parent || state.position !== "fixed" || !state.focused || state.left < 0 || state.top < 0 || state.right > state.width || state.bottom > state.height) throw new Error(`${entrySelector} overlay is invalid: ${JSON.stringify(state)}`);
+  if (!state?.parent || !state.page && (state.position !== "fixed" || !state.focused) || state.left < 0 || state.top < 0 || state.right > state.width || state.bottom > state.height) throw new Error(`${entrySelector} panel is invalid: ${JSON.stringify(state)}`);
   await evaluate(`(() => { const target = document.activeElement || window; target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })); target.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true })); return true; })()`);
-  await waitFor(() => evaluate("!document.querySelector('#overlay-root .control-panel')"), `${entrySelector} panel did not close with Escape`);
-  console.log(JSON.stringify({ ok: true, entrySelector, overlayRoot: true, fixed: true, focused: true, inViewport: true, escape: true }));
+  await waitFor(() => evaluate(`!document.querySelector('${panelSelector}')`), `${entrySelector} panel did not close with Escape`);
+  console.log(JSON.stringify({ ok: true, entrySelector, presentation:state.page?"page":"overlay", focused: state.focused, inViewport: true, escape: true }));
 } finally {
   socket.close();
 }

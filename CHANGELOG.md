@@ -10,6 +10,7 @@
 - Verify native pause/resume/end against the actual Windows 1.0.60 binary with an isolated loopback provider; keep unverified binaries read-only. Physical Android acceptance and public release remain separate.
 - Open native-task conversation history without reconnecting the CLI or resuming its target, and discard updates from replaced connections.
 - Exclude dependency tests, examples, coverage reports and source maps from Windows inspection packages.
+- Rewrite Android native diagnostic source paths during compilation and reject local build paths in APK content checks.
 
 ## 0.12.0 — Grok Remote 0.4.0
 

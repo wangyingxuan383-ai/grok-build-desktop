@@ -30,6 +30,7 @@
       "./plugins/with-release-signing.cjs",
       "./plugins/with-notices.cjs",
       "./plugins/with-native-dependency-check.cjs",
+      "./plugins/with-native-path-privacy.cjs",
       "./plugins/with-runtime-host.cjs",
       [
         "expo-image-picker",
