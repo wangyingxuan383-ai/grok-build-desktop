@@ -4,7 +4,10 @@ const { withProjectBuildGradle } = require("@expo/config-plugins");
 // This maps diagnostic paths, without changing source or include resolution.
 module.exports = config => withProjectBuildGradle(config, mod => {
   const marker = "// Grok Remote native path privacy (CMake)";
-  if (!mod.modResults.contents.includes(marker)) mod.modResults.contents += `
+  if (mod.modResults.contents.includes(marker)) return mod;
+  const beforeAppEvaluation = 'apply plugin: "com.facebook.react.rootproject"';
+  if (!mod.modResults.contents.includes(beforeAppEvaluation)) throw Error("Native path privacy requires the React Native root plugin entry");
+  const block = `
 ${marker}
 def grokSourceRoot = rootProject.projectDir.parentFile.parentFile.parentFile
 def grokNativeRoots = [gradle.gradleUserHomeDir, grokSourceRoot, new File(grokSourceRoot, "node_modules").toPath().toRealPath().parent.toFile()]
@@ -24,5 +27,7 @@ subprojects { child ->
   }
 }
 `;
+  // The React root plugin may evaluate :app eagerly. Register finalization first.
+  mod.modResults.contents = mod.modResults.contents.replace(beforeAppEvaluation, () => block + "\n" + beforeAppEvaluation);
   return mod;
 });
