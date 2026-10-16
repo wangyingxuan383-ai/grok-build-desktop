@@ -84,7 +84,12 @@ app.whenReady().then(async()=>{
     assert(await run('document.body.textContent.includes("Computer 操作等待确认") && !document.body.textContent.includes("Other secret")'),'confirmation leaked across conversations');
     await run('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="允许本次").click()');await wait();
     assert(await run('fixture.confirmationCalls()[0].id==="pending:mine" && fixture.confirmationCalls()[0].approved && !document.body.textContent.includes("Delete fixture")'),'confirmation response did not resolve shared inbox ID');
-    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation payload/timezone/history/bound workspace' : 'REGRESSION_DOM_PASSED all fixture groups including automation');
+    await run('fixture.nativeTasks()');await wait();
+    await run('Array.from(document.querySelectorAll(".task-tabs button")).find(b=>b.textContent==="队列与后台").click()');await wait();
+    await run('document.querySelector(".native-run-item summary").click()');await wait();
+    await run('Array.from(document.querySelectorAll(".native-run-item button")).find(b=>b.textContent==="查看会话").click()');await wait();
+    assert(await run('fixture.nativeOpen().sessionId==="native-session" && fixture.nativeOpen().previewOnly===true'),'native task view must request history-only navigation');
+    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation and native history-only navigation' : 'REGRESSION_DOM_PASSED all fixture groups including native history-only navigation');
     app.exit(0);
   }catch(error){console.error(error.stack);app.exit(1)}
 });`;

@@ -19,7 +19,7 @@ if (!existsSync(asarPath) || statSync(asarPath).size < 1_000_000) throw new Erro
 const files = new Set(listPackage(asarPath).map((entry) => entry.replaceAll("\\", "/").replace(/^\//, "")));
 const requiredAsarEntries = ["package.json", "out/main/index.js", "out/main/token-activity-worker.js", "out/preload/index.cjs", "out/renderer/index.html"];
 for (const entry of requiredAsarEntries) if (!files.has(entry)) throw new Error(`Application ASAR is missing: ${entry}`);
-for (const entry of files) if (/^node_modules\/.*(?:\.map$|\.test\.[^/]+$|\/(?:test|tests|__tests__|fixtures)\/)/i.test(entry)) throw new Error(`Dependency debug/test material must not be packaged: ${entry}`);
+for (const entry of files) if (/^node_modules\/.*(?:\.(?:map|log)$|\.test\.[^/]+$|\/(?:test|tests|__tests__|fixtures|coverage|example|examples)\/)/i.test(entry)) throw new Error(`Dependency debug/test material must not be packaged: ${entry}`);
 for (const entry of files) if (/^node_modules\/node-pty\/(?:build\/|.*\.pdb$)/i.test(entry)) throw new Error(`Native build intermediate must not be packaged: ${entry}`);
 for (const name of ["conpty.node", "conpty_console_list.node"]) {
   const path = join(resourcesRoot, "app.asar.unpacked", "node_modules", "node-pty", "prebuilds", "win32-x64", name);

@@ -602,7 +602,7 @@ export default function App(): React.JSX.Element {
     window.setTimeout(focusComposer, 0);
   };
 
-  const openSession = async (session: SessionSummary): Promise<void> => {
+  const openSession = async (session: SessionSummary, previewOnly = false): Promise<void> => {
     const requestId = ++openRequestRef.current;
     setOperationBusy(true);
     setActiveCodexId(""); setCodexDetail(null);
@@ -618,6 +618,12 @@ export default function App(): React.JSX.Element {
       if (preview?.projection) store.handleEvent({ type: "conversation-projection-restore", sessionId: session.id, projection: preview.projection });
       if (preview?.presentations.length) store.handleEvent({ type: "turn-presentations-restore", sessionId: session.id, presentations: preview.presentations });
       setOperationBusy(false);
+      if (previewOnly) {
+        setComposerNotice("已显示会话历史；查看不会恢复原生任务。");
+        window.dispatchEvent(new Event("grok:reveal-current"));
+        settleConversationBottom(session.id);
+        return;
+      }
       const result = await window.grokDesktop.openSession(session.cwd, session.id);
       if (requestId !== openRequestRef.current) return;
       if (result.hydration === "offline") setComposerNotice(`已显示本地历史；CLI 暂未连接：${result.message || "可稍后重试"}`);
@@ -629,7 +635,7 @@ export default function App(): React.JSX.Element {
     finally { if (requestId === openRequestRef.current) setOperationBusy(false); }
   };
 
-  const openConversationTarget = async (target: { cwd: string; sessionId: string }): Promise<void> => {
+  const openConversationTarget = async (target: { cwd: string; sessionId: string; previewOnly?: boolean }): Promise<void> => {
     const navigationRequest = ++openRequestRef.current;
     if (offlineFixtureRef.current) {
       const session = useAppStore.getState().sessions.find((value) => value.id === target.sessionId);
@@ -653,7 +659,7 @@ export default function App(): React.JSX.Element {
     setWorkbenchView("chat");
     setRightTool(null);
     setPanel(null);
-    await openSession(session);
+    await openSession(session, target.previewOnly);
     window.requestAnimationFrame(() => { window.dispatchEvent(new Event("resize")); focusComposer(); });
   };
   openConversationTargetRef.current = openConversationTarget;
@@ -1067,7 +1073,7 @@ export default function App(): React.JSX.Element {
         {panel === "extensions" && <Suspense fallback={<p role="status">正在加载扩展中心…</p>}><LazyExtensionsPanel confirmAction={askConfirm} setError={store.setError} onUseSkill={(command) => { setPanel(null); setWorkbenchView("chat"); setComposer(command); focusComposer(); }} onClose={() => { setPanel(null); focusComposer(); }} /></Suspense>}
         {panel === "diagnostics" && <LazyDiagnosticsPanel confirmAction={askConfirm} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "onboarding" && store.onboarding && <LazyOnboardingPanel state={store.onboarding} onState={store.setOnboarding} onRemote={()=>{try{localStorage.setItem("grok.settings-category.once","remote")}catch{}setPanel("settings")}} onClose={() => { setReturnToOnboarding(false); setPanel(null); focusComposer(); }} onAccounts={() => { setReturnToOnboarding(true); setPanel("accounts"); }} onWorkspace={() => void window.grokDesktop.chooseWorkspace().then(async (cwd) => { if (cwd) { store.setSettings(await window.grokDesktop.getSettings()); store.setSessions(await window.grokDesktop.listSessions(cwd)); } })} />}
-        {panel === "tasks" && <LazyTaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task) => { if (!task.sessionId) return; void openConversationTarget({ cwd: task.workspace, sessionId: task.sessionId }).catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
+        {panel === "tasks" && <LazyTaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task, previewOnly) => { if (!task.sessionId) return; void openConversationTarget({ cwd: task.workspace, sessionId: task.sessionId, previewOnly }).catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "providers" && <LazyProviderManagerDialog confirmAction={askConfirm} onError={store.setError} onSettingsChanged={() => void window.grokDesktop.getSettings().then(store.setSettings)} onClose={() => setPanel(null)}/>}
         {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history", "providers", "feedback"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onProviders={() => setPanel("providers")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
       </Suspense></div></PagePresentation.Provider>}

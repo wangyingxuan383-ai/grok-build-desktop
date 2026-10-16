@@ -26,6 +26,7 @@ const updateCalls: any[] = [];
 let mcpCalls = 0;
 let mcpResolve: (() => void) | undefined;
 let savedAutomation: any;
+let nativeOpen: unknown;
 let confirmationCalls: unknown[] = [];
 const automation: any = { id: "task", name: "Fixture schedule", workspace: "fixture", schedule: { kind: "once", at: "2030-01-01T01:30:00.000Z" }, profile: { modelId: "fixture-model", effort: "low", mode: "agent", permissionPolicy: "agent", computerEnabled: false }, enabled: true, wakeToRun: false, notify: false, missedRunPolicy: "run-once", contextPolicy: "fresh", timeZone: "Asia/Shanghai", revision: 3, sessionRevision: 2, frozenExecutionProfile: { id: "private-runtime-profile" }, scheduleAnchor: "2026-09-18T00:00:00Z", registrationStatus: "registered", promptPresent: true, createdAt: "now", updatedAt: "now" };
 const api = {
@@ -34,6 +35,7 @@ const api = {
   listBackgroundTasks: async () => [], listInbox: async () => [], listProviders: async () => [], listExecutionProfiles: async () => [],
   onAutomationEvent: () => noop,
   onEvent: () => noop, listNativeRuns: async () => [],
+  getSessionRuntimePreferences: async () => ({cwd:"fixture"}),
   readAutomationInstructions: async () => "Fixture instructions",
   updateAutomation: async (_id: string, input: unknown) => { savedAutomation = input; return [automation]; },
   getDraft: (key: string) => new Promise<ComposerDraftState | null>((resolve) => waiting.push({ key, resolve })),
@@ -103,6 +105,11 @@ Object.assign(window, { fixture: {
   commands:()=>root.render(<CommandSearch actions={[{id:"tasks",label:"任务中心",run:()=>{chosen="tasks"}},{id:"disabled",label:"不可用",disabled:true,run:()=>{chosen="bad"}}]} onError={noop}/>),
   taskCenter: (bound = false) => { automation.destination = bound ? "current-session" : "standalone"; automation.targetSessionId = bound ? "parent" : undefined; automation.contextPolicy = bound ? "reuse" : "fresh"; root.render(<TaskCenterPanel key={String(bound)} workspace="fixture" accounts={[]} onClose={noop} onOpenSession={noop} setError={message => { throw Error(message); }} confirmAction={async () => true} />); },
   automationPayload: () => savedAutomation,
+  nativeTasks: () => {
+    api.listNativeRuns=async()=>[{sessionId:"native-session",id:"goal-a",kind:"goal",title:"Readonly native goal",status:"paused",actions:["resume","stop"],stale:false,revision:"a".repeat(64)}] as any;
+    root.render(<TaskCenterPanel key="native-tasks" workspace="fixture" accounts={[]} onClose={noop} onOpenSession={(task,previewOnly)=>{nativeOpen={...task,previewOnly}}} setError={message=>{throw Error(message)}} confirmAction={async()=>true}/>);
+  },
+  nativeOpen: () => nativeOpen,
   confirmations: () => {
     api.listInbox = async () => [{ id: "pending:mine", kind: "confirmation", sessionId: "parent", title: "Computer 操作等待确认", detail: "Delete fixture", createdAt: "now" }, { id: "pending:other", kind: "confirmation", sessionId: "other", title: "Other secret", createdAt: "now" }];
     api.respondAutomationPending = async (id: string, approved: boolean) => { confirmationCalls.push({ id, approved }); };
