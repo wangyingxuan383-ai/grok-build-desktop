@@ -8,6 +8,18 @@ async function fixture(version: string): Promise<Record<string, unknown>> {
 }
 
 describe("CLI runtime handshake fixtures", () => {
+  it("retains the window from the redacted real 1.0.60 initialize sample", async () => {
+    const value = await fixture("1.0.60");
+    const handshake = normalizeRuntimeHandshake(value);
+    expect(handshake.agentVersion).toBe("1.0.60");
+    expect(handshake.models[0]).toMatchObject({ modelId: "grok-4.6", totalContextTokens: 500000 });
+    expect(handshake.models[0]?.reasoningEfforts).toContain("xhigh");
+    const model = (value._meta as any).modelState.availableModels[0];
+    for (const invalid of [0, -1, 0.5, "500000", true, Infinity]) {
+      model._meta.totalContextTokens = invalid;
+      expect(normalizeRuntimeHandshake(value).models[0]).not.toHaveProperty("totalContextTokens");
+    }
+  });
   it.each(["0.2.117", "0.2.118", "0.2.120"])("normalizes %s without retaining unknown payloads", async (version) => {
     const value = await fixture(version);
     value.unrecognizedFutureField = { prompt: "must-not-be-saved" };

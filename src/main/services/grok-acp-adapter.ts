@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { createHash } from "node:crypto";
 import { mergeTurnUsage } from "../../shared/turn-usage";
 import { SessionMcpTools } from "./session-mcp-tools";
+import { readCliBinaryIdentity, type CliBinaryIdentity } from "./cli-binary-identity";
 import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
@@ -458,6 +459,7 @@ export class GrokAcpAdapter extends EventEmitter {
   readonly extensionLeaseId?: string;
   runtimeHandshake?: CliRuntimeHandshake;
   private cliIdentityPromise?: Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }>;
+  private binaryIdentityPromise?: Promise<CliBinaryIdentity | undefined>;
   private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status" | "title" | "kind">>();
   lastCloseReceipt?: SessionCloseReceipt;
 
@@ -586,6 +588,7 @@ export class GrokAcpAdapter extends EventEmitter {
       return {
         modelId: model.modelId,
         name: model.name || model.modelId,
+        ...(model.totalContextTokens ? { totalContextTokens: model.totalContextTokens } : {}),
         ...(model.modelId===this.runtimeHandshake?.currentModelId?{defaultForCli:true}:{}),
         ...(reasoningEfforts.length ? { supportsReasoningEffort: true, reasoningEfforts } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
@@ -616,6 +619,8 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private async launchAndInitialize(): Promise<void> {
     if (this.process) throw new Error("Grok ACP 进程已经启动");
+    this.binaryIdentityPromise = readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
+    const launchIdentity = await this.binaryIdentityPromise;
     const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag, { modelId: this.options.modelId, agentProfilePath: this.options.agentProfilePath, alwaysApprove: this.options.alwaysApprove });
     await this.options.log.log(`spawn ${this.options.cliPath} ${args.join(" ")} cwd=${this.options.cwd}`);
     const batch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
@@ -641,6 +646,10 @@ export class GrokAcpAdapter extends EventEmitter {
       _meta: { clientIdentifier: DESKTOP_ACP_CLIENT_IDENTIFIER },
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
+    if (launchIdentity) {
+      const currentIdentity = await readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
+      if (currentIdentity?.key !== launchIdentity.key) this.binaryIdentityPromise = Promise.resolve(undefined);
+    }
     this.emit("runtime-handshake", this.runtimeHandshake);
   }
 
@@ -670,7 +679,7 @@ export class GrokAcpAdapter extends EventEmitter {
       : ((this.runtimeHandshake?.models ?? []).map((model) => ({
         modelId: model.modelId,
         name: model.name ?? model.modelId,
-        ...(model.reasoningEfforts?.length ? { _meta: { supportsReasoningEffort: true, reasoningEfforts: model.reasoningEfforts.map((value) => ({ value })) } } : {}),
+        _meta: { totalContextTokens: model.totalContextTokens, supportsReasoningEffort: Boolean(model.reasoningEfforts?.length), reasoningEfforts: model.reasoningEfforts?.map((value) => ({ value })) },
       })) as SessionModel[]);
     this.models = availableModels.map((model) => {
       const reasoningEfforts = (model._meta?.reasoningEfforts ?? []).flatMap((item) => {
@@ -687,7 +696,7 @@ export class GrokAcpAdapter extends EventEmitter {
         modelId: model.modelId,
         name: model.name,
         description: model.description,
-        totalContextTokens: model._meta?.totalContextTokens,
+        totalContextTokens: modelContextTokens(model._meta?.totalContextTokens),
         ...normalizeImageInputCapability(model._meta),
         supportsReasoningEffort: model._meta?.supportsReasoningEffort === true && reasoningEfforts.length > 0,
         reasoningEfforts,
@@ -701,6 +710,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.runtimeHandshake.models = this.models.map((model) => ({
         modelId: model.modelId,
         name: model.name,
+        ...(model.totalContextTokens ? { totalContextTokens: model.totalContextTokens } : {}),
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((item) => item.value) } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
         ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
@@ -837,6 +847,8 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   /** Fingerprints the binary that owns this live ACP connection without exposing a user path to the model. */
+  async runtimeIdentity(): Promise<CliBinaryIdentity | undefined> { return this.binaryIdentityPromise; }
+
   cliIdentity(): Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }> {
     if (!this.cliIdentityPromise) {
       const cliPath = this.options.cliPath;
@@ -2071,7 +2083,7 @@ export class GrokAcpAdapter extends EventEmitter {
         modelId,
         name: firstNonEmptyString(row.name, row.label) ?? modelId,
         description: firstNonEmptyString(row.description),
-        totalContextTokens: optionalPositiveInteger(meta.totalContextTokens ?? row.totalContextTokens),
+        totalContextTokens: modelContextTokens(meta.totalContextTokens ?? row.totalContextTokens),
         ...normalizeImageInputCapability(meta, row),
         supportsReasoningEffort: meta.supportsReasoningEffort === true && reasoningEfforts.length > 0,
         reasoningEfforts,
@@ -2088,6 +2100,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.runtimeHandshake.models = this.models.map((model) => ({
         modelId: model.modelId,
         name: model.name,
+        ...(model.totalContextTokens ? { totalContextTokens: model.totalContextTokens } : {}),
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((entry) => entry.value) } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
         ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
@@ -3357,6 +3370,10 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function modelContextTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function optionalPositiveInteger(value: unknown): number | undefined {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isInteger(number) && number > 0 ? number : undefined;
@@ -3434,6 +3451,7 @@ export function normalizeRuntimeHandshake(value: Record<string, unknown>): CliRu
       return [{
         modelId,
         name: firstNonEmptyString(row.name, row.label),
+        ...(modelContextTokens(modelMeta.totalContextTokens ?? row.totalContextTokens) ? { totalContextTokens: modelContextTokens(modelMeta.totalContextTokens ?? row.totalContextTokens) } : {}),
         ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}),
         ...normalizeImageInputCapability(modelMeta, row),
       }];

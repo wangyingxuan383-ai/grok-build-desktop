@@ -83,6 +83,7 @@ export interface SessionView {
   runtimeUpdates: CliRuntimeUpdate[];
   hydration: SessionHydrationState;
   hydrationGeneration: number;
+  contextRevision?: number;
   hydrationMessage?: string;
 }
 
@@ -186,6 +187,8 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
   if (!sessionId) return {};
   const view = state.views[sessionId] ?? emptyView();
   let next = { ...view, messages: [...view.messages] };
+  if (["session-ready", "session-reset", "turn-completed", "compact-status", "mode"].includes(event.type)
+    || event.type === "status" && event.status === "idle") next.contextRevision = (view.contextRevision ?? 0) + 1;
   switch (event.type) {
     case "session-hydration":
       if (event.generation < view.hydrationGeneration) return {};
@@ -200,6 +203,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       // local action request ids cannot survive, so only those cards expire.
       next = {
         ...view,
+        contextRevision: next.contextRevision,
         status: "cold",
         models: [],
         commands: [],

@@ -1,5 +1,15 @@
 # Development roadmap
 
+## CLI compatibility and lightweight native-run management
+
+- [x] Preserve validated context capacity in initialize, new-session catalogs and resume fallbacks.
+- [x] Share current-context display and event-driven reads; keep usage totals separate and reject stale responses.
+- [x] Retain unknown Memory support when legacy flags disappear; bind optional evidence to the owning CLI binary.
+- [ ] Project native Goal/Workflow state into existing task surfaces without creating or resuming work during reads.
+- [ ] Enable only identity-bound, live-verified native controls with exact ownership, revisions and confirmed outcomes.
+- [ ] Complete regression, rendered UI and paired local-package privacy/signature verification.
+- [ ] Record physical Android interaction and system-install acceptance separately.
+
 ## Desktop 0.12.0 / Grok Remote 0.4.0 candidate
 
 - [x] Integrate SDK-compatible gesture, animation, virtual-gallery, image, haptics, authentication and icon dependencies; compile their native Android modules.

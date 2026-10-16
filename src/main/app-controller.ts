@@ -1001,6 +1001,11 @@ export class AppController {
     return this.processes.listOfficialSessions(cwd, cursor);
   }
 
+  private async recordSessionCapabilities(sessionId: string, names: readonly import("../shared/types").CliCapabilityName[]): Promise<void> {
+    const owner = await this.processes.get(sessionId).runtimeIdentity?.();
+    await this.cliCapabilities.recordRuntimeSupport(names, true, undefined, owner);
+  }
+
   getCliSessionInfo(sessionId: string): Promise<CliSessionInfo> {
     return this.processes.sessionInfo(sessionId);
   }
@@ -1510,7 +1515,7 @@ export class AppController {
       if (worktree) await this.worktrees.remove(workspace, worktree.id, true).catch(() => undefined);
       throw error;
     }
-    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew"]).catch((error) => this.log.log(error));
+    void this.recordSessionCapabilities(result.sessionId, ["acp.initialize", "acp.sessionNew"]).catch((error) => this.log.log(error));
     if(activate)this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
     const assignment: SessionExecutionAssignment = { sessionId: result.sessionId, sourceWorkspacePath: workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
@@ -1628,7 +1633,7 @@ export class AppController {
       this.finishProjectionReplay(sessionId);
       this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
       emitHydration("ready");
-      void this.cliCapabilities.recordRuntimeSupport(["acp.initialize"]).catch((error) => this.log.log(error));
+      void this.recordSessionCapabilities(sessionId, ["acp.initialize"]).catch((error) => this.log.log(error));
       return { ...result, hydration: "ready" };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1649,7 +1654,7 @@ export class AppController {
     const source = await this.processes.renameSessionIfLoaded(sessionId, normalized);
     await this.catalog.rename(sessionId, normalized);
     if (source === "official") {
-      void this.cliCapabilities.recordRuntimeSupport(["session.rename"]).catch((error) => this.log.log(error));
+      void this.recordSessionCapabilities(sessionId, ["session.rename"]).catch((error) => this.log.log(error));
     }
   }
 
@@ -2699,7 +2704,7 @@ export class AppController {
     const detail = await this.codex.open(id, true);
     const before = detail.contentHash;
     const result = await this.processes.create(detail.cwd);
-    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew", "codexReader"]).catch((error) => this.log.log(error));
+    void this.recordSessionCapabilities(result.sessionId, ["acp.initialize", "acp.sessionNew", "codexReader"]).catch((error) => this.log.log(error));
     this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
     await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "codex-continuation", id, title: "Codex 接力", suggestedTitle: detail.title }]);
@@ -2733,7 +2738,7 @@ export class AppController {
     const detail = await this.claude.open(id, true);
     const before = detail.contentHash;
     const result = await this.processes.create(detail.cwd);
-    void this.cliCapabilities.recordRuntimeSupport(["acp.initialize", "acp.sessionNew", "claudeReader"]).catch((error) => this.log.log(error));
+    void this.recordSessionCapabilities(result.sessionId, ["acp.initialize", "acp.sessionNew", "claudeReader"]).catch((error) => this.log.log(error));
     this.focusedSessionId = result.sessionId;
     await this.catalog.markRead(result.sessionId);
     await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "claude-continuation", id, title: "Claude 接力", suggestedTitle: detail.title }]);
@@ -3216,7 +3221,7 @@ export class AppController {
       if (worktree) await this.worktrees.remove(sourceWorkspace, worktree.id, true).catch(() => undefined);
       throw new Error("CLI 未返回分叉会话 ID");
     }
-    void this.cliCapabilities.recordRuntimeSupport(["fork"]).catch((error) => this.log.log(error));
+    void this.recordSessionCapabilities(sessionId, ["fork"]).catch((error) => this.log.log(error));
     await this.catalog.recordFork(sessionId, childId);
     const inheritedWorktreeId = worktree?.id ?? (!launch ? parentAssignment?.worktreeId : undefined);
     const assignment: SessionExecutionAssignment = { sessionId: childId, sourceWorkspacePath: sourceWorkspace, cwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: inheritedWorktreeId, createdAt: new Date().toISOString() };

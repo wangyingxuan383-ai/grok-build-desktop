@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — CLI compatibility and native tasks
+
+- Preserve CLI-declared model context capacity in new-task catalogs and resume fallbacks, without inventing missing limits.
+- Display current context occupancy independently of token usage; share event-driven reads and ignore responses from older session/configuration generations.
+- Treat missing legacy Memory flags as unknown support and bind optional capability evidence to the executable that produced it.
+
 ## 0.12.0 — Grok Remote 0.4.0
 
 - Add explicit foreground read acknowledgements while retaining passive history reads for monitoring and locked/background screens.

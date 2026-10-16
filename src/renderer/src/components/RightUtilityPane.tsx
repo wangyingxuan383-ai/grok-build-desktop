@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentDashboardNode, BackgroundTaskSummary, CliRuntimeUpdate, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
 import { canOpenRecentFileDiff } from "../session-ui-guards";
 import type { UiChatTurn } from "../store";
 import { UiIcon, type UiIconName } from "../ui-icons";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 import { useWorkbenchStore } from "../workbench-store";
+import { useSessionContext } from "../hooks/use-session-context";
+import { sessionContextDisplay } from "../../../shared/session-context";
 import { statusText } from "../agent-status";
 
 export type RightUtilityTool = "launcher" | "document" | "files" | "tasks" | "session";
@@ -150,7 +152,8 @@ export function reviewSurfaceForCapability(available?: boolean): "review" | "age
 }
 
 function SessionTool({ sessionId, onError }: { sessionId?: string; onError(message: string): void }): React.JSX.Element {
-  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.grokDesktop.getCliSessionInfo>>>();
+  const { info, refresh: refreshContext } = useSessionContext(sessionId);
+  const owner = useRef(sessionId); owner.current = sessionId;
   const [usage, setUsage] = useState<Awaited<ReturnType<typeof window.grokDesktop.getCliSessionUsage>>>();
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof window.grokDesktop.getSessionRuntimePreferences>>>();
   const [loading, setLoading] = useState(false);
@@ -160,12 +163,12 @@ function SessionTool({ sessionId, onError }: { sessionId?: string; onError(messa
     if (!sessionId) return;
     setLoading(true);
     void Promise.all([
-      window.grokDesktop.getCliSessionInfo(sessionId),
+      refreshContext(),
       window.grokDesktop.getCliSessionUsage(sessionId),
       window.grokDesktop.getSessionRuntimePreferences(sessionId),
-    ]).then(([nextInfo, nextUsage, nextRuntime]) => { setInfo(nextInfo); setUsage(nextUsage); setRuntime(nextRuntime); }).catch((error) => onError(message(error))).finally(() => setLoading(false));
+    ]).then(([, nextUsage, nextRuntime]) => { if(owner.current === sessionId) { setUsage(nextUsage); setRuntime(nextRuntime); } }).catch((error) => onError(message(error))).finally(() => setLoading(false));
   };
-  useEffect(() => { setInfo(undefined); setUsage(undefined); setRuntime(undefined); refresh(); }, [sessionId]);
+  useEffect(() => { setUsage(undefined); setRuntime(undefined); refresh(); }, [sessionId]);
   const compact = (): void => {
     if (!sessionId || compacting) return;
     setCompacting(true); setCompactMessage("正在请求 CLI 压缩会话…");
@@ -174,9 +177,7 @@ function SessionTool({ sessionId, onError }: { sessionId?: string; onError(messa
       .catch((error) => { const text = message(error); setCompactMessage(text); onError(text); })
       .finally(() => setCompacting(false));
   };
-  const contextPercent = info?.contextUsagePercent ?? (info?.contextUsedTokens !== undefined && info.contextWindowTokens
-    ? Math.min(100, info.contextUsedTokens / info.contextWindowTokens * 100)
-    : undefined);
+  const contextPercent = sessionContextDisplay(info).percent;
   const compactionPolicy = runtime?.compaction ?? { mode: "inherit" as const };
   const setCompaction = (mode: "inherit" | "custom", thresholdPercent = compactionPolicy.thresholdPercent ?? 85): void => {
     if (!sessionId) return;

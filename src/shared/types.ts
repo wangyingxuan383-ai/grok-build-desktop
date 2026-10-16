@@ -1825,7 +1825,7 @@ export interface CliRuntimeHandshake {
   sessionCapabilities?: Record<string, boolean>;
   mcpCapabilities?: Record<string, boolean>;
   currentModelId?: string;
-  models: Array<{ modelId: string; name?: string; reasoningEfforts?: ReasoningEffort[]; acceptsImages?: boolean; inputModalities?: string[] }>;
+  models: Array<{ modelId: string; name?: string; totalContextTokens?: number; reasoningEfforts?: ReasoningEffort[]; acceptsImages?: boolean; inputModalities?: string[] }>;
   commands: string[];
   extensions: string[];
   features: {
