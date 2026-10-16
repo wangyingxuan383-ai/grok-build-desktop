@@ -7,7 +7,7 @@
 - [x] Retain unknown Memory support when legacy flags disappear; bind optional evidence to the owning CLI binary.
 - [x] Project native Goal/Workflow state into existing task surfaces without creating or resuming work during reads.
 - [x] Enable only identity-bound, live-verified native controls with exact ownership, revisions and confirmed outcomes.
-- [ ] Complete regression, rendered UI and paired local-package privacy/signature verification.
+- [x] Complete regression, rendered UI and paired local-package privacy/signature verification.
 - [ ] Record physical Android interaction and system-install acceptance separately.
 
 ## Desktop 0.12.0 / Grok Remote 0.4.0 candidate
