@@ -1,12 +1,16 @@
 # Development roadmap
 
-## CLI compatibility and lightweight native-run management
+## CLI compatibility and native-run management (Desktop 0.12.2 / Grok Remote 0.4.2)
 
 - [x] Preserve validated context capacity in initialize, new-session catalogs and resume fallbacks.
 - [x] Share current-context display and event-driven reads; keep usage totals separate and reject stale responses.
 - [x] Retain unknown Memory support when legacy flags disappear; bind optional evidence to the owning CLI binary.
 - [x] Project native Goal/Workflow state into existing task surfaces without creating or resuming work during reads.
-- [x] Enable only identity-bound, live-verified native controls with exact ownership, revisions and confirmed outcomes.
+- [x] Gate native controls on the protocol baseline with exact ownership, revisions and confirmed outcomes; verify official 1.0.60 and 1.0.62 binaries with an isolated loopback provider.
+- [x] Respect the leader configuration and keep goal-state reads off the hydration path.
+- [x] Show session-scoped runs in the right pane and the phone conversation; group and filter the task center; keep last-known restored state; allow removing finished records.
+- [x] Announce background workflow completion once; keep user stops and replays silent.
+- [x] Quiet cold-session details, multi-word session search, picker sizing, and PowerShell 7 preference with a 5.1 fallback.
 - [x] Complete regression, rendered UI and paired local-package privacy/signature verification.
 - [ ] Record physical Android interaction and system-install acceptance separately.
 
