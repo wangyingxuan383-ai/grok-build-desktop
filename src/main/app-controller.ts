@@ -229,7 +229,7 @@ import {readPullRequest} from "./services/pull-request-service";
 import {DesktopNotifications,parseNotificationUrl,type NotificationTarget} from "./services/desktop-notifications";
 import { CliCapabilityService } from "./services/cli-capability-service";
 import { NativeRunService } from "./services/native-run-service";
-import type { NativeRunControlInput } from "../shared/native-runs";
+import { activeNativeRuns, type NativeRunControlInput, type NativeRunDismissInput, type NativeRunSnapshot } from "../shared/native-runs";
 import { WorkspaceTreeService } from "./services/workspace-tree-service";
 import { EditorService } from "./services/editor-service";
 import { GitService } from "./services/git-service";
@@ -524,7 +524,7 @@ export class AppController {
       connection: (id) => {
         if (!this.processes.snapshot(id)) return undefined;
         const adapter = this.processes.get(id);
-        return { owner: adapter, verified: adapter.nativeRunControlVerified, commands: adapter.commands.map(c => c.name.replace(/^\//, "")), working: adapter.working, needsUser: adapter.needsUser,
+        return { owner: adapter, controllable: adapter.nativeRunControllable, commands: adapter.commands.map(c => c.name.replace(/^\//, "")), working: adapter.working, needsUser: adapter.needsUser,
           queued: adapter.queuedPrompts().length > 0, activeTurnId: adapter.activeTurnId, controlBusy: adapter.nativeRunControlBusy,
           reserve: () => adapter.reserveNativeRunControl(), cancel: () => adapter.cancel(),
           prompt: (text, performsWork) => adapter.prompt(text, [], null, { nativeControl: true, suppressCompletion: !performsWork }),
@@ -533,6 +533,7 @@ export class AppController {
       saved: () => this.sessionRuntime.nativeRunSummaries(),
       save: async (id, nativeRuns) => { await this.sessionRuntime.patch(id, { nativeRuns }); },
       onControlStart: (input) => { if (input.action !== "resume") this.runningSessions.delete(input.sessionId); },
+      onWorkflowFinished: (row) => void this.announceWorkflowFinished(row).catch((error) => this.log.log(error)),
     });
     this.updater = new CliUpdateService(
       userDataPath,
@@ -1028,8 +1029,10 @@ export class AppController {
     catch { return { sessionId, supported: false, source: "unsupported" }; }
   }
 
-  getCliSessionUsage(sessionId: string): Promise<CliSessionUsage> {
-    return this.processes.sessionUsage(sessionId);
+  async getCliSessionUsage(sessionId: string): Promise<CliSessionUsage> {
+    // A cold or closed session has no live usage; the detail pane shows that state instead of an error.
+    try { return await this.processes.sessionUsage(sessionId); }
+    catch { return { sessionId, supported: false, source: "unsupported" }; }
   }
 
   getSessionRuntimePreferences(sessionId: string) {
@@ -1420,7 +1423,7 @@ export class AppController {
     const availableProviders=await this.listProviders().catch(error=>{notices.push("Provider 目录暂不可用："+(error instanceof Error?error.message:String(error)));return []});
     const imageModels=availableProviders.filter(p=>p.enabled!==false).flatMap(p=>p.models.filter(m=>m.enabled!==false).map(m=>({modelId:m.id,providerId:p.id,name:`${p.name} · ${m.name||m.model}`,image:Object.values(m.capabilities?.protocols??{}).some(value=>value?.imageGeneration===true),video:Object.values(m.capabilities?.protocols??{}).some(value=>value?.videoGeneration===true)})));
     const modelId=models.some(model=>model.modelId===settings.defaultModel)?settings.defaultModel:models.find(model=>model.defaultForCli&&!model.providerId)?.modelId??settings.defaultModel;
-    return {capabilities:["native-runs","session.create","session.rename","session.archive","queue.remove","session.configure","session.compact","session.fork","session.delete","queue.edit","queue.move","queue.clear","workbench","attachments.upload"],workspaces,models,imageModels,modelCatalog:{refreshing:Boolean(this.modelCatalogRefreshFlight||this.modelCatalogProbe),checkedAt:this.modelCatalogProbedAt||undefined,reason:this.modelCatalogError},...(notices.length?{notices}:{}),defaults:{modelId,effort:settings.defaultEffort,mode:settings.defaultMode}};
+    return {capabilities:["native-runs","native-run.dismiss","session.create","session.rename","session.archive","queue.remove","session.configure","session.compact","session.fork","session.delete","queue.edit","queue.move","queue.clear","workbench","attachments.upload"],workspaces,models,imageModels,modelCatalog:{refreshing:Boolean(this.modelCatalogRefreshFlight||this.modelCatalogProbe),checkedAt:this.modelCatalogProbedAt||undefined,reason:this.modelCatalogError},...(notices.length?{notices}:{}),defaults:{modelId,effort:settings.defaultEffort,mode:settings.defaultMode}};
   }
   async remoteSessions():Promise<RemoteSession[]> {
     if(this.remoteListCache&&Date.now()<this.remoteListExpires)return this.remoteListCache.map(row=>({...row,status:this.processes.liveStatuses().get(row.id)||row.status}));
@@ -1460,7 +1463,9 @@ export class AppController {
     }
     while(start>0&&end-start<2000){const event=events[start-1]!;if(!allowed.has(event.type)){start--;continue;}const safe={...sanitizeRemoteEvent(event),remoteIndex:start-1};const size=Buffer.byteLength(JSON.stringify(safe));if(bytes+size>2*1024*1024&&visible.length)break;bytes+=size;visible.unshift(safe);start--;if(end-start>=250&&(event.type==="user-message"||event.type==="turn-started"))break;}
     const pending=[...remotePendingInteractions(events),...this.computer.pendingForSession(id)];
-    return {session,events:visible,totalEvents:events.length,before:start||undefined,truncated:start>0,pending,runtime:await this.remoteRuntime(id)};
+    // The latest window carries this session's goals/workflows, refreshed by the same event signals as the history.
+    const nativeRuns=before===undefined?activeNativeRuns(await this.nativeRuns.list(id).catch(()=>[])):undefined;
+    return {session,events:visible,totalEvents:events.length,before:start||undefined,truncated:start>0,pending,runtime:await this.remoteRuntime(id),...(nativeRuns?{nativeRuns}:{})};
   }
   private async performRemoteCommand(command:RemoteCommand,deviceId?:string):Promise<{state:"queued"|"completed"|"failed"|"unknown";message?:string;resultSessionId?:string}> {
     if(command.action==="workbench"){if(!deviceId)throw Error("设备身份无效");return this.remoteTools().mutate(command.mutation!,deviceId,command.operationId)}
@@ -1650,8 +1655,9 @@ export class AppController {
       }
       this.finishProjectionReplay(sessionId);
       this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
-      await this.processes.get(sessionId).refreshNativeGoalState?.().catch(() => undefined);
       emitHydration("ready");
+      // Goal state is informational; opening the conversation never waits for it.
+      void Promise.resolve().then(() => this.processes.get(sessionId).refreshNativeGoalState?.()).catch(() => undefined);
       void this.recordSessionCapabilities(sessionId, ["acp.initialize"]).catch((error) => this.log.log(error));
       return { ...result, hydration: "ready" };
     } catch (error) {
@@ -3413,6 +3419,15 @@ export class AppController {
 
   listNativeRuns(sessionId?: string) { return this.nativeRuns.list(sessionId); }
   controlNativeRun(input: NativeRunControlInput) { return this.nativeRuns.control(input); }
+  dismissNativeRun(input: NativeRunDismissInput) { return this.nativeRuns.dismiss(input); }
+  /** Background workflows end without a prompt turn; announce their final state once, like a finished turn. */
+  private async announceWorkflowFinished(row: NativeRunSnapshot): Promise<void> {
+    const failed = row.status === "failed", limited = row.status === "budget-limited";
+    const title = failed ? "工作流失败" : limited ? "工作流预算已用完" : "工作流已完成";
+    if (this.visibleConversationId !== row.sessionId || !this.window?.isFocused()) await this.catalog.markUnread(row.sessionId, failed);
+    await this.inbox.add({ kind: failed || limited ? "failure" : "completion", title, detail: row.title, sessionId: row.sessionId });
+    await this.notices().show(`workflow:${row.sessionId}:${row.id}:${row.status}`, failed || limited ? "failure" : "completion", `Grok ${title}`, row.title, { kind: "session", id: row.sessionId });
+  }
   async killBackgroundTask(id: string): Promise<void> { if (/(?:^|:)unidentified-/.test(id)) throw new Error("CLI 未提供可取消的原生任务 ID"); const separator = id.indexOf(":"); if (separator < 1) throw new Error("后台任务标识无效"); await this.processes.killBackgroundTask(id.slice(0, separator), id.slice(separator + 1)); }
   async listInbox(): Promise<NotificationInboxItem[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];

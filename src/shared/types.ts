@@ -2436,6 +2436,7 @@ export interface GrokDesktopApi {
   listBackgroundTasks(): Promise<BackgroundTaskSummary[]>;
   listNativeRuns(sessionId?: string): Promise<import("./native-runs").NativeRunSnapshot[]>;
   controlNativeRun(input: import("./native-runs").NativeRunControlInput): Promise<import("./native-runs").NativeRunControlReceipt>;
+  dismissNativeRun(input: import("./native-runs").NativeRunDismissInput): Promise<void>;
   killBackgroundTask(id: string): Promise<void>;
   listInbox(): Promise<NotificationInboxItem[]>;
   openInboxItem(id:string):Promise<void>;

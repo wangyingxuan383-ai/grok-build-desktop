@@ -237,6 +237,7 @@ const api: GrokDesktopApi = {
   listBackgroundTasks: () => ipcRenderer.invoke("tasks:list"),
   listNativeRuns: (id) => ipcRenderer.invoke("native-runs:list", id),
   controlNativeRun: (input) => ipcRenderer.invoke("native-runs:control", input),
+  dismissNativeRun: (input) => ipcRenderer.invoke("native-runs:dismiss", input),
   killBackgroundTask: (id) => ipcRenderer.invoke("tasks:kill", id),
   listInbox: () => ipcRenderer.invoke("inbox:list"),
   openInboxItem:id=>ipcRenderer.invoke("inbox:open",id),

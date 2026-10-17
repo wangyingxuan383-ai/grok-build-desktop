@@ -20,6 +20,11 @@ const RULES: Record<string, Rule> = {
     for (const key of ["sessionId", "runId", "revision", "operationId"]) if (typeof value[key] !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/.test(value[key] as string)) throw Error("原生任务身份无效");
     if (!["goal", "workflow"].includes(String(value.kind)) || !["pause", "resume", "stop"].includes(String(value.action))) throw Error("原生控制动作无效");
   },
+  "native-runs:dismiss": args => {
+    const value = strictRecordArg(args, 0, ["sessionId", "kind", "runId"]);
+    for (const key of ["sessionId", "runId"]) if (typeof value[key] !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,159}$/.test(value[key] as string)) throw Error("任务身份无效");
+    if (!["goal", "workflow"].includes(String(value.kind))) throw Error("任务类型无效");
+  },
   "remote:state":noArgs,
   "remote:enable":args=>{if(typeof args[0]!=="boolean")throw Error("手机连接开关无效");if(args[1]!==undefined&&(!Number.isInteger(args[1])||(args[1] as number)<1024||(args[1] as number)>65535))throw Error("手机连接端口无效")},
   "remote:pair":args=>{if(args[0]!==undefined)stringArg(args,0,512)},

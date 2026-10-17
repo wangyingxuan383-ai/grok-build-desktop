@@ -1,18 +1,29 @@
 import { createHash } from "node:crypto";
 import type { ChatEvent } from "../../shared/types";
-import { nativeRunIdValid, nativeRunKey, type NativeRunAction, type NativeRunControlInput, type NativeRunControlReceipt, type NativeRunSnapshot, type NativeRunWire } from "../../shared/native-runs";
+import { nativeRunDismissible, nativeRunIdValid, nativeRunKey, type NativeRunAction, type NativeRunControlInput, type NativeRunControlReceipt, type NativeRunDismissInput, type NativeRunSnapshot, type NativeRunWire } from "../../shared/native-runs";
 
 // Private process ownership survives the controller's asynchronous event queue.
 // It never becomes part of IPC, history or persisted task summaries.
 const eventOwners = new WeakMap<ChatEvent, object>();
 export function bindNativeRunEventOwner(event: ChatEvent, owner: object): void { eventOwners.set(event, owner); }
 
-/** Windows stable binary exercised against a loopback-only provider, never an account model. */
-export function hasNativeRunControlProof(identity?: { version?: string; sha256?: string }): boolean {
-  return identity?.version === "1.0.60" && identity.sha256 === "cce3a54d95128ca57d78ecbf0accde92dd08a185a2552e267700a98c32f4198f";
+/** First CLI release whose native Goal/Workflow commands passed the isolated end-to-end check. */
+export const NATIVE_RUN_CONTROL_MIN_VERSION = "1.0.60";
+/** Releases found to break the control contract. Keep empty unless a regression is confirmed. */
+const NATIVE_RUN_CONTROL_BLOCKED_VERSIONS: readonly string[] = [];
+/**
+ * Controls follow the protocol contract rather than one binary hash: a supported version still
+ * needs declared commands, exact native IDs and a native receipt before any action is reported.
+ */
+export function nativeRunControlSupported(version?: string): boolean {
+  const parsed = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "");
+  if (!parsed || NATIVE_RUN_CONTROL_BLOCKED_VERSIONS.includes(parsed.slice(1).join("."))) return false;
+  const [major = 0, minor = 0, patch = 0] = parsed.slice(1).map(Number), [x = 0, y = 0, z = 0] = NATIVE_RUN_CONTROL_MIN_VERSION.split(".").map(Number);
+  return major !== x ? major > x : minor !== y ? minor > y : patch >= z;
 }
+const TERMINAL_NOTICE = new Set<NativeRunSnapshot["status"]>(["completed", "failed", "budget-limited"]);
 export interface NativeRunConnection {
-  owner: object; verified: boolean; commands: string[]; working: boolean; needsUser: boolean; queued: boolean;
+  owner: object; controllable: boolean; commands: string[]; working: boolean; needsUser: boolean; queued: boolean;
   activeTurnId?: string; controlBusy: boolean;
   reserve(): () => void;
   prompt(text: string, performsWork: boolean): Promise<void>;
@@ -32,6 +43,8 @@ export class NativeRunService {
     saved(): Promise<NativeRunSnapshot[]>;
     save(sessionId: string, rows: NativeRunSnapshot[]): Promise<void>;
     onControlStart?(input: NativeRunControlInput): void;
+    /** A live workflow reached a final state for the first time in this connection. */
+    onWorkflowFinished?(row: NativeRunSnapshot): void;
     timeoutMs?: number;
   }) {}
 
@@ -58,8 +71,11 @@ export class NativeRunService {
         const value: NativeRunSnapshot = { ...row, sessionId, revision: "", observedAt: event.update.at, stale: replaying || !connection, actions: [] };
         if (row.kind === "goal" && row.nativeStatus === "cleared" && previous) { value.title = previous.value.title; value.budget = previous.value.budget; }
         if (this.entries.size < 1024 || previous) this.entries.set(key, { value, owner: replaying ? undefined : connection?.owner, goalTurn });
-        const uncertain = this.uncertain.get(key);
-        if (uncertain && this.confirmed(value, uncertain)) this.uncertain.delete(key);
+        const live = !replaying && Boolean(connection);
+        // Newer live state supersedes an unconfirmed outcome, whether or not it matches the request.
+        if (live) this.uncertain.delete(key);
+        // Workflows finish in the background without a prompt turn, so this is their only completion signal.
+        if (live && value.kind === "workflow" && TERMINAL_NOTICE.has(value.status) && previous && !TERMINAL_NOTICE.has(previous.value.status) && previous.value.status !== "stopped") this.options.onWorkflowFinished?.(value);
         this.trim(sessionId);
         // Reuse the existing runtime projection; never create another task database.
         void this.options.save(sessionId, this.savedFor(sessionId)).catch(() => undefined);
@@ -85,16 +101,28 @@ export class NativeRunService {
       this.entries.delete(key); this.uncertain.delete(key);
     }
   }
+  /** Removes a finished or restored summary only; live running/paused work cannot be hidden. */
+  async dismiss(input: NativeRunDismissInput): Promise<void> {
+    if (!nativeRunIdValid(input.sessionId) || !nativeRunIdValid(input.runId) || !["goal","workflow"].includes(input.kind)) throw Error("任务身份无效");
+    await this.load();
+    const key = nativeRunKey({ sessionId: input.sessionId, kind: input.kind, id: input.runId }), entry = this.entries.get(key);
+    if (!entry) return;
+    if (!nativeRunDismissible(this.snapshot(entry))) throw Error("执行中或已暂停的任务不能移除记录");
+    this.entries.delete(key); this.uncertain.delete(key);
+    await this.options.save(input.sessionId, this.savedFor(input.sessionId)).catch(() => undefined);
+    for (const listener of this.listeners) listener();
+  }
   private snapshot(entry: Entry): NativeRunSnapshot {
     const row = entry.value, c = this.options.connection(row.sessionId), actions: NativeRunAction[] = [];
     const stale = row.stale || !c || c.owner !== entry.owner;
-    let reason = stale ? "连接已变化，等待原生状态确认" : !c?.verified ? "此 CLI 尚未通过原生控制验证" : c.controlBusy || this.locks.has(row.sessionId) ? "正在提交原生控制" : c.needsUser ? "请先处理会话中的待回应事项" : c.queued ? "请先处理会话队列" : undefined;
-    if (this.uncertain.has(nativeRunKey(row))) reason = "前次操作状态待确认，请刷新原生状态";
-    if (!reason && c) {
-      if (!c.commands.includes(row.kind)) reason = "当前 CLI 未声明对应原生命令";
+    const finished = ["completed", "stopped", "failed", "budget-limited"].includes(row.status);
+    let reason = finished ? undefined : stale ? "上次记录的状态；CLI 报告新状态后会自动更新" : !c?.controllable ? "此 CLI 版本不支持在应用内控制（需要 1.0.60 或更高）" : c.controlBusy || this.locks.has(row.sessionId) ? "正在提交操作…" : c.needsUser ? "请先处理会话中的待回应事项" : c.queued ? "请先处理会话中的排队消息" : undefined;
+    if (this.uncertain.has(nativeRunKey(row))) reason = "上次操作未收到 CLI 确认；收到新状态后可再次操作";
+    if (!reason && c && !finished) {
+      if (!c.commands.includes(row.kind)) reason = "当前 CLI 没有提供对应命令";
       else if (row.kind === "goal" && row.status === "running") {
         if (c.working && entry.goalTurn && c.activeTurnId === entry.goalTurn) actions.push("pause", "stop");
-        else reason = "无法确认当前回合属于这个目标";
+        else reason = "暂时无法确认这个目标对应的执行回合";
       } else if (c.working) reason = "当前回合结束后可操作";
       else if (row.status === "paused") actions.push("resume", "stop");
       else if (row.kind === "workflow" && row.status === "running") actions.push("pause", "stop");
@@ -103,8 +131,8 @@ export class NativeRunService {
     return { ...row, stale, revision, actions, unavailableReason: reason };
   }
   control(input: NativeRunControlInput): Promise<NativeRunControlReceipt> {
-    for (const id of [input.sessionId,input.runId,input.operationId]) if (!nativeRunIdValid(id)) return Promise.reject(Error("原生任务身份无效"));
-    if (!["goal","workflow"].includes(input.kind) || !["pause","resume","stop"].includes(input.action) || !/^[a-f0-9]{64}$/.test(input.revision)) return Promise.reject(Error("原生控制参数无效"));
+    for (const id of [input.sessionId,input.runId,input.operationId]) if (!nativeRunIdValid(id)) return Promise.reject(Error("任务身份无效"));
+    if (!["goal","workflow"].includes(input.kind) || !["pause","resume","stop"].includes(input.action) || !/^[a-f0-9]{64}$/.test(input.revision)) return Promise.reject(Error("操作参数无效"));
     const fingerprint = JSON.stringify(input), old = this.operations.get(input.operationId);
     if (old) return old.fingerprint === fingerprint ? old.promise : Promise.reject(Error("操作标识已用于其他请求"));
     const promise = Promise.resolve().then(() => this.perform(input));
@@ -115,11 +143,11 @@ export class NativeRunService {
   private async perform(input: NativeRunControlInput): Promise<NativeRunControlReceipt> {
     await this.load();
     const key = nativeRunKey({sessionId:input.sessionId,kind:input.kind,id:input.runId}), entry = this.entries.get(key);
-    if (!entry) throw Error("原生任务已不存在，请刷新");
+    if (!entry) throw Error("这项任务已不存在，请刷新");
     const before = this.snapshot(entry), c = this.options.connection(input.sessionId);
-    if (before.revision !== input.revision) throw Error("原生任务状态已变化，请刷新后再操作");
+    if (before.revision !== input.revision) throw Error("任务状态已变化，请刷新后再操作");
     if (!c || !before.actions.includes(input.action)) throw Error(before.unavailableReason || "当前状态不允许此操作");
-    if (this.locks.has(input.sessionId)) throw Error("此会话已有控制操作正在进行");
+    if (this.locks.has(input.sessionId)) throw Error("这个会话已有操作正在进行");
     this.locks.add(input.sessionId);
     let release: () => void;
     try { release = c.reserve(); } catch (error) { this.locks.delete(input.sessionId); throw error; }
@@ -143,7 +171,7 @@ export class NativeRunService {
       if (now.working || now.needsUser || now.queued) throw Error("会话执行状态已变化，未发送后续命令");
       if (input.kind === "goal") {
         const latest = [...this.entries.values()].filter(e => e.value.sessionId === input.sessionId && e.value.kind === "goal" && e.owner === c.owner && e.value.status !== "stopped").at(-1);
-        if (latest?.value.id !== input.runId) throw Error("当前原生目标已经改变，未执行命令");
+        if (latest?.value.id !== input.runId) throw Error("当前目标已经改变，未执行命令");
       }
       const confirmed = wait(() => Boolean(current() && this.confirmed(current()!, input.action)));
       const command = input.kind === "goal" ? `/goal ${input.action === "stop" ? "clear" : input.action}` : `/workflow ${input.action} ${input.runId}`;
@@ -151,7 +179,7 @@ export class NativeRunService {
       const failed = request.then(() => new Promise<never>(() => {}));
       await Promise.race([confirmed, failed]);
       if (!(input.kind === "goal" && input.action === "resume")) await wait(() => !this.options.connection(input.sessionId)?.working);
-      return receipt("completed",input.action === "pause" ? "原生任务已暂停" : input.action === "resume" ? "原生任务已恢复" : "原生任务已结束");
+      return receipt("completed",input.action === "pause" ? "已暂停" : input.action === "resume" ? "已恢复" : "已结束");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/待确认/.test(message)) { this.uncertain.set(key,input.action); return receipt("unknown",message); }
@@ -165,7 +193,7 @@ export class NativeRunService {
     return new Promise((resolve,reject) => {
       const done = (error?: unknown) => { clearTimeout(timer); this.listeners.delete(check); error ? reject(error) : resolve(); };
       const check = () => { try { if (predicate()) done(); } catch (error) { done(error); } };
-      const timer = setTimeout(() => done(Error("未收到原生确认，状态待确认")), Math.max(1,deadline-Date.now()));
+      const timer = setTimeout(() => done(Error("未收到 CLI 确认，结果待确认")), Math.max(1,deadline-Date.now()));
       this.listeners.add(check); check();
     });
   }

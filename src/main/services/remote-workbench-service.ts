@@ -12,6 +12,7 @@ interface Asset {owner:string;path?:string;html?:string;mimeType:string;name:str
 const text=z.string().min(1).max(65536),id=z.string().min(1).max(256),flag=z.boolean();
 const dataSchemas:Record<RemoteMutation["kind"],z.ZodType>={
  "native-run.control":z.object({sessionId:id,kind:z.enum(["goal","workflow"]),revision:z.string().regex(/^[a-f0-9]{64}$/),action:z.enum(["pause","resume","stop"])}).strict(),
+ "native-run.dismiss":z.object({sessionId:id,kind:z.enum(["goal","workflow"])}).strict(),
  "image.create":z.object({}).strict(),"image.rename":z.object({title:z.string().min(1).max(80)}).strict(),
  "image.submit":z.object({request:z.object({kind:z.enum(["image","video"]),prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),route:z.enum(["cli","provider"]).optional(),modelId:id.optional(),providerId:id.optional(),duration:z.number().optional(),resolution:z.enum(["480p","720p"]).optional()}).strict(),attachmentIds:z.array(id).max(12).optional(),referenceSources:z.array(z.string().max(4096)).max(12).optional()}).strict(),
  "code.image.submit":z.object({prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),modelId:id.optional(),attachmentIds:z.array(id).max(12).optional()}).strict(),"image.cancel":z.object({}).strict(),"image.delete":z.object({deleteFiles:flag.optional()}).strict(),"image.record.delete":z.object({jobId:id,deleteFiles:flag.optional()}).strict(),
@@ -105,6 +106,7 @@ export class RemoteWorkbenchService {
    case "computer.permission":await c.respondComputerAppPermission(target,data.decision as "once"|"always"|"deny");break;
    case "computer.risk":await c.respondComputerRisk(target,data.approved===true);break;
    case "native-run.control": { const receipt=await c.controlNativeRun({sessionId:String(data.sessionId),kind:data.kind as "goal"|"workflow",runId:target,revision:String(data.revision),action:data.action as "pause"|"resume"|"stop",operationId}); return {state:receipt.state,message:receipt.message}; }
+   case "native-run.dismiss":await c.dismissNativeRun({sessionId:String(data.sessionId),kind:data.kind as "goal"|"workflow",runId:target});break;
    case "task.cancel":await c.killBackgroundTask(target);break;
    case "account.switch":await c.switchAccount(target);break;
    case "notification.register":await c.registerRemotePush(owner,String(data.token),data.deliveryVersion===2?2:1);break;

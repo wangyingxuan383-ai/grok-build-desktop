@@ -34,6 +34,7 @@ import type {
   SessionHydrationState,
   McpElicitationRequest,
 } from "../../shared/types";
+import { readableError } from "./error-message";
 
 export type UiMessage =
   | { id: string; kind: "user"; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
@@ -150,7 +151,7 @@ export const useAppStore = create<AppState>((set) => ({
   appRelease: undefined,
   bootstrap: (data) => set({ ...data, loading: false, error: "" }),
   setLoading: (loading) => set({ loading }),
-  setError: (error) => set({ error, loading: false }),
+  setError: (error) => set({ error: error ? readableError(error) : error, loading: false }),
   setSettings: (settings) => set({ settings }),
   setAccounts: (accounts) => set({ accounts }),
   setSessions: (sessions) => set({ sessions }),

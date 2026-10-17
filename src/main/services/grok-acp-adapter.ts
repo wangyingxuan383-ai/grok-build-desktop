@@ -4,7 +4,7 @@ import { mergeTurnUsage } from "../../shared/turn-usage";
 import { SessionMcpTools } from "./session-mcp-tools";
 import { readCliBinaryIdentity, type CliBinaryIdentity } from "./cli-binary-identity";
 import { normalizeNativeRunWire } from "../../shared/native-runs";
-import { bindNativeRunEventOwner, hasNativeRunControlProof } from "./native-run-service";
+import { bindNativeRunEventOwner, nativeRunControlSupported } from "./native-run-service";
 import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
@@ -465,7 +465,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private cliIdentityPromise?: Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }>;
   private binaryIdentityPromise?: Promise<CliBinaryIdentity | undefined>;
   private nativeControlPending = false;
-  private nativeControlVerified = false;
+  private nativeControlEnabled = false;
   private lastNativeGoalId?: string;
   private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status" | "title" | "kind">>();
   lastCloseReceipt?: SessionCloseReceipt;
@@ -488,7 +488,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
   get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
-  get nativeRunControlVerified(): boolean { return this.nativeControlVerified; }
+  get nativeRunControllable(): boolean { return this.nativeControlEnabled; }
   get nativeRunControlBusy(): boolean { return this.nativeControlPending; }
   reserveNativeRunControl(): () => void {
     if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后再试");
@@ -633,12 +633,10 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private async launchAndInitialize(): Promise<void> {
     if (this.process) throw new Error("Grok ACP 进程已经启动");
-    this.binaryIdentityPromise = readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
-    const launchIdentity = await this.binaryIdentityPromise;
+    // Fingerprint the executable alongside startup; capability evidence binds to it, launch never waits for it.
+    const launchIdentity = readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
+    this.binaryIdentityPromise = launchIdentity;
     const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag, { modelId: this.options.modelId, agentProfilePath: this.options.agentProfilePath, alwaysApprove: this.options.alwaysApprove });
-    // Verified controls require an exclusive backend, so a separate terminal
-    // cannot change a goal between the identity check and its native command.
-    if (hasNativeRunControlProof(launchIdentity)) args.splice(args.length - 1, 0, "--no-leader");
     await this.options.log.log(`spawn ${this.options.cliPath} ${args.join(" ")} cwd=${this.options.cwd}`);
     const batch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
     const executable = batch ? (this.options.env.ComSpec || process.env.ComSpec || "cmd.exe") : this.options.cliPath;
@@ -663,11 +661,14 @@ export class GrokAcpAdapter extends EventEmitter {
       _meta: { clientIdentifier: DESKTOP_ACP_CLIENT_IDENTIFIER },
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
-    if (launchIdentity) {
-      const currentIdentity = await readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
-      if (currentIdentity?.key !== launchIdentity.key) this.binaryIdentityPromise = Promise.resolve(undefined);
-      else this.nativeControlVerified = hasNativeRunControlProof(launchIdentity);
-    }
+    // The running process reports its own version; controls still need declared commands and native receipts.
+    this.nativeControlEnabled = nativeRunControlSupported(this.runtimeHandshake.agentVersion ?? this.options.cliVersion);
+    // A binary replaced during startup must not inherit evidence recorded for the earlier file.
+    this.binaryIdentityPromise = launchIdentity.then(async (identity) => {
+      if (!identity) return undefined;
+      const current = await readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
+      return current?.key === identity.key ? identity : undefined;
+    });
     this.emit("runtime-handshake", this.runtimeHandshake);
   }
 
@@ -868,7 +869,7 @@ export class GrokAcpAdapter extends EventEmitter {
   async runtimeIdentity(): Promise<CliBinaryIdentity | undefined> { return this.binaryIdentityPromise; }
 
   async refreshNativeGoalState(): Promise<void> {
-    if (!this.nativeControlVerified) return;
+    if (!this.nativeControlEnabled) return;
     const state = unwrapExtResult(await this.extension("x.ai/session/state", { cwd: this.options.cwd }, 5000));
     const goal = recordValue(state.goal);
     if (goal) this.handlePrivateSessionUpdate({ ...goal, sessionUpdate: "goal_updated", tokens_used: goal.tokens_used_high_water });
