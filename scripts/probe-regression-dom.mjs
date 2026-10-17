@@ -86,9 +86,14 @@ app.whenReady().then(async()=>{
     assert(await run('fixture.confirmationCalls()[0].id==="pending:mine" && fixture.confirmationCalls()[0].approved && !document.body.textContent.includes("Delete fixture")'),'confirmation response did not resolve shared inbox ID');
     await run('fixture.nativeTasks()');await wait();
     await run('Array.from(document.querySelectorAll(".task-tabs button")).find(b=>b.textContent==="队列与后台").click()');await wait();
-    await run('document.querySelector(".native-run-item summary").click()');await wait();
-    await run('Array.from(document.querySelectorAll(".native-run-item button")).find(b=>b.textContent==="查看会话").click()');await wait();
-    assert(await run('fixture.nativeOpen().sessionId==="native-session" && fixture.nativeOpen().previewOnly===true'),'native task view must request history-only navigation');
+    const nativeRow = (title) => 'Array.from(document.querySelectorAll(".native-run-row")).find(r=>r.textContent.includes("' + title + '"))';
+    await run(nativeRow("Live native goal") + '.querySelector("summary").click()');await wait();
+    await run('Array.from(' + nativeRow("Live native goal") + '.querySelectorAll("button")).find(b=>b.textContent==="查看会话").click()');await wait();
+    assert(await run('fixture.nativeOpen().sessionId==="native-session" && fixture.nativeOpen().previewOnly===false'),'a live native task must open its conversation normally');
+    await run(nativeRow("Restored native workflow") + '.querySelector("summary").click()');await wait();
+    assert(await run(nativeRow("Restored native workflow") + '.textContent.includes("上次记录")'),'a restored summary must keep its last-known status');
+    await run('Array.from(' + nativeRow("Restored native workflow") + '.querySelectorAll("button")).find(b=>b.textContent==="查看会话").click()');await wait();
+    assert(await run('fixture.nativeOpen().sessionId==="restored-session" && fixture.nativeOpen().previewOnly===true'),'a restored native summary must request history-only navigation');
     console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation and native history-only navigation' : 'REGRESSION_DOM_PASSED all fixture groups including native history-only navigation');
     app.exit(0);
   }catch(error){console.error(error.stack);app.exit(1)}

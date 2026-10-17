@@ -21,6 +21,13 @@ describe("conversation projection search", () => {
     expect(conversationProjectionMatches(projection, "不存在")).toBe(false);
   });
 
+  it("matches every word in any order across messages, like the CLI resume picker", () => {
+    expect(conversationProjectionMatches(projection, "oauth 流程图")).toBe(true);
+    expect(conversationProjectionMatches(projection, "  auth-service   登录  ")).toBe(true);
+    expect(conversationProjectionMatches(projection, "oauth 不存在")).toBe(false);
+    expect(conversationProjectionMatches(projection, "   ")).toBe(false);
+  });
+
   it("does not index media handles or raw media payloads", () => {
     expect(searchableEventText({ type: "media", sessionId: "s1", media: "image", source: "secret-path.png" })).toBe("");
   });

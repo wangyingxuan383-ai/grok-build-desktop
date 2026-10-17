@@ -230,6 +230,8 @@ import {DesktopNotifications,parseNotificationUrl,type NotificationTarget} from 
 import { CliCapabilityService } from "./services/cli-capability-service";
 import { NativeRunService } from "./services/native-run-service";
 import { activeNativeRuns, type NativeRunControlInput, type NativeRunDismissInput, type NativeRunSnapshot } from "../shared/native-runs";
+import { matchesAllWords } from "../shared/search-words";
+import { preferredPowerShell } from "./services/powershell-path";
 import { WorkspaceTreeService } from "./services/workspace-tree-service";
 import { EditorService } from "./services/editor-service";
 import { GitService } from "./services/git-service";
@@ -1007,7 +1009,7 @@ export class AppController {
     const normalized = query.trim().toLocaleLowerCase();
     if (normalized) {
       const matches = await Promise.all(result.map(async (row) => {
-        if (row.title.toLocaleLowerCase().includes(normalized) || row.id.toLocaleLowerCase().includes(normalized)) return true;
+        if (matchesAllWords(`${row.title}\n${row.id}`, normalized)) return true;
         return conversationProjectionMatches(await this.conversationProjections.restore(row.id).catch(() => undefined), normalized);
       }));
       result = result.filter((_row, index) => matches[index]);
@@ -1361,8 +1363,8 @@ export class AppController {
   /** Opens a visible PowerShell window running xAI's official installer; only on an explicit click. */
   async installCliInteractive(){
     if(process.platform!=="win32")throw Error("一键安装仅支持 Windows，请按官方文档安装");
-    // detached on Windows gives the child its own visible console window.
-    const child=spawn("powershell.exe",["-NoExit","-NoProfile","-ExecutionPolicy","Bypass","-Command","Write-Host '正在运行 xAI 官方安装脚本 https://x.ai/cli/install.ps1 ...';irm https://x.ai/cli/install.ps1 | iex; Write-Host '';Write-Host '完成后回到 Grok Build Desktop 点击“重新检测”。'"],{detached:true,stdio:"ignore",windowsHide:false});
+    // detached on Windows gives the child its own visible console window; PowerShell 7 is preferred when installed.
+    const child=spawn(preferredPowerShell(),["-NoExit","-NoProfile","-ExecutionPolicy","Bypass","-Command","Write-Host '正在运行 xAI 官方安装脚本 https://x.ai/cli/install.ps1 ...';irm https://x.ai/cli/install.ps1 | iex; Write-Host '';Write-Host '完成后回到 Grok Build Desktop 点击“重新检测”。'"],{detached:true,stdio:"ignore",windowsHide:false});
     child.unref();
   }
   async getRemoteState() { const state=await this.getRemoteGateway().state();return {...state,qrDataUrl:state.pairing?await qrDataUrl(state.pairing.uri,{width:280,margin:2}):undefined}; }
@@ -1464,7 +1466,7 @@ export class AppController {
     while(start>0&&end-start<2000){const event=events[start-1]!;if(!allowed.has(event.type)){start--;continue;}const safe={...sanitizeRemoteEvent(event),remoteIndex:start-1};const size=Buffer.byteLength(JSON.stringify(safe));if(bytes+size>2*1024*1024&&visible.length)break;bytes+=size;visible.unshift(safe);start--;if(end-start>=250&&(event.type==="user-message"||event.type==="turn-started"))break;}
     const pending=[...remotePendingInteractions(events),...this.computer.pendingForSession(id)];
     // The latest window carries this session's goals/workflows, refreshed by the same event signals as the history.
-    const nativeRuns=before===undefined?activeNativeRuns(await this.nativeRuns.list(id).catch(()=>[])):undefined;
+    const nativeRuns=before===undefined&&this.nativeRuns?activeNativeRuns(await this.nativeRuns.list(id).catch(()=>[])):undefined;
     return {session,events:visible,totalEvents:events.length,before:start||undefined,truncated:start>0,pending,runtime:await this.remoteRuntime(id),...(nativeRuns?{nativeRuns}:{})};
   }
   private async performRemoteCommand(command:RemoteCommand,deviceId?:string):Promise<{state:"queued"|"completed"|"failed"|"unknown";message?:string;resultSessionId?:string}> {

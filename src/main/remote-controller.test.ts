@@ -30,6 +30,9 @@ describe("Desktop remote execution owner",()=>{
   expect((await AppController.prototype.remoteSnapshot.call(c,row.id)).session.status).toBe("unread");expect(c.catalog.markRead).not.toHaveBeenCalled();
   await AppController.prototype.remoteSnapshot.call(c,row.id,5,undefined,true);expect(c.catalog.markRead).not.toHaveBeenCalled();
   const opened=await AppController.prototype.remoteSnapshot.call(c,row.id,undefined,undefined,true);expect(c.catalog.markRead).toHaveBeenCalledWith(row.id);expect(opened.session.status).toBe("idle");expect(c.openSession).not.toHaveBeenCalled()});
+ it("carries only active goals/workflows of the session on the latest page",async()=>{const c=fixture();c.inspectSession=vi.fn(async()=>({events:[]}));const runs=[{id:"wf-a",kind:"workflow",status:"running",sessionId:row.id},{id:"wf-b",kind:"workflow",status:"completed",sessionId:row.id}];c.nativeRuns={list:vi.fn(async()=>runs)};
+  const latest=await AppController.prototype.remoteSnapshot.call(c,row.id);expect(c.nativeRuns.list).toHaveBeenCalledWith(row.id);expect(latest.nativeRuns?.map(run=>run.id)).toEqual(["wf-a"]);
+  const older=await AppController.prototype.remoteSnapshot.call(c,row.id,5);expect(older.nativeRuns).toBeUndefined();expect(c.nativeRuns.list).toHaveBeenCalledTimes(1)});
  it("reads bounded history without resuming a session or marking it read",async()=>{const c=fixture();c.inspectSession=vi.fn(async()=>({events:Array.from({length:3000},(_,index)=>({type:"message-chunk",sessionId:row.id,text:String(index)}))}));const result=await AppController.prototype.remoteSnapshot.call(c,row.id);expect(result.before).toBe(1000);expect(result.events).toHaveLength(2000);expect(result.events[0]).toMatchObject({remoteIndex:1000});expect(c.openSession).not.toHaveBeenCalled();expect(c.sendPrompt).not.toHaveBeenCalled();expect(c.focusedSessionId).toBe("desktop-other")});
 });
 

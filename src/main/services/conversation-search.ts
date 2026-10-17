@@ -1,15 +1,22 @@
 import type { ChatEvent, ConversationProjection } from "../../shared/types";
+import { searchWords } from "../../shared/search-words";
 
 /**
  * Builds a bounded, text-only index for Desktop projection search.  Media
  * payloads, attachment bytes and arbitrary tool objects are deliberately not
- * serialized into the index.
+ * serialized into the index. Every query word must appear somewhere in the
+ * conversation; the scan stops as soon as all words are found.
  */
 export function conversationProjectionMatches(projection: ConversationProjection | undefined, query: string): boolean {
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle || !projection) return false;
-  return projection.events.some((event) => isChatEventRecord(event)
-    && searchableEventText(event).toLocaleLowerCase().includes(needle));
+  const pending = new Set(searchWords(query));
+  if (!pending.size || !projection) return false;
+  for (const event of projection.events) {
+    if (!isChatEventRecord(event)) continue;
+    const text = searchableEventText(event).toLocaleLowerCase();
+    for (const word of pending) if (text.includes(word)) pending.delete(word);
+    if (!pending.size) return true;
+  }
+  return false;
 }
 
 export function searchableEventText(event: ChatEvent): string {

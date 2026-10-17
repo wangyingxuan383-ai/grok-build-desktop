@@ -10,14 +10,16 @@ import { CapabilitiesPanel, ContextPanel, QueueEditor, SearchPanel, UsagePanel }
 import { CodeImage } from "./code-image";
 import { NewSession, Interaction, confirm } from "./forms";
 import { SessionRow, type Preferences } from "./screens";
+import { NativeRunCards } from "./native-runs";
+import { activeNativeRuns } from "../../../src/shared/native-runs";
 import { densityLabels, type Density } from "./conversation";
 import type { ConversationRow } from "./remote-model";
 import type { useRemote } from "./use-remote";
 import type { RemoteReceipt, RemoteSession } from "../../../src/shared/remote";
 import type { PromptQueueEntry } from "../../../src/shared/types";
 type Client = ReturnType<typeof useRemote>;
-export type Sheet = "snippets" | "bookmarks" | "new" | "manage" | "find" | "pending" | "queue" | "children" | "details" | "config" | "attachments" | "actions" | "tools" | "files" | "review" | "usage" | "context" | "code-image" | null;
-const titles: Record<NonNullable<Sheet>, string> = { snippets: "提示词片段", bookmarks: "消息书签", new: "新建会话", manage: "会话操作", find: "搜索当前消息", pending: "待处理请求", queue: "消息队列", children: "子会话", details: "会话信息", config: "模型与配置", attachments: "材料与附件", actions: "会话工具", tools: "命令与能力", context: "上下文与分支", files: "项目文件", review: "代码改动", usage: "用量统计", "code-image": "编程时生成图片" };
+export type Sheet = "snippets" | "bookmarks" | "new" | "manage" | "find" | "pending" | "queue" | "children" | "details" | "config" | "attachments" | "actions" | "tools" | "files" | "review" | "usage" | "context" | "code-image" | "native-runs" | null;
+const titles: Record<NonNullable<Sheet>, string> = { "native-runs": "目标与工作流", snippets: "提示词片段", bookmarks: "消息书签", new: "新建会话", manage: "会话操作", find: "搜索当前消息", pending: "待处理请求", queue: "消息队列", children: "子会话", details: "会话信息", config: "模型与配置", attachments: "材料与附件", actions: "会话工具", tools: "命令与能力", context: "上下文与分支", files: "项目文件", review: "代码改动", usage: "用量统计", "code-image": "编程时生成图片" };
 export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected, rows, queue, children, actionsDisabled, preferences, setPreferences, openSession, openFile, density, setDensity, onCreated, onForked, onBookmark }: {
     onBookmark: (bookmark: Bookmark) => void;
     sheet: Sheet;
@@ -65,7 +67,8 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
             {sheet === "config" ? <ConfigurationPicker client={client} theme={theme} /> : null}
             {sheet === "snippets" ? <SnippetsSheet theme={theme} onInsert={text => { client.setDraft(insertSnippet(client.draft, text)); close(); }} /> : null}
             {sheet === "bookmarks" ? <BookmarksSheet storageKey={client.host ? client.host.fingerprint + ":bookmarks" : undefined} theme={theme} onOpen={bookmark => { close(); onBookmark(bookmark); }} /> : null}
-            {sheet === "actions" ? <ToolsMenu theme={theme} open={go} childCount={children.length} /> : null}
+            {sheet === "actions" ? <ToolsMenu theme={theme} open={go} childCount={children.length} nativeCount={activeNativeRuns(client.snapshot?.nativeRuns ?? []).length} /> : null}
+            {sheet === "native-runs" ? (activeNativeRuns(client.snapshot?.nativeRuns ?? []).length ? <NativeRunCards scoped rows={client.snapshot?.nativeRuns ?? []} client={client} theme={theme} disabled={actionsDisabled} refresh={client.refresh} /> : <Text style={{ color: theme.muted }}>这个会话目前没有目标或工作流。</Text>) : null}
             {sheet === "code-image" ? <CodeImage client={client} theme={theme} /> : null}
             {sheet === "attachments" ? <AttachmentsPanel client={client} theme={theme} /> : null}
             {sheet === "tools" ? <CapabilitiesPanel client={client} theme={theme} close={close} /> : null}
@@ -95,7 +98,7 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
       </View>
     </Modal>;
 }
-function ToolsMenu({ theme, open, childCount }: { theme: Theme; open: (sheet: Sheet) => void; childCount: number }) {
+function ToolsMenu({ theme, open, childCount, nativeCount }: { theme: Theme; open: (sheet: Sheet) => void; childCount: number; nativeCount: number }) {
     return <Section theme={theme}>
       <ListRow theme={theme} title="提示词片段" detail="插入常用指令，编辑后再发送" onPress={() => open("snippets")} />
       <ListRow theme={theme} title="命令与能力" detail="斜杠命令、Skills 与 MCP 工具" onPress={() => open("tools")} />
@@ -103,8 +106,9 @@ function ToolsMenu({ theme, open, childCount }: { theme: Theme; open: (sheet: Sh
       <ListRow theme={theme} title="生成项目图片" detail="在当前编程会话中生成图片" onPress={() => open("code-image")} />
       <ListRow theme={theme} title="代码改动" detail="查看本会话涉及的文件差异" onPress={() => open("review")} />
       <ListRow theme={theme} title="上下文与分支" detail="压缩上下文或从此处分叉" onPress={() => open("context")} />
-      <ListRow theme={theme} title="子智能体" value={childCount ? String(childCount) : undefined} onPress={() => open("children")} />
-      <ListRow theme={theme} title="用量统计" onPress={() => open("usage")} />
+      {nativeCount ? <ListRow theme={theme} title="目标与工作流" detail="查看状态，暂停、恢复或结束" value={String(nativeCount)} onPress={() => open("native-runs")} /> : null}
+      <ListRow theme={theme} title="子智能体" detail="查看本会话派生的子会话" value={childCount ? String(childCount) : undefined} onPress={() => open("children")} />
+      <ListRow theme={theme} title="用量统计" detail="本会话的 Token 与调用次数" onPress={() => open("usage")} />
     </Section>;
 }
 function ManageSheet({ theme, client, selected, rows, actionsDisabled, preferences, setPreferences, open, close, density, setDensity }: {

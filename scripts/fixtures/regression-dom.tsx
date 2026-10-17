@@ -106,7 +106,10 @@ Object.assign(window, { fixture: {
   taskCenter: (bound = false) => { automation.destination = bound ? "current-session" : "standalone"; automation.targetSessionId = bound ? "parent" : undefined; automation.contextPolicy = bound ? "reuse" : "fresh"; root.render(<TaskCenterPanel key={String(bound)} workspace="fixture" accounts={[]} onClose={noop} onOpenSession={noop} setError={message => { throw Error(message); }} confirmAction={async () => true} />); },
   automationPayload: () => savedAutomation,
   nativeTasks: () => {
-    api.listNativeRuns=async()=>[{sessionId:"native-session",id:"goal-a",kind:"goal",title:"Readonly native goal",status:"paused",actions:["resume","stop"],stale:false,revision:"a".repeat(64)}] as any;
+    api.listNativeRuns=async()=>[
+      {sessionId:"native-session",id:"goal-a",kind:"goal",title:"Live native goal",status:"paused",actions:["resume","stop"],stale:false,revision:"a".repeat(64),observedAt:new Date().toISOString()},
+      {sessionId:"restored-session",id:"wf-b",kind:"workflow",title:"Restored native workflow",status:"paused",actions:[],stale:true,revision:"b".repeat(64),observedAt:new Date().toISOString()},
+    ] as any;
     root.render(<TaskCenterPanel key="native-tasks" workspace="fixture" accounts={[]} onClose={noop} onOpenSession={(task,previewOnly)=>{nativeOpen={...task,previewOnly}}} setError={message=>{throw Error(message)}} confirmAction={async()=>true}/>);
   },
   nativeOpen: () => nativeOpen,
