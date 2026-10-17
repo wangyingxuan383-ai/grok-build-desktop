@@ -1,0 +1,59 @@
+/* Loaded with the task center and right pane (lazy chunks), not the main stylesheet. */
+/* Goals and workflows: task center groups every session, the right pane shows the current one. */
+.native-runs{display:grid;gap:10px;margin-bottom:20px;min-width:0}
+.native-runs-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.native-runs-head h3{margin:0;font-size:var(--text-base);font-weight:650}
+.native-runs-head p{margin:3px 0 0;color:var(--color-fg-subtle);font-size:var(--text-sm)}
+.native-run-filters{display:flex;gap:6px}
+.native-run-filters button{padding:3px 10px;border:1px solid var(--color-border);border-radius:999px;background:transparent;color:var(--color-fg-subtle);font-size:var(--text-sm);cursor:pointer}
+.native-run-filters button:hover{color:var(--color-fg)}
+.native-run-filters button[aria-selected="true"]{border-color:var(--color-border-strong);background:var(--color-card-selected);color:var(--color-fg)}
+.native-run-group{display:grid;gap:6px;min-width:0}
+.native-run-group-head{display:flex;align-items:center;gap:6px;min-width:0;padding:0 2px;color:var(--color-fg-subtle);font-size:var(--text-sm)}
+.native-run-group-head strong{min-width:0;overflow:hidden;color:var(--color-fg);font-size:var(--text-caption);font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.native-run-group-head button{flex:0 0 auto;margin-left:auto;padding:2px 4px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--color-accent);font-size:var(--text-sm);cursor:pointer}
+.native-run-card{overflow:hidden;border:1px solid var(--color-border);border-radius:var(--radius-lg);background:var(--color-card)}
+.native-run-row{min-width:0;border-bottom:1px solid var(--color-border)}
+.native-run-row:last-child{border-bottom:0}
+.native-run-row>summary{display:flex;align-items:center;gap:8px;min-width:0;padding:9px 12px;cursor:pointer;list-style:none}
+.native-run-row>summary::-webkit-details-marker{display:none}
+.native-run-row[open]{background:color-mix(in srgb,var(--color-accent) 4%,var(--color-card))}
+.native-run-chevron{flex:0 0 auto;color:var(--color-fg-subtle);transition:transform .15s}
+.native-run-row[open] .native-run-chevron{transform:rotate(90deg)}
+.native-run-title{flex:1;min-width:0;overflow:hidden;font-size:var(--text-caption);font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.native-run-time{flex:0 0 auto;display:flex;align-items:center;gap:6px;color:var(--color-fg-subtle);font-size:var(--text-sm)}
+.native-run-time code,.native-run-meta code{margin-left:6px;padding:0 5px;border-radius:var(--radius-sm);background:var(--color-card-selected);color:var(--color-fg-subtlest);font-family:var(--font-mono);font-size:11px}
+.native-run-status{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;padding:2px 8px 2px 7px;border-radius:999px;font-size:11px;font-weight:600;line-height:16px;white-space:nowrap}
+.native-run-status i{width:6px;height:6px;border-radius:50%;background:currentColor}
+.native-run-status.tone-running{background:var(--color-accent-soft);color:var(--color-accent)}
+.native-run-status.tone-running i{box-shadow:0 0 0 3px color-mix(in srgb,var(--color-accent) 22%,transparent)}
+.native-run-status.tone-paused{background:var(--color-card-selected);color:var(--color-fg-subtle)}
+.native-run-status.tone-attention{background:var(--color-warning-soft);color:var(--color-warning)}
+.native-run-status.tone-failed{background:var(--color-danger-soft);color:var(--color-danger)}
+.native-run-status.tone-stale{padding:1px 7px 1px 6px;border:1px dashed var(--color-border-strong);background:transparent;color:var(--color-fg-subtle)}
+.native-run-body{display:grid;gap:6px;min-width:0;padding:0 12px 11px 34px}
+.native-run-meta{color:var(--color-fg-subtle);font-size:var(--text-sm)}
+.native-run-budget{display:flex;align-items:center;gap:8px;color:var(--color-fg-subtle);font-size:var(--text-sm)}
+.native-run-meter{flex:1;max-width:180px;height:4px;overflow:hidden;border-radius:2px;background:color-mix(in srgb,var(--color-fg) 12%,transparent)}
+.native-run-meter i{display:block;height:100%;border-radius:2px;background:var(--color-accent)}
+.native-run-meter.warn i{background:var(--color-warning)}
+.native-run-meter.full i{background:var(--color-danger)}
+.native-run-reason,.native-run-hint,.native-run-notice{margin:0;color:var(--color-fg-subtle);font-size:var(--text-sm);line-height:1.5;overflow-wrap:anywhere}
+.native-run-reason.tone-attention,.native-run-notice.warn{color:var(--color-warning)}
+.native-run-reason.tone-failed,.native-run-notice.danger{color:var(--color-danger)}
+.native-run-notice.ok{color:var(--color-success)}
+.native-run-actions{display:flex;flex-wrap:wrap;gap:6px}
+.native-run-actions button{height:26px;display:inline-flex;align-items:center;gap:5px;padding:0 10px;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);background:var(--color-card-selected);color:var(--color-fg);font-size:var(--text-sm);cursor:pointer}
+.native-run-actions button:hover:not(:disabled){border-color:var(--color-fg-subtlest)}
+.native-run-actions button.danger{border-color:color-mix(in srgb,var(--color-danger) 40%,transparent);background:transparent;color:var(--color-danger)}
+.native-run-actions button.ghost{border-color:transparent;background:transparent;color:var(--color-fg-subtle)}
+.native-run-actions button.ghost:hover:not(:disabled){color:var(--color-fg)}
+.native-run-actions button:disabled{cursor:default;opacity:.5}
+.native-run-spin{width:10px;height:10px;border:2px solid color-mix(in srgb,var(--color-fg) 25%,transparent);border-top-color:var(--color-accent);border-radius:50%;animation:native-run-spin .8s linear infinite}
+@keyframes native-run-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.native-run-spin{animation:none}.native-run-chevron{transition:none}}
+/* Right pane: rows stay open and follow the pane's section rhythm. */
+.native-run-row.pane{display:grid;gap:6px;padding:9px 10px}
+.native-run-row.pane .native-run-top{display:flex;align-items:center;gap:8px;min-width:0}
+.native-run-row.pane .native-run-body{padding:0}
+.native-run-pane-note{margin:0;padding:8px 10px;border-bottom:1px solid var(--color-border);color:var(--color-fg-subtle);font-size:var(--text-sm);line-height:1.5}

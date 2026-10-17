@@ -1,0 +1,11 @@
+/* Right pane tool text sizes and session details; loaded with the lazy right pane. */
+.right-utility-tabs button { font-size: var(--text-sm); }
+.right-tool-scroll > section { border-radius: var(--radius-xl); background: var(--color-card); }
+.right-tool-scroll > section > header strong { font-size: var(--text-caption); }
+.tasks-tool article strong { font-size: var(--text-sm); }
+.tasks-tool article small, .tasks-tool article p, .right-tool-empty { font-size: var(--text-sm); }
+.session-compaction { display: grid; gap: 8px; margin-top: 12px; }
+.session-compaction label { display: grid; gap: 4px; color: var(--color-fg-subtle); font-size: var(--text-sm); }
+.session-compaction select { min-width: 0; max-width: 220px; padding: 6px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-input); color: var(--color-fg); font-size: var(--text-sm); }
+.session-compaction .settings-note { margin: 0; }
+.session-compaction .button-row button { padding: 5px 12px; font-size: var(--text-sm); }

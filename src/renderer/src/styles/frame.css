@@ -171,16 +171,6 @@
 .right-tool-launcher strong { font-size: var(--text-base); font-weight: 600; color: var(--color-fg); }
 .right-tool-launcher small { font-size: var(--text-sm); color: var(--color-fg-subtlest); }
 .right-utility-tabs { padding: 6px 8px; }
-.right-utility-tabs button { font-size: var(--text-sm); }
-.right-tool-scroll > section { border-radius: var(--radius-xl); background: var(--color-card); }
-.right-tool-scroll > section > header strong { font-size: var(--text-caption); }
-.tasks-tool article strong { font-size: var(--text-sm); }
-.tasks-tool article small, .tasks-tool article p, .right-tool-empty { font-size: var(--text-sm); }
-.session-compaction { display: grid; gap: 8px; margin-top: 12px; }
-.session-compaction label { display: grid; gap: 4px; color: var(--color-fg-subtle); font-size: var(--text-sm); }
-.session-compaction select { min-width: 0; max-width: 220px; padding: 6px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-input); color: var(--color-fg); font-size: var(--text-sm); }
-.session-compaction .settings-note { margin: 0; }
-.session-compaction .button-row button { padding: 5px 12px; font-size: var(--text-sm); }
 
 /* ---- Full-page panels (settings, accounts, tasks, extensions...) ----
    The header already names the page and offers the way back, so the page is the frame itself:

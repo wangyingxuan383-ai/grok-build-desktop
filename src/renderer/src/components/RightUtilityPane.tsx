@@ -10,6 +10,7 @@ import { sessionContextDisplay } from "../../../shared/session-context";
 import { statusText } from "../agent-status";
 import { useNativeRuns } from "../hooks/use-native-runs";
 import { NativeRunList } from "./NativeRunList";
+import "../styles/right-pane-tools.css";
 
 type Confirm = (message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 

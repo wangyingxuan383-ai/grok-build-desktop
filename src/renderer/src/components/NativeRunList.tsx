@@ -7,6 +7,7 @@ import {
 import { errorMessage } from "../error-message";
 import { useAppStore } from "../store";
 import { UiIcon } from "../ui-icons";
+import "../styles/native-runs.css";
 
 type Confirm = (message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 type Notice = { text: string; tone: "ok" | "warn" | "danger" };
