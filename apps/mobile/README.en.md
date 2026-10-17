@@ -2,11 +2,11 @@
 
 # Grok Remote Android companion
 
-Grok Remote 0.4.0 pairs with Grok Build Desktop 0.12.0. The phone follows and controls the computer's existing Grok execution owner. Credentials and model execution remain on Windows; no Expo Go or developer address is required. Install over the existing app to retain pairing and drafts. This release adds native gestures, a virtual gallery, scoped searchable settings, optional application lock, reliable notifications, task editing, bookmarks and transfer controls.
+Grok Remote pairs with the Grok Build Desktop version published in the same release. The phone follows and controls the computer's existing Grok execution owner. Credentials and model execution remain on Windows; no Expo Go or developer address is required. Install over the existing app to retain pairing and drafts. Recent versions add native gestures, a virtual gallery, scoped searchable settings, optional application lock, reliable notifications, task editing, bookmarks, transfer controls and native goal/workflow controls.
 
 ## Download and updates
 
-[Download the signed Android APK](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.12.0/Grok-Remote-v0.4.0.apk) or find Windows and Android together on the [latest release](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest). Desktop onboarding and connection settings show download QR codes.
+Download the signed Android APK together with the Windows packages from the [latest release](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest). Desktop onboarding and connection settings show download QR codes.
 
 From 0.3.6, the Devices screen and unpaired welcome screen can check public updates without an online computer. APK downloads report progress, support cancellation and require SHA-256, size, package, version and original signing identity verification before Android asks for installation consent. Pairing and drafts remain when updating with the same signature. Older clients can install this APK manually first.
 

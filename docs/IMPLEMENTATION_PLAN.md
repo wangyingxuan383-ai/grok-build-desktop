@@ -12,6 +12,7 @@
 - [x] Announce background workflow completion once; keep user stops and replays silent.
 - [x] Quiet cold-session details, multi-word session search, picker sizing, and PowerShell 7 preference with a 5.1 fallback.
 - [x] Complete regression, rendered UI and paired local-package privacy/signature verification.
+- [x] Publish the paired release with source/checksum/signature/provenance checks, inspect the public downloads for private data and unnecessary debug/test files, and confirm both update parsers resolve the new installer and APK.
 - [ ] Record physical Android interaction and system-install acceptance separately.
 
 ## Desktop 0.12.0 / Grok Remote 0.4.0 candidate

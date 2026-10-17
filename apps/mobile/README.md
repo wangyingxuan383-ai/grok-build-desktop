@@ -2,13 +2,11 @@
 
 简体中文 · [English / 开发者构建说明](README.en.md)
 
-Grok Remote **0.4.0** 是 Grok Build Desktop **0.12.0** 的 Android 客户端。电脑运行 Grok CLI，手机负责查看、输入与控制。模型账号和执行凭据留在电脑上，不需要 Expo Go。
+Grok Remote 是 Grok Build Desktop 的 Android 客户端，两端请使用同一 Release 中的配套版本。电脑运行 Grok CLI，手机负责查看、输入与控制。模型账号和执行凭据留在电脑上，不需要 Expo Go。
 
 ## 下载与安装
 
-- [手机 APK 0.4.0](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.12.0/Grok-Remote-v0.4.0.apk)
-- [配套电脑安装包与便携版](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/tag/v0.12.0)
-- [最新版本](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest)
+- [最新 Release](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/latest)：手机 APK 与配套的电脑安装版、便携版都在这里。
 
 APK 支持 arm64-v8a / x86_64。Android 可能要求允许浏览器或文件管理器“安装未知应用”，按系统提示确认。使用同签名 APK 覆盖安装保留配对、草稿和设置。SHA-256 位于同一 Release 的 `SHA256SUMS.txt`。
 
