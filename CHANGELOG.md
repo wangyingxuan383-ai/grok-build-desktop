@@ -2,7 +2,7 @@
 
 ## 0.12.2 — Grok Remote 0.4.2
 
-Includes the changes of the unpublished 0.12.1 / 0.4.1 inspection build.
+Includes the changes of the unpublished 0.12.1 / 0.4.1 inspection build. Mobile guides now point to the latest release instead of a fixed version.
 
 - Preserve CLI-declared model context capacity in new-task catalogs and resume fallbacks, without inventing missing limits.
 - Display current context occupancy independently of token usage; share event-driven reads, ignore stale responses, and show an empty ring with a tooltip when occupancy is unknown.
