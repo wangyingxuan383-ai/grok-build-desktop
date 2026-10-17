@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import type { AppSettings, CliCapabilityName, CliCapabilitySnapshot, CliCapabilitySupport } from "../../shared/types";
 import { CLI_CAPABILITY_NAMES } from "../../shared/workbench-types";
 import { buildCliEnv, locateGrokCli, readCliVersion } from "./cli-locator";
+import { readCliBinaryIdentity, type CliBinaryIdentity } from "./cli-binary-identity";
 
 const execFileAsync = promisify(execFile);
 const MAX_OUTPUT = 4 * 1024 * 1024;
@@ -24,6 +25,7 @@ export interface CliCapabilityProbeInput {
 export class CliCapabilityService {
   private readonly cache = new Map<string, Promise<CliCapabilitySnapshot>>();
   private readonly runtimeEvidence = new Map<string, Partial<Record<CliCapabilityName, CliCapabilitySupport>>>();
+  private currentIdentity?: string;
 
   constructor(
     private readonly getSettings: () => Promise<AppSettings>,
@@ -31,6 +33,7 @@ export class CliCapabilityService {
     private readonly dependencies: {
       locate?: typeof locateGrokCli;
       readVersion?: typeof readCliVersion;
+      identity?: typeof readCliBinaryIdentity;
       run?: (cliPath: string, args: readonly string[], env: NodeJS.ProcessEnv, cwd: string) => Promise<CliCapabilityCommandResult>;
     } = {},
   ) {}
@@ -41,7 +44,13 @@ export class CliCapabilityService {
     if (!cliPath) return unavailableCliSnapshot();
     const env = buildCliEnv(settings, await this.getApiKey());
     const version = await (this.dependencies.readVersion ?? readCliVersion)(cliPath, env);
-    const cacheKey = version || "unknown-version";
+    const identity = await (this.dependencies.identity ?? readCliBinaryIdentity)(cliPath, version, force);
+    const cacheKey = identity.key;
+    if (this.currentIdentity !== cacheKey || force) {
+      this.cache.clear();
+      this.runtimeEvidence.clear();
+      this.currentIdentity = cacheKey;
+    }
     if (force) this.cache.delete(cacheKey);
     let pending = this.cache.get(cacheKey);
     if (!pending) {
@@ -56,9 +65,10 @@ export class CliCapabilityService {
     return mergeCliCapabilityEvidence(snapshot, this.runtimeEvidence.get(cacheKey));
   }
 
-  async recordRuntimeSupport(names: readonly CliCapabilityName[], supported = true, reason?: string): Promise<void> {
+  async recordRuntimeSupport(names: readonly CliCapabilityName[], supported = true, reason?: string, owner?: Pick<CliBinaryIdentity, "key">): Promise<void> {
     const snapshot = await this.get();
-    if (!snapshot.cliFound) return;
+    // Runtime evidence must carry the identity captured by its owning connection.
+    if (!snapshot.cliFound || !owner || owner.key !== snapshot.cacheKey || this.currentIdentity !== owner.key) return;
     const current = this.runtimeEvidence.get(snapshot.cacheKey) ?? {};
     for (const name of names) current[name] = {
       state: supported ? "supported" : "unsupported",
@@ -71,6 +81,7 @@ export class CliCapabilityService {
   clear(): void {
     this.cache.clear();
     this.runtimeEvidence.clear();
+    this.currentIdentity = undefined;
   }
 }
 
@@ -86,7 +97,9 @@ export async function probeCliCapabilities(input: CliCapabilityProbeInput): Prom
 
   if (root) {
     setHelpCapability(capabilities, "worktree.create", hasOption(root, "worktree"), "CLI 未公布 --worktree");
-    setHelpCapability(capabilities, "memory.enable", hasOption(root, "experimental-memory") && hasOption(root, "no-memory"), "CLI 未公布 Memory 会话开关");
+    capabilities["memory.enable"] = hasOption(root, "experimental-memory") && hasOption(root, "no-memory")
+      ? { state: "supported", source: "cli-help" }
+      : { state: "unknown", source: "cli-help", reason: "CLI 未公布可检测的 Memory 会话开关；工作区设置仍沿用现有流程" };
     setHelpCapability(capabilities, "dashboard", hasCommand(root, "dashboard"), "CLI 未公布 dashboard 命令");
     setHelpCapability(capabilities, "plugins", hasCommand(root, "plugin"), "CLI 未公布 plugin 命令");
     setHelpCapability(capabilities, "mcp", hasCommand(root, "mcp"), "CLI 未公布 mcp 命令");

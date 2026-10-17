@@ -345,7 +345,7 @@ function RemoteApp() {
           {client.snapshot?.pending.length && selected?.canSend !== false ? <InlinePending pending={client.snapshot.pending} theme={theme} disabled={actionsDisabled} submit={(action, extra) => void client.perform(action, extra)} onAll={() => openSheet("pending")} /> : null}
           <Composer client={client} session={selected} theme={theme} disabled={actionsDisabled || !client.materialsReady} queueCount={queue.length} childrenCount={children.length}
             onStop={() => confirm("停止当前执行？", "历史会保留，电脑正在执行的本轮任务将停止。", () => void client.perform("cancel"))}
-            onAttach={() => openSheet("attachments")} onTools={() => openSheet("actions")} onConfig={() => openSheet("config")} onPending={() => openSheet("pending")} onQueue={() => openSheet("queue")} onChildren={() => openSheet("children")} />
+            onAttach={() => openSheet("attachments")} onTools={() => openSheet("actions")} onConfig={() => openSheet("config")} onPending={() => openSheet("pending")} onQueue={() => openSheet("queue")} onChildren={() => openSheet("children")} onNativeRuns={() => openSheet("native-runs")} />
         </ConversationFrame></ReadingScale.Provider>) : (<>
           {tab === "sessions" ? <SessionList sessions={client.sessions} theme={theme} favorites={preferences.favorites} recent={preferences.recent || []} refreshing={client.refreshing} onOpen={(id) => openSession(id)} refresh={client.refresh} online={online} actions={sessionActions} scrollToTop={topSignal} />
             : tab === "activity" ? <TaskWorkspace key={host.fingerprint} client={client} theme={theme} initialTab={activityFocus} onOpen={id => openSession(id)} />

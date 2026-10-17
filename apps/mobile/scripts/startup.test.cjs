@@ -9,6 +9,21 @@ const renderer = require("react-test-renderer");
 const { mismatches } = require("./check-native-dependencies.cjs");
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+test("native path privacy runs before eager app evaluation and preserves literal Gradle text", () => {
+  const path=join(__dirname,"../plugins/with-native-path-privacy.cjs");
+  const loaded=new Module(path);
+  loaded.require=id=>id==="@expo/config-plugins"?{withProjectBuildGradle:(config,transform)=>transform(config)}:require(id);
+  loaded._compile(readFileSync(path,"utf8"),path);
+  const original='apply plugin: "expo-root-project"\napply plugin: "com.facebook.react.rootproject"\n';
+  const config={modResults:{contents:original}};
+  loaded.exports(config);
+  const output=config.modResults.contents;
+  assert.equal(output.split('apply plugin: "com.facebook.react.rootproject"').length,2);
+  assert.ok(output.indexOf("// Grok Remote native path privacy")<output.indexOf('apply plugin: "com.facebook.react.rootproject"'));
+  assert.ok(output.includes(String.raw`.replace('$', '\\$')`));
+  loaded.exports(config);assert.equal(config.modResults.contents,output);
+});
+
 function load(name, mocks) {
   const path = join(__dirname, "../src", name);
   const compiled = ts.transpileModule(readFileSync(path, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;

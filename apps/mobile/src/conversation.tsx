@@ -16,6 +16,7 @@ import type { useRemote } from "./use-remote";
 import type { RemoteSession } from "../../../src/shared/remote";
 import { savedRead, savedWrite } from "./cache";
 import { ConversationNavigator } from "./conversation-navigator";
+import { nativeRunChip } from "./native-runs";
 import { ActionMenu, haptic, type MenuItem } from "./gestures";
 type Client = ReturnType<typeof useRemote>;
 export type Density = "compact" | "standard" | "full";
@@ -222,7 +223,7 @@ function toolStatus(value: string) {
  * Status that needs attention (pending requests, queue, sub-sessions, receipts) appears
  * as chips above the input only when present, instead of permanent rows.
  */
-export function Composer({ client, session, theme, disabled, onStop, onAttach, onTools, onConfig, onPending, onQueue, onChildren, queueCount, childrenCount }: {
+export function Composer({ client, session, theme, disabled, onStop, onAttach, onTools, onConfig, onPending, onQueue, onChildren, onNativeRuns, queueCount, childrenCount }: {
     client: Client;
     session?: RemoteSession;
     theme: Theme;
@@ -234,6 +235,7 @@ export function Composer({ client, session, theme, disabled, onStop, onAttach, o
     onPending: () => void;
     onQueue: () => void;
     onChildren: () => void;
+    onNativeRuns: () => void;
     queueCount: number;
     childrenCount: number;
 }) {
@@ -246,6 +248,8 @@ export function Composer({ client, session, theme, disabled, onStop, onAttach, o
     const materials = client.composer.attachments.length + (client.composer.references?.length ?? 0);
     const chips: React.ReactNode[] = [];
     if (pending) chips.push(<Chip key="pending" tone="warning" label={`${pending} 项待确认`} theme={theme} onPress={onPending} />);
+    const native = nativeRunChip(client.snapshot?.nativeRuns);
+    if (native) chips.push(<Chip key="native" tone={native.tone} label={native.label} theme={theme} onPress={onNativeRuns} />);
     if (queueCount) chips.push(<Chip key="queue" label={`队列 ${queueCount}`} theme={theme} onPress={onQueue} />);
     if (childrenCount) chips.push(<Chip key="children" label={`子会话 ${childrenCount}`} theme={theme} onPress={onChildren} />);
     if (client.composer.attachments.length) chips.push(<Chip key="files" selected label={`附件 ${client.composer.attachments.length}`} theme={theme} onPress={onAttach} />);

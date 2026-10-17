@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { hasIpcRuntimeSchema, validateIpcInvocation } from "./ipc-schema";
 
 describe("IPC runtime schemas", () => {
+  it("requires exact native control identities and rejects unknown action fields", () => {
+    const input={sessionId:"session-a",kind:"workflow",runId:"wf-one",revision:"a".repeat(64),action:"pause",operationId:"operation-a"};
+    expect(()=>validateIpcInvocation("native-runs:control",[input],1)).not.toThrow();
+    for(const patch of [{runId:"wf-one; stop other"},{kind:"shell"},{action:"run"},{text:"/goal new objective"}])expect(()=>validateIpcInvocation("native-runs:control",[{...input,...patch}],1)).toThrow();
+  });
   it("allows clearing an image draft after submission and keeps its identity required", () => {
     expect(() => validateIpcInvocation("images:draft", ["image-session", ""], 2)).not.toThrow();
     for (const args of [["", ""], ["image-session", null], ["image-session", "\0"], ["image-session", "x".repeat(2*1024*1024+1)]])

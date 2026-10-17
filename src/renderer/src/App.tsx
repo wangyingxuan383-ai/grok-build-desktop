@@ -602,7 +602,7 @@ export default function App(): React.JSX.Element {
     window.setTimeout(focusComposer, 0);
   };
 
-  const openSession = async (session: SessionSummary): Promise<void> => {
+  const openSession = async (session: SessionSummary, previewOnly = false): Promise<void> => {
     const requestId = ++openRequestRef.current;
     setOperationBusy(true);
     setActiveCodexId(""); setCodexDetail(null);
@@ -618,6 +618,12 @@ export default function App(): React.JSX.Element {
       if (preview?.projection) store.handleEvent({ type: "conversation-projection-restore", sessionId: session.id, projection: preview.projection });
       if (preview?.presentations.length) store.handleEvent({ type: "turn-presentations-restore", sessionId: session.id, presentations: preview.presentations });
       setOperationBusy(false);
+      if (previewOnly) {
+        setComposerNotice("已打开会话历史；只查看不会重新连接 CLI。");
+        window.dispatchEvent(new Event("grok:reveal-current"));
+        settleConversationBottom(session.id);
+        return;
+      }
       const result = await window.grokDesktop.openSession(session.cwd, session.id);
       if (requestId !== openRequestRef.current) return;
       if (result.hydration === "offline") setComposerNotice(`已显示本地历史；CLI 暂未连接：${result.message || "可稍后重试"}`);
@@ -629,7 +635,7 @@ export default function App(): React.JSX.Element {
     finally { if (requestId === openRequestRef.current) setOperationBusy(false); }
   };
 
-  const openConversationTarget = async (target: { cwd: string; sessionId: string }): Promise<void> => {
+  const openConversationTarget = async (target: { cwd: string; sessionId: string; previewOnly?: boolean }): Promise<void> => {
     const navigationRequest = ++openRequestRef.current;
     if (offlineFixtureRef.current) {
       const session = useAppStore.getState().sessions.find((value) => value.id === target.sessionId);
@@ -653,7 +659,7 @@ export default function App(): React.JSX.Element {
     setWorkbenchView("chat");
     setRightTool(null);
     setPanel(null);
-    await openSession(session);
+    await openSession(session, target.previewOnly);
     window.requestAnimationFrame(() => { window.dispatchEvent(new Event("resize")); focusComposer(); });
   };
   openConversationTargetRef.current = openConversationTarget;
@@ -1067,7 +1073,7 @@ export default function App(): React.JSX.Element {
         {panel === "extensions" && <Suspense fallback={<p role="status">正在加载扩展中心…</p>}><LazyExtensionsPanel confirmAction={askConfirm} setError={store.setError} onUseSkill={(command) => { setPanel(null); setWorkbenchView("chat"); setComposer(command); focusComposer(); }} onClose={() => { setPanel(null); focusComposer(); }} /></Suspense>}
         {panel === "diagnostics" && <LazyDiagnosticsPanel confirmAction={askConfirm} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "onboarding" && store.onboarding && <LazyOnboardingPanel state={store.onboarding} onState={store.setOnboarding} onRemote={()=>{try{localStorage.setItem("grok.settings-category.once","remote")}catch{}setPanel("settings")}} onClose={() => { setReturnToOnboarding(false); setPanel(null); focusComposer(); }} onAccounts={() => { setReturnToOnboarding(true); setPanel("accounts"); }} onWorkspace={() => void window.grokDesktop.chooseWorkspace().then(async (cwd) => { if (cwd) { store.setSettings(await window.grokDesktop.getSettings()); store.setSessions(await window.grokDesktop.listSessions(cwd)); } })} />}
-        {panel === "tasks" && <LazyTaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task) => { if (!task.sessionId) return; void openConversationTarget({ cwd: task.workspace, sessionId: task.sessionId }).catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
+        {panel === "tasks" && <LazyTaskCenterPanel workspace={store.settings?.activeWorkspace || ""} accounts={store.accounts} setError={store.setError} confirmAction={askConfirm} onOpenSession={(task, previewOnly) => { if (!task.sessionId) return; void openConversationTarget({ cwd: task.workspace, sessionId: task.sessionId, previewOnly }).catch((error) => store.setError(errorMessage(error))); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "providers" && <LazyProviderManagerDialog confirmAction={askConfirm} onError={store.setError} onSettingsChanged={() => void window.grokDesktop.getSettings().then(store.setSettings)} onClose={() => setPanel(null)}/>}
         {panel && !["media", "extensions", "diagnostics", "onboarding", "tasks", "history", "providers", "feedback"].includes(panel) && <ControlPanel type={panel as "settings" | "accounts" | "about"} confirmAction={askConfirm} onDiagnostics={() => setPanel("diagnostics")} onProviders={() => setPanel("providers")} onOnboarding={async () => { store.setOnboarding(await window.grokDesktop.resetOnboarding()); setPanel("onboarding"); }} onClose={() => { if (returnToOnboarding && panel === "accounts") { setReturnToOnboarding(false); setPanel("onboarding"); } else { setPanel(null); focusComposer(); } }} />}
       </Suspense></div></PagePresentation.Provider>}
@@ -1204,7 +1210,7 @@ export default function App(): React.JSX.Element {
         </div></WorkspaceDeck>
       </main>
       {subagentPane ? <aside className="right-utility-pane sa-pane"><Suspense fallback={<p role="status">正在加载子会话…</p>}><LazySubagentConversation key={subagentPane} variant="pane" nodeId={subagentPane} onClose={()=>setSubagentPane(undefined)}/></Suspense></aside>
-      : visibleArtifactPreview ? <Suspense fallback={<aside className="right-utility-pane" role="status">正在加载预览…</aside>}><LazyArtifactPreviewPane key={visibleArtifactPreview.kind==="file"?`${visibleArtifactPreview.workspace}:${visibleArtifactPreview.path}`:`${visibleArtifactPreview.sessionId}:${visibleArtifactPreview.messageId}`} target={visibleArtifactPreview} onPinMedia={media=>{const target:ContentTarget={kind:"artifact",workspace:media.workspace,id:encodeMediaArtifact(media),title:media.media==="image"?"生成图片":"生成视频"};void activateContent(target).then(()=>{setArtifactPreview(undefined);window.dispatchEvent(new CustomEvent("grok:reveal-file",{detail:target}))}).catch(error=>store.setError(errorMessage(error)))}} onClose={()=>setArtifactPreview(undefined)} onError={store.setError} onPin={(workspace,path)=>{setArtifactPath(path);setWorkbenchView("artifacts");setArtifactPreview(undefined);window.dispatchEvent(new CustomEvent("grok:reveal-file",{detail:{kind:"artifact",workspace,id:path,title:path.split(/[\\/]/).at(-1)||"产物"}}))}} onReturn={(sessionId,cwd)=>{setArtifactPreview(undefined);if(sessionId===store.activeSessionId){setWorkbenchView("chat");return;}void openConversationTarget({sessionId,cwd}).catch(error=>store.setError(errorMessage(error)))}}/></Suspense> : <RightDock tool={rightTool} active={!pagePanel && activeWorkbenchView === "chat"} sessionId={store.activeSessionId} cwd={executionRoot} lastTurnPaths={lastTurnPaths} reviewInitialScope={reviewInitialScope} turn={utilityTurn} queue={view?.queue ?? []} runtimeUpdates={view?.runtimeUpdates ?? []} sessionStatus={view?.status} onTool={(tool) => { if (tool === "review") setReviewInitialScope("unstaged"); setRightTool(tool); }} onClose={() => setRightTool(null)} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onAddComment={(comment) => { setReviewComments((values) => [...values, comment]); focusComposer(); }} onExpandResult={() => { setRightTool(null); const index = utilityTurn ? turns.findIndex((turn) => turn.id === utilityTurn.id) : turns.length - 1; if (index >= 0) virtuosoRef.current?.scrollToIndex({ index, align: "end", behavior: "smooth" }); }} onError={store.setError}/>
+      : visibleArtifactPreview ? <Suspense fallback={<aside className="right-utility-pane" role="status">正在加载预览…</aside>}><LazyArtifactPreviewPane key={visibleArtifactPreview.kind==="file"?`${visibleArtifactPreview.workspace}:${visibleArtifactPreview.path}`:`${visibleArtifactPreview.sessionId}:${visibleArtifactPreview.messageId}`} target={visibleArtifactPreview} onPinMedia={media=>{const target:ContentTarget={kind:"artifact",workspace:media.workspace,id:encodeMediaArtifact(media),title:media.media==="image"?"生成图片":"生成视频"};void activateContent(target).then(()=>{setArtifactPreview(undefined);window.dispatchEvent(new CustomEvent("grok:reveal-file",{detail:target}))}).catch(error=>store.setError(errorMessage(error)))}} onClose={()=>setArtifactPreview(undefined)} onError={store.setError} onPin={(workspace,path)=>{setArtifactPath(path);setWorkbenchView("artifacts");setArtifactPreview(undefined);window.dispatchEvent(new CustomEvent("grok:reveal-file",{detail:{kind:"artifact",workspace,id:path,title:path.split(/[\\/]/).at(-1)||"产物"}}))}} onReturn={(sessionId,cwd)=>{setArtifactPreview(undefined);if(sessionId===store.activeSessionId){setWorkbenchView("chat");return;}void openConversationTarget({sessionId,cwd}).catch(error=>store.setError(errorMessage(error)))}}/></Suspense> : <RightDock tool={rightTool} active={!pagePanel && activeWorkbenchView === "chat"} sessionId={store.activeSessionId} cwd={executionRoot} lastTurnPaths={lastTurnPaths} reviewInitialScope={reviewInitialScope} turn={utilityTurn} queue={view?.queue ?? []} runtimeUpdates={view?.runtimeUpdates ?? []} sessionStatus={view?.status} onTool={(tool) => { if (tool === "review") setReviewInitialScope("unstaged"); setRightTool(tool); }} onClose={() => setRightTool(null)} onNavigate={(intent) => void navigate(intent).catch((error) => store.setError(errorMessage(error)))} onAddComment={(comment) => { setReviewComments((values) => [...values, comment]); focusComposer(); }} onExpandResult={() => { setRightTool(null); const index = utilityTurn ? turns.findIndex((turn) => turn.id === utilityTurn.id) : turns.length - 1; if (index >= 0) virtuosoRef.current?.scrollToIndex({ index, align: "end", behavior: "smooth" }); }} onError={store.setError} confirmAction={askConfirm}/>
       }
       <CommandSearch actions={commandActions} onError={store.setError}/>
       <DialogHost>

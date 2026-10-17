@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.2 — Grok Remote 0.4.2
+
+Includes the changes of the unpublished 0.12.1 / 0.4.1 inspection build.
+
+- Preserve CLI-declared model context capacity in new-task catalogs and resume fallbacks, without inventing missing limits.
+- Display current context occupancy independently of token usage; share event-driven reads, ignore stale responses, and show an empty ring with a tooltip when occupancy is unknown.
+- Treat missing legacy Memory flags as unknown support and bind optional capability evidence to the executable that produced it.
+- Manage native Goal/Workflow runs from the task center (grouped by conversation, with in-progress and needs-attention filters), the current conversation's right-pane task tab, and on the phone from the task tab, a conversation status chip and the conversation tools.
+- Gate native controls on the CLI protocol baseline (1.0.60 or later, as reported by the running agent) with declared commands, exact IDs, live revisions and native receipts, instead of one binary hash. Verified against the official Windows 1.0.60 and 1.0.62 binaries with an isolated loopback provider.
+- Respect the user's leader configuration, read goal state without delaying conversation hydration, and let newer live state end an unconfirmed control outcome.
+- Keep the last-known status of restored summaries, allow removing finished or restored records, and distinguish identically titled runs with a short ID.
+- Announce a background workflow's completion, failure or exhausted budget once; user stops and history replays stay silent.
+- Open live native-run conversations normally; restored summaries open as read-only history.
+- Show one "not connected" state for cold sessions in the session pane instead of an IPC error, and strip Electron IPC framing from error messages.
+- Match session search words in any order on Desktop (sidebar and Ctrl+K) and on the phone, following the CLI resume picker.
+- Size composer pickers to their selected value and use design-token text sizes in the right pane.
+- Prefer PowerShell 7 for repository scripts and the CLI install window when it is installed, falling back to Windows PowerShell 5.1.
+- Phone: tone-matched badge and chip backgrounds, receipt-driven control feedback, and running counts limited to live running work.
+- Exclude dependency tests, examples, coverage reports and source maps from Windows packages; rewrite Android native diagnostic source paths during compilation and reject local build paths in APK content checks.
+
 ## 0.12.0 — Grok Remote 0.4.0
 
 - Add explicit foreground read acknowledgements while retaining passive history reads for monitoring and locked/background screens.

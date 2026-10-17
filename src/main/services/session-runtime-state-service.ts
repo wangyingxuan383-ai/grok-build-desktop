@@ -26,6 +26,10 @@ export class SessionRuntimeStateService {
     return (await this.store.get()).sessions[sessionId];
   }
 
+  async nativeRunSummaries(): Promise<import("../../shared/native-runs").NativeRunSnapshot[]> {
+    return Object.values((await this.store.get()).sessions).flatMap(session => session.nativeRuns ?? []);
+  }
+
   async save(input: Omit<SessionRuntimePreferences, "updatedAt"> & { updatedAt?: string }): Promise<SessionRuntimePreferences> {
     const value: SessionRuntimePreferences = { ...input, updatedAt: input.updatedAt ?? new Date().toISOString() };
     await this.store.mutate((current) => {

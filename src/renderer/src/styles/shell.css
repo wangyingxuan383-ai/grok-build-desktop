@@ -182,7 +182,8 @@
 .toolbar-left { gap: 4px; }
 .add-button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: 50%; }
 .add-button:hover { border-color: var(--border); }
-.model-controls select { height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: .6875em; }
+/* Size each picker to its selected value; a fixed width left a long gap before the arrow. */
+.model-controls select { height: 28px; field-sizing: content; padding: 0 4px 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: var(--text-sm); }
 .model-controls select:hover { background: var(--hover); color: var(--text); }
 .token-meter { gap: 5px; color: var(--muted); font-size: .625em; }
 .token-meter > span { width: 14px; height: 14px; }
@@ -308,3 +309,4 @@
 .remote-mobile-download > div { flex: 1; min-width: 0; }
 .remote-mobile-download img { flex-shrink: 0; border-radius: 12px; }
 @media (max-width: 640px) { .remote-mobile-download { flex-wrap: wrap; } }
+

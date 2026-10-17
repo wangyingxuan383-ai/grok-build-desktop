@@ -7,6 +7,7 @@
 | Subagents | Native CLI orchestration, inline cards, read-only child viewer and task status | Native identity and actual transcripts preferred; summary-only fallback is labeled |
 | Usage | SQLite worker, local dates, explicit parent totals and separate cumulative child reports | No inferred billing or invented totals; direct Provider image usage recorded only when explicitly returned |
 | Scheduling | Windows Task Scheduler, encrypted instructions, fixed context, confirmations, run history and notifications | Offline lifecycle coverage; actual timed firing requires Windows live acceptance |
+| Native Goal / Workflow | Desktop-owned runs in the task center, the conversation's right pane and the Android task tab, conversation chip and tools; exact-ID controls, confirmed receipts and one notice when a background workflow finishes | Protocol-gated for CLI 1.0.60 and later; official 1.0.60 and 1.0.62 binaries verified through the adapter with an isolated loopback provider; restored summaries stay read-only; no creation form or extra polling |
 | Computer | Session MCP, call proof, native Windows host, observation/control/action evidence | Selection is not execution; current model/GUI isolation acceptance remains separate |
 | Artifacts | Contextual right-pane preview and pinned views | HTML is interactive but isolated, with local relative resources and no external network; Office uses text extraction |
 | Terminal | Workspace-bound manual PTY | No model-control tool is exposed |

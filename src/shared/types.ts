@@ -725,6 +725,8 @@ export interface SessionRuntimePreferences {
   profileId?: string;
   /** Session compaction behavior. The CLI remains authoritative when omitted or set to inherit. */
   compaction?: SessionCompactionPolicy;
+  /** Last known native run summaries; restored values are read-only until confirmed live. */
+  nativeRuns?: import("./native-runs").NativeRunSnapshot[];
   updatedAt: string;
 }
 
@@ -1595,6 +1597,7 @@ export interface ToolCallState {
 export type TurnOutcome = "completed" | "failed" | "cancelled" | "interrupted";
 
 export interface TurnPresentation {
+  origin?: "native-control";
   turnId: string;
   ordinal: number;
   clientMessageId?: string;
@@ -1825,7 +1828,7 @@ export interface CliRuntimeHandshake {
   sessionCapabilities?: Record<string, boolean>;
   mcpCapabilities?: Record<string, boolean>;
   currentModelId?: string;
-  models: Array<{ modelId: string; name?: string; reasoningEfforts?: ReasoningEffort[]; acceptsImages?: boolean; inputModalities?: string[] }>;
+  models: Array<{ modelId: string; name?: string; totalContextTokens?: number; reasoningEfforts?: ReasoningEffort[]; acceptsImages?: boolean; inputModalities?: string[] }>;
   commands: string[];
   extensions: string[];
   features: {
@@ -2431,6 +2434,9 @@ export interface GrokDesktopApi {
   rewindSession(sessionId: string, pointId: string): Promise<void>;
   archiveSession(sessionId: string, archived: boolean): Promise<void>;
   listBackgroundTasks(): Promise<BackgroundTaskSummary[]>;
+  listNativeRuns(sessionId?: string): Promise<import("./native-runs").NativeRunSnapshot[]>;
+  controlNativeRun(input: import("./native-runs").NativeRunControlInput): Promise<import("./native-runs").NativeRunControlReceipt>;
+  dismissNativeRun(input: import("./native-runs").NativeRunDismissInput): Promise<void>;
   killBackgroundTask(id: string): Promise<void>;
   listInbox(): Promise<NotificationInboxItem[]>;
   openInboxItem(id:string):Promise<void>;

@@ -27,9 +27,9 @@ app.whenReady().then(async()=>{
     const key=async(key,code)=>{await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key,code});await win.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key,code});await wait()};
     if (process.env.REGRESSION_SCOPE !== 'automation') {
     await run('fixture.menus()'); await wait();
-    await run('document.querySelectorAll(".session-actions")[0].focus()'); await key('ArrowDown','ArrowDown');
+    await run('document.querySelectorAll(".sb-session-more")[0].focus()'); await key('ArrowDown','ArrowDown');
     assert(await run('document.activeElement.getAttribute("role")==="menuitem"'),'menu arrow focus');
-    await key('Escape','Escape');assert(await run('document.activeElement.classList.contains("session-actions") && !document.querySelector("[role=menu]")'),'menu Escape restore');
+    await key('Escape','Escape');assert(await run('document.activeElement.classList.contains("sb-session-more") && !document.querySelector("[role=menu]")'),'menu Escape restore');
     await run('Object.defineProperty(navigator,"clipboard",{configurable:true,value:{writeText:()=>Promise.reject(Error("denied"))}});fixture.toast("first")');await wait();
     await run('document.querySelector(".toast-actions button").click()');await wait();
     assert(await run('document.querySelector(".toast-actions button").textContent.includes("复制失败")'),'copy failure feedback');
@@ -84,7 +84,17 @@ app.whenReady().then(async()=>{
     assert(await run('document.body.textContent.includes("Computer 操作等待确认") && !document.body.textContent.includes("Other secret")'),'confirmation leaked across conversations');
     await run('Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="允许本次").click()');await wait();
     assert(await run('fixture.confirmationCalls()[0].id==="pending:mine" && fixture.confirmationCalls()[0].approved && !document.body.textContent.includes("Delete fixture")'),'confirmation response did not resolve shared inbox ID');
-    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation payload/timezone/history/bound workspace' : 'REGRESSION_DOM_PASSED all fixture groups including automation');
+    await run('fixture.nativeTasks()');await wait();
+    await run('Array.from(document.querySelectorAll(".task-tabs button")).find(b=>b.textContent==="队列与后台").click()');await wait();
+    const nativeRow = (title) => 'Array.from(document.querySelectorAll(".native-run-row")).find(r=>r.textContent.includes("' + title + '"))';
+    await run(nativeRow("Live native goal") + '.querySelector("summary").click()');await wait();
+    await run('Array.from(' + nativeRow("Live native goal") + '.querySelectorAll("button")).find(b=>b.textContent==="查看会话").click()');await wait();
+    assert(await run('fixture.nativeOpen().sessionId==="native-session" && fixture.nativeOpen().previewOnly===false'),'a live native task must open its conversation normally');
+    await run(nativeRow("Restored native workflow") + '.querySelector("summary").click()');await wait();
+    assert(await run(nativeRow("Restored native workflow") + '.textContent.includes("上次记录")'),'a restored summary must keep its last-known status');
+    await run('Array.from(' + nativeRow("Restored native workflow") + '.querySelectorAll("button")).find(b=>b.textContent==="查看会话").click()');await wait();
+    assert(await run('fixture.nativeOpen().sessionId==="restored-session" && fixture.nativeOpen().previewOnly===true'),'a restored native summary must request history-only navigation');
+    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation and native live/restored navigation' : 'REGRESSION_DOM_PASSED all fixture groups including native live/restored navigation');
     app.exit(0);
   }catch(error){console.error(error.stack);app.exit(1)}
 });`;

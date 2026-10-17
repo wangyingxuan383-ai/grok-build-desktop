@@ -11,6 +11,15 @@ import {sessionCacheKey}from"./media-cache-service";
 const roots:string[]=[];afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})});
 const root=async()=>{const value=await mkdtemp(join(tmpdir(),"grok-mobile-contract-"));roots.push(value);return value};
 describe("remote workbench contracts",()=>{
+ it("forwards native control identity and preserves an unconfirmed result",async()=>{
+  const controlNativeRun=vi.fn(async()=>({operationId:"native-op",state:"unknown",message:"状态待确认"}));
+  const service=new RemoteWorkbenchService({controlNativeRun} as unknown as AppController,await root());
+  const data={sessionId:"session-a",kind:"workflow",revision:"a".repeat(64),action:"pause"};
+  expect(await service.mutate({kind:"native-run.control",target:"workflow-full-id",data},"paired-device","native-op")).toEqual({state:"unknown",message:"状态待确认"});
+  expect(controlNativeRun).toHaveBeenCalledWith({...data,runId:"workflow-full-id",operationId:"native-op"});
+  await expect(service.mutate({kind:"native-run.control",target:"workflow-full-id",data:{...data,command:"arbitrary"}},"paired-device","other-op")).rejects.toThrow();
+  expect(controlNativeRun).toHaveBeenCalledTimes(1);
+ });
  it("accepts actual model/mode/effort configuration and rejects path or hidden operation fields",()=>{const base={operationId:Date.now()+"_model",sessionId:"session",action:"configure",revision:"a".repeat(64),modelId:"provider-model"};expect(parseRemoteCommand(base).modelId).toBe("provider-model");expect(()=>parseRemoteCommand({...base,cwd:"C:/other"})).toThrow("未知");expect(()=>parseRemoteCommand({...base,effort:"unlimited"})).toThrow("参数");expect(parseRemoteCommand({...base,modelId:undefined,effort:"auto"}).effort).toBe("auto")});
  it("routes original service mutations with device identity and validates their inputs",async()=>{const controller={pauseAutomation:vi.fn(async()=>[]),switchAccount:vi.fn(),remoteOptions:vi.fn(async()=>({workspaces:[]}))};const service=new RemoteWorkbenchService(controller as unknown as AppController,await root());await service.mutate({kind:"automation.pause",target:"task",data:{paused:true}},"device","op");expect(controller.pauseAutomation).toHaveBeenCalledWith("task",true);await expect(service.mutate({kind:"automation.pause",target:"task",data:{paused:"true"}},"device","op2")).rejects.toThrow("参数");expect(controller.pauseAutomation).toHaveBeenCalledTimes(1)});
  it("does not report a saved but unregistered task as successful",async()=>{const controller={remoteOptions:vi.fn(async()=>({workspaces:[{id:"project",path:"C:/demo"}]})),createRemoteAutomation:vi.fn(async()=>({id:"new-task",registrationStatus:"error",registrationError:"scheduler unavailable"}))};const service=new RemoteWorkbenchService(controller as unknown as AppController,await root());await expect(service.mutate({kind:"automation.create",data:{workspaceId:"project",input:{name:"one"}}},"device","op")).rejects.toMatchObject({resultSessionId:"new-task",message:expect.stringContaining("未注册")});expect(controller.createRemoteAutomation).toHaveBeenCalledWith(expect.objectContaining({workspace:"C:/demo"}),undefined)});

@@ -32,6 +32,63 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 const host = (fingerprint = "a", address = "https://a.example.invalid") => ({ id: fingerprint, fingerprint: fingerprint.repeat(64), host: address, token: "fixture", name: fingerprint });
 const native = { View: "View", Text: "Text", Pressable: "Pressable", ScrollView: "ScrollView", TextInput: "TextInput", FlatList: "FlatList", KeyboardAvoidingView: "KeyboardAvoidingView", ActivityIndicator: "ActivityIndicator", Platform: { OS: "android" }, Keyboard: { dismiss() {} }, Vibration: { vibrate() {} }, StyleSheet: { create: x => x, hairlineWidth: 1 }, useColorScheme: () => "light", AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) } };
 
+function nativeRunsModule() {
+  const shared=load("../../src/shared/native-runs.ts",{});
+  return load("src/native-runs.tsx",{"react-native":native,"./ui":{Badge:"Badge",Button:"Button",Card:"Card",font:{caption:12},ui:{section:{},title:{},hint:{},row:{}}},"./icons":{Icon:"Icon"},"./forms":{confirm:(_a,_b,run)=>run()},"../../../src/shared/native-runs":shared});
+}
+const nativeRow=(patch={})=>({id:"wf-one",kind:"workflow",title:"Existing native task",status:"running",nativeStatus:"active",sessionId:"session-owner",revision:"a".repeat(64),observedAt:new Date().toISOString(),stale:false,actions:["pause","stop"],...patch});
+const text=(tree)=>tree.root.findAllByType("Text").map(node=>[].concat(node.props.children).join("")).join("|");
+
+test("native task controls stay collapsed, bind the owner and follow the desktop receipt", async () => {
+  const {NativeRunCards}=nativeRunsModule(), calls=[], pending=deferred();
+  let refreshes=0;
+  const client={sessions:[{id:"session-owner",title:"Owner"}],receipt:undefined,mutate:(...args)=>{calls.push(args);return pending.promise;}};
+  const props=(c,rows=[nativeRow()])=>({rows,client:c,theme:{},disabled:false,refresh:async()=>{refreshes++;},open:id=>{opened=id;}});
+  let tree,opened;
+  try {
+    await renderer.act(()=>{tree=renderer.create(React.createElement(NativeRunCards,props(client)));});
+    assert.equal(calls.length,0);assert.equal(tree.root.findAllByType("Button").length,0);
+    await renderer.act(()=>tree.root.findByType("Pressable").props.onPress());
+    const buttons=tree.root.findAllByType("Button");await renderer.act(()=>buttons.find(b=>b.props.title==="打开会话").props.onPress());assert.equal(opened,"session-owner");assert.equal(calls.length,0);
+    const pause=buttons.find(b=>b.props.title==="暂停");await renderer.act(()=>{pause.props.onPress();pause.props.onPress();});
+    assert.equal(calls.length,1);assert.deepEqual(calls[0],["native-run.control","wf-one",{sessionId:"session-owner",kind:"workflow",revision:"a".repeat(64),action:"pause"}]);
+    // The desktop answers "accepted" first; only the final receipt may report the outcome.
+    await renderer.act(async()=>{pending.resolve({operationId:"op-1",state:"accepted"});await settle();});
+    assert.ok(tree.root.findAllByType("Button").some(b=>b.props.title==="正在暂停…"));assert.ok(!text(tree).includes("已暂停"));
+    await renderer.act(()=>tree.update(React.createElement(NativeRunCards,props({...client,receipt:{operationId:"op-1",state:"completed",message:"已暂停"}}))));
+    assert.ok(text(tree).includes("已暂停"));assert.ok(refreshes>=1);assert.ok(!tree.root.findAllByType("Button").some(b=>b.props.title==="正在暂停…"));
+    await renderer.act(()=>tree.update(React.createElement(NativeRunCards,props(client,[]))));
+    assert.equal(tree.toJSON(),null);
+  } finally {if(tree)await renderer.act(()=>tree.unmount());}
+});
+
+test("an unconfirmed native control says so, and finished or restored records can be removed", async () => {
+  const {NativeRunCards}=nativeRunsModule(), calls=[];
+  const client={sessions:[],receipt:undefined,mutate:async(...args)=>{calls.push(args);return {operationId:"op-"+calls.length,state:args[0]==="native-run.control"?"unknown":"completed"};}};
+  const rows=[nativeRow(),nativeRow({id:"wf-old",title:"Restored",status:"paused",stale:true,actions:[]})];
+  let tree;
+  try {
+    await renderer.act(()=>{tree=renderer.create(React.createElement(NativeRunCards,{rows,client,theme:{},disabled:false,refresh:async()=>{}}));});
+    assert.ok(tree.root.findAllByType("Badge").some(b=>b.props.text==="上次记录 · 已暂停"),"restored rows keep their last-known status");
+    await renderer.act(()=>tree.root.findAllByType("Pressable")[0].props.onPress());
+    await renderer.act(async()=>{tree.root.findAllByType("Button").find(b=>b.props.title==="暂停").props.onPress();await settle();});
+    assert.ok(text(tree).includes("未收到 CLI 确认"));
+    assert.ok(!tree.root.findAllByType("Button").some(b=>b.props.title==="移除记录"),"live running work cannot be removed");
+    await renderer.act(()=>tree.root.findAllByType("Pressable")[1].props.onPress());
+    await renderer.act(async()=>{tree.root.findAllByType("Button").find(b=>b.props.title==="移除记录").props.onPress();await settle();});
+    assert.deepEqual(calls.at(-1),["native-run.dismiss","wf-old",{sessionId:"session-owner",kind:"workflow"}]);
+  } finally {if(tree)await renderer.act(()=>tree.unmount());}
+});
+
+test("the conversation chip shows live work first and ignores restored summaries", () => {
+  const {nativeRunChip}=nativeRunsModule();
+  assert.equal(nativeRunChip([]),undefined);
+  assert.equal(nativeRunChip([nativeRow({stale:true})]),undefined);
+  assert.deepEqual(nativeRunChip([nativeRow({kind:"goal",status:"paused"}),nativeRow({id:"wf-two"})]),{label:"工作流执行中",tone:"info"});
+  assert.deepEqual(nativeRunChip([nativeRow({status:"budget-limited"}),nativeRow({id:"b",status:"paused"})]),{label:"工作流预算已用完",tone:"warning"});
+  assert.deepEqual(nativeRunChip([nativeRow({status:"paused"}),nativeRow({id:"b",kind:"goal",status:"paused"})]),{label:"2 项已暂停",tone:undefined});
+});
+
 test("overview ignores late responses after switching computers, including manual refresh", async () => {
   let current = host(), hook, calls = 0; const pending = [deferred(), deferred()], writes = [];
   const query = () => pending[calls++].promise;
@@ -86,6 +143,7 @@ function conversationModule(cache) {
     "./ui": { Button: "Button", Chip: "Chip", IconButton: "IconButton", font: {}, radius: {}, space: {}, ui: {} },
     "./remote-model": {}, "./app-model": load("src/app-model.ts", {}), "./cache": cache, "./back-layers": { useBackLayer() {} },
     "./conversation-navigator": { ConversationNavigator: "ConversationNavigator" }, "./gestures": { ActionMenu: "ActionMenu", haptic: () => {} },
+    "./native-runs": { nativeRunChip: () => undefined },
   });
 }
 test("conversation history offers both pull refresh and an error retry", async () => {

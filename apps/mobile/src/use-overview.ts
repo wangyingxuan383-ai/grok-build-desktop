@@ -6,6 +6,7 @@ import type { AutomationTask, AutomationRunRecord, BackgroundTaskSummary, Notifi
 import type { ImageWorkspace } from "../../../src/shared/image-workspace";
 
 export interface Overview {
+    nativeRuns?: import("../../../src/shared/native-runs").NativeRunSnapshot[];
     tasks?: BackgroundTaskSummary[];
     automations?: AutomationTask[];
     runs?: AutomationRunRecord[];
@@ -51,7 +52,7 @@ export function useOverview(client: ReturnType<typeof useRemote>) {
         setValue(undefined); setError(""); setLoading(Boolean(host));
         if (!host) return;
         void cacheRead<Overview>(host.fingerprint + ":overview").then(cached => {
-            if (active && owner.current === identity && cached) setValue(previous => previous ?? cached.value);
+            if (active && owner.current === identity && cached) setValue(previous => previous ?? { ...cached.value, nativeRuns: cached.value.nativeRuns?.map(row => ({ ...row, stale: true, actions: [] })) });
         }).catch(() => undefined);
         const read = () => { if (AppState.currentState === "active" || AppState.currentState == null) void refresh(); };
         read();

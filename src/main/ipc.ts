@@ -201,6 +201,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:rewind", (sessionId: string, pointId: string) => controller.rewindSession(sessionId, pointId));
   handle("session:archive", (sessionId: string, archived: boolean) => controller.archiveSession(sessionId, archived));
   handle("tasks:list", () => controller.listBackgroundTasks());
+  handle("native-runs:list", (id?: string) => controller.listNativeRuns(id));
+  handle("native-runs:control", (input: import("../shared/native-runs").NativeRunControlInput) => controller.controlNativeRun(input));
+  handle("native-runs:dismiss", (input: import("../shared/native-runs").NativeRunDismissInput) => controller.dismissNativeRun(input));
   handle("tasks:kill", (id: string) => controller.killBackgroundTask(id));
   handle("inbox:list", () => controller.listInbox());
   handle("inbox:open",(id:string)=>controller.openInboxItem(id));

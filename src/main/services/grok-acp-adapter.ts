@@ -2,6 +2,9 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { createHash } from "node:crypto";
 import { mergeTurnUsage } from "../../shared/turn-usage";
 import { SessionMcpTools } from "./session-mcp-tools";
+import { readCliBinaryIdentity, type CliBinaryIdentity } from "./cli-binary-identity";
+import { normalizeNativeRunWire } from "../../shared/native-runs";
+import { bindNativeRunEventOwner, nativeRunControlSupported } from "./native-run-service";
 import { EventEmitter } from "node:events";
 import { createReadStream } from "node:fs";
 import { methods as acpMethods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
@@ -261,6 +264,8 @@ interface AdapterOptions extends SessionProcessOptions {
 }
 
 export interface UserPromptPresentation {
+  nativeControl?: boolean;
+  suppressCompletion?: boolean;
   toolSelection?: import("../../shared/types").McpToolSelection;
   clientMessageId?: string;
   attachments?: UserMessageAttachmentPreview[];
@@ -458,6 +463,10 @@ export class GrokAcpAdapter extends EventEmitter {
   readonly extensionLeaseId?: string;
   runtimeHandshake?: CliRuntimeHandshake;
   private cliIdentityPromise?: Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }>;
+  private binaryIdentityPromise?: Promise<CliBinaryIdentity | undefined>;
+  private nativeControlPending = false;
+  private nativeControlEnabled = false;
+  private lastNativeGoalId?: string;
   private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status" | "title" | "kind">>();
   lastCloseReceipt?: SessionCloseReceipt;
 
@@ -479,6 +488,13 @@ export class GrokAcpAdapter extends EventEmitter {
   }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
   get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
+  get nativeRunControllable(): boolean { return this.nativeControlEnabled; }
+  get nativeRunControlBusy(): boolean { return this.nativeControlPending; }
+  reserveNativeRunControl(): () => void {
+    if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后再试");
+    this.nativeControlPending = true;
+    return () => { this.nativeControlPending = false; };
+  }
   /** Official Grok allows a model change while the Plan decision card is
    * waiting. This is deliberately narrower than `needsUser`, which also
    * covers permission/question prompts that must remain locked. */
@@ -586,6 +602,7 @@ export class GrokAcpAdapter extends EventEmitter {
       return {
         modelId: model.modelId,
         name: model.name || model.modelId,
+        ...(model.totalContextTokens ? { totalContextTokens: model.totalContextTokens } : {}),
         ...(model.modelId===this.runtimeHandshake?.currentModelId?{defaultForCli:true}:{}),
         ...(reasoningEfforts.length ? { supportsReasoningEffort: true, reasoningEfforts } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
@@ -616,6 +633,9 @@ export class GrokAcpAdapter extends EventEmitter {
 
   private async launchAndInitialize(): Promise<void> {
     if (this.process) throw new Error("Grok ACP 进程已经启动");
+    // Fingerprint the executable alongside startup; capability evidence binds to it, launch never waits for it.
+    const launchIdentity = readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
+    this.binaryIdentityPromise = launchIdentity;
     const args = buildGrokAgentArgs(this.options.effort, this.options.pluginDirs, this.options.effortFlag, { modelId: this.options.modelId, agentProfilePath: this.options.agentProfilePath, alwaysApprove: this.options.alwaysApprove });
     await this.options.log.log(`spawn ${this.options.cliPath} ${args.join(" ")} cwd=${this.options.cwd}`);
     const batch = process.platform === "win32" && /\.(cmd|bat)$/i.test(this.options.cliPath);
@@ -641,6 +661,14 @@ export class GrokAcpAdapter extends EventEmitter {
       _meta: { clientIdentifier: DESKTOP_ACP_CLIENT_IDENTIFIER },
     }, 120_000) as Record<string, unknown>;
     this.runtimeHandshake = normalizeRuntimeHandshake(initializeResult);
+    // The running process reports its own version; controls still need declared commands and native receipts.
+    this.nativeControlEnabled = nativeRunControlSupported(this.runtimeHandshake.agentVersion ?? this.options.cliVersion);
+    // A binary replaced during startup must not inherit evidence recorded for the earlier file.
+    this.binaryIdentityPromise = launchIdentity.then(async (identity) => {
+      if (!identity) return undefined;
+      const current = await readCliBinaryIdentity(this.options.cliPath, this.options.cliVersion).catch(() => undefined);
+      return current?.key === identity.key ? identity : undefined;
+    });
     this.emit("runtime-handshake", this.runtimeHandshake);
   }
 
@@ -670,7 +698,7 @@ export class GrokAcpAdapter extends EventEmitter {
       : ((this.runtimeHandshake?.models ?? []).map((model) => ({
         modelId: model.modelId,
         name: model.name ?? model.modelId,
-        ...(model.reasoningEfforts?.length ? { _meta: { supportsReasoningEffort: true, reasoningEfforts: model.reasoningEfforts.map((value) => ({ value })) } } : {}),
+        _meta: { totalContextTokens: model.totalContextTokens, supportsReasoningEffort: Boolean(model.reasoningEfforts?.length), reasoningEfforts: model.reasoningEfforts?.map((value) => ({ value })) },
       })) as SessionModel[]);
     this.models = availableModels.map((model) => {
       const reasoningEfforts = (model._meta?.reasoningEfforts ?? []).flatMap((item) => {
@@ -687,7 +715,7 @@ export class GrokAcpAdapter extends EventEmitter {
         modelId: model.modelId,
         name: model.name,
         description: model.description,
-        totalContextTokens: model._meta?.totalContextTokens,
+        totalContextTokens: modelContextTokens(model._meta?.totalContextTokens),
         ...normalizeImageInputCapability(model._meta),
         supportsReasoningEffort: model._meta?.supportsReasoningEffort === true && reasoningEfforts.length > 0,
         reasoningEfforts,
@@ -701,6 +729,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.runtimeHandshake.models = this.models.map((model) => ({
         modelId: model.modelId,
         name: model.name,
+        ...(model.totalContextTokens ? { totalContextTokens: model.totalContextTokens } : {}),
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((item) => item.value) } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
         ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
@@ -837,6 +866,15 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   /** Fingerprints the binary that owns this live ACP connection without exposing a user path to the model. */
+  async runtimeIdentity(): Promise<CliBinaryIdentity | undefined> { return this.binaryIdentityPromise; }
+
+  async refreshNativeGoalState(): Promise<void> {
+    if (!this.nativeControlEnabled) return;
+    const state = unwrapExtResult(await this.extension("x.ai/session/state", { cwd: this.options.cwd }, 5000));
+    const goal = recordValue(state.goal);
+    if (goal) this.handlePrivateSessionUpdate({ ...goal, sessionUpdate: "goal_updated", tokens_used: goal.tokens_used_high_water });
+  }
+
   cliIdentity(): Promise<{ executableName: string; pathFingerprint: string; version?: string; sha256?: string }> {
     if (!this.cliIdentityPromise) {
       const cliPath = this.options.cliPath;
@@ -950,11 +988,12 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
+    if (this.nativeControlPending && !presentation.nativeControl) throw new Error("原生控制正在进行；草稿已保留，请稍后发送");
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const clientMessageId = presentation.clientMessageId || crypto.randomUUID();
     this.lastTouched = Date.now();
     this.working = true;
-    const startedTurn = this.beginTurn(clientMessageId);
+    const startedTurn = this.beginTurn(clientMessageId, presentation.suppressCompletion);
     this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "sending" });
     this.emitStatus("working", "Grok 正在处理…");
     try {
@@ -1038,6 +1077,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false, presentation: UserPromptPresentation = {}): Promise<QueueOperationReceipt> {
+    if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后再提交队列");
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
     const clientMessageId = presentation.clientMessageId || id;
@@ -1283,6 +1323,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async setModel(modelId: string, identity: { localModelId?: string; persistRuntime?: boolean } = {}): Promise<void> {
+    if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后切换配置");
     const previousRequestedModelId = this.requestedModelId;
     const previousLocalModelId = this.providerLocalModelId;
     const previousCurrentModelId = this.currentModelId;
@@ -1314,6 +1355,7 @@ export class GrokAcpAdapter extends EventEmitter {
    * the model, so wait for model_changed before reporting success.
    */
   async setEffort(effort: Exclude<ReasoningEffort, "">): Promise<void> {
+    if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后切换配置");
     if (!this.sessionId || !this.currentModelId) throw new LiveEffortUnsupportedError("当前会话没有可用于热切换的模型");
     if (this.pendingEffortChange) throw new Error("另一项推理强度切换仍在进行");
     if (effort === this.currentEffort) return;
@@ -1336,6 +1378,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async applyMode(mode: SessionMode, persist = true): Promise<void> {
+    if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后切换配置");
     if (mode === "plan" && this.mode !== "plan") {
       this.planExecutionMode = this.mode === "auto" ? "auto" : "agent";
     }
@@ -1926,11 +1969,13 @@ export class GrokAcpAdapter extends EventEmitter {
         return;
       }
       case "goal_updated":
-        this.emitRuntimeUpdate("goal", updateType, firstNonEmptyString(update.title, update.summary, update.status));
+      case "workflow_updated": {
+        const kind = updateType === "goal_updated" ? "goal" : "workflow";
+        const nativeRun = normalizeNativeRunWire(kind, update, this.lastNativeGoalId);
+        if (nativeRun?.kind === "goal") this.lastNativeGoalId = nativeRun.id;
+        this.emitRuntimeUpdate(kind, updateType, nativeRun?.title ?? firstNonEmptyString(update.title, update.summary, update.status), nativeRun ? { nativeRun } : undefined);
         return;
-      case "workflow_updated":
-        this.emitRuntimeUpdate("workflow", updateType, firstNonEmptyString(update.title, update.summary, update.status));
-        return;
+      }
       case "model_auto_switched":
         this.handleModelChanged({ ...update, sessionUpdate: "model_changed", model_id: update.model_id ?? update.modelId ?? update.to_model_id });
         this.emitRuntimeUpdate("model", updateType, firstNonEmptyString(update.reason, update.model_id, update.modelId));
@@ -2071,7 +2116,7 @@ export class GrokAcpAdapter extends EventEmitter {
         modelId,
         name: firstNonEmptyString(row.name, row.label) ?? modelId,
         description: firstNonEmptyString(row.description),
-        totalContextTokens: optionalPositiveInteger(meta.totalContextTokens ?? row.totalContextTokens),
+        totalContextTokens: modelContextTokens(meta.totalContextTokens ?? row.totalContextTokens),
         ...normalizeImageInputCapability(meta, row),
         supportsReasoningEffort: meta.supportsReasoningEffort === true && reasoningEfforts.length > 0,
         reasoningEfforts,
@@ -2088,6 +2133,7 @@ export class GrokAcpAdapter extends EventEmitter {
       this.runtimeHandshake.models = this.models.map((model) => ({
         modelId: model.modelId,
         name: model.name,
+        ...(model.totalContextTokens ? { totalContextTokens: model.totalContextTokens } : {}),
         ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts.map((entry) => entry.value) } : {}),
         ...(model.acceptsImages !== undefined ? { acceptsImages: model.acceptsImages } : {}),
         ...(model.inputModalities?.length ? { inputModalities: model.inputModalities } : {}),
@@ -2440,12 +2486,13 @@ export class GrokAcpAdapter extends EventEmitter {
     }
   }
 
-  private beginTurn(clientMessageId?: string): TurnPresentation {
+  private beginTurn(clientMessageId?: string, suppressCompletion = false): TurnPresentation {
     if (this.activeTurn) return this.activeTurn;
     this.providerThinking = { pending: "", thought: false };
     this.cancelRequested = false;
     const presentation: TurnPresentation & { monotonicStartedAt: number } = {
       turnId: clientMessageId || crypto.randomUUID(),
+      ...(suppressCompletion ? { origin: "native-control" as const } : {}),
       ordinal: this.nextTurnOrdinal++,
       ...(clientMessageId ? { clientMessageId } : {}),
       startedAt: new Date().toISOString(),
@@ -2468,6 +2515,7 @@ export class GrokAcpAdapter extends EventEmitter {
     const presentation: TurnPresentation = {
       turnId: active.turnId,
       ordinal: active.ordinal,
+      ...(active.origin ? { origin: active.origin } : {}),
       ...(active.clientMessageId ? { clientMessageId: active.clientMessageId } : {}),
       startedAt: active.startedAt,
       completedAt,
@@ -2721,6 +2769,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private emitEvent(event: ChatEvent): void {
+    bindNativeRunEventOwner(event, this);
     if (event.type === "prompt-queue") {
       const persist = this.options.onPromptQueueChanged;
       if (persist) void Promise.resolve(persist(event.sessionId, event.entries.map((entry) => ({ ...entry })))).catch((error: unknown) => {
@@ -3357,6 +3406,10 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function modelContextTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 function optionalPositiveInteger(value: unknown): number | undefined {
   const number = typeof value === "number" ? value : Number(value);
   return Number.isInteger(number) && number > 0 ? number : undefined;
@@ -3434,6 +3487,7 @@ export function normalizeRuntimeHandshake(value: Record<string, unknown>): CliRu
       return [{
         modelId,
         name: firstNonEmptyString(row.name, row.label),
+        ...(modelContextTokens(modelMeta.totalContextTokens ?? row.totalContextTokens) ? { totalContextTokens: modelContextTokens(modelMeta.totalContextTokens ?? row.totalContextTokens) } : {}),
         ...(efforts.length ? { reasoningEfforts: [...new Set(efforts)] } : {}),
         ...normalizeImageInputCapability(modelMeta, row),
       }];

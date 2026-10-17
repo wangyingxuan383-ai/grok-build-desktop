@@ -25,7 +25,13 @@ try {
  npm run test:ui;if($LASTEXITCODE -ne 0){throw 'Mobile UI workflow checks failed.'}
  npm run prebuild;if($LASTEXITCODE -ne 0){throw 'Android prebuild failed.'}
  Push-Location -LiteralPath (Join-Path $Mobile 'android')
- try{& .\gradlew.bat :app:assembleRelease "-PreactNativeArchitectures=$Architectures" --no-daemon --console=plain;if($LASTEXITCODE -ne 0){throw 'Android build failed.'}}finally{Pop-Location}
+ try{
+  # Windows PowerShell promotes native stderr warnings to terminating errors.
+  # Gradle's exit code is authoritative, including for harmless SDK XML warnings.
+  $PreviousErrorAction=$ErrorActionPreference
+  try{$ErrorActionPreference='Continue';& .\gradlew.bat :app:assembleRelease "-PreactNativeArchitectures=$Architectures" --no-daemon --console=plain;$BuildExit=$LASTEXITCODE}finally{$ErrorActionPreference=$PreviousErrorAction}
+  if($BuildExit -ne 0){throw 'Android build failed.'}
+ }finally{Pop-Location}
  $Version=(Get-Content -LiteralPath (Join-Path $Mobile 'package.json') -Raw | ConvertFrom-Json).version
  $Artifacts=Join-Path $Root 'out\android-companion'
  [IO.Directory]::CreateDirectory($Artifacts)|Out-Null
@@ -33,8 +39,15 @@ try {
  Copy-Item -LiteralPath (Join-Path $Mobile 'android\app\build\outputs\apk\release\app-release.apk') -Destination $Apk -Force
  & (Join-Path $SdkRoot 'build-tools\36.0.0\apksigner.bat') verify --verbose $Apk
  if($LASTEXITCODE -ne 0){throw 'APK signature verification failed.'}
- node (Join-Path $PSScriptRoot 'check-mobile-artifact.mjs') $Apk
- if($LASTEXITCODE -ne 0){throw 'APK native contract or artifact check failed.'}
+ $PreviousPrivateStrings=$env:GROK_PRIVATE_STRINGS
+ try {
+  $PrivatePaths=@($Root,$env:USERPROFILE,$env:GRADLE_USER_HOME) | Where-Object {$_}
+  $PrivateStrings=@($PrivatePaths | ForEach-Object {$_;$_.Replace('\','/')})
+  if($PreviousPrivateStrings){$PrivateStrings+=@($PreviousPrivateStrings | ConvertFrom-Json)}
+  $env:GROK_PRIVATE_STRINGS=ConvertTo-Json -InputObject @($PrivateStrings | Select-Object -Unique) -Compress
+  node (Join-Path $PSScriptRoot 'check-mobile-artifact.mjs') $Apk
+  if($LASTEXITCODE -ne 0){throw 'APK native contract or artifact check failed.'}
+ } finally {$env:GROK_PRIVATE_STRINGS=$PreviousPrivateStrings}
  $Hash=(Get-FileHash -LiteralPath $Apk -Algorithm SHA256).Hash.ToLowerInvariant()
  [IO.File]::WriteAllText((Join-Path $Artifacts 'SHA256SUMS.txt'),"$Hash  $([IO.Path]::GetFileName($Apk))`n",[Text.UTF8Encoding]::new($false))
  Copy-Item -LiteralPath (Join-Path $Mobile 'THIRD_PARTY_NOTICES.md'),(Join-Path $Mobile 'LICENSE-APACHE-2.0.txt') -Destination $Artifacts -Force

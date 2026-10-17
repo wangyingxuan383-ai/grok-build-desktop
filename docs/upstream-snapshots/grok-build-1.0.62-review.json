@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-10-17",
+  "runtimeVersion": "1.0.62",
+  "platform": "win32-x64",
+  "sha256": "86c6c766b7961597c2a327f77e43a7b73cbc44f5cee9da6dd74ba73b45ae8b68",
+  "authenticode": "Valid; X Corp.",
+  "controlGate": "protocol baseline 1.0.60 with declared commands, exact IDs and native receipts",
+  "evidence": {
+    "initialize": true,
+    "agentVersionReported": "1.0.62",
+    "leaderOverride": false,
+    "localProviderNativeControls": [
+      { "kind": "goal", "action": "pause", "state": "completed" },
+      { "kind": "goal", "action": "resume", "state": "completed" },
+      { "kind": "goal", "action": "stop", "state": "completed" },
+      { "kind": "workflow", "action": "pause", "state": "completed" },
+      { "kind": "workflow", "action": "resume", "state": "completed" },
+      { "kind": "workflow", "action": "stop", "state": "completed" },
+      { "kind": "workflow", "action": "stop", "state": "completed" }
+    ],
+    "independentWorkflowIsolation": true,
+    "userStopsRaisedFinishedNotice": false
+  },
+  "scope": "Official binary downloaded to an isolated folder, actual Desktop adapter and an isolated loopback-only provider; the installed CLI was not replaced and no account model was called.",
+  "notVerified": [
+    "physical Android interaction",
+    "authenticated official inference",
+    "workflow completion notices from a real finished run",
+    "large live session model behavior"
+  ]
+}

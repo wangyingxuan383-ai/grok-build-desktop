@@ -171,7 +171,6 @@
 .right-tool-launcher strong { font-size: var(--text-base); font-weight: 600; color: var(--color-fg); }
 .right-tool-launcher small { font-size: var(--text-sm); color: var(--color-fg-subtlest); }
 .right-utility-tabs { padding: 6px 8px; }
-.right-tool-scroll > section { border-radius: var(--radius-xl); background: var(--color-card); }
 
 /* ---- Full-page panels (settings, accounts, tasks, extensions...) ----
    The header already names the page and offers the way back, so the page is the frame itself:

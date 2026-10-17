@@ -1,16 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AgentDashboardNode, BackgroundTaskSummary, CliRuntimeUpdate, EditorDocument, NavigationIntent, PromptQueueEntry } from "../../../shared/types";
 import { canOpenRecentFileDiff } from "../session-ui-guards";
-import type { UiChatTurn } from "../store";
+import { useAppStore, type UiChatTurn } from "../store";
 import { UiIcon, type UiIconName } from "../ui-icons";
 import { LazyMarkdownView } from "./LazyMarkdownView";
 import { useWorkbenchStore } from "../workbench-store";
+import { useSessionContext } from "../hooks/use-session-context";
+import { sessionContextDisplay } from "../../../shared/session-context";
 import { statusText } from "../agent-status";
+import { useNativeRuns } from "../hooks/use-native-runs";
+import { NativeRunList } from "./NativeRunList";
+import "../styles/right-pane-tools.css";
+
+type Confirm = (message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
 
 export type RightUtilityTool = "launcher" | "document" | "files" | "tasks" | "session";
 export type RightTool = "review" | "agent-changes" | RightUtilityTool;
 
-export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, runtimeUpdates, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError }: {
+export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, runtimeUpdates, sessionStatus, onTool, onClose, onNavigate, onExpandResult, onError, confirmAction }: {
   tool: RightUtilityTool;
   turn?: UiChatTurn;
   cwd: string;
@@ -24,6 +31,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, run
   onNavigate(intent: NavigationIntent): void;
   onExpandResult(): void;
   onError(message: string): void;
+  confirmAction: Confirm;
 }): React.JSX.Element {
   const [width, setWidth] = useState(() => readWidth(tool));
   useEffect(() => setWidth(readWidth(tool)), [tool]);
@@ -42,7 +50,7 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, run
     {tool === "launcher" ? <ToolLauncher cwd={cwd} onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
     {tool === "document" && <DocumentTool turn={turn} onExpand={onExpandResult}/>}
     {tool === "files" && <FilesTool cwd={cwd} sessionId={sessionId} paths={paths} onNavigate={onNavigate} onError={onError}/>}
-    {tool === "tasks" && <TasksTool cwd={cwd} sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError}/>}
+    {tool === "tasks" && <TasksTool cwd={cwd} sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError} confirm={confirmAction}/>}
     {tool === "session" && <SessionTool sessionId={sessionId} onError={onError}/>}
   </aside>;
 }
@@ -109,8 +117,11 @@ function FilesTool({ cwd, sessionId, paths, onNavigate, onError }: { cwd: string
   </div>;
 }
 
-function TasksTool({ cwd, sessionId, queue, runtimeUpdates, sessionStatus, onError }: { cwd: string; sessionId?: string; queue: PromptQueueEntry[]; runtimeUpdates: CliRuntimeUpdate[]; sessionStatus?: string; onError(message: string): void }): React.JSX.Element {
+function TasksTool({ cwd, sessionId, queue, runtimeUpdates, sessionStatus, onError, confirm }: { cwd: string; sessionId?: string; queue: PromptQueueEntry[]; runtimeUpdates: CliRuntimeUpdate[]; sessionStatus?: string; onError(message: string): void; confirm: Confirm }): React.JSX.Element {
   const [tasks, setTasks] = useState<BackgroundTaskSummary[]>([]);
+  const native = useNativeRuns(sessionId, Boolean(sessionId));
+  // Goal/workflow updates are summarized by their own card; the timeline keeps the other runtime events.
+  const timeline = runtimeUpdates.filter((item) => item.kind !== "goal" && item.kind !== "workflow");
   useEffect(() => {
     let cancelled = false;
     const refresh = (): void => { void window.grokDesktop.listBackgroundTasks().then((values) => { if (!cancelled) setTasks(values.filter((value) => !sessionId || !value.sessionId || value.sessionId === sessionId)); }).catch((error) => { if (!cancelled) onError(message(error)); }); };
@@ -118,7 +129,7 @@ function TasksTool({ cwd, sessionId, queue, runtimeUpdates, sessionStatus, onErr
     const timer = window.setInterval(refresh, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [onError, sessionId]);
-  return <div className="right-tool-scroll tasks-tool"><SubagentList workspace={cwd} parentSessionId={sessionId}/><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{runtimeUpdates.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{runtimeUpdates.length}</span></header>{runtimeUpdates.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
+  return <div className="right-tool-scroll tasks-tool"><NativeRunList variant="pane" rows={native.rows} onRefresh={native.refresh} confirm={confirm}/><SubagentList workspace={cwd} parentSessionId={sessionId}/><section><header><strong>会话状态</strong><span className={`utility-status status-${sessionStatus ?? "idle"}`}>{sessionStatusLabel(sessionStatus)}</span></header>{queue.length ? queue.map((item) => <article key={item.id}><UiIcon name="tasks"/><div><strong>{item.text || "附件消息"}</strong><small>队列 #{item.position} · {item.state}</small></div></article>) : <p className="right-tool-empty">没有排队消息。</p>}</section><section><header><strong>后台与 Agent</strong><span>{tasks.length}</span></header>{tasks.map((task) => <article key={task.id}><span className={`task-dot status-${task.status}`}/><div><strong>{task.title}</strong><small>{task.kind} · {task.status} · {new Date(task.updatedAt).toLocaleTimeString()}</small>{task.detail && <p>{task.detail}</p>}</div></article>)}{!tasks.length && <p className="right-tool-empty">当前没有后台任务或等待事项。</p>}</section>{timeline.length > 0 && <section><header><strong>CLI 运行时间线</strong><span>{timeline.length}</span></header>{timeline.slice(-20).reverse().map((item) => <article key={`${item.at}-${item.name}`}><span className="task-dot status-completed"/><div><strong>{item.name}</strong><small>{item.kind} · {new Date(item.at).toLocaleTimeString()}</small>{item.summary && <p>{item.summary}</p>}</div></article>)}</section>}</div>;
 }
 
 function SubagentList({workspace, parentSessionId}: {workspace: string; parentSessionId?: string}) {
@@ -150,7 +161,10 @@ export function reviewSurfaceForCapability(available?: boolean): "review" | "age
 }
 
 function SessionTool({ sessionId, onError }: { sessionId?: string; onError(message: string): void }): React.JSX.Element {
-  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.grokDesktop.getCliSessionInfo>>>();
+  const { info, refresh: refreshContext } = useSessionContext(sessionId);
+  // Live metadata exists only while the CLI holds this session; a history view is not an unsupported CLI.
+  const connected = useAppStore((state) => Boolean(sessionId && state.views[sessionId]?.hydration === "ready"));
+  const owner = useRef(sessionId); owner.current = sessionId;
   const [usage, setUsage] = useState<Awaited<ReturnType<typeof window.grokDesktop.getCliSessionUsage>>>();
   const [runtime, setRuntime] = useState<Awaited<ReturnType<typeof window.grokDesktop.getSessionRuntimePreferences>>>();
   const [loading, setLoading] = useState(false);
@@ -160,12 +174,12 @@ function SessionTool({ sessionId, onError }: { sessionId?: string; onError(messa
     if (!sessionId) return;
     setLoading(true);
     void Promise.all([
-      window.grokDesktop.getCliSessionInfo(sessionId),
+      refreshContext(),
       window.grokDesktop.getCliSessionUsage(sessionId),
       window.grokDesktop.getSessionRuntimePreferences(sessionId),
-    ]).then(([nextInfo, nextUsage, nextRuntime]) => { setInfo(nextInfo); setUsage(nextUsage); setRuntime(nextRuntime); }).catch((error) => onError(message(error))).finally(() => setLoading(false));
+    ]).then(([, nextUsage, nextRuntime]) => { if(owner.current === sessionId) { setUsage(nextUsage); setRuntime(nextRuntime); } }).catch((error) => onError(message(error))).finally(() => setLoading(false));
   };
-  useEffect(() => { setInfo(undefined); setUsage(undefined); setRuntime(undefined); refresh(); }, [sessionId]);
+  useEffect(() => { setUsage(undefined); setRuntime(undefined); refresh(); }, [sessionId]);
   const compact = (): void => {
     if (!sessionId || compacting) return;
     setCompacting(true); setCompactMessage("正在请求 CLI 压缩会话…");
@@ -174,9 +188,7 @@ function SessionTool({ sessionId, onError }: { sessionId?: string; onError(messa
       .catch((error) => { const text = message(error); setCompactMessage(text); onError(text); })
       .finally(() => setCompacting(false));
   };
-  const contextPercent = info?.contextUsagePercent ?? (info?.contextUsedTokens !== undefined && info.contextWindowTokens
-    ? Math.min(100, info.contextUsedTokens / info.contextWindowTokens * 100)
-    : undefined);
+  const contextPercent = sessionContextDisplay(info).percent;
   const compactionPolicy = runtime?.compaction ?? { mode: "inherit" as const };
   const setCompaction = (mode: "inherit" | "custom", thresholdPercent = compactionPolicy.thresholdPercent ?? 85): void => {
     if (!sessionId) return;
@@ -188,10 +200,10 @@ function SessionTool({ sessionId, onError }: { sessionId?: string; onError(messa
   };
   return <div className="right-tool-scroll session-tool">
     <section><header><strong>官方会话</strong><button onClick={refresh} disabled={loading || !sessionId}>{loading ? "读取中…" : "刷新"}</button></header>
-      {!sessionId ? <p className="right-tool-empty">当前没有活动会话。</p> : info?.supported === false ? <p className="right-tool-empty">当前 CLI 不支持 session/info；不会用全局默认值猜测旧会话配置。</p> : <dl className="session-detail-list"><dt>会话 ID</dt><dd title={info?.sessionId}>{info?.sessionId || "—"}</dd><dt>标题</dt><dd>{info?.title || "未命名"}</dd><dt>工作目录</dt><dd title={info?.cwd}>{info?.cwd || "—"}</dd><dt>Agent</dt><dd>{info?.agentName || "CLI 未返回"}</dd><dt>模型</dt><dd>{info?.modelId || "—"}{info?.resolvedModelId && info.resolvedModelId !== info.modelId ? ` → ${info.resolvedModelId}` : ""}</dd><dt>模式</dt><dd>{info?.mode || "CLI 未返回"}</dd><dt>思考档位</dt><dd>{info?.effort || "CLI 默认/未返回"}</dd><dt>Sandbox</dt><dd>{info?.sandbox || "CLI 未返回"}</dd></dl>}
+      {!sessionId ? <p className="right-tool-empty">当前没有活动会话。</p> : !connected ? <p className="right-tool-empty">会话尚未连接 CLI，暂时没有实时元数据和用量。发送消息或重新打开会话后即可查看。</p> : info?.supported === false ? <p className="right-tool-empty">当前 CLI 不支持 session/info；不会用全局默认值猜测旧会话配置。</p> : <dl className="session-detail-list"><dt>会话 ID</dt><dd title={info?.sessionId}>{info?.sessionId || "—"}</dd><dt>标题</dt><dd>{info?.title || "未命名"}</dd><dt>工作目录</dt><dd title={info?.cwd}>{info?.cwd || "—"}</dd><dt>Agent</dt><dd>{info?.agentName || "CLI 未返回"}</dd><dt>模型</dt><dd>{info?.modelId || "—"}{info?.resolvedModelId && info.resolvedModelId !== info.modelId ? ` → ${info.resolvedModelId}` : ""}</dd><dt>模式</dt><dd>{info?.mode || "CLI 未返回"}</dd><dt>思考档位</dt><dd>{info?.effort || "CLI 默认/未返回"}</dd><dt>Sandbox</dt><dd>{info?.sandbox || "CLI 未返回"}</dd></dl>}
     </section>
-    <section><header><strong>Context</strong><span>{contextPercent === undefined ? "CLI 未返回" : `${contextPercent.toFixed(1)}%`}</span></header>{contextPercent === undefined ? <p className="right-tool-empty">上下文窗口与会话累计 Token 是不同概念；这里只显示 CLI 返回的当前上下文占用。</p> : <><div className="quota-progress"><i style={{ width: `${contextPercent}%` }}/></div><dl className="session-detail-list"><dt>当前占用</dt><dd>{formatOptionalTokens(info?.contextUsedTokens)}</dd><dt>模型窗口</dt><dd>{formatOptionalTokens(info?.contextWindowTokens)}</dd><dt>剩余</dt><dd>{formatOptionalTokens(info?.contextFreeTokens)}</dd><dt>系统提示</dt><dd>{formatOptionalTokens(info?.systemPromptTokens)}</dd><dt>工具定义</dt><dd>{info?.toolDefinitionsCount === undefined ? "未返回" : `${info.toolDefinitionsCount} 个 · ${formatOptionalTokens(info.toolDefinitionsTokens)}`}</dd><dt>消息/工具调用</dt><dd>{info?.messageCount === undefined && info?.toolCallCount === undefined ? "未返回" : `${info?.messageCount ?? 0} / ${info?.toolCallCount ?? 0}`}</dd><dt>已压缩</dt><dd>{info?.compactionCount === undefined ? "未返回" : `${info.compactionCount} 次`}</dd><dt>CLI 当前阈值</dt><dd>{info?.autoCompactThresholdPercent === undefined ? "未返回" : `${info.autoCompactThresholdPercent}%`}</dd></dl></>}<label className="field"><span>自动压缩策略</span><select value={compactionPolicy.mode} onChange={(event) => setCompaction(event.target.value as "inherit" | "custom")} disabled={!sessionId}><option value="inherit">继承 CLI</option><option value="custom">会话自定义</option></select></label>{compactionPolicy.mode === "custom" && <label className="field"><span>阈值 {compactionPolicy.thresholdPercent ?? 85}%</span><input type="range" min={60} max={95} step={1} value={compactionPolicy.thresholdPercent ?? 85} onChange={(event) => setCompaction("custom", Number(event.target.value))}/></label>}<p className="settings-note">自定义阈值通过此会话专属 CLI 环境生效，不修改全局配置；更改后需重新连接会话。</p><button onClick={compact} disabled={!sessionId || compacting}>{compacting ? "压缩中…" : "立即压缩"}</button>{compactMessage && <p className="settings-note" aria-live="polite">{compactMessage}</p>}</section>
-    <section><header><strong>当前会话累计用量（CLI）</strong><span>{usage?.supported === false ? "不支持" : usage?.usageIsIncomplete ? "统计可能不完整" : "CLI 上报"}</span></header>{usage?.supported === false ? <p className="right-tool-empty">当前 CLI 未提供 session/usage；不会推算 Token 或费用。</p> : <><p className="settings-note">这是当前 CLI 进程报告的会话累计数据；与本机逐回合历史、账号订阅额度是不同口径。</p><dl className="session-detail-list"><dt>输入</dt><dd>{formatOptionalTokens(usage?.inputTokens)}</dd><dt>输出</dt><dd>{formatOptionalTokens(usage?.outputTokens)}</dd><dt>缓存读取</dt><dd>{formatOptionalTokens(usage?.cachedReadTokens)}</dd><dt>推理</dt><dd>{formatOptionalTokens(usage?.reasoningTokens)}</dd><dt>总计</dt><dd>{formatOptionalTokens(usage?.totalTokens)}</dd><dt>模型调用</dt><dd>{usage?.modelCalls === undefined ? "未返回" : usage.modelCalls.toLocaleString()}</dd><dt>API 耗时</dt><dd>{usage?.apiDurationMs === undefined ? "未返回" : `${(usage.apiDurationMs / 1000).toFixed(1)} 秒`}</dd><dt>费用</dt><dd>{usage?.costUsd === undefined ? "未返回/不可信" : `${usage.costIsPartial ? "部分 " : ""}$${usage.costUsd.toFixed(6)}`}</dd><dt>周期额度</dt><dd>{usage?.limitPercent === undefined ? "见账号额度" : `${usage.limitPercent.toFixed(1)}%`}</dd><dt>重置时间</dt><dd>{usage?.resetAt ? new Date(usage.resetAt).toLocaleString() : "见账号额度"}</dd></dl>{usage?.usageIsIncomplete && <p className="settings-note">存在仍在运行或未结算的子 Agent，本次会话用量可能低估；费用不会被当作完整账单。</p>}</>}</section>
+    <section><header><strong>上下文</strong><span>{contextPercent === undefined ? (connected ? "CLI 未返回" : "未连接") : `${contextPercent.toFixed(1)}%`}</span></header>{contextPercent === undefined ? (connected ? <p className="right-tool-empty">上下文窗口与会话累计 Token 是不同概念；这里只显示 CLI 返回的当前上下文占用。</p> : null) : <><div className="quota-progress"><i style={{ width: `${contextPercent}%` }}/></div><dl className="session-detail-list"><dt>当前占用</dt><dd>{formatOptionalTokens(info?.contextUsedTokens)}</dd><dt>模型窗口</dt><dd>{formatOptionalTokens(info?.contextWindowTokens)}</dd><dt>剩余</dt><dd>{formatOptionalTokens(info?.contextFreeTokens)}</dd><dt>系统提示</dt><dd>{formatOptionalTokens(info?.systemPromptTokens)}</dd><dt>工具定义</dt><dd>{info?.toolDefinitionsCount === undefined ? "未返回" : `${info.toolDefinitionsCount} 个 · ${formatOptionalTokens(info.toolDefinitionsTokens)}`}</dd><dt>消息/工具调用</dt><dd>{info?.messageCount === undefined && info?.toolCallCount === undefined ? "未返回" : `${info?.messageCount ?? 0} / ${info?.toolCallCount ?? 0}`}</dd><dt>已压缩</dt><dd>{info?.compactionCount === undefined ? "未返回" : `${info.compactionCount} 次`}</dd><dt>CLI 当前阈值</dt><dd>{info?.autoCompactThresholdPercent === undefined ? "未返回" : `${info.autoCompactThresholdPercent}%`}</dd></dl></>}<div className="session-compaction"><label><span>自动压缩策略</span><select value={compactionPolicy.mode} onChange={(event) => setCompaction(event.target.value as "inherit" | "custom")} disabled={!sessionId}><option value="inherit">继承 CLI</option><option value="custom">会话自定义</option></select></label>{compactionPolicy.mode === "custom" && <label><span>阈值 {compactionPolicy.thresholdPercent ?? 85}%</span><input type="range" min={60} max={95} step={1} value={compactionPolicy.thresholdPercent ?? 85} onChange={(event) => setCompaction("custom", Number(event.target.value))}/></label>}<p className="settings-note">自定义阈值通过此会话专属 CLI 环境生效，不修改全局配置；更改后需重新连接会话。</p><div className="button-row"><button onClick={compact} disabled={!sessionId || !connected || compacting} title={connected ? undefined : "会话连接 CLI 后才能压缩"}>{compacting ? "压缩中…" : "立即压缩"}</button></div>{compactMessage && <p className="settings-note" aria-live="polite">{compactMessage}</p>}</div></section>
+    {connected && <section><header><strong>当前会话累计用量（CLI）</strong><span>{usage?.supported === false ? "不支持" : usage?.usageIsIncomplete ? "统计可能不完整" : "CLI 上报"}</span></header>{usage?.supported === false ? <p className="right-tool-empty">当前 CLI 未提供 session/usage；不会推算 Token 或费用。</p> : <><p className="settings-note">这是当前 CLI 进程报告的会话累计数据；与本机逐回合历史、账号订阅额度是不同口径。</p><dl className="session-detail-list"><dt>输入</dt><dd>{formatOptionalTokens(usage?.inputTokens)}</dd><dt>输出</dt><dd>{formatOptionalTokens(usage?.outputTokens)}</dd><dt>缓存读取</dt><dd>{formatOptionalTokens(usage?.cachedReadTokens)}</dd><dt>推理</dt><dd>{formatOptionalTokens(usage?.reasoningTokens)}</dd><dt>总计</dt><dd>{formatOptionalTokens(usage?.totalTokens)}</dd><dt>模型调用</dt><dd>{usage?.modelCalls === undefined ? "未返回" : usage.modelCalls.toLocaleString()}</dd><dt>API 耗时</dt><dd>{usage?.apiDurationMs === undefined ? "未返回" : `${(usage.apiDurationMs / 1000).toFixed(1)} 秒`}</dd><dt>费用</dt><dd>{usage?.costUsd === undefined ? "未返回/不可信" : `${usage.costIsPartial ? "部分 " : ""}$${usage.costUsd.toFixed(6)}`}</dd><dt>周期额度</dt><dd>{usage?.limitPercent === undefined ? "见账号额度" : `${usage.limitPercent.toFixed(1)}%`}</dd><dt>重置时间</dt><dd>{usage?.resetAt ? new Date(usage.resetAt).toLocaleString() : "见账号额度"}</dd></dl>{usage?.usageIsIncomplete && <p className="settings-note">存在仍在运行或未结算的子 Agent，本次会话用量可能低估；费用不会被当作完整账单。</p>}</>}</section>}
   </div>;
 }
 

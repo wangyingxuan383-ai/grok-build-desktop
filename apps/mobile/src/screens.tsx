@@ -7,6 +7,7 @@ import { haptic } from "./haptics";
 import { Icon } from "./icons";
 import { useBackLayer } from "./back-layers";
 import type { RemoteSession } from "../../../src/shared/remote";
+import { matchesAllWords, searchWords } from "../../../src/shared/search-words";
 import { Chip, EmptyState, font, radius, space, ui, type Theme, SearchField } from "./ui";
 import { sessionStatusLabel } from "./remote-model";
 import { projectLabel } from "./experience-model";
@@ -146,12 +147,12 @@ export function SessionList({ sessions, theme, favorites, recent, onOpen, refres
     const base = useMemo(() => sessions.filter((s) => !s.parentSessionId), [sessions]);
     const activeCount = base.filter(s => !s.archived && ACTIVE.includes(s.status)).length;
     const sections = useMemo(() => {
-        const query = search.trim().toLowerCase();
+        const words = searchWords(search);
         const filtered = base.filter((s) => (filter === "archived" ? s.archived : !s.archived) &&
             (filter !== "active" || ACTIVE.includes(s.status)) &&
             (filter !== "unread" || s.status === "unread") &&
             (filter !== "favorite" || favorites.includes(s.id)) &&
-            (!query || `${s.title} ${s.projectName} ${s.preview || ""}`.toLowerCase().includes(query)));
+            matchesAllWords(`${s.title} ${s.projectName} ${s.preview || ""}`, words));
         const groups = new Map<string, RemoteSession[]>();
         for (const row of filtered)
             groups.set(row.cwd, [...(groups.get(row.cwd) ?? []), row]);
