@@ -94,7 +94,7 @@ app.whenReady().then(async()=>{
     assert(await run(nativeRow("Restored native workflow") + '.textContent.includes("上次记录")'),'a restored summary must keep its last-known status');
     await run('Array.from(' + nativeRow("Restored native workflow") + '.querySelectorAll("button")).find(b=>b.textContent==="查看会话").click()');await wait();
     assert(await run('fixture.nativeOpen().sessionId==="restored-session" && fixture.nativeOpen().previewOnly===true'),'a restored native summary must request history-only navigation');
-    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation and native history-only navigation' : 'REGRESSION_DOM_PASSED all fixture groups including native history-only navigation');
+    console.log(process.env.REGRESSION_SCOPE === 'automation' ? 'REGRESSION_DOM_PASSED automation and native live/restored navigation' : 'REGRESSION_DOM_PASSED all fixture groups including native live/restored navigation');
     app.exit(0);
   }catch(error){console.error(error.stack);app.exit(1)}
 });`;
