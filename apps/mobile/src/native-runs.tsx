@@ -77,7 +77,7 @@ export function NativeRunCards({ rows, client, theme, disabled, refresh, open, s
       <Pressable accessibilityRole="button" accessibilityLabel={`${row.title}，${nativeRunStatusText(row)}`} accessibilityState={{ expanded: isOpen }} onPress={() => setExpanded(isOpen ? undefined : key)} style={{ gap: 6 }}>
         <View style={[ui.row, { gap: 8 }]}>
           <Badge text={nativeRunStatusText(row)} theme={theme} tone={badgeTone[tone]} />
-          <Text numberOfLines={1} style={{ flex: 1, color: theme.muted, fontSize: font.caption }}>{nativeRunKindLabels[row.kind]}{scoped ? "" : ` · ${session}`}{duplicates.has(key) ? ` · ${nativeRunShortId(row.id)}` : ""}</Text>
+          <Text numberOfLines={1} style={{ flex: 1, color: theme.muted, fontSize: font.caption }}>{nativeRunKindLabels[row.kind]}{duplicates.has(key) ? ` · ${nativeRunShortId(row.id)}` : ""}{scoped ? "" : ` · ${session}`}</Text>
           <Icon name={isOpen ? "expand" : "forward"} size={16} color={theme.muted} />
         </View>
         <Text numberOfLines={isOpen ? 4 : 2} style={{ color: theme.text, fontSize: 16, lineHeight: 22, fontWeight: "600" }}>{row.title}</Text>

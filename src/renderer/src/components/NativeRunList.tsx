@@ -63,7 +63,7 @@ export function NativeRunList({ rows, variant, onRefresh, onOpen, confirm }: {
       <div className="native-run-meta">{nativeRunKindLabels[row.kind]}{row.phase ? ` · ${nativeRunPhaseLabel(row.phase)}阶段` : ""}{variant === "pane" ? ` · ${nativeRunUpdatedLabel(row.observedAt)}` : ""}{variant === "pane" && duplicates.has(key) ? <code>{nativeRunShortId(row.id)}</code> : null}</div>
       {row.budget && <div className="native-run-budget"><span>{nativeRunBudgetText(row.budget)}</span>{ratio !== undefined && <span className={`native-run-meter${ratio >= 1 ? " full" : ratio >= 0.9 ? " warn" : ""}`}><i style={{ width: `${Math.max(2, ratio * 100)}%` }} /></span>}</div>}
       {row.reason && <p className={`native-run-reason tone-${tone}`}>{row.reason}</p>}
-      {!row.actions.length && row.unavailableReason && <p className="native-run-hint">{row.unavailableReason}</p>}
+      {!row.actions.length && row.unavailableReason && !(variant === "pane" && row.stale) && <p className="native-run-hint">{row.unavailableReason}</p>}
       {notice && <p className={`native-run-notice ${notice.tone}`} role="status">{notice.text}</p>}
       {(row.actions.length > 0 || (variant === "center" && onOpen) || nativeRunDismissible(row)) && <div className="native-run-actions">
         {row.actions.map((action) => <button key={action} className={action === "stop" ? "danger" : undefined} disabled={Boolean(busy)} onClick={() => void control(row, action)}>{rowBusy && busy?.action === action ? <><span className="native-run-spin" />{busyLabels[action]}</> : nativeRunActionLabels[action]}</button>)}
@@ -76,6 +76,7 @@ export function NativeRunList({ rows, variant, onRefresh, onOpen, confirm }: {
 
   if (variant === "pane") return <section className="native-run-section" aria-label="目标与工作流">
     <header><strong>目标与工作流</strong><span>{visible.length}</span></header>
+    {visible.some((row) => row.stale) && <p className="native-run-pane-note">标"上次记录"的项目来自电脑重启或连接变化之前，CLI 报告新状态后会自动更新。</p>}
     {visible.map((row) => <div className="native-run-row pane" key={nativeRunKey(row)}>
       <div className="native-run-top">{status(row)}<span className="native-run-title" title={row.title}>{row.title}</span></div>
       {body(row)}
