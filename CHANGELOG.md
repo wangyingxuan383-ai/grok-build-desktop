@@ -13,7 +13,7 @@
 - Fix tray inbox navigation, duplicate annotation insertion, Windows aliased draft directories and unsupported interjection fallback; unsupported interjections enter the removable next-turn queue while current work continues.
 - Read event-driven phone state as invalidations, so pairing requests and device changes appear without polling; focus quick-entry input after its first rendered frame and support Escape to close.
 
-Final package and physical-device verification are recorded separately; this entry does not claim a public release.
+Local Windows/Android candidates passed their package, content and signing checks, including packaged pairing and Portable startup. Physical-device interaction and system-installer acceptance remain separate; this entry does not claim a public release.
 
 ## 0.12.2 — Grok Remote 0.4.2
 

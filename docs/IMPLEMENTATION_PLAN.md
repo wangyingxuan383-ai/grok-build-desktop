@@ -8,7 +8,8 @@
 - [x] Complete final quick-entry and phone library ownership/concurrency checks.
 - [x] Accept Desktop snippet/settings/export/inbox components in light/dark at 820px and 125/150% zoom and wide-screen rendering; inspect phone snippets/variables at 320/360/393px and larger text. Keep physical-device evidence separate.
 - [x] Verify real pairing/TLS consent, authenticated computer snippet reads, passive session history and device revocation; fix payload-free state notifications without reintroducing polling.
-- [ ] Pass the final desktop/mobile regressions, public-content checks and signed local Windows/Android package gates.
+- [x] Pass final Desktop regression (1392 passed, 9 environment skips), phone regression (132 passed), both type checks and the unchanged renderer budget.
+- [x] Verify final Windows Setup/Portable contents, Fuses, current-version UI, paired TLS/snippet flows and Portable startup under a Chinese/spaced path; verify same-signature Android 0.4.3/code 15 and its source trees. Deliver local candidates; no public upload.
 - [ ] Record physical Android IME, gestures, background restoration and system-install acceptance separately.
 
 This candidate excludes desktop pets, voice models, new worktree orchestration and independent conversation windows. Screenshot entry uses the system snipping tool followed by an explicit clipboard attachment. New global shortcuts, sleep prevention and quota warnings are opt-in. Public publishing is separate from local candidate delivery.
