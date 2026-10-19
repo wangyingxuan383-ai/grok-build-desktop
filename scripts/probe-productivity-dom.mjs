@@ -51,13 +51,16 @@ app.whenReady().then(async()=>{
   for(const [name,show] of [['snippets','snippets'],['settings','settings'],['export','export'],['inbox','inbox']]){
    for(const dark of [false,true]){
     await run('productivityFixture.theme('+dark+');productivityFixture.'+show+'('+ (show==='inbox'?'true':'') +')');await wait();
-    win.setSize(820,900);win.webContents.setZoomFactor(1.5);await wait();
-    assert(await run('document.documentElement.scrollWidth<=window.innerWidth+1'),'horizontal page overflow: '+name);
-    assert(await run('Array.from(document.querySelectorAll(".snippet-library")).every(e=>e.scrollWidth<=e.clientWidth+1)'),'snippet inner overflow');
-    fs.writeFileSync(path.join(__dirname,name+'-'+(dark?'dark':'light')+'-150.png'),(await win.webContents.capturePage()).toPNG());
+    for(const [width,zoom] of [[820,1.25],[820,1.5]]){
+     win.setSize(width,900);win.webContents.setZoomFactor(zoom);await wait();
+     assert(await run('document.documentElement.scrollWidth<=window.innerWidth+1'),'horizontal page overflow: '+name);
+     assert(await run('Array.from(document.querySelectorAll(".snippet-library")).every(e=>e.scrollWidth<=e.clientWidth+1)'),'snippet inner overflow');
+     await run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+     fs.writeFileSync(path.join(__dirname,name+'-'+(dark?'dark':'light')+'-'+width+'-'+zoom*100+'.png'),(await win.webContents.capturePage()).toPNG());
+    }
    }
   }
-  console.log('PRODUCTIVITY_DOM_PASSED inbox navigation, duplicate/stale annotations, variable insertion, sandboxed export, 820px 150% layouts');app.exit(0);
+  console.log('PRODUCTIVITY_DOM_PASSED inbox navigation, duplicate/stale annotations, variable insertion, sandboxed export, 820px 125/150% layouts');app.exit(0);
  }catch(error){console.error(error.stack);app.exit(1)}
 });`;
 await writeFile(resolve(output,"main.cjs"),source);

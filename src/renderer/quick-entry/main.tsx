@@ -30,6 +30,9 @@ function QuickEntry() {
     } catch (error) { if (version === generation.current) setError(message(error)); }
   };
   useEffect(() => { void load(); return () => { generation.current++; }; }, []);
+  // Context loads before the textarea exists on the first frame. Focus after
+  // React commits that frame, and after an explicit project change.
+  useEffect(() => { textarea.current?.focus(); }, [context?.draftId, context?.workspace]);
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
     const update = () => { if (context) applyThemeToDocument(context.theme, media.matches); };
@@ -49,7 +52,7 @@ function QuickEntry() {
   const session = context?.sessions.find(row => row.id === sessionId);
   const canSend = context?.workspace && (!sessionId || session && !["working", "needs-user", "queued"].includes(session.status)) && (text.trim() || context?.attachments.length);
 
-  return <main>
+  return <main onKeyDownCapture={event => { if (event.key === "Escape" && !busyRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); void window.quickEntry.cancel(); } }}>
     <header><div><h1>{context?.intent === "screenshot" ? "截图提问" : "快速提问"}</h1><p>选择项目与会话，继续手头的工作</p></div><button aria-label="关闭并丢弃草稿" className="close" onClick={() => void window.quickEntry.cancel()}>×</button></header>
     {context ? <>
       <div className="target">
@@ -63,7 +66,7 @@ function QuickEntry() {
         </select></label>
       </div>
       <label className="composer"><span className="sr-only">提问内容</span><textarea ref={textarea} value={text} disabled={busy} maxLength={100000} placeholder="想让 Grok 帮你做什么？" onChange={event => setText(event.target.value)}
-        onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && canSend && !busyRef.current) { event.preventDefault(); void send(); } }} /></label>
+        onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && canSend && !busyRef.current) { event.preventDefault(); void send(); } }} /></label>
       {!!context.attachments.length && <ul className="attachments" aria-label="附件">{context.attachments.map(row => <li key={row.id}>
         {row.previewUrl ? <img src={row.previewUrl} alt="截图预览" /> : <span className="file-icon" aria-hidden="true">↗</span>}
         <span title={row.name}>{row.name}</span><button aria-label={`移除 ${row.name}`} disabled={busy} onClick={() => void action(async () => { await window.quickEntry.remove(context.draftId, row.id); setContext({ ...context, attachments: context.attachments.filter(item => item.id !== row.id) }); })}>×</button>
@@ -75,7 +78,7 @@ function QuickEntry() {
       </div>
       {(notice || context.intent === "screenshot") && <p className="hint" role="status">{notice || "点“系统截图”选择区域，再点“引用剪贴板”。截图会留在草稿中，等你确认发送。"}</p>}
       {context.warnings.map(warning => <p key={warning} className="warning">{warning}</p>)}
-      <footer><span>Enter 发送 · Shift+Enter 换行<br />关闭会丢弃此草稿，主窗口草稿保留。</span><button className="primary" disabled={busy || !canSend} onClick={() => void send()}>{busy ? "请稍候…" : "发送到会话"}</button></footer>
+      <footer><span>Enter 发送 · Shift+Enter 换行 · Esc 关闭<br />关闭会丢弃此草稿，主窗口草稿保留。</span><button className="primary" disabled={busy || !canSend} onClick={() => void send()}>{busy ? "请稍候…" : "发送到会话"}</button></footer>
     </> : <p className="hint">正在读取项目与会话…</p>}
     {error && <p className="error" role="alert">{error}</p>}
   </main>;
