@@ -6,6 +6,13 @@ import { readWorkspaceArtifact } from "./services/workspace-artifact-service";
 import { mediaRequestSession } from "../shared/media-scope";
 import { RemoteWorkbenchService } from "./services/remote-workbench-service";
 import { RemotePushService } from "./services/remote-push-service";
+import { QuotaWarningService } from "./services/quota-warning-service";
+import { PromptSnippetService } from "./services/prompt-snippet-service";
+import { SessionExportService } from "./services/session-export";
+import type { SessionExportOptions } from "../shared/conversation-export";
+import type { PreviewElementPick } from "../shared/preview-feedback";
+import type { PromptSnippetInput } from "../shared/prompt-snippets";
+import type { DesktopActivitySnapshot } from "../shared/desktop-activity";
 import{session as remoteHttpSession}from"electron";
 import { ImageWorkspaceService } from "./services/image-workspace-service";
 import type { ImageSubmit } from "../shared/image-workspace";
@@ -25,6 +32,7 @@ import { SubagentConversationService } from "./services/subagent-conversation-se
 import type { CliUpdateInput, CliUpdatePolicy, CliUpdateAction } from "../shared/types";
 import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme, Notification, safeStorage, session, shell, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
+import { watch, type FSWatcher } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFile, copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -224,9 +232,9 @@ import { DEFAULT_THEME, mergeThemeSettings, ThemeService } from "./services/them
 import { managedBaseUrlEnvironmentName, ProviderService, validateGrokConfig } from "./services/provider-service";
 import { AutomationService } from "./services/automation-service";
 import { resolveAutomationSessionAction } from "./services/automation-session-lifecycle";
-import { NotificationInboxService } from "./services/notification-inbox";
+import { NotificationInboxService, sortInboxItems } from "./services/notification-inbox";
 import {readPullRequest} from "./services/pull-request-service";
-import {DesktopNotifications,parseNotificationUrl,type NotificationTarget} from "./services/desktop-notifications";
+import {DesktopNotifications,notificationContent,notificationText,notificationProject,parseNotificationUrl,type NotificationTarget,type DesktopNoticeKind} from "./services/desktop-notifications";
 import { CliCapabilityService } from "./services/cli-capability-service";
 import { NativeRunService } from "./services/native-run-service";
 import { activeNativeRuns, type NativeRunControlInput, type NativeRunDismissInput, type NativeRunSnapshot } from "../shared/native-runs";
@@ -296,6 +304,8 @@ export class AppController {
   private readonly claude: ClaudeSessionCatalog;
   private readonly workspaces: WorkspaceCatalog;
   private readonly quota: GrokQuotaService;
+  private quotaWarnings?: QuotaWarningService;
+  private readonly promptSnippets: PromptSnippetService;
   private readonly uiState: UiStateService;
   private readonly extensions: ExtensionService;
   private readonly codexPlugins: CodexPluginService;
@@ -311,6 +321,9 @@ export class AppController {
   private readonly resourceIntegrity: ResourceIntegrityResult;
   private readonly themeService: ThemeService;
   private readonly providers: ProviderService;
+  private cliConfigObservation?: Promise<void>;
+  private stopCliConfigObservation?: () => void;
+  private sessionExporter?: SessionExportService;
   private readonly automations: AutomationService;
   private readonly nativeAgentCapabilities = new NativeAgentCapabilities();
   private readonly desktopTools: DesktopToolsService;
@@ -338,13 +351,40 @@ export class AppController {
   private readonly previewServers=new Map<string,{workspace:string;script:string}>();
   private readonly pullRequestWatches=new Map<string,NodeJS.Timeout>();
   async getPullRequestStatus(workspace:string){const root=await this.requireToolWorkspace(workspace);return {...await readPullRequest(root,buildCliEnv(await this.settingsStore.get())),watching:this.pullRequestWatches.has(root)}}
-  async watchPullRequest(workspace:string,sessionId:string,enabled:boolean){const root=await this.requireToolWorkspace(workspace);const existing=this.pullRequestWatches.get(root);if(existing)clearInterval(existing);this.pullRequestWatches.delete(root);if(!enabled)return;const owner=this.processes.snapshot(sessionId)??await this.sessionRuntime.get(sessionId);if(!owner||!samePath(owner.cwd,root))throw Error("PR 提醒必须绑定当前项目会话");let previous=await this.getPullRequestStatus(root);if(!previous.available)throw Error(previous.reason);let reading=false;const timer=setInterval(()=>{if(reading)return;reading=true;void this.getPullRequestStatus(root).then(async next=>{if(next.available&&next.number===previous.number&&previous.pending&&!next.pending){await this.inbox.add({kind:"completion",title:"PR 的 CI 检查已结束",detail:`#${next.number} ${next.title}`,sessionId});await this.notices().show(`ci:${root}:${next.number}:${JSON.stringify(next.checks)}`,"completion","PR 的 CI 检查已结束","点击返回关联会话查看项目。",{kind:"session",id:sessionId});}if(next.available)previous=next;}).catch(error=>this.log.log(String(error))).finally(()=>{reading=false})},60_000);timer.unref();this.pullRequestWatches.set(root,timer)}
+  async watchPullRequest(workspace: string, sessionId: string, enabled: boolean) {
+    const root = await this.requireToolWorkspace(workspace);
+    const existing = this.pullRequestWatches.get(root);
+    if (existing) clearInterval(existing);
+    this.pullRequestWatches.delete(root);
+    if (!enabled || this.disposing) return;
+    const owner = this.processes.snapshot(sessionId) ?? await this.sessionRuntime.get(sessionId);
+    if (!owner || !samePath(owner.cwd, root)) throw Error("PR 提醒必须绑定当前项目会话");
+    let previous = await this.getPullRequestStatus(root), reading = false;
+    if (!previous.available) throw Error(previous.reason);
+    const timer = setInterval(() => {
+      if (reading || this.disposing) return;
+      reading = true;
+      void this.getPullRequestStatus(root).then(async next => {
+        if (this.disposing || this.pullRequestWatches.get(root) !== timer) return;
+        if (next.available && next.number === previous.number && previous.pending && !next.pending) {
+          const key = `ci:${root}:${next.number}:${JSON.stringify(next.checks)}`;
+          const content = await this.sessionNoticeContent(sessionId, "completion", `PR #${next.number} ${next.title}：CI 检查已结束`);
+          if (this.disposing || this.pullRequestWatches.get(root) !== timer) return;
+          const result = await this.inbox.addOnce({ kind: "completion", title: content.title, detail: content.body, sessionId }, key);
+          if (result.added && !this.disposing) await this.notices().show(key, "completion", content.title, content.body, { kind: "session", id: sessionId });
+        }
+        if (next.available) previous = next;
+      }).catch(error => this.log.log(String(error))).catch(() => undefined).finally(() => { reading = false; });
+    }, 60_000);
+    timer.unref();
+    this.pullRequestWatches.set(root, timer);
+  }
   private readonly workspaceTerminals=new WorkspaceTerminalService(event=>{if(this.window&&!this.window.isDestroyed())this.window.webContents.send("grok:workspace-terminal",event)});
   private computerStateObserver?: (state: ComputerTaskState) => void;
   private focusedSessionId = "";
   private visibleConversationId="";
   private desktopNotices?:DesktopNotifications;
-  private notices(){return this.desktopNotices??=new DesktopNotifications(()=>this.settingsStore.get(),()=>this.window,()=>this.visibleConversationId,target=>void this.navigateNotification(target).catch(error=>this.log.log(String(error))))}
+  private notices(){const notices=this.desktopNotices??=new DesktopNotifications(()=>this.settingsStore.get(),()=>this.window,()=>this.visibleConversationId,target=>void this.navigateNotification(target).catch(error=>this.log.log(String(error))).catch(()=>undefined));if(this.disposing)notices.dispose();return notices}
   private pendingNotice?:NotificationTarget;
   private rendererNoticeReady=false;
   setVisibleConversation(id:string){this.rendererNoticeReady=true;this.visibleConversationId=id;if(this.pendingNotice){const target=this.pendingNotice;this.pendingNotice=undefined;void this.navigateNotification(target).catch(error=>this.log.log(String(error)))}}
@@ -355,7 +395,7 @@ export class AppController {
     else this.window?.webContents.send("grok:notification-target",target);
   }
   handleNotificationUrl(value:string){const target=parseNotificationUrl(value);if(target){this.pendingNotice=target;if(this.window&&this.rendererNoticeReady)return this.navigateNotification(target).then(()=>{this.pendingNotice=undefined})}return Promise.resolve()}
-  async openInboxItem(id:string){const item=(await this.inbox.list()).find(item=>item.id===id);if(!item)throw Error("通知记录已不存在");await this.navigateNotification(item.automationRunId?{kind:"automation",id:item.automationRunId}:item.sessionId?.startsWith("image-")?{kind:"image",id:item.sessionId}:item.sessionId?{kind:"session",id:item.sessionId}:{kind:"automation",id:item.taskId||"test"});await this.inbox.markRead(id,true)}
+  async openInboxItem(id:string){const item=(await this.listInbox()).find(item=>item.id===id);if(!item)throw Error("通知记录已不存在");if(!item.automationRunId&&!item.sessionId&&!item.taskId){await this.inbox.markRead(id,true);return}await this.navigateNotification(item.automationRunId?{kind:"automation",id:item.automationRunId}:item.sessionId?.startsWith("image-")?{kind:"image",id:item.sessionId}:item.sessionId?{kind:"session",id:item.sessionId}:{kind:"automation",id:item.taskId!});await this.inbox.markRead(id,true)}
   private readonly agentChanges = new AgentChangeService();
   private readonly turnFileChanges = new TurnFileChangeJournal();
   private readonly mediaAccess: MediaAccessService;
@@ -365,6 +405,161 @@ export class AppController {
   private readonly mediaThumbnails: MediaThumbnailService;
   private readonly tokenActivity: TokenActivityService;
   private readonly runningSessions = new Set<string>();
+  private readonly activityListeners = new Set<(snapshot: DesktopActivitySnapshot) => void>();
+  private readonly settingsListeners = new Set<(settings: AppSettings) => void>();
+  private desktopActivityFlight?: Promise<DesktopActivitySnapshot>;
+  private activityRevision = 0;
+  private activityTimer?: NodeJS.Timeout;
+  private activityFingerprint?: string;
+  private readonly desktopSessionStates = new Map<string, "running" | "awaiting" | "error">();
+  private readonly noticeContexts = new Map<string, { title?: string; turnId?: string; result?: string }>();
+  private readonly pendingSessionNotices = new Map<string, NotificationInboxItem>();
+  private inboxUnsubscribe?: () => void;
+  private pendingInboxWatcher?: FSWatcher;
+  private pendingInboxTimer?: NodeJS.Timeout;
+  private pushContext?: { computer: string; devices: string[] };
+
+  observeSettings(listener: (settings: AppSettings) => void): () => void {
+    if (this.disposing) return () => undefined;
+    this.settingsListeners.add(listener);
+    return () => { this.settingsListeners.delete(listener); };
+  }
+
+  observeDesktopActivity(listener: (snapshot: DesktopActivitySnapshot) => void): () => void {
+    if (this.disposing) return () => undefined;
+    const observer = (snapshot: DesktopActivitySnapshot) => listener(snapshot);
+    this.activityListeners.add(observer);
+    void this.getDesktopActivity().then(snapshot => {
+      if (!this.disposing && this.activityListeners.has(observer)) this.deliverObserver(observer, snapshot);
+    }).catch(() => undefined);
+    return () => { this.activityListeners.delete(observer); };
+  }
+
+  private deliverObserver<T>(listener: (value: T) => void, value: T): void {
+    if (this.disposing) return;
+    try { void Promise.resolve(listener(structuredClone(value))).catch(() => undefined); } catch { /* One observer cannot break another. */ }
+  }
+
+  private activityChanged(): void {
+    this.activityRevision = (this.activityRevision ?? 0) + 1;
+    if (this.disposing || !this.activityListeners?.size || this.activityTimer) return;
+    this.activityTimer = setTimeout(() => {
+      this.activityTimer = undefined;
+      void this.getDesktopActivity().then(snapshot => {
+        if (this.disposing) return;
+        const fingerprint = JSON.stringify(snapshot);
+        if (fingerprint === this.activityFingerprint) return;
+        this.activityFingerprint = fingerprint;
+        for (const listener of this.activityListeners) this.deliverObserver(listener, snapshot);
+      }).catch(() => undefined);
+    }, 20);
+    this.activityTimer.unref?.();
+  }
+
+  /** Reads only already-owned processes and local stores; never creates/resumes a CLI. */
+  getDesktopActivity(): Promise<DesktopActivitySnapshot> {
+    if (this.desktopActivityFlight) return this.desktopActivityFlight;
+    const read = async (): Promise<DesktopActivitySnapshot> => {
+      let revision: number, snapshot: DesktopActivitySnapshot;
+      do {
+        revision = this.activityRevision;
+        const live = this.processes.snapshots();
+        const states = new Map(this.desktopSessionStates);
+        for (const row of live) {
+          const adapter = this.processes.get(row.sessionId);
+          if (adapter.needsUser) states.set(row.sessionId, "awaiting");
+          else if (adapter.working) states.set(row.sessionId, "running");
+        }
+        const names = new Map<string, string>();
+        await Promise.all([...new Set(live.map(row => row.cwd))].map(async cwd => {
+          for (const row of await this.catalog.list(cwd).catch(() => [])) names.set(row.id, row.title);
+        }));
+        const inbox = this.disposing ? [] : await this.listInbox();
+        const sessions: DesktopActivitySnapshot["sessions"] = [...states].map(([sessionId, status]) => ({
+          sessionId, status,
+          title: notificationText(this.noticeContexts.get(sessionId)?.title || names.get(sessionId) || "Grok 会话", 72),
+          projectName: notificationProject(live.find(row => row.sessionId === sessionId)?.cwd),
+        })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+        snapshot = { sessions, runningCount: sessions.filter(row => row.status === "running").length, awaitingCount: sessions.filter(row => row.status === "awaiting").length,
+          errorCount: sessions.filter(row => row.status === "error").length, inboxUnreadCount: inbox.filter(row => !row.read).length, livePhoneCount: this.remoteLiveDevices() };
+      } while (!this.disposing && revision !== this.activityRevision);
+      return snapshot;
+    };
+    const flight = read();
+    this.desktopActivityFlight = flight;
+    void flight.finally(() => { if (this.desktopActivityFlight === flight) this.desktopActivityFlight = undefined; }).catch(() => undefined);
+    return flight;
+  }
+
+  private inboxChanged(): void {
+    if (this.disposing) return;
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.send("grok:inbox-changed");
+    this.activityChanged();
+    const context = this.pushContext;
+    if (context) void this.pushTools().poll(() => this.listInbox(), context.computer, context.devices).catch(() => undefined);
+  }
+
+  private watchPendingInbox(): void {
+    const root = join(this.userDataPath, "automations", "pending");
+    void mkdir(root, { recursive: true }).then(async () => {
+      if (this.disposing) return;
+      const canonicalRoot = await realpath(root);
+      if (this.disposing) return;
+      this.pendingInboxWatcher = watch(canonicalRoot, { persistent: false }, (_event, name) => {
+        if (name && !name.toString().endsWith(".json")) return;
+        if (this.pendingInboxTimer) clearTimeout(this.pendingInboxTimer);
+        this.pendingInboxTimer = setTimeout(() => { this.pendingInboxTimer = undefined; this.inboxChanged(); }, 25);
+        this.pendingInboxTimer.unref?.();
+      });
+      this.pendingInboxWatcher.on("error", () => { this.pendingInboxWatcher?.close(); this.pendingInboxWatcher = undefined; });
+    }).catch(() => undefined);
+  }
+
+  private async sessionNoticeContent(sessionId: string, kind: DesktopNoticeKind, detail?: string) {
+    const cwd = this.processes.snapshot(sessionId)?.cwd;
+    const context = this.noticeContexts?.get(sessionId);
+    const title = context?.title || (cwd ? (await this.catalog.list?.(cwd).catch(() => []) ?? []).find(row => row.id === sessionId)?.title : undefined);
+    return notificationContent(kind, title, cwd, detail || context?.result);
+  }
+
+  private confirmationNotice(event: ChatEvent): { key: string; detail: string } | undefined {
+    switch (event.type) {
+      case "permission": { const tool = event.request.toolCall as {title?:string;name?:string;description?:string} | undefined; return { key: `permission:${event.request.requestId}`, detail: String(tool?.title || tool?.name || tool?.description || "工具操作需要授权") }; }
+      case "question": return { key: `question:${event.requestId}`, detail: event.questions.map(item => item.question).join("；") };
+      case "plan": return event.requestId === undefined ? undefined : { key: `plan:${event.requestId}`, detail: event.text };
+      case "computer-risk": return { key: `computer-risk:${event.request.requestId}`, detail: `${event.request.appName}：${event.request.summary}` };
+      case "computer-permission": return { key: `computer-permission:${event.request.requestId}`, detail: `允许操作应用 ${event.request.app.name}？` };
+      case "mcp-elicitation": return { key: `mcp-elicitation:${event.request.requestId}`, detail: event.request.message };
+      default: return undefined;
+    }
+  }
+
+  private observeNotificationEvent(event: ChatEvent): void {
+    if (!event.sessionId || !this.noticeContexts || this.disposing) return;
+    const id = event.sessionId, context = this.noticeContexts.get(id) ?? {};
+    if (event.type === "session-title") context.title = notificationText(event.title, 72);
+    if (event.type === "turn-started") { context.turnId = event.presentation.turnId; context.result = ""; }
+    if (event.type === "message-chunk") context.result = (context.result ?? "").concat(event.text).slice(0, 4096);
+    if (event.type === "session-recap") context.result = event.text.slice(0, 4096);
+    this.noticeContexts.set(id, context);
+    let changed = false;
+    if (event.type === "interaction-resolved") changed = this.pendingSessionNotices.delete(`${id}:${event.interaction}:${event.requestId}`);
+    if (event.type === "status" && ["working", "idle", "error", "cold"].includes(event.status) || event.type === "session-reset") {
+      for (const key of this.pendingSessionNotices.keys()) if (key.startsWith(`${id}:`)) { this.pendingSessionNotices.delete(key); changed = true; }
+    }
+    if (event.type === "status") {
+      if (event.status === "working") this.desktopSessionStates.set(id, "running");
+      else if (event.status === "needs-user") this.desktopSessionStates.set(id, "awaiting");
+      else if (event.status === "error") this.desktopSessionStates.set(id, "error");
+      else if (event.status === "idle" || event.status === "cold") this.desktopSessionStates.delete(id);
+    } else if (event.type === "error") this.desktopSessionStates.set(id, "error");
+    else if (this.confirmationNotice(event)) this.desktopSessionStates.set(id, "awaiting");
+    else if (event.type === "interaction-resolved" && ![...this.pendingSessionNotices.keys()].some(key => key.startsWith(`${id}:`))) {
+      if (this.runningSessions.has(id)) this.desktopSessionStates.set(id, "running"); else this.desktopSessionStates.delete(id);
+    } else if (event.type === "session-reset") { this.desktopSessionStates.delete(id); this.noticeContexts.delete(id); }
+    if (changed) this.inboxChanged();
+    if (["status", "error", "interaction-resolved", "session-reset", "session-title", "turn-started"].includes(event.type) || this.confirmationNotice(event)) this.activityChanged();
+  }
   private readonly projectionReplaying = new Set<string>();
   private readonly projectionOpenSessions = new Set<string>();
   private readonly projectionReplayBuffers = new Map<string, ChatEvent[]>();
@@ -383,6 +578,7 @@ export class AppController {
   private readonly offlineUiSessionResponder?: OfflineUiSessionResponder;
 
   constructor(private readonly userDataPath: string) {
+    this.promptSnippets = new PromptSnippetService(userDataPath);
     this.appConfig = loadAppConfig();
     this.buildInfo = createBuildInfo(this.appConfig);
     this.settingsStore = new JsonStore(join(userDataPath, "settings.json"), { ...DEFAULT_SETTINGS, cliPath: this.appConfig.mockCliPath });
@@ -438,13 +634,13 @@ export class AppController {
           const state = value as ComputerTaskState;
           this.computerStateObserver?.(state);
           this.window?.webContents.send("grok:computer-state", state);
-          void this.handleEvent({ type: "computer-state", sessionId: state.sessionId, state });
+          void this.handleEvent({ type: "computer-state", sessionId: state.sessionId, state }).catch(error => this.log.log(error)).catch(() => undefined);
         } else if (kind === "permission") {
           const request = value as import("../shared/types").ComputerAppPermissionRequest;
-          void this.handleEvent({ type: "computer-permission", sessionId: request.sessionId, request });
+          void this.handleEvent({ type: "computer-permission", sessionId: request.sessionId, request }).catch(error => this.log.log(error)).catch(() => undefined);
         } else {
           const request = value as import("../shared/types").ComputerRiskConfirmation;
-          void this.handleEvent({ type: "computer-risk", sessionId: request.sessionId, request });
+          void this.handleEvent({ type: "computer-risk", sessionId: request.sessionId, request }).catch(error => this.log.log(error)).catch(() => undefined);
         }
       },
       async (windowId, maxEdge) => {
@@ -463,7 +659,7 @@ export class AppController {
       () => this.settingsStore.get(),
       () => this.auth?.activeApiKey(),
       this.log,
-      (event) => void this.handleEvent(event),
+      (event) => void this.handleEvent(event).catch(error => this.log.log(error)).catch(() => undefined),
       async (context) => {
         const authority = new DesktopToolAuthority();
         const authorize = (tool: string, input: Record<string, unknown>) => authority.consume(tool, input);
@@ -535,7 +731,7 @@ export class AppController {
       saved: () => this.sessionRuntime.nativeRunSummaries(),
       save: async (id, nativeRuns) => { await this.sessionRuntime.patch(id, { nativeRuns }); },
       onControlStart: (input) => { if (input.action !== "resume") this.runningSessions.delete(input.sessionId); },
-      onWorkflowFinished: (row) => void this.announceWorkflowFinished(row).catch((error) => this.log.log(error)),
+      onWorkflowFinished: (row) => void this.announceWorkflowFinished(row).catch((error) => this.log.log(error)).catch(() => undefined),
     });
     this.updater = new CliUpdateService(
       userDataPath,
@@ -572,6 +768,8 @@ export class AppController {
     this.codexPlugins = new CodexPluginService(userDataPath, this.log);
     this.appRelease = new AppReleaseService(this.buildInfo, this.log, createAppReleaseFetcher(this.buildInfo, () => this.settingsStore.get()));
     this.inbox = new NotificationInboxService(userDataPath);
+    this.inboxUnsubscribe = this.inbox.onChanged(() => this.inboxChanged());
+    this.watchPendingInbox();
     const workerBaseArgs = app.isPackaged ? [] : [app.getAppPath()];
     this.automations = new AutomationService(userDataPath, this.log, {
       executable: process.execPath,
@@ -585,7 +783,9 @@ export class AppController {
         child.unref();
       },
       onChanged: (event) => {
+        if (this.disposing) return;
         this.window?.webContents.send("grok:automation-event", event);
+        this.inboxChanged();
         if (event.pending) this.showAutomationPendingNotification(event.pending);
       },
       onRunFinished: run => this.recordAutomationResult(run),
@@ -694,7 +894,20 @@ export class AppController {
   async startPreviewServer(workspace:string,script:string){const root=await this.requireToolWorkspace(workspace);if(!(await this.previewConfigurations(root)).includes(script))throw Error("开发服务器配置不存在，请刷新项目脚本");const terminal=await this.workspaceTerminals.create(root);try{this.workspaceTerminals.write(terminal.id,`${process.platform==="win32"?"npm.cmd":"npm"} run ${script}\r`);this.previewServers.set(terminal.id,{workspace:root,script});return terminal.id}catch(error){this.workspaceTerminals.close(terminal.id);throw error}}
   listPreviewServers(workspace:string):import("../shared/workspace-tools").PreviewServer[]{const terminals=this.workspaceTerminals.list(workspace);return [...this.previewServers].filter(([,value])=>samePath(value.workspace,workspace)).map(([terminalId,value])=>{const terminal=terminals.find(row=>row.id===terminalId);const text=terminal?.output.replace(/\u001b\[[0-9;]*[A-Za-z]/g,"")??"";const url=text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}[^\s\u001b]*/)?.[0];return {terminalId,...value,status:terminal?.status??"exited",url}})}
   stopPreviewServer(id:string){if(!this.previewServers.has(id))throw Error("开发服务器已不存在");this.workspaceTerminals.close(id);this.previewServers.delete(id)}
-  async captureBrowserFeedback(id:string){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");const {image,state}=await this.workspaceBrowser.capture(id);const bytes=image.toPNG();if(!bytes.length||bytes.length>20*1024*1024)throw Error("网页截图不可用或过大");const owner=state.sessionId||`browser:${id}`;const directory=join(this.userDataPath,"session-attachments",sessionCacheKey(owner));await mkdir(directory,{recursive:true});const path=join(directory,`${crypto.randomUUID()}.png`);await writeFile(path,bytes);this.trustedPickedPaths.add(process.platform==="win32"?path.toLowerCase():path);const media=await this.mediaAccess.registerAttachment(owner,path,"image/png","网页截图");return {tab:state,previewUrl:`grok-media://access/${media.id}?sessionId=${encodeURIComponent(owner)}`,attachment:{id:crypto.randomUUID(),name:"网页预览.png",path,kind:"image" as const,mimeType:"image/png",size:bytes.length}}}
+  async captureBrowserFeedback(id: string, pick?: PreviewElementPick) {
+    if (!this.workspaceBrowser) throw Error("浏览器窗口不可用");
+    const { image, state, revision, element } = await this.workspaceBrowser.capture(id, pick);
+    const bytes = image.toPNG();
+    if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw Error("网页截图不可用或过大");
+    const owner = state.sessionId || "browser:" + id;
+    const directory = join(this.userDataPath, "session-attachments", sessionCacheKey(owner));
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, crypto.randomUUID() + ".png");
+    await writeFile(path, bytes);
+    this.trustedPickedPaths.add(process.platform === "win32" ? path.toLowerCase() : path);
+    const media = await this.mediaAccess.registerAttachment(owner, path, "image/png", "网页截图");
+    return { tab: state, revision, element, previewUrl: "grok-media://access/" + media.id + "?sessionId=" + encodeURIComponent(owner), attachment: { id: crypto.randomUUID(), name: "网页预览.png", path, kind: "image" as const, mimeType: "image/png", size: bytes.length } };
+  }
   navigateWorkspaceBrowser(id:string,url:string){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");return this.workspaceBrowser.navigate(id,url)}
   commandWorkspaceBrowser(id:string,action:"back"|"forward"|"reload"|"stop"){this.workspaceBrowser?.command(id,action)}
   boundsWorkspaceBrowser(id:string,bounds:import("../shared/workspace-tools").WorkspaceViewBounds){this.workspaceBrowser?.bounds(id,bounds)}
@@ -703,7 +916,18 @@ export class AppController {
   setWindow(window: BrowserWindow): void {
     this.window = window;
     this.workspaceBrowser ??=new WorkspaceBrowserService(window,tabs=>{if(!window.isDestroyed())window.webContents.send("grok:workspace-browser",tabs)});
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1") void this.ensureCliConfigObservation().catch(() => undefined);
   }
+
+  private ensureCliConfigObservation(): Promise<void> {
+    return this.cliConfigObservation ??= this.providers.startConfigObserver(state => {
+      if (!this.disposing && this.window && !this.window.isDestroyed()) this.window.webContents.send("grok:cli-config-changed", state);
+      // Configuration affects catalogs and future launches only. Never restart an active session.
+      this.invalidateModelCatalog();
+    }).then(stop => { if (this.disposing) stop(); else this.stopCliConfigObservation = stop; });
+  }
+
+  async getCliConfigState() { await this.ensureCliConfigObservation(); return this.providers.getCliConfigState(); }
 
   showContextMenu(params: ContextMenuParams): void {
     if (!this.window) return;
@@ -1347,11 +1571,16 @@ export class AppController {
     return this.remoteGateway ??= new RemoteGatewayService(this.userDataPath, {
       sessions: () => this.remoteSessions(), snapshot: (id,before,around,read) => this.remoteSnapshot(id,before,around,read), options:(refresh,modelsOnly)=>this.remoteOptions(refresh,modelsOnly),perform: (command,deviceId) => this.performRemoteCommand(command,deviceId),
       query:(params,deviceId)=>this.remoteTools().query(params,deviceId),upload:(body,deviceId)=>this.remoteTools().files.upload(body,deviceId,id=>this.remoteTools().known(id)),resource:(ticket,suffix,deviceId)=>this.remoteTools().resource(ticket,suffix,deviceId),
-      tick:(computer,devices)=>this.pushTools().poll(()=>this.listInbox(),computer,devices),
+      tick:async(computer,devices)=>{
+        if(this.disposing)return;
+        const changed=!this.pushContext||this.pushContext.computer!==computer||JSON.stringify(this.pushContext.devices)!==JSON.stringify(devices);
+        this.pushContext={computer,devices:[...devices]};
+        if(changed||this.remotePush?.retryNeeded||!this.inbox.observing||!this.pendingInboxWatcher)await this.pushTools().poll(()=>this.listInbox(),computer,devices);
+      },
     }, {
       encrypt: value => { if (!safeStorage.isEncryptionAvailable()) throw Error("系统加密不可用，暂时不能开启手机连接"); return safeStorage.encryptString(value).toString("base64"); },
       decrypt: value => safeStorage.decryptString(Buffer.from(value,"base64")),
-    }, () => { this.window?.webContents.send("grok:remote-state"); });
+    }, () => { if(this.disposing)return;this.window?.webContents.send("grok:remote-state");this.activityChanged(); });
   }
   /** Download link + QR for the companion APK attached to the latest public release. */
   async getMobileDownload():Promise<{version?:string;url?:string;qrDataUrl?:string;error?:string}>{
@@ -1680,6 +1909,8 @@ export class AppController {
     if ([...normalized].length > 100) throw new Error("会话名称不能超过 100 个字符");
     const source = await this.processes.renameSessionIfLoaded(sessionId, normalized);
     await this.catalog.rename(sessionId, normalized);
+    this.noticeContexts.set(sessionId, { ...this.noticeContexts.get(sessionId), title: notificationText(normalized, 72) });
+    this.activityChanged();
     if (source === "official") {
       void this.recordSessionCapabilities(sessionId, ["session.rename"]).catch((error) => this.log.log(error));
     }
@@ -1763,6 +1994,24 @@ export class AppController {
   }
 
   pinSession(sessionId: string, pinned: boolean): Promise<void> { return this.catalog.pin(sessionId, pinned); }
+
+  private exports(): SessionExportService {
+    return this.sessionExporter ??= new SessionExportService({
+      readSession: async sessionId => {
+        const row = (await this.remoteSessions()).find(value => value.id === sessionId);
+        if (!row) return undefined;
+        const projection = await this.inspectSession(row.cwd, sessionId);
+        if (!projection) return undefined;
+        return { sessionId, title: row.title, projection: { sessionId: projection.sessionId, events: projection.events as unknown as Readonly<Record<string, unknown>>[] }, presentations: await this.turnPresentations.list(sessionId) };
+      },
+      showSaveDialog: options => {
+        if (!this.window || this.window.isDestroyed()) throw new Error("主窗口已关闭，无法导出会话");
+        return dialog.showSaveDialog(this.window, options);
+      },
+    });
+  }
+  previewSessionExport(sessionId: string, options: SessionExportOptions = {}) { return this.exports().previewSessionExport(sessionId, options); }
+  saveSessionExport(sessionId: string, options: SessionExportOptions = {}) { return this.exports().saveSessionExport(sessionId, options); }
 
   async exportSessionMarkdown(cwd: string, sessionId: string): Promise<string | null> {
     const markdown = await this.catalog.exportMarkdown(cwd, sessionId);
@@ -2127,8 +2376,14 @@ export class AppController {
         if(job.sessionId.startsWith("image-"))await this.imageWorkspace.update(job).catch(error=>this.log.log(`图像记录保存失败：${String(error)}`).catch(()=>undefined));
       } finally { this.mediaJobControls.delete(jobId); this.mediaWaitExtensions.delete(jobId); }
       this.publishMediaJob(job);
-      await this.inbox.add({kind:job.status==="completed"?"completion":"failure",title:job.status==="completed"?"图像任务已完成":job.status==="cancelled"?"媒体等待已取消":"图像任务失败",detail:job.status==="completed"?job.message:job.error||job.message,sessionId:job.sessionId});
-      await this.notices().show(`media:${jobId}`,job.status==="completed"?"completion":"failure",job.status==="completed"?"Grok 媒体已生成":"Grok 媒体任务已结束",job.status==="completed"?`已保存 ${job.artifacts.length} 个产物，点击查看。`:"点击查看原因与现有结果。",{kind:job.sessionId.startsWith("image-")?"image":"session",id:job.sessionId});
+      if (this.disposing) return;
+      const kind=job.status==="completed"?"completion":"failure";
+      const image=job.sessionId.startsWith("image-")?await this.imageWorkspace.get(job.sessionId).catch(()=>undefined):undefined;
+      const detail=job.status==="completed"?`已保存 ${job.artifacts.length} 个产物。${job.message||""}`:job.error||job.message;
+      const content=image?notificationContent(kind,image.title,image.cwd,detail):await this.sessionNoticeContent(job.sessionId,kind,detail);
+      if (this.disposing) return;
+      const result=await this.inbox.addOnce({kind,title:content.title,detail:content.body,sessionId:job.sessionId},`media:${jobId}`);
+      if(result.added&&!this.disposing)await this.notices().show(`media:${jobId}`,kind,content.title,content.body,{kind:job.sessionId.startsWith("image-")?"image":"session",id:job.sessionId});
     }
   }
 
@@ -2698,6 +2953,7 @@ export class AppController {
     if (patch.theme !== undefined) patch.theme = mergeThemeSettings(current.theme ?? DEFAULT_THEME, patch.theme);
     const settings = await this.settingsStore.patch(patch);
     applyNativeTheme(settings.theme);
+    for (const listener of this.settingsListeners) this.deliverObserver(listener, settings);
     return settings;
   }
 
@@ -2788,7 +3044,17 @@ export class AppController {
     return { sessionId: result.sessionId, cwd: detail.cwd };
   }
 
-  getQuota(force = false): Promise<GrokQuotaSnapshot> { return this.quota.get(force); }
+  async getQuota(force = false): Promise<GrokQuotaSnapshot> {
+    const snapshot = await this.quota.get(force);
+    if (!this.disposing) try {
+      const settings = await this.settingsStore.get();
+      await (this.quotaWarnings ??= new QuotaWarningService(this.userDataPath)).observe(snapshot, settings.productivity?.quotaWarningPercent ?? 0, async warning => {
+        if (this.disposing) return;
+        await this.inbox.add({ kind: "info", title: notificationText(warning.title, 100), detail: notificationText(warning.detail) }, `quota:${warning.key}`);
+      });
+    } catch (error) { await this.log.log(`额度提醒暂不可用：${String(error)}`).catch(() => undefined); }
+    return snapshot;
+  }
 
   private modelCatalog: ModelInfo[] = [];
   private modelCatalogProbe?: Promise<ModelInfo[]>;
@@ -3424,22 +3690,32 @@ export class AppController {
   dismissNativeRun(input: NativeRunDismissInput) { return this.nativeRuns.dismiss(input); }
   /** Background workflows end without a prompt turn; announce their final state once, like a finished turn. */
   private async announceWorkflowFinished(row: NativeRunSnapshot): Promise<void> {
+    if (this.disposing) return;
     const failed = row.status === "failed", limited = row.status === "budget-limited";
     const title = failed ? "工作流失败" : limited ? "工作流预算已用完" : "工作流已完成";
     if (this.visibleConversationId !== row.sessionId || !this.window?.isFocused()) await this.catalog.markUnread(row.sessionId, failed);
-    await this.inbox.add({ kind: failed || limited ? "failure" : "completion", title, detail: row.title, sessionId: row.sessionId });
-    await this.notices().show(`workflow:${row.sessionId}:${row.id}:${row.status}`, failed || limited ? "failure" : "completion", `Grok ${title}`, row.title, { kind: "session", id: row.sessionId });
+    const kind = failed || limited ? "failure" : "completion";
+    const content = await this.sessionNoticeContent(row.sessionId, kind, `${title}：${row.title}`);
+    const key = `workflow:${row.sessionId}:${row.id}`;
+    if (this.disposing) return;
+    const result = await this.inbox.addOnce({ kind, title: content.title, detail: content.body, sessionId: row.sessionId }, key);
+    if (result.added && !this.disposing) await this.notices().show(key, kind, content.title, content.body, { kind: "session", id: row.sessionId });
   }
   async killBackgroundTask(id: string): Promise<void> { if (/(?:^|:)unidentified-/.test(id)) throw new Error("CLI 未提供可取消的原生任务 ID"); const separator = id.indexOf(":"); if (separator < 1) throw new Error("后台任务标识无效"); await this.processes.killBackgroundTask(id.slice(0, separator), id.slice(separator + 1)); }
   async listInbox(): Promise<NotificationInboxItem[]> {
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
-    const stored = await this.inbox.list(); const pending = await this.automations.pending();
-    if (!pending.length) return stored.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const stored = [...await this.inbox.list(), ...this.pendingSessionNotices.values()]; const pending = await this.automations.pending();
+    if (!pending.length) return sortInboxItems(stored);
     const [tasks, runs] = await Promise.all([this.automations.list(), this.automations.listRuns()]);
-    return [...pending.map((value): NotificationInboxItem => ({ id: `pending:${value.id}`, kind: "confirmation", title: value.source === "computer" ? "定时任务：Computer 操作等待确认" : "定时任务：工具权限等待确认", detail: value.summary, taskId: value.taskId, automationRunId: value.runId, sessionId: runs.find(run => run.id === value.runId)?.sessionId ?? tasks.find(task => task.id === value.taskId)?.targetSessionId ?? tasks.find(task => task.id === value.taskId)?.sessionId, read: false, createdAt: new Date(new Date(value.expiresAt).getTime() - 30 * 60_000).toISOString() })), ...stored].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return sortInboxItems([...pending.map((value): NotificationInboxItem => ({ id: `pending:${value.id}`, kind: "confirmation", title: notificationText(`${tasks.find(task => task.id === value.taskId)?.name || "定时任务"} · 等待确认`, 100), detail: notificationText(value.summary), taskId: value.taskId, automationRunId: value.runId, sessionId: runs.find(run => run.id === value.runId)?.sessionId ?? tasks.find(task => task.id === value.taskId)?.targetSessionId ?? tasks.find(task => task.id === value.taskId)?.sessionId, read: false, createdAt: new Date(new Date(value.expiresAt).getTime() - 30 * 60_000).toISOString() })), ...stored]);
   }
-  markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]> { return this.inbox.markRead(id, read); }
-  clearInbox(): Promise<NotificationInboxItem[]> { return this.inbox.clear(); }
+  async markInboxRead(id: string, read: boolean): Promise<NotificationInboxItem[]> { await this.inbox.markRead(id, read); return this.listInbox(); }
+  async markAllInboxRead(): Promise<NotificationInboxItem[]> { await this.inbox.markAllRead(); return this.listInbox(); }
+  async clearInbox(): Promise<NotificationInboxItem[]> { await this.inbox.clear(); return this.listInbox(); }
+  listPromptSnippets() { return this.promptSnippets.list(); }
+  savePromptSnippet(input: PromptSnippetInput) { return this.promptSnippets.save(input); }
+  deletePromptSnippet(id: string, updatedAt?: string) { return this.promptSnippets.delete(id, updatedAt); }
+
   async getDraft(key: string): Promise<ComposerDraftState | null> {
     const draft = await this.uiState.getDraft(key);
     // A restored composer draft was originally selected by the user through
@@ -3769,6 +4045,16 @@ export class AppController {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.stopCliConfigObservation?.();
+    this.inboxUnsubscribe?.();
+    this.pendingInboxWatcher?.close();
+    if (this.pendingInboxTimer) clearTimeout(this.pendingInboxTimer);
+    this.inbox.dispose();
+    this.desktopNotices?.dispose();
+    this.remotePush?.dispose();
+    this.activityListeners.clear();
+    this.settingsListeners.clear();
+    if (this.activityTimer) clearTimeout(this.activityTimer);
     await this.remoteGateway?.dispose();
     for(const timer of this.pullRequestWatches.values())clearInterval(timer);this.pullRequestWatches.clear();
     this.workspaceTerminals.dispose();
@@ -3939,18 +4225,20 @@ export class AppController {
 
   private eventFlights = new Map<string, Promise<void>>();
   private handleEvent(event: ChatEvent): Promise<void> {
+    if (this.disposing) return Promise.resolve();
     // Preparing attachments performs I/O. Preserve ACP order across that await,
     // otherwise a sent status or terminal update can overtake its user bubble.
     const key = event.sessionId || "global";
     const flights = this.eventFlights ??= new Map();
     const next = (flights.get(key) ?? Promise.resolve()).catch(() => undefined)
-      .then(() => this.handleOrderedEvent(event));
+      .then(() => this.disposing ? undefined : this.handleOrderedEvent(event));
     flights.set(key, next);
     void next.finally(() => { if (flights.get(key) === next) flights.delete(key); }).catch(() => undefined);
     return next;
   }
 
   private async handleOrderedEvent(event: ChatEvent): Promise<void> {
+    if (this.disposing) return;
     const replayingAtEntry=Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId));
     this.nativeRuns?.record(event, replayingAtEntry);
     this.nativeAgentCapabilities.record(event, { replaying: Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId)) });
@@ -3976,6 +4264,7 @@ export class AppController {
       }
     }
     event = await this.prepareVisibleEvent(event);
+    if (this.disposing) return;
     // Failure enrichment changes what the renderer presents, so it is the only
     // disk/network-adjacent observer allowed to run before delivery.
     if (event.type === "error") {
@@ -4058,6 +4347,7 @@ export class AppController {
     }
     if (!replayingAtEntry && !this.projectionReplaying.has(sessionId)) this.remoteGateway?.observe(event);
     if (replayingAtEntry || this.projectionReplaying.has(sessionId)) return;
+    this.observeNotificationEvent(event);
     await this.dashboard.record(event).catch((error) => this.log.log(`Agent Dashboard 记录失败：${error instanceof Error ? error.message : String(error)}`));
     if ((event.type === "turn-started" || event.type === "turn-completed") && event.presentation) {
       await this.turnPresentations.recordForSession(event.sessionId, event.presentation)
@@ -4108,11 +4398,26 @@ export class AppController {
     // session restore also toggle working→idle and must not raise completion notices.
     if (!replayingAtEntry && event.type === "turn-started" && event.presentation.origin !== "native-control") this.runningSessions.add(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && this.runningSessions.delete(event.sessionId)) {
+      if (this.disposing) return;
       if(this.visibleConversationId!==event.sessionId||!this.window?.isFocused())await this.catalog.markUnread(event.sessionId, event.status === "error");
-      await this.inbox.add({ kind: event.status === "error" ? "failure" : "completion", title: event.status === "error" ? "会话失败" : "会话已完成", detail: event.text, sessionId: event.sessionId });
-      await this.notices().show(`session:${event.sessionId}:${Date.now()}`,event.status==="error"?"failure":"completion",event.status==="error"?"Grok 会话失败":"Grok 会话已完成","点击查看最终回复或错误详情。",{kind:"session",id:event.sessionId});
+      const kind = event.status === "error" ? "failure" : "completion";
+      const content = await this.sessionNoticeContent(event.sessionId, kind, kind === "failure" ? event.text : undefined);
+      const key = `session:${event.sessionId}:${this.noticeContexts?.get(event.sessionId)?.turnId || "turn"}`;
+      if (this.disposing) return;
+      await this.inbox.add({ kind, title: content.title, detail: content.body, sessionId: event.sessionId }, key);
+      if (!this.disposing) await this.notices().show(key, kind, content.title, content.body, {kind:"session",id:event.sessionId});
     }
-    if(["permission","question","plan","computer-permission","computer-risk"].includes(event.type)&&event.sessionId){const raw=event as unknown as {requestId?:string;request?:{requestId?:string}};await this.notices().show(`confirmation:${event.sessionId}:${raw.requestId??raw.request?.requestId??event.type}`,"confirmation","Grok 正在等待你处理","任务已暂停，点击返回会话。",{kind:"session",id:event.sessionId});}
+    const confirmation = this.confirmationNotice(event);
+    if (confirmation && event.sessionId && !this.disposing) {
+      const key = `${event.sessionId}:${confirmation.key}`;
+      if (!this.pendingSessionNotices.has(key)) {
+        const content = await this.sessionNoticeContent(event.sessionId, "confirmation", confirmation.detail);
+        if (this.disposing) return;
+        this.pendingSessionNotices.set(key, { id: `session-pending:${createHash("sha256").update(key).digest("hex")}`, kind: "confirmation", title: content.title, detail: content.body, sessionId: event.sessionId, read: false, createdAt: new Date().toISOString() });
+        this.inboxChanged();
+        await this.notices().show(`confirmation:${key}`, "confirmation", content.title, content.body, {kind:"session",id:event.sessionId});
+      }
+    }
   }
 
   private finishProjectionReplay(sessionId: string): void {
@@ -4186,23 +4491,31 @@ export class AppController {
 
   private async showAutomationNotification(run: AutomationRunRecord): Promise<void> {
     const [task,policy]=await Promise.all([this.automations.list().then(tasks=>tasks.find(task=>task.id===run.taskId)),this.automations.getPolicy()]);
-    if(!task?.notify||(run.status==="completed"?!policy.notifyOnSuccess:!policy.notifyOnFailure))return;
-    await this.notices().show(`automation:${run.id}`,run.status==="completed"&&!run.warning?"completion":"failure",run.warning?"定时任务结果待检查":run.status==="completed"?"定时任务已完成":"定时任务失败","点击打开对应运行记录。",{kind:"automation",id:run.id});
+    if(this.disposing||!task?.notify||(run.status==="completed"?!policy.notifyOnSuccess:!policy.notifyOnFailure))return;
+    const kind=run.status==="completed"&&!run.warning?"completion":"failure";
+    const content=notificationContent(kind,task.name,task.workspace,run.error||run.warning||"运行结果已保存，打开查看回复。");
+    await this.notices().show(`automation:${run.id}`,kind,content.title,content.body,{kind:"automation",id:run.id});
   }
 
   private async recordAutomationResult(run: AutomationRunRecord): Promise<void> {
-    await this.inbox.add({
+    if (this.disposing) return;
+    const task=(await this.automations.list()).find(task=>task.id===run.taskId);
+    const content=notificationContent(run.status==="completed"&&!run.warning?"completion":"failure",task?.name||"定时任务",task?.workspace,run.error||run.warning||"运行结果已保存，打开查看回复。");
+    if (this.disposing) return;
+    const result = await this.inbox.addOnce({
       kind: run.status === "completed" && !run.warning ? "completion" : "failure",
-      title: run.warning ? "定时任务结果待检查" : run.status === "completed" ? "定时任务已完成" : "定时任务失败",
-      detail: run.error || run.warning || (run.sessionId ? `已保存为 Grok 会话 ${run.sessionId.slice(0, 8)}` : "运行记录已保存，可在任务中心查看。"),
+      title: content.title,
+      detail: content.body,
+      sessionId: run.sessionId,
       taskId: run.taskId,
       automationRunId: run.id,
     });
-    await this.showAutomationNotification(run);
+    if (result.added && !this.disposing) await this.showAutomationNotification(run);
   }
 
   private showAutomationPendingNotification(pending: import("../shared/types").AutomationPendingConfirmation): void {
-    void this.notices().show(`pending:${pending.id}`,"confirmation","定时任务等待确认",`操作已暂停，将在 ${new Date(pending.expiresAt).toLocaleTimeString("zh-CN")} 前等待处理。点击打开任务中心。`,{kind:"automation",id:pending.runId}).catch(error=>this.log.log(String(error)));
+    if(this.disposing)return;
+    void this.automations.list().then(async tasks=>{if(this.disposing)return;const task=tasks.find(task=>task.id===pending.taskId);const content=notificationContent("confirmation",task?.name||"定时任务",task?.workspace,pending.summary);await this.notices().show(`pending:${pending.id}`,"confirmation",content.title,content.body,{kind:"automation",id:pending.runId})}).catch(error=>this.log.log(String(error))).catch(()=>undefined);
   }
 
   private openInteractiveTaskCenter(): void {

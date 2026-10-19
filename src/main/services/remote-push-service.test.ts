@@ -4,6 +4,37 @@ import{tmpdir}from"node:os";import{join}from"node:path";import{generateKeyPairSy
 import{RemotePushService}from"./remote-push-service";
 const roots:string[]=[];afterEach(async()=>{for(const root of roots.splice(0))await rm(root,{recursive:true,force:true})});
 describe("optional remote push",()=>{
+ it("coalesces inbox changes during delivery without dropping the newest event",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"grok-push-events-"));roots.push(root);
+  let release!:()=>void;
+  const request=vi.fn(async(_url:string,_init:RequestInit)=>{if(request.mock.calls.length===1)await new Promise<void>(done=>{release=done});return new Response("{}",{status:200})});
+  const service=new RemotePushService(root,{encrypt:s=>s,decrypt:s=>s},request);
+  const state={credential:JSON.stringify({project_id:"fixture-project"}),publicConfig:{},devices:{device:"token"},seen:[] as string[],initialized:true,deliveryVersions:{device:2}};
+  (service as any).store={get:async()=>structuredClone(state),mutate:async(change:(state:unknown)=>void)=>{change(state);return structuredClone(state)}};
+  (service as any).accessToken=async()=>"fixture-access";
+  const item=(id:string)=>({id,kind:"completion" as const,title:"private request",read:false,createdAt:id});
+  const first=service.poll(async()=>[item("a")],"computer",["device"]);
+  await vi.waitFor(()=>expect(request).toHaveBeenCalledOnce());
+  await service.poll(async()=>[item("b"),item("a")],"computer",["device"]);
+  release();await first;
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls.map(call=>JSON.parse(String(call[1].body)).message.data.noticeId)).toEqual(["a","b"]);
+  expect(JSON.stringify(request.mock.calls)).not.toContain("private request");
+  service.dispose();
+ });
+ it("aborts delivery and drops queued inbox reads when disposed",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"grok-push-dispose-"));roots.push(root);
+  const request=vi.fn(async(_url:string,init:RequestInit)=>new Promise<Response>((_resolve,reject)=>{init.signal!.addEventListener("abort",()=>reject(Error("closed")),{once:true})}));
+  const service=new RemotePushService(root,{encrypt:s=>s,decrypt:s=>s},request);
+  const state={credential:JSON.stringify({project_id:"fixture-project"}),publicConfig:{},devices:{device:"token"},seen:[],initialized:true};
+  (service as any).store={get:async()=>structuredClone(state)};(service as any).accessToken=async()=>"fixture-access";
+  const read=vi.fn(async()=>[{id:"a",kind:"failure" as const,title:"x",read:false,createdAt:""}]);
+  const first=service.poll(read,"computer",["device"]);
+  await vi.waitFor(()=>expect(request).toHaveBeenCalledOnce());
+  const queued=vi.fn(async()=>[]);await service.poll(queued,"computer",["device"]);
+  service.dispose();await first;
+  expect(queued).not.toHaveBeenCalled();expect(request).toHaveBeenCalledOnce();expect(service.retryNeeded).toBe(false);
+ });
  it("stays inactive without configuration and never reads task content",async()=>{const root=await mkdtemp(join(tmpdir(),"grok-push-"));roots.push(root);const read=vi.fn(async()=>[]),request=vi.fn();const service=new RemotePushService(root,{encrypt:s=>s,decrypt:s=>s},request);expect((await service.status()).configured).toBe(false);await service.poll(read,"computer",["device"]);expect(read).not.toHaveBeenCalled();expect(request).not.toHaveBeenCalled()});
  it("encrypts credentials/tokens and sends only generic notices and original identities",async()=>{
   const root=await mkdtemp(join(tmpdir(),"grok-push-"));roots.push(root);const {privateKey}=generateKeyPairSync("rsa",{modulusLength:2048,privateKeyEncoding:{type:"pkcs8",format:"pem"},publicKeyEncoding:{type:"spki",format:"pem"}});const credential=join(root,"credential.json"),android=join(root,"android.json");await writeFile(credential,JSON.stringify({project_id:"fixture-project",client_email:"fixture@example.invalid",private_key:privateKey}));await writeFile(android,JSON.stringify({project_info:{project_id:"fixture-project",project_number:"123"},client:[{client_info:{mobilesdk_app_id:"fixture-app",android_client_info:{package_name:"io.github.grokbuilddesktop.companion"}},api_key:[{current_key:"fixture-api-key"}]}]}));

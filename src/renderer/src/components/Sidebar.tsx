@@ -9,6 +9,7 @@ import { ActionMenu, type UiAction } from "./ui/ActionMenu";
 import { IconButton } from "./ui/Button";
 import { ModeSwitch, type AppMode } from "./ModeSwitch";
 import { UpdateIndicator } from "./UpdateIndicator";
+import { shortcutFor } from "../../../shared/shortcuts";
 
 const LazyFileExplorer = lazy(() => import("./FileWorkbench").then((module) => ({ default: module.FileExplorer })));
 const LazyGitExplorer = lazy(() => import("./GitWorkbench").then((module) => ({ default: module.GitExplorer })));
@@ -23,6 +24,7 @@ const EXPANDED_KEY = "grok.sidebar-projects.v1";
 
 export function Sidebar(props: {
   version: string;
+  inboxUnreadCount?: number;
   mode: AppMode;
   onMode(mode: AppMode): void;
   settings?: AppSettings;
@@ -192,9 +194,9 @@ export function Sidebar(props: {
     <aside className="sidebar">
       <ModeSwitch mode={props.mode} onMode={props.onMode} />
       <nav className="sb-nav" aria-label="主要入口">
-        <button type="button" className="sb-nav-row is-primary" disabled={props.busy} onClick={props.onNew}><UiIcon name="new-chat" /><span>新建会话</span><kbd>Ctrl N</kbd></button>
-        <button type="button" className="sb-nav-row" onClick={() => window.dispatchEvent(new Event("grok:command-search"))} aria-label="搜索命令和会话"><UiIcon name="search" /><span>搜索</span><kbd>Ctrl K</kbd></button>
-        <button type="button" className="sb-nav-row" onClick={() => props.onPanel("tasks")}><UiIcon name="clock" /><span>定时任务</span></button>
+        <button type="button" className="sb-nav-row is-primary" disabled={props.busy} onClick={props.onNew}><UiIcon name="new-chat" /><span>新建会话</span>{shortcutFor("new-session",props.settings?.productivity)&&<kbd>{shortcutFor("new-session",props.settings?.productivity).replace("Control+","Ctrl ").replaceAll("+"," ")}</kbd>}</button>
+        <button type="button" className="sb-nav-row" onClick={() => window.dispatchEvent(new Event("grok:command-search"))} aria-label="搜索命令和会话"><UiIcon name="search" /><span>搜索</span>{shortcutFor("command-search",props.settings?.productivity)&&<kbd>{shortcutFor("command-search",props.settings?.productivity).replace("Control+","Ctrl ").replaceAll("+"," ")}</kbd>}</button>
+        <button type="button" className="sb-nav-row" onClick={() => props.onPanel("tasks")} aria-label={`任务中心${props.inboxUnreadCount ? `，${props.inboxUnreadCount} 条未读` : ""}`}><UiIcon name="clock" /><span>任务中心</span>{!!props.inboxUnreadCount && <small className="sb-inbox-count">{props.inboxUnreadCount > 99 ? "99+" : props.inboxUnreadCount}</small>}</button>
         <button type="button" className="sb-nav-row" onClick={() => props.onPanel("extensions")}><UiIcon name="extensions" /><span>技能与扩展</span></button>
         <ActionMenu align="start" actions={tools} onError={onError} trigger={<button type="button" className="sb-nav-row"><UiIcon name="grid" /><span>更多工具</span><UiIcon name="chevron-right" size={13} className="sb-nav-tail" /></button>} />
       </nav>

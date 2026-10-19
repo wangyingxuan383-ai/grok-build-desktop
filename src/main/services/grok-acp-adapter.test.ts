@@ -1134,12 +1134,12 @@ describe("Grok internal queue isolation", () => {
     ]);
   });
 
-  it("falls back to the official send-now prompt path when the CLI has no current-turn interjection method", async () => {
+  it("queues unsupported interjections without stopping the current turn", async () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     const queuePrompt = vi.fn(async () => ({
       operationId: "fallback-op",
       entryId: "fallback-entry",
-      state: "send-now",
+      state: "queued",
       fallback: true,
       message: "fallback",
     }));
@@ -1156,10 +1156,11 @@ describe("Grok internal queue isolation", () => {
     });
 
     await expect(adapter.interjectPrompt("旧版回退", [], { clientMessageId: "client-fallback" })).resolves.toMatchObject({
-      state: "send-now",
+      state: "queued",
       fallback: true,
+      message: expect.stringContaining("当前任务继续运行"),
     });
-    expect(queuePrompt).toHaveBeenCalledWith("旧版回退", [], true, expect.objectContaining({ clientMessageId: "client-fallback" }));
+    expect(queuePrompt).toHaveBeenCalledWith("旧版回退", [], false, expect.objectContaining({ clientMessageId: "client-fallback" }));
     expect(adapter.pendingInterjections.size).toBe(0);
     expect(adapter.emitEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "interjection" }));
   });

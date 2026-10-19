@@ -1,6 +1,21 @@
 import {expect,it,vi} from "vitest";
 vi.mock("electron",()=>({app:{},clipboard:{},desktopCapturer:{},dialog:{},Menu:{},nativeImage:{},nativeTheme:{},Notification:class{},session:{},shell:{},safeStorage:{}}));
 import {AppController} from "./app-controller";
+it("invalidates a delayed model probe when external configuration changes", async () => {
+ let changed!: (state: unknown) => void;
+ let finish!: (models: unknown[]) => void;
+ const probeModelCatalog = vi.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue([{modelId:"fresh",name:"Fresh"}]);
+ const controller:any={providers:{startConfigObserver:async(callback:typeof changed)=>{changed=callback;return()=>undefined},list:async()=>[]},settingsStore:{get:async()=>({activeWorkspace:process.cwd()})},processes:{listKnownModels:()=>[],probeModelCatalog},modelCatalog:[],modelCatalogRevision:0,modelCatalogProbedAt:0,modelCatalogAttemptedAt:0,log:{log:vi.fn()}};
+ Object.setPrototypeOf(controller,AppController.prototype);
+ await controller.ensureCliConfigObservation();
+ const old = controller.listModelCatalog();
+ await vi.waitFor(()=>expect(probeModelCatalog).toHaveBeenCalledTimes(1));
+ changed({revision:2});
+ finish([{modelId:"old",name:"Old"}]);
+ expect(await old).toEqual([]);
+ expect(controller.modelCatalogProbedAt).toBe(0);
+ expect(await controller.listModelCatalog()).toEqual([{modelId:"fresh",name:"Fresh"}]);
+});
 it("quietly returns unknown context when a read-only session query cannot run",async()=>{
  const sessionInfo=vi.fn(async()=>{throw Error("session not loaded")});
  expect(await AppController.prototype.getCliSessionInfo.call({processes:{sessionInfo}} as any,"cold-session")).toEqual({sessionId:"cold-session",supported:false,source:"unsupported"});

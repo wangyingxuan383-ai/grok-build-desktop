@@ -9,6 +9,10 @@ import { createPortal } from "react-dom";
 import type { VirtuosoHandle } from "react-virtuoso";
 import type { AppMenuCommand, AppSettings, Attachment, ChatEvent, ClaudeSessionDetail, ClaudeSessionSummary, CodexSessionDetail, CodexSessionSummary, ComposerCapabilitySelection, ComputerAppPermissionRequest, ComputerRiskConfirmation, ComputerTaskState, ComputerUseSettings, CustomProviderProfile, ExecutionProfileLaunchInput, GitRepositoryStatus, GrokQuotaSnapshot, GrokWorktreeSummary, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution, ModelInfo, NavigationIntent, NewTaskDraft, PromptQueueEntry, ReasoningEffort, RewindPoint, SessionExecutionAssignment, SessionExecutionProfile, SessionMode, SessionOriginKind, SessionSummary, SkillSummary, ThemeSettings, TurnFailure, WorkspaceFileCandidate, WorkspaceSummary } from "../../shared/types";
 import { resolveComputerMention } from "../../shared/computer-mentions";
+import { APP_SHORTCUTS, matchesShortcut, shortcutFor } from "../../shared/shortcuts";
+import { insertPromptSnippet } from "../../shared/prompt-snippets";
+import type { DesktopActivitySnapshot } from "../../shared/desktop-activity";
+import { SessionStatusStrip } from "./components/SessionStatusStrip";
 import { buildComposerCommand, normalizeSkillCommand, selectComposerCommand } from "../../shared/composer-capability";
 import { LazyMarkdownView } from "./components/LazyMarkdownView";
 import { buildChatTurns, useAppStore } from "./store";
@@ -48,6 +52,8 @@ import { launchInputFromDraft } from "./new-task-launch";
 import { useSubmissionController } from "./hooks/use-submission-controller";
 
 const LazySubagentConversation = lazy(()=>import("./components/SubagentConversation").then(module=>({default:module.SubagentConversation})));
+const LazySnippetLibrary = lazy(() => import("./components/SnippetLibrary").then(module => ({ default: module.SnippetLibrary })));
+const LazyExportSessionPanel = lazy(() => import("./components/ExportSessionPanel").then(module => ({ default: module.ExportSessionPanel })));
 const LazyImageWorkspacePage = lazy(()=>import("./components/ImageWorkspacePage").then(module=>({default:module.ImageWorkspacePage})));
 const LazyArtifactPreviewPane = lazy(()=>import("./components/ArtifactPreviewPane").then(module=>({default:module.ArtifactPreviewPane})));
 const LazyArtifactWorkbench = lazy(()=>import("./components/ArtifactWorkbench").then(module=>({default:module.ArtifactWorkbench})));
@@ -72,7 +78,10 @@ type Panel = "settings" | "accounts" | "providers" | "about" | "media" | "extens
 const panelLabels: Record<string,string> = { settings:"设置",accounts:"账号",providers:"模型提供商",about:"关于与更新",media:"创作",extensions:"扩展",diagnostics:"诊断",onboarding:"使用引导",tasks:"任务中心",history:"会话历史",feedback:"官方反馈" };
 export default function App(): React.JSX.Element {
   const [imageMode,setImageMode]=useState(()=>{try{return localStorage.getItem("grok.app-mode.v1")==="image"}catch{return false}});
-  const selectImageMode=(value:boolean)=>{setImageMode(value);try{localStorage.setItem("grok.app-mode.v1",value?"image":"code")}catch{}};
+  const imageModeRef = useRef(imageMode);
+  const imageDropRef = useRef<((attachments: Attachment[]) => void) | null>(null);
+  const registerImageDrop = useCallback((receive: ((attachments: Attachment[]) => void) | null) => { imageDropRef.current = receive; }, []);
+  const selectImageMode=(value:boolean)=>{imageModeRef.current=value;setImageMode(value);try{localStorage.setItem("grok.app-mode.v1",value?"image":"code")}catch{}};
   const store = useAppStore(useShallow((state) => ({
     accounts: state.accounts,
     activeSessionId: state.activeSessionId,
@@ -126,6 +135,19 @@ export default function App(): React.JSX.Element {
   const [operationBusy, setOperationBusy] = useState(false);
   const { sendingSessionIds, sendingSessionIdsRef, updateSendingSessions } = useSubmissionController();
   const [composerNotice, setComposerNotice] = useState("");
+  const [snippetLibrary, setSnippetLibrary] = useState<{ seed: string; slashQuery?: string; target: string }>();
+  const [exportTarget, setExportTarget] = useState<{ id: string; title: string }>();
+  const [inboxUnreadCount, setInboxUnreadCount] = useState(0);
+  const menuCommandRef = useRef<(command: AppMenuCommand) => void>(() => undefined);
+  useEffect(() => {
+    const api = window.grokDesktop;
+    if (!api.getDesktopActivity || !api.onDesktopActivityChanged) return;
+    let alive = true, receivedEvent = false;
+    const update = (snapshot: DesktopActivitySnapshot): void => { if (alive) setInboxUnreadCount(snapshot.inboxUnreadCount); };
+    const off = api.onDesktopActivityChanged(snapshot => { receivedEvent = true; update(snapshot); });
+    void api.getDesktopActivity().then(snapshot => { if (!receivedEvent) update(snapshot); }).catch(() => undefined);
+    return () => { alive = false; off(); };
+  }, []);
   const [pendingFeedback,setPendingFeedback]=useState<{sessionId:string;text:string;attachments?:Attachment[]}>();
   const [diagnosingFailure, setDiagnosingFailure] = useState<TurnFailure>();
   const [dialog, setDialog] = useState<DialogState | null>(null);
@@ -161,7 +183,7 @@ export default function App(): React.JSX.Element {
   const activeComputerPermission = computerPermissions[store.activeSessionId] ?? null;
   const activeComputerRisk = computerRisks[store.activeSessionId] ?? null;
   const pagePanel = panel && !["history", "feedback"].includes(panel);
-  const hasBlockingOverlay = Boolean((panel && !pagePanel) || dialog || activeComputerPermission || activeComputerRisk);
+  const hasBlockingOverlay = Boolean((panel && !pagePanel) || dialog || activeComputerPermission || activeComputerRisk || snippetLibrary || exportTarget);
   useOverlayFocusTrap(hasBlockingOverlay);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
@@ -187,6 +209,11 @@ export default function App(): React.JSX.Element {
   }, [store.setError]);
 
   useEffect(() => { void refreshModelCatalog(); }, [refreshModelCatalog, store.settings?.activeWorkspace]);
+  useEffect(() => window.grokDesktop.onCliConfigChanged?.(state => {
+    if (state.notice) return;
+    // Refresh parsed config/provider data without launching another native catalog probe.
+    void window.grokDesktop.listModelCatalog(false).then(models => { if (models.length) setCatalogModels(models); }).catch(() => undefined);
+  }), []);
   useEffect(()=>{if(!imageMode)void window.grokDesktop.setVisibleConversation(store.activeSessionId).catch(()=>undefined)},[imageMode,store.activeSessionId]);
 
   const focusComposer = useCallback(() => {
@@ -284,7 +311,11 @@ export default function App(): React.JSX.Element {
     };
     const removeEvent = window.grokDesktop.onEvent(enqueue);
     const removeLogin = window.grokDesktop.onLogin((state) => useAppStore.getState().setLogin(state));
-    const removeDrop = window.grokDesktop.onDroppedAttachments((attachments) => useAppStore.getState().addAttachments(attachments));
+    const removeDrop = window.grokDesktop.onDroppedAttachments((attachments) => {
+      if (!imageModeRef.current) { useAppStore.getState().addAttachments(attachments); return; }
+      if (imageDropRef.current) imageDropRef.current(attachments);
+      else useAppStore.getState().setError("图像输入尚未准备好，请打开图像会话后重新拖入参考图。");
+    });
     const removeNavigate = window.grokDesktop.onNavigateSession((target) => { selectImageMode(false); void openConversationTargetRef.current(target).catch((error) => useAppStore.getState().setError(errorMessage(error))); });
     const removeNotice=window.grokDesktop.onNotificationTarget(target=>{if(target.kind==="missing-session"){useAppStore.getState().setError("这条提醒对应的会话已不存在，可能已被删除或移动。");return}if(target.kind==="image"){localStorage.setItem("grok.image-notification-target",target.id);selectImageMode(true);window.dispatchEvent(new CustomEvent("grok:open-image-conversation",{detail:{id:target.id}}))}else{localStorage.setItem("grok.task-notification-run.v1",target.id);setPanel("tasks")}});
     const removeComputer = window.grokDesktop.onComputerStateChanged((state) => {
@@ -427,22 +458,25 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f" && useWorkbenchStore.getState().activeView === "chat") { event.preventDefault(); setConversationSearchOpen(true); window.setTimeout(() => document.querySelector<HTMLInputElement>("#conversation-search")?.focus(), 0); }
-      else if (event.ctrlKey && event.key.toLowerCase() === "n") { event.preventDefault(); useWorkbenchStore.getState().setActiveView("chat"); void openNewSessionDialog(); }
-      else if (event.ctrlKey && event.key.toLowerCase() === "f" && useWorkbenchStore.getState().activeView === "chat") { event.preventDefault(); document.querySelector<HTMLInputElement>("#session-search")?.focus(); }
-      else if (event.ctrlKey && event.key.toLowerCase() === "l") { event.preventDefault(); useWorkbenchStore.getState().setActiveView("chat"); window.setTimeout(focusComposer, 0); }
+      if (event.defaultPrevented) return;
+      const modal = hasBlockingOverlay || document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"], .add-palette');
+      // CommandSearch owns its shortcut and focus. All other registered local
+      // accelerators use exactly the same action as the native application menu.
+      const shortcut = !modal && APP_SHORTCUTS.find(item => item.command !== "command-search" && matchesShortcut(event, shortcutFor(item.command, store.settings?.productivity)));
+      if (shortcut) { event.preventDefault(); menuCommandRef.current(shortcut.command); }
       else if (event.key === "Escape" && dialog) { event.preventDefault(); event.stopImmediatePropagation(); closeDialog(dialog.input ? null : false); }
       else if (event.key === "Escape" && activeComputerRisk) { event.preventDefault(); event.stopImmediatePropagation(); void window.grokDesktop.respondComputerRisk(activeComputerRisk.requestId, false).finally(() => { setComputerRisks((current) => omitRecordKey(current, activeComputerRisk.sessionId)); focusComposer(); }); }
       else if (event.key === "Escape" && activeComputerPermission) { event.preventDefault(); event.stopImmediatePropagation(); void window.grokDesktop.respondComputerAppPermission(activeComputerPermission.requestId, "deny").finally(() => { setComputerPermissions((current) => omitRecordKey(current, activeComputerPermission.sessionId)); focusComposer(); }); }
       // The composer palette is a later-mounted overlay and owns the topmost
       // Escape press. Do not let an onboarding/settings panel underneath it
       // consume that key first.
+      else if (event.key === "Escape" && (snippetLibrary || exportTarget)) return;
       else if (event.key === "Escape" && document.querySelector(".add-palette")) return;
       else if (event.key === "Escape" && panel) { event.preventDefault(); event.stopImmediatePropagation(); setPanel(null); focusComposer(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeComputerPermission, activeComputerRisk, closeDialog, dialog, focusComposer, panel]);
+  }, [activeComputerPermission, activeComputerRisk, closeDialog, dialog, focusComposer, panel, hasBlockingOverlay, snippetLibrary, exportTarget, store.settings?.productivity]);
 
   useEffect(() => {
     const resize = (): void => { if (window.innerWidth < 1000) setSidebarCollapsed(true); };
@@ -875,7 +909,7 @@ export default function App(): React.JSX.Element {
     }
   }, [store.activeSessionId]);
 
-  useEffect(() => window.grokDesktop.onMenuCommand((command: AppMenuCommand) => {
+  const handleMenuCommand = useCallback((command: AppMenuCommand) => {
     if (command === "new-session") { setWorkbenchView("chat"); void openNewSessionDialog(); }
     else if (command === "choose-workspace") void (async () => {
       const cwd = await window.grokDesktop.chooseWorkspace();
@@ -885,10 +919,12 @@ export default function App(): React.JSX.Element {
       store.setActiveSession(""); setActiveCodexId(""); setCodexDetail(null); setActiveClaudeId(""); setClaudeDetail(null);
     })();
     else if (command === "add-attachment") void window.grokDesktop.pickAttachments().then(store.addAttachments).catch((error) => store.setError(errorMessage(error))).finally(focusComposer);
-    else if (command === "export-session" && activeSession) void window.grokDesktop.exportSessionMarkdown(activeSession.cwd, activeSession.id);
+    else if (command === "export-session" && activeSession) setExportTarget({ id: activeSession.id, title: activeSession.title });
     else if (command === "search-sessions") document.querySelector<HTMLInputElement>("#session-search")?.focus();
     else if (command === "search-conversation") { setConversationSearchOpen(true); window.setTimeout(() => document.querySelector<HTMLInputElement>("#conversation-search")?.focus(), 0); }
-    else if (command === "focus-composer") { setWorkbenchView("chat"); window.setTimeout(focusComposer, 0); }
+    else if (command === "focus-composer") { selectImageMode(false); setPanel(null); setActiveCodexId(""); setActiveClaudeId(""); setWorkbenchView("chat"); window.setTimeout(focusComposer, 0); }
+    else if (command === "command-search") { selectImageMode(false); setPanel(null); window.setTimeout(() => window.dispatchEvent(new Event("grok:command-search")), 0); }
+    else if (command === "open-inbox") { try { localStorage.setItem("grok.task-center-tab.v1", "inbox"); } catch { /* navigation still opens the center */ } selectImageMode(false); setPanel("tasks"); window.setTimeout(() => window.dispatchEvent(new Event("grok:open-inbox")), 0); }
     else if (command === "stop-generation" && store.activeSessionId) void stopActiveSession();
     else if (command === "copy-final-answer") { const answer = turns.toReversed().find((turn) => turn.final)?.final; if (answer && "text" in answer) void navigator.clipboard.writeText(answer.text); }
     else if (command === "toggle-sidebar") setSidebarCollapsed((value) => !value);
@@ -902,7 +938,9 @@ export default function App(): React.JSX.Element {
     else if (command === "open-about") setPanel("about");
     else if (command === "open-task-center") setPanel("tasks");
     else if (command === "open-feedback") setPanel("feedback");
-  }), [activeSession?.id, focusComposer, setWorkbenchView, stopActiveSession, store.activeSessionId, turns]);
+  }, [activeSession?.id, focusComposer, setWorkbenchView, stopActiveSession, store.activeSessionId, turns]);
+  menuCommandRef.current = handleMenuCommand;
+  useEffect(() => window.grokDesktop.onMenuCommand(handleMenuCommand), [handleMenuCommand]);
 
   const handleMediaPreview = useCallback((target:MediaPreview)=>{const owner=store.sessions.find(session=>session.id===target.sessionId);const workspace=owner?.cwd||target.workspace;if(!workspace)return false;setRightToolState(null);setArtifactPreview({...target,workspace});return true;},[store.sessions]);
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;
@@ -929,7 +967,7 @@ export default function App(): React.JSX.Element {
     ...([['tasks','任务中心'],['extensions','扩展与 Skills'],['settings','设置'],['accounts','账号'],['providers','模型提供商'],['diagnostics','诊断'],['about','关于与更新'],['onboarding','使用引导'],['media','创作'],['history','会话历史与分叉'],['feedback','官方反馈']] as const).map(([id,label]) => ({id:`panel:${id}`,label,disabled:(id==='history'||id==='feedback')&&!store.activeSessionId,run:()=>setPanel(id)})),
     ...store.sessions.map(session=>({id:`session:${session.id}`,label:`会话 / ${session.title}`,run:()=>openConversationTarget({cwd:session.cwd,sessionId:session.id})})),
   ];
-  if(imageMode)return <><Suspense fallback={<div role="status">正在加载图像模式…</div>}><LazyImageWorkspacePage onCode={()=>{setPanel(null);selectImageMode(false)}} onPanel={panel=>{if(panel==="providers")selectImageMode(false);setPanel(panel)}} onNotice={store.setError}/></Suspense><DialogHost>
+  if(imageMode)return <><Suspense fallback={<div role="status">正在加载图像模式…</div>}><LazyImageWorkspacePage registerDrop={registerImageDrop} onCode={()=>{setPanel(null);selectImageMode(false)}} onPanel={panel=>{if(panel==="providers")selectImageMode(false);setPanel(panel)}} onNotice={store.setError}/></Suspense><DialogHost>
     <Suspense fallback={<div role="status">正在加载…</div>}>
       {(panel === "settings" || panel === "accounts" || panel === "about") && <ControlPanel type={panel} confirmAction={askConfirm} onDiagnostics={()=>setPanel("diagnostics")} onProviders={()=>setPanel("providers")} onOnboarding={()=>setPanel("onboarding")} onClose={()=>setPanel(null)}/>}
       {panel === "diagnostics" && <LazyDiagnosticsPanel confirmAction={askConfirm} onClose={()=>setPanel(null)}/>}
@@ -942,6 +980,7 @@ export default function App(): React.JSX.Element {
   return (
     <SubagentOpenContext.Provider value={openSubagent}><MediaPreviewContext.Provider value={handleMediaPreview}><AppShell className={`app-shell density-${store.settings?.uiDensity ?? "balanced"} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${subagentPane || visibleArtifactPreview || rightTool && activeWorkbenchView === "chat" ? "right-tool-open" : ""} ${store.settings?.theme ? themeBackgroundClass(store.settings.theme) : ""}`} sidebar={<Sidebar
         version={store.appVersion}
+        inboxUnreadCount={inboxUnreadCount}
         mode="code"
         onMode={(mode) => selectImageMode(mode === "image")}
         settings={store.settings}
@@ -1012,7 +1051,7 @@ export default function App(): React.JSX.Element {
         }}
         onPin={async (session) => { await window.grokDesktop.pinSession(session.id, !session.pinned); await refreshSessions(); }}
         onArchive={async (session) => { await window.grokDesktop.archiveSession(session.id, !session.archived); await refreshSessions(); }}
-        onExport={async (session) => { await window.grokDesktop.exportSessionMarkdown(session.cwd, session.id); }}
+        onExport={session => setExportTarget({ id: session.id, title: session.title })}
         onHideCodex={async (session) => { await window.grokDesktop.hideCodexSession(session.id, true); store.setCodexSessions(await window.grokDesktop.listCodexSessions(session.cwd, store.settings?.showArchivedCodex, true)); if (activeCodexId === session.id) { setActiveCodexId(""); setCodexDetail(null); } }}
         onHideClaude={async (session) => { await window.grokDesktop.hideClaudeSession(session.id, true); store.setClaudeSessions(await window.grokDesktop.listClaudeSessions(session.cwd, true)); if (activeClaudeId === session.id) { setActiveClaudeId(""); setClaudeDetail(null); } }}
         onToggleCodex={async (collapsed) => { if (!store.settings) return; store.setSettings(await window.grokDesktop.updateSettings({ codexGroupCollapsed: collapsed })); }}
@@ -1129,6 +1168,7 @@ export default function App(): React.JSX.Element {
         {diagnosingFailure && createPortal(<LazyFailureDiagnosisPanel failure={diagnosingFailure} onClose={() => setDiagnosingFailure(undefined)} />, document.getElementById("overlay-root")!)}
         {!activeCodexId && !activeClaudeId && Boolean(view?.followUps.length) && <div className="follow-up-suggestions" aria-label="CLI 跟进建议"><span>跟进建议</span>{view!.followUps.map((suggestion) => <button key={suggestion.id} onClick={() => { setComposer(suggestion.text); focusComposer(); }}>{suggestion.text}</button>)}</div>}
         {!activeCodexId && !activeClaudeId && view && view.hydration !== "ready" && view.hydration !== "local" && <div className={`session-hydration-banner ${view.hydration}`} role="status"><span>{view.hydration === "connecting" ? "正在连接 CLI，已先显示本地历史…" : view.hydration === "synchronizing" ? "正在合并 CLI 回放…" : `本地历史仍可用；连接${view.hydration === "offline" ? "离线" : "失败"}${view.hydrationMessage ? `：${view.hydrationMessage}` : ""}`}</span>{(view.hydration === "offline" || view.hydration === "failed") && activeSession && <button onClick={() => void openSession(activeSession).catch(() => undefined)}>重新连接</button>}</div>}
+        {!activeCodexId && !activeClaudeId && store.activeSessionId && <SessionStatusStrip turn={turns.at(-1)?.presentation} workspace={executionRoot}/>}
         {!activeCodexId && !activeClaudeId && <Composer
           inputRef={composerRef}
           text={composer}
@@ -1204,6 +1244,7 @@ export default function App(): React.JSX.Element {
           onClearCapability={() => setCapability(undefined)}
           onManageExtensions={() => setPanel("extensions")}
           onHistory={navigatePromptHistory}
+          onSnippets={() => setSnippetLibrary({ seed: composer, slashQuery: /^\/[^\r\n]*$/.test(composer) ? composer.slice(1) : undefined, target: draftKey })}
           onControlSettled={focusComposer}
         />}</div>}
         </Suspense>
@@ -1218,6 +1259,8 @@ export default function App(): React.JSX.Element {
         {store.error && <GlobalErrorToast message={store.error} onReload={() => window.location.reload()} onDiagnostics={() => setPanel("diagnostics")} onDismiss={() => store.setError("")} />}
         {panel === "history" && store.activeSessionId && <SessionHistoryPanel sessionId={store.activeSessionId} confirmAction={askConfirm} onForked={async (result) => { setPanel(null); await openConversationTarget(result); }} onRewound={() => { setPanel(null); settleConversationBottom(store.activeSessionId); }} onClose={() => { setPanel(null); focusComposer(); }} />}
         {panel === "feedback" && <OfficialFeedbackDialog sessionId={store.activeSessionId} onClose={() => { setPanel(null); focusComposer(); }} />}
+        {snippetLibrary && <Suspense fallback={null}><LazySnippetLibrary seed={snippetLibrary.seed} query={snippetLibrary.slashQuery} onClose={() => { setSnippetLibrary(undefined); focusComposer(); }} onInsert={text => { if (draftKey !== snippetLibrary.target) { store.setError("会话已切换，请重新选择片段"); return; } setComposer(value => insertPromptSnippet(value, text, snippetLibrary.slashQuery)); setSnippetLibrary(undefined); focusComposer(); }}/></Suspense>}
+        {exportTarget && <Suspense fallback={null}><LazyExportSessionPanel sessionId={exportTarget.id} title={exportTarget.title} api={window.grokDesktop} onClose={() => { setExportTarget(undefined); focusComposer(); }}/></Suspense>}
         {activeComputerPermission && <ComputerPermissionDialog request={activeComputerPermission} onRespond={async (decision) => { try { await window.grokDesktop.respondComputerAppPermission(activeComputerPermission.requestId, decision); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerPermissions((current) => omitRecordKey(current, activeComputerPermission.sessionId)); focusComposer(); } }} />}
         {activeComputerRisk && <ComputerRiskDialog request={activeComputerRisk} onRespond={async (approved) => { try { await window.grokDesktop.respondComputerRisk(activeComputerRisk.requestId, approved); } catch (error) { store.setError(errorMessage(error)); } finally { setComputerRisks((current) => omitRecordKey(current, activeComputerRisk.sessionId)); focusComposer(); } }} />}
         {dialog && <ActionDialog dialog={dialog} onClose={closeDialog} />}

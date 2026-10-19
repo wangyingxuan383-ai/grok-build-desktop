@@ -15,6 +15,14 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   };
 
   handle("workspace-artifact:pick",(cwd:string)=>controller.pickWorkspaceArtifact(cwd));
+  handle("desktop:activity", () => controller.getDesktopActivity());
+  handle("cli:config-state", () => controller.getCliConfigState());
+  handle("inbox:mark-all-read", () => controller.markAllInboxRead());
+  handle("snippets:list", () => controller.listPromptSnippets());
+  handle("snippets:save", (input: import("../shared/prompt-snippets").PromptSnippetInput) => controller.savePromptSnippet(input));
+  handle("snippets:delete", (id: string, updatedAt: string) => controller.deletePromptSnippet(id, updatedAt));
+  handle("session:export-preview", (id: string, options: import("../shared/conversation-export").SessionExportOptions) => controller.previewSessionExport(id, options));
+  handle("session:export-save", (id: string, options: import("../shared/conversation-export").SessionExportOptions) => controller.saveSessionExport(id, options));
   handle("remote:state",()=>controller.getRemoteState());
   handle("remote:enable",(enabled:boolean,port?:number)=>controller.setRemoteEnabled(enabled,port));
   handle("remote:pair",(address?:string)=>controller.beginRemotePairing(address));
@@ -34,7 +42,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("preview:start",(workspace:string,script:string)=>controller.startPreviewServer(workspace,script));
   handle("preview:list",(workspace:string)=>controller.listPreviewServers(workspace));
   handle("preview:stop",(id:string)=>controller.stopPreviewServer(id));
-  handle("workspace-browser:capture",(id:string)=>controller.captureBrowserFeedback(id));
+  handle("workspace-browser:capture",(id:string,pick?:import("../shared/preview-feedback").PreviewElementPick)=>controller.captureBrowserFeedback(id,pick));
   handle("workspace-browser:navigate",(id:string,url:string)=>controller.navigateWorkspaceBrowser(id,url));
   handle("workspace-browser:command",(id:string,action:"back"|"forward"|"reload"|"stop")=>controller.commandWorkspaceBrowser(id,action));
   handle("workspace-browser:bounds",(id:string,bounds:import("../shared/workspace-tools").WorkspaceViewBounds)=>controller.boundsWorkspaceBrowser(id,bounds));
@@ -234,7 +242,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("git:pull-request",(workspace:string)=>controller.getPullRequestStatus(workspace));
   handle("git:watch-pull-request",(workspace:string,sessionId:string,enabled:boolean)=>controller.watchPullRequest(workspace,sessionId,enabled));
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
-  handle("models:catalog", () => controller.listModelCatalog());
+  handle("models:catalog", (refresh?: boolean) => controller.listModelCatalog(refresh));
   handle("theme:get", () => controller.getTheme());
   handle("theme:update", (patch: Partial<ThemeSettings>) => controller.updateTheme(patch));
   handle("theme:pick-background", () => controller.pickThemeBackground());

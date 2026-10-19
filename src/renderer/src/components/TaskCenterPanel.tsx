@@ -7,6 +7,56 @@ import { useNativeRuns } from "../hooks/use-native-runs";
 import { useAppStore } from "../store";
 
 type TaskCenterReadApi = Pick<GrokDesktopApi, "listAutomations" | "listAutomationRuns" | "getAutomationGlobalPolicy" | "listBackgroundTasks" | "listInbox" | "listProviders">;
+type TaskCenterInboxApi = Pick<GrokDesktopApi, "listInbox"> & {
+  onInboxChanged?: (listener: (items?: NotificationInboxItem[] | void) => void) => () => void;
+  markAllInboxRead?: () => Promise<NotificationInboxItem[]>;
+};
+
+export type TaskCenterTab = "persistent" | "runs" | "queue" | "inbox";
+export function initialTaskCenterTab(storage: Pick<Storage, "getItem" | "removeItem">): TaskCenterTab {
+  try {
+    const requested = storage.getItem("grok.task-center-tab.v1");
+    storage.removeItem("grok.task-center-tab.v1");
+    if (requested === "inbox") return "inbox";
+    return storage.getItem("grok.task-notification-run.v1") ? "runs" : "persistent";
+  } catch { return "persistent"; }
+}
+export function observeTaskCenterNavigation(events: EventTarget, storage: Pick<Storage, "removeItem">, select: (tab: TaskCenterTab) => void): () => void {
+  const open = () => { try { storage.removeItem("grok.task-center-tab.v1"); } catch { /* storage can be unavailable */ } select("inbox"); };
+  events.addEventListener("grok:open-inbox", open);
+  return () => events.removeEventListener("grok:open-inbox", open);
+}
+
+export function sortTaskCenterInbox(items: NotificationInboxItem[]): NotificationInboxItem[] {
+  const rank = (item: NotificationInboxItem) => item.read ? 3 : item.kind === "confirmation" ? 0 : item.kind === "failure" ? 1 : item.kind === "completion" ? 2 : 3;
+  return items.slice().sort((a, b) => rank(a) - rank(b) || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+}
+
+/** Subscribe before reading; discard stale reads and stop all delivery on cleanup. */
+export function observeTaskCenterInbox(api: TaskCenterInboxApi, publish: (items: NotificationInboxItem[]) => void, onError: (error: unknown) => void): () => void {
+  let disposed = false, reading = false, dirty = false, revision = 0;
+  const refresh = async () => {
+    dirty = true;
+    if (reading || disposed) return;
+    reading = true;
+    try {
+      while (dirty && !disposed) {
+        dirty = false;
+        const current = revision;
+        try { const items = await api.listInbox(); if (!disposed && current === revision) publish(sortTaskCenterInbox(items)); }
+        catch (error) { if (!disposed && current === revision) onError(error); }
+      }
+    } finally { reading = false; }
+  };
+  const off = api.onInboxChanged?.(items => {
+    if (disposed) return;
+    revision++;
+    if (Array.isArray(items)) { dirty = false; publish(sortTaskCenterInbox(items)); }
+    else void refresh().catch(error => { if (!disposed) onError(error); });
+  });
+  void refresh().catch(error => { if (!disposed) onError(error); });
+  return () => { disposed = true; revision++; off?.(); };
+}
 
 export interface TaskCenterSnapshot {
   tasks: AutomationTask[];
@@ -34,7 +84,9 @@ export async function loadTaskCenterSnapshot(api: TaskCenterReadApi, publish?:(s
 
 export function TaskCenterPanel({ workspace, accounts, onClose, onOpenSession, setError, confirmAction }: { workspace: string; accounts: AccountProfile[]; onClose(): void; onOpenSession(task: Pick<AutomationTask, "sessionId" | "workspace">, previewOnly?: boolean): void; setError(message: string): void; confirmAction(message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> }): React.JSX.Element {
   const page = useContext(PagePresentation);
-  const [tab, setTab] = useState<"persistent" | "runs" | "queue">(()=>localStorage.getItem("grok.task-notification-run.v1")?"runs":"persistent");
+  const [tab, setTab] = useState<TaskCenterTab>(() => { try { return initialTaskCenterTab(localStorage); } catch { return "persistent"; } });
+  useEffect(() => observeTaskCenterNavigation(window, { removeItem: key => { try { localStorage.removeItem(key); } catch { /* navigation remains available */ } } }, setTab), []);
+  const inboxRevision = useRef(0);
   const refreshEpoch=useRef(0),policyDirty=useRef(false),editingEpoch=useRef(0);
   const [loadErrors,setLoadErrors]=useState<string[]>([]);
   const [tasks, setTasks] = useState<AutomationTask[]>([]);
@@ -50,7 +102,8 @@ export function TaskCenterPanel({ workspace, accounts, onClose, onOpenSession, s
   const [busy, setBusy] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string>();
   const activeAccount = accounts.find((value) => value.active);
-  const refresh = async (): Promise<void> => {const epoch=++refreshEpoch.current;await loadTaskCenterSnapshot(window.grokDesktop,next=>{if(epoch!==refreshEpoch.current)return;if(next.loaded?.includes("tasks"))setTasks(next.tasks);if(next.loaded?.includes("runs"))setRuns(next.runs);if(!policyDirty.current&&next.policy)setPolicy(next.policy);if(next.loaded?.includes("background"))setBackground(next.background);if(next.loaded?.includes("inbox"))setInbox(next.inbox);if(next.loaded?.includes("providers"))setProviders(next.providers);setLoadErrors(next.errors??[]);});};
+  const refresh = async (): Promise<void> => {const epoch=++refreshEpoch.current,revision=inboxRevision.current;await loadTaskCenterSnapshot(window.grokDesktop,next=>{if(epoch!==refreshEpoch.current)return;if(next.loaded?.includes("tasks"))setTasks(next.tasks);if(next.loaded?.includes("runs"))setRuns(next.runs);if(!policyDirty.current&&next.policy)setPolicy(next.policy);if(next.loaded?.includes("background"))setBackground(next.background);if(revision===inboxRevision.current&&next.loaded?.includes("inbox"))setInbox(sortTaskCenterInbox(next.inbox));if(next.loaded?.includes("providers"))setProviders(next.providers);setLoadErrors(next.errors??[]);});};
+  useEffect(() => observeTaskCenterInbox(window.grokDesktop as TaskCenterInboxApi, items => { inboxRevision.current++; setInbox(items); }, error => setError(text(error))), []);
   const action=async(operation:()=>Promise<unknown>)=>{setBusy(true);try{await operation();await refresh()}catch(error){setError(text(error))}finally{setBusy(false)}};
   useEffect(() => { void refresh().catch((error) => setError(text(error))); if (workspace) void window.grokDesktop.listExecutionProfiles(workspace).then((values) => setExecutionProfiles(values.filter((value) => value.effective))).catch((error) => setError(text(error))); const off=window.grokDesktop.onAutomationEvent(()=>void refresh().catch(error=>setError(text(error))));return()=>{off();refreshEpoch.current++}; }, [workspace]);
   // Live sessions open normally; only restored summaries stay a read-only history view.
@@ -58,7 +111,7 @@ export function TaskCenterPanel({ workspace, accounts, onClose, onOpenSession, s
   const begin = (): void => {editingEpoch.current++;setEditing({ name: "新定时任务", workspace, prompt: "", schedule: { kind: "daily", time: "09:00" }, profile: { modelId: "", effort: "", mode: "auto", permissionPolicy: "auto", computerEnabled: false, accountId: activeAccount?.id }, executionProfileId: executionProfiles.find((value) => value.id === "builtin-normal")?.id, enabled: true, wakeToRun: false, notify: true, missedRunPolicy: "run-once", contextPolicy: "reuse" });};
   const save = async (): Promise<void> => { if (!editing) return; setBusy(true); try { const payload = { ...editing }; if (payload.id && !payload.prompt?.trim()) delete payload.prompt; setTasks(payload.id ? await window.grokDesktop.updateAutomation(payload.id, payload) : await window.grokDesktop.createAutomation(payload)); setEditing(null); setRuns(await window.grokDesktop.listAutomationRuns()); } catch (error) { setError(text(error)); } finally { setBusy(false); } };
   const checkHealth = async (repair: boolean): Promise<void> => { setBusy(true); try { const report = await window.grokDesktop.checkAutomationHealth(repair); setHealth(report); setTasks(await window.grokDesktop.listAutomations()); } catch (error) { setError(text(error)); } finally { setBusy(false); } };
-  return <PanelSurface className="modal-backdrop" onMouseDown={onClose}><section className="control-panel task-center" role="dialog" aria-modal="true" aria-label="任务中心" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>任务中心</h2><small>持久任务、运行记录和会话后台工作</small></div><button data-panel-close autoFocus={!page} onClick={onClose}>×</button></header><div className="task-tabs"><button autoFocus={page} className={tab === "persistent" ? "active" : ""} onClick={() => setTab("persistent")}>持久任务</button><button className={tab === "runs" ? "active" : ""} onClick={() => setTab("runs")}>运行记录</button><button className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")}>队列与后台</button></div><div className="panel-scroll">{loadErrors.length>0&&<div role="alert"><p>部分数据读取失败，已保留可读取的任务：</p>{loadErrors.map(error=><p key={error}>{error}</p>)}<button onClick={()=>void refresh()}>重新读取</button></div>}
+  return <PanelSurface className="modal-backdrop" onMouseDown={onClose}><section className="control-panel task-center" role="dialog" aria-modal="true" aria-label="任务中心" onMouseDown={(event) => event.stopPropagation()}><header><div><h2>任务中心</h2><small>持久任务、运行记录和会话后台工作</small></div><button data-panel-close autoFocus={!page} onClick={onClose}>×</button></header><div className="task-tabs"><button autoFocus={page} className={tab === "persistent" ? "active" : ""} onClick={() => setTab("persistent")}>持久任务</button><button className={tab === "runs" ? "active" : ""} onClick={() => setTab("runs")}>运行记录</button><button className={tab === "queue" ? "active" : ""} onClick={() => setTab("queue")}>队列与后台</button><button className={tab === "inbox" ? "active" : ""} onClick={() => setTab("inbox")}>收件箱{inbox.some(item => !item.read) ? `（${inbox.filter(item => !item.read).length}）` : ""}</button></div><div className="panel-scroll">{loadErrors.length>0&&<div role="alert"><p>部分数据读取失败，已保留可读取的任务：</p>{loadErrors.map(error=><p key={error}>{error}</p>)}<button onClick={()=>void refresh()}>重新读取</button></div>}
     {tab === "persistent" && <>{policy && <PolicyEditor value={policy} onChange={value=>{policyDirty.current=true;setPolicy(value)}} onSave={async () => { setBusy(true); try { setPolicy(await window.grokDesktop.updateAutomationGlobalPolicy(policy));policyDirty.current=false; } catch (error) { setError(text(error)); } finally { setBusy(false); } }} onApply={async () => { if (!await confirmAction("将全局执行配置应用到全部独立持久任务？继续当前会话的任务会保留绑定配置。", { title: "批量应用", confirmLabel: "应用到全部" })) return; await action(()=>window.grokDesktop.applyAutomationPolicyToAll()); }} />}<div className="task-center-actions"><button className="primary" onClick={begin}>新建持久任务</button><button disabled={busy} onClick={() => void checkHealth(false)}>健康检查</button><button disabled={busy} onClick={() => void checkHealth(true)}>自动修复安全项</button></div>{health && <AutomationHealthSummary report={health} tasks={tasks} />}{editing && <AutomationEditor value={editing} accounts={accounts} providers={providers} executionProfiles={executionProfiles} disabled={busy} onChange={setEditing} onCancel={()=>{editingEpoch.current++;setEditing(null)}} onSave={() => void save()} />}{tasks.map((task) => <TaskRow key={task.id} task={task} executionProfiles={executionProfiles} busy={busy} onOpen={() => onOpenSession(task)} onClear={async () => { if (!task.sessionId || !await confirmAction(`清理“${task.name}”的任务上下文？这会永久删除当前专属 Grok 会话；下一次运行将创建干净会话。`, { title: "清理任务上下文", confirmLabel: "永久清理", danger: true })) return; setBusy(true); try { setTasks(await window.grokDesktop.clearAutomationContext(task.id)); } catch (error) { setError(text(error)); } finally { setBusy(false); } }} onEdit={()=>{const epoch=++editingEpoch.current;setBusy(true);void window.grokDesktop.readAutomationInstructions(task.id).then(prompt=>{if(epoch===editingEpoch.current)setEditing({...toInput(task),prompt})}).catch(error=>setError(text(error))).finally(()=>setBusy(false))}} onRun={async () => { setBusy(true); try { await window.grokDesktop.runAutomationNow(task.id); setRuns(await window.grokDesktop.listAutomationRuns()); } catch (error) { setError(text(error)); } finally { setBusy(false); } }} onPause={()=>void action(()=>window.grokDesktop.pauseAutomation(task.id,task.enabled))} onDelete={async () => { if (await confirmAction(`删除定时任务“${task.name}”？原 Grok 会话不会删除。`, { title: "删除定时任务", confirmLabel: "删除", danger: true })) await action(()=>window.grokDesktop.deleteAutomation(task.id)); }} />)}{!tasks.length && !editing && <p className="empty-copy">尚未创建持久任务。应用关闭后仍需执行的任务应在此创建。</p>}</>}
     {tab === "runs" && <RunList runs={runs} tasks={tasks} onRefresh={refresh} onOpen={onOpenSession} onError={setError} confirmAction={confirmAction} cancellingRunId={cancellingRunId} onCancel={async (run) => {
       setCancellingRunId(run.id);
@@ -68,7 +121,16 @@ export function TaskCenterPanel({ workspace, accounts, onClose, onOpenSession, s
       } catch (error) { setError(text(error)); }
       finally { setCancellingRunId(undefined); }
     }} />}
-    {tab === "queue" && <div className="task-help"><NativeRunList variant="center" rows={native.rows} onRefresh={native.refresh} onOpen={(sessionId, previewOnly) => void openNative(sessionId, previewOnly)} confirm={confirmAction}/><h3>会话队列与后台任务</h3><p>活动回合中按 Enter 会加入队列，Ctrl+Enter 会插话。持久任务由 Windows Task Scheduler 唤醒；`/loop` 仍只在对应 Grok 会话进程存活时运行。</p>{inbox.filter((item) => item.kind === "confirmation").map((item) => <article className="pending-confirmation" key={item.id}><div><strong>{item.title}</strong><p>{item.detail}</p></div><button onClick={async () => { await action(()=>window.grokDesktop.respondAutomationPending(item.id,false)); }}>拒绝</button><button className="danger" onClick={async () => { await action(()=>window.grokDesktop.respondAutomationPending(item.id,true)); }}>允许一次</button></article>)}<div className="background-task-list">{background.map((item) => <article key={item.id}><span className={`run-status ${item.status}`}>{item.status}</span><div><strong>{item.title}</strong><small>{item.kind} · {new Date(item.updatedAt).toLocaleString()}</small>{item.detail && <p>{item.detail}</p>}</div>{item.sessionId && item.kind !== "queue" && ["running", "needs-user"].includes(item.status) && <button onClick={async () => { await action(()=>window.grokDesktop.killBackgroundTask(item.id)); }}>停止</button>}</article>)}{!background.length && <p className="empty-copy">当前没有可查询的后台任务。</p>}</div>{inbox.length > 0 && <details className="task-inbox"><summary>完成与失败收件箱（{inbox.length}）</summary>{inbox.filter((item) => item.kind !== "confirmation").map((item) => <div key={item.id}><strong>{item.title}</strong><span>{item.detail}</span><button disabled={busy} onClick={()=>void action(()=>window.grokDesktop.openInboxItem(item.id))}>查看结果</button><button onClick={()=>void action(()=>window.grokDesktop.markInboxRead(item.id,true))}>{item.read ? "已读" : "标为已读"}</button></div>)}<button onClick={()=>void action(()=>window.grokDesktop.clearInbox())}>清空收件箱</button></details>}</div>}
+    {tab === "queue" && <div className="task-help"><NativeRunList variant="center" rows={native.rows} onRefresh={native.refresh} onOpen={(sessionId, previewOnly) => void openNative(sessionId, previewOnly)} confirm={confirmAction}/><h3>会话队列与后台任务</h3><p>活动回合中按 Enter 会加入队列，Ctrl+Enter 会插话。持久任务由 Windows Task Scheduler 唤醒；`/loop` 仍只在对应 Grok 会话进程存活时运行。</p>{inbox.filter((item) => item.kind === "confirmation" && item.id.startsWith("pending:")).map((item) => <article className="pending-confirmation" key={item.id}><div><strong>{item.title}</strong><p>{item.detail}</p></div><button onClick={async () => { await action(()=>window.grokDesktop.respondAutomationPending(item.id,false)); }}>拒绝</button><button className="danger" onClick={async () => { await action(()=>window.grokDesktop.respondAutomationPending(item.id,true)); }}>允许一次</button></article>)}<div className="background-task-list">{background.map((item) => <article key={item.id}><span className={`run-status ${item.status}`}>{item.status}</span><div><strong>{item.title}</strong><small>{item.kind} · {new Date(item.updatedAt).toLocaleString()}</small>{item.detail && <p>{item.detail}</p>}</div>{item.sessionId && item.kind !== "queue" && ["running", "needs-user"].includes(item.status) && <button onClick={async () => { await action(()=>window.grokDesktop.killBackgroundTask(item.id)); }}>停止</button>}</article>)}{!background.length && <p className="empty-copy">当前没有可查询的后台任务。</p>}</div></div>}
+    {tab === "inbox" && <section className="task-inbox" aria-label="通知收件箱">
+      <div className="task-center-actions"><strong>{inbox.filter(item => !item.read).length} 条未读</strong><button disabled={busy || !inbox.some(item => !item.read && item.kind !== "confirmation") || !(window.grokDesktop as TaskCenterInboxApi).markAllInboxRead} onClick={() => void action(async () => { await (window.grokDesktop as TaskCenterInboxApi).markAllInboxRead?.(); })}>全部标为已读</button><button disabled={busy || !inbox.some(item => item.kind !== "confirmation")} onClick={() => void action(() => window.grokDesktop.clearInbox())}>清空收件箱</button></div>
+      {inbox.map(item => <article className={item.kind === "confirmation" ? "pending-confirmation" : "automation-row"} key={item.id}>
+        <div><strong>{!item.read && "● "}{item.title}</strong>{item.detail && <p>{item.detail}</p>}<small>{new Date(item.createdAt).toLocaleString()} · {item.kind === "confirmation" ? "待处理" : item.read ? "已读" : "未读"}</small></div>
+        <div className="button-row">{item.id.startsWith("pending:") ? <><button disabled={busy} onClick={() => void action(() => window.grokDesktop.respondAutomationPending(item.id, false))}>拒绝</button><button className="danger" disabled={busy} onClick={() => void action(() => window.grokDesktop.respondAutomationPending(item.id, true))}>允许一次</button></> : (item.sessionId || item.automationRunId) && <button disabled={busy} onClick={() => void action(() => window.grokDesktop.openInboxItem(item.id))}>{item.kind === "confirmation" ? "前往处理" : "查看结果"}</button>}
+        {item.kind !== "confirmation" && <button disabled={busy || item.read} onClick={() => void action(() => window.grokDesktop.markInboxRead(item.id, true))}>{item.read ? "已读" : "标为已读"}</button>}</div>
+      </article>)}
+      {!inbox.length && <p className="empty-copy">暂无通知。需要确认的请求、执行失败和完成结果会出现在这里。</p>}
+    </section>}
   </div></section></PanelSurface>;
 }
 

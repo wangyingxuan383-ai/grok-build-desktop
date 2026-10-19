@@ -1,5 +1,17 @@
 # Development roadmap
 
+## Desktop productivity candidate (0.13.0 / Grok Remote 0.4.3)
+
+- [x] Preserve the development snapshot and integrate event-driven activity, named notifications, a prioritized inbox and consistent close/exit behavior.
+- [x] Repair first-mount and already-open inbox navigation, protect attachment storage against Windows root aliases, and discard model probes from an older config revision.
+- [x] Verify sandboxed DOM behavior for duplicate/stale Diff feedback, explicit snippet variable insertion and redacted HTML/Markdown export.
+- [x] Complete final quick-entry and phone library ownership/concurrency checks.
+- [ ] Accept the existing visual language in light/dark, narrow layouts and larger text; keep the renderer budgets unchanged.
+- [ ] Pass the final desktop/mobile regressions, public-content checks and signed local Windows/Android package gates.
+- [ ] Record physical Android IME, gestures, background restoration and system-install acceptance separately.
+
+This candidate excludes desktop pets, voice models, new worktree orchestration and independent conversation windows. Screenshot entry uses the system snipping tool followed by an explicit clipboard attachment. New global shortcuts, sleep prevention and quota warnings are opt-in. Public publishing is separate from local candidate delivery.
+
 ## CLI compatibility and native-run management (Desktop 0.12.2 / Grok Remote 0.4.2)
 
 - [x] Preserve validated context capacity in initialize, new-session catalogs and resume fallbacks.

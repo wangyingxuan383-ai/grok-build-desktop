@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.0 — Grok Remote 0.4.3 (local candidate)
+
+- Add event-driven tray activity, unread inbox counts, named session notifications, temporary quiet mode and a shared close-to-tray/quit transaction.
+- Add a sandboxed quick-question window, optional global shortcuts, explicit system-screenshot/clipboard attachments, taskbar activity and opt-in sleep prevention.
+- Add a prompt snippet library with explicit variable insertion; the phone can read the paired computer's library while keeping phone snippets private.
+- Route dropped image references to the image conversation instead of the coding draft.
+- Add selected-element screenshot feedback and exact-line Diff annotations to conversation drafts, without automatically sending them.
+- Export stored conversations as redacted Markdown or sandboxed static HTML with a preview before saving.
+- Observe valid external CLI configuration changes without restarting active work; preserve last-good configuration and reject late model probes.
+- Add compact reported turn statistics, configurable application shortcuts, event-driven phone status and opt-in inbox quota warnings based on explicit current-period data.
+- Fix tray inbox navigation, duplicate annotation insertion, Windows aliased draft directories and unsupported interjection fallback; unsupported interjections enter the removable next-turn queue while current work continues.
+
+Final package and physical-device verification are recorded separately; this entry does not claim a public release.
+
 ## 0.12.2 — Grok Remote 0.4.2
 
 Includes the changes of the unpublished 0.12.1 / 0.4.1 inspection build. Mobile guides now point to the latest release instead of a fixed version.

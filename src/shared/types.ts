@@ -1,3 +1,8 @@
+import type { PromptSnippetApi } from "./prompt-snippets";
+import type { SessionExportApi } from "./conversation-export";
+import type { DesktopActivitySnapshot } from "./desktop-activity";
+import type { CliConfigState } from "./cli-config-state";
+
 export const REASONING_EFFORTS = ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 export type SessionMode = "agent" | "plan" | "auto";
@@ -51,6 +56,7 @@ export type ComposerCapabilitySelection = {
 } | { kind: "mcp"; label: string; command: ""; source?: string; selection: McpToolSelection };
 
 export type AppMenuCommand =
+  | "command-search" | "open-inbox"
   | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
   | "search-sessions" | "search-conversation" | "focus-composer" | "stop-generation" | "copy-final-answer"
   | "toggle-sidebar" | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
@@ -282,6 +288,7 @@ export interface AttachmentPrivacyFinding {
 }
 
 export interface AppSettings {
+  productivity?: import("./productivity").DesktopProductivitySettings;
   notifications?:{completion:"background"|"always"|"off";failure:boolean;confirmation:boolean;sound:boolean};
   cliPath: string;
   httpProxy: string;
@@ -2158,7 +2165,14 @@ export interface OfflineUiFixture {
   activeSessionId?: string;
 }
 
-export interface GrokDesktopApi {
+export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
+  getDesktopActivity(): Promise<DesktopActivitySnapshot>;
+  onDesktopActivityChanged(listener: (state: DesktopActivitySnapshot) => void): () => void;
+  onInboxChanged(listener: () => void): () => void;
+  markAllInboxRead(): Promise<NotificationInboxItem[]>;
+  onRemoteStateChanged(listener: (state: import("./remote").RemoteGatewayState) => void): () => void;
+  getCliConfigState(): Promise<CliConfigState>;
+  onCliConfigChanged(listener: (state: CliConfigState) => void): () => void;
   getRemoteState():Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
   setRemoteEnabled(enabled:boolean,port?:number):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
   beginRemotePairing(address?:string):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
@@ -2171,7 +2185,7 @@ export interface GrokDesktopApi {
   startPreviewServer(workspace:string,script:string):Promise<string>;
   listPreviewServers(workspace:string):Promise<import("./workspace-tools").PreviewServer[]>;
   stopPreviewServer(id:string):Promise<void>;
-  captureBrowserFeedback(id:string):Promise<{tab:import("./workspace-tools").WorkspaceBrowserTab;previewUrl:string;attachment:Attachment}>;
+  captureBrowserFeedback(id:string,pick?:import("./preview-feedback").PreviewElementPick):Promise<import("./preview-feedback").PreviewFeedbackCapture>;
   navigateWorkspaceBrowser(id:string,url:string):Promise<void>;
   commandWorkspaceBrowser(id:string,action:"back"|"forward"|"reload"|"stop"):Promise<void>;
   boundsWorkspaceBrowser(id:string,bounds:import("./workspace-tools").WorkspaceViewBounds):Promise<void>;
@@ -2359,7 +2373,7 @@ export interface GrokDesktopApi {
   getPullRequestStatus(workspace:string):Promise<import("./workspace-tools").PullRequestStatus>;
   watchPullRequest(workspace:string,sessionId:string,enabled:boolean):Promise<void>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
-  listModelCatalog(): Promise<ModelInfo[]>;
+  listModelCatalog(refresh?: boolean): Promise<ModelInfo[]>;
   getTheme(): Promise<ThemeSettings>;
   updateTheme(patch: Partial<ThemeSettings>): Promise<AppSettings>;
   pickThemeBackground(): Promise<AppSettings | null>;

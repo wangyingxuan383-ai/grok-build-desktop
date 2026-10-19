@@ -1130,14 +1130,15 @@ export class GrokAcpAdapter extends EventEmitter {
       return { operationId: crypto.randomUUID(), entryId: id, state: "interjected", message: "插话已注入当前正在运行的回合；它不是队列中的下一回合" };
     } catch (error) {
       this.pendingInterjections.delete(id);
-      // Older CLIs do not expose x.ai/interject. Their closest compatible
-      // behavior is the official sendNow prompt metadata path.
+      // An unsupported interjection must not silently stop the current turn.
+      // Retain an ordinary, removable next-turn message instead.
       if (!isMethodNotFound(error)) {
         this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "failed" });
         this.emitEvent({ type: "user-message-status", sessionId: this.sessionId, clientMessageId, delivery: "failed" });
         throw error;
       }
-      return this.queuePrompt(text, attachments, true, { ...presentation, clientMessageId });
+      const receipt = await this.queuePrompt(text, attachments, false, { ...presentation, clientMessageId });
+      return { ...receipt, fallback: true, message: "当前 CLI 不支持回合内插话；消息已加入下一回合队列，当前任务继续运行" };
     }
   }
 

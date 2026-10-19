@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { BookmarksSheet, SnippetsSheet, type Bookmark } from "./library";
 import { insertSnippet } from "./library-model";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -42,6 +42,9 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
     onCreated: (value: RemoteReceipt) => void;
     onForked: (value: RemoteReceipt) => void;
 }) {
+    const snippetTarget = JSON.stringify([client.host?.id, client.host?.fingerprint, client.host?.host, client.sessionId]);
+    const currentSnippetTarget = useRef({ target: snippetTarget, sheet, client });
+    currentSnippetTarget.current = { target: snippetTarget, sheet, client };
     const [directory, setDirectory] = useState("");
     useEffect(() => { setDirectory(""); }, [client.sessionId, client.host?.fingerprint]);
     // Sheets reached from another sheet show a back arrow to where the user came from.
@@ -65,7 +68,7 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
           <ScrollView keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }} contentContainerStyle={{ gap: space.md, paddingBottom: space.sm }}>
             {sheet === "new" ? <NewSession client={client} theme={theme} disabled={actionsDisabled} close={close} created={onCreated} /> : null}
             {sheet === "config" ? <ConfigurationPicker client={client} theme={theme} /> : null}
-            {sheet === "snippets" ? <SnippetsSheet theme={theme} onInsert={text => { client.setDraft(insertSnippet(client.draft, text)); close(); }} /> : null}
+            {sheet === "snippets" ? <SnippetsSheet key={snippetTarget} client={client} theme={theme} onInsert={text => { const current = currentSnippetTarget.current; if (current.sheet !== "snippets" || current.target !== snippetTarget) return; current.client.setDraft(insertSnippet(current.client.draft, text)); close(); }} /> : null}
             {sheet === "bookmarks" ? <BookmarksSheet storageKey={client.host ? client.host.fingerprint + ":bookmarks" : undefined} theme={theme} onOpen={bookmark => { close(); onBookmark(bookmark); }} /> : null}
             {sheet === "actions" ? <ToolsMenu theme={theme} open={go} childCount={children.length} nativeCount={activeNativeRuns(client.snapshot?.nativeRuns ?? []).length} /> : null}
             {sheet === "native-runs" ? (activeNativeRuns(client.snapshot?.nativeRuns ?? []).length ? <NativeRunCards scoped rows={client.snapshot?.nativeRuns ?? []} client={client} theme={theme} disabled={actionsDisabled} refresh={client.refresh} /> : <Text style={{ color: theme.muted }}>这个会话目前没有目标或工作流。</Text>) : null}

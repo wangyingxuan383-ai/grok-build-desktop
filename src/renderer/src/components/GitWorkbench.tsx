@@ -3,6 +3,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { GitCommitDetails, GitCommitSummary, GitFileChange, GitRepositoryStatus } from "../../../shared/types";
 import { useGitStore, type GitSelection } from "../git-store";
 import { useWorkbenchStore } from "../workbench-store";
+import { useAppStore } from "../store";
+import { installDiffAnnotationActions, mappedDiffRange, splitPatchWithLines, useDiffAnnotations } from "./DiffAnnotations";
 
 const MonacoDiffEditor = lazy(async () => {
   (await import("../monaco")).configureMonaco();
@@ -96,7 +98,24 @@ export function GitWorkbench({ workspace, dialogs }: { workspace: string; dialog
   const [operation, setOperation] = useState<{ id: string; kind: "pull" | "push" }>();
   const [operationSummary, setOperationSummary] = useState("");
   const light = document.documentElement.dataset.themeResolved === "light";
-  const diffSides = useMemo(() => splitUnifiedPatch(git.diff?.patch ?? ""), [git.diff?.patch]);
+  const diffSides = useMemo(() => splitPatchWithLines(git.diff?.patch ?? ""), [git.diff?.patch]);
+  const annotations = useDiffAnnotations(dialogs.setError);
+  const actionCleanup = useRef<(() => void) | undefined>(undefined);
+  const annotateSelection = useRef<(side:"old"|"new",start:number,end:number)=>void>(()=>{});
+  useEffect(()=>()=>actionCleanup.current?.(),[]);
+  annotateSelection.current=(side,start,end)=>{
+    const selection=git.selection,diff=git.diff;
+    if(!selection||!diff||git.workspace!==workspace)return;
+    try {
+      const range=mappedDiffRange(side==="old"?diffSides.oldLines:diffSides.newLines,start,end);
+      const sessionId=useAppStore.getState().activeSessionId;
+      const change = git.status?.changes.find(item => item.path === selection.path);
+      annotations.begin({path:side === "old" && change?.oldPath ? change.oldPath : selection.path,side,...range},sessionId,workspace,async()=>{
+        const current=await window.grokDesktop.getGitDiff(workspace,selection.staged,selection.path);
+        return !current.binary&&current.patch===diff.patch;
+      });
+    } catch(error){dialogs.setError(errorMessage(error));}
+  };
 
   const refreshMetadata = useCallback(async (): Promise<void> => {
     if (!workspace || !git.status) return;
@@ -178,7 +197,8 @@ export function GitWorkbench({ workspace, dialogs }: { workspace: string; dialog
     <div className="git-main-grid">
       <section className="git-diff-pane">
         <header><strong>{git.selection ? `${git.selection.staged ? "暂存区" : "工作区"} · ${git.selection.path}` : "Git Diff"}</strong><div><button disabled={!git.selection} onClick={() => void openEditor()}>在编辑器打开</button><button className="danger-link" disabled={!git.selection || !editable} onClick={() => void discard()}>丢弃</button></div></header>
-        {!git.selection ? <div className="git-placeholder">从左侧选择一个变更以查看 Diff。</div> : !git.diff ? <div className="git-placeholder">正在加载 Diff…</div> : git.diff.binary ? <div className="git-placeholder">二进制文件无法显示文本 Diff。</div> : <Suspense fallback={<div className="git-placeholder">正在加载 Diff 编辑器…</div>}><MonacoDiffEditor height="100%" theme={light ? "light" : "vs-dark"} original={diffSides.original} modified={diffSides.modified} language={languageFromPath(git.selection.path)} options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true, wordWrap: "on" }} /></Suspense>}
+        {!git.selection ? <div className="git-placeholder">从左侧选择一个变更以查看 Diff。</div> : !git.diff ? <div className="git-placeholder">正在加载 Diff…</div> : git.diff.binary ? <div className="git-placeholder">二进制文件无法显示文本 Diff。</div> : <Suspense fallback={<div className="git-placeholder">正在加载 Diff 编辑器…</div>}><MonacoDiffEditor height="100%" theme={light ? "light" : "vs-dark"} original={diffSides.original} modified={diffSides.modified} language={languageFromPath(git.selection.path)} onMount={editor=>{actionCleanup.current?.();actionCleanup.current=installDiffAnnotationActions(editor,(side,start,end)=>annotateSelection.current(side,start,end));}} options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true, wordWrap: "on" }} /></Suspense>}
+        {annotations.panel}
       </section>
       <aside className="git-details-pane">
         <section className="git-commit-box"><h3>提交</h3><textarea value={commitMessage} onChange={(event) => setCommitMessage(event.target.value)} placeholder="提交信息（通过 stdin 传给 Git）" /><button className="primary" disabled={!editable || git.loading || !commitMessage.trim() || !git.status.changes.some((change) => change.staged)} onClick={() => void commit()}>提交已暂存更改</button></section>

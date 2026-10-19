@@ -22,15 +22,40 @@ export function paintStatusDot(bitmap: Buffer, size: number, color: [number, num
   return bitmap;
 }
 
-/** Tray icon; `connected` adds a green dot while at least one phone is online. */
-export function trayIcon(connected = false): NativeImage {
+export type TrayStatus = "idle" | "connected" | "working" | "waiting" | "error";
+
+/** Status priority is decided from activity events; no animated timers are needed. */
+export function trayIcon(status: TrayStatus | boolean = "idle"): NativeImage {
   const image = base();
-  if (!connected) return image;
+  if (!status || status === "idle") return image;
+  const color: [number, number, number] = status === "waiting" ? [229, 180, 84] : status === "error" ? [240, 106, 106] : status === "working" ? [110, 168, 254] : [52, 199, 89];
   const result = nativeImage.createEmpty();
   for (const scaleFactor of [2, 4]) {
     const size = 16 * scaleFactor, bitmap = image.toBitmap({ scaleFactor });
     if (bitmap.length !== size * size * 4) continue;
-    result.addRepresentation({ scaleFactor, width: size, height: size, buffer: paintStatusDot(Buffer.from(bitmap), size, [52, 199, 89]) });
+    const marked = nativeImage.createFromBitmap(paintStatusDot(Buffer.from(bitmap), size, color), { width: size, height: size, scaleFactor });
+    result.addRepresentation({ scaleFactor, buffer: marked.toPNG() });
   }
   return result.isEmpty() ? image : result;
+}
+
+const DIGITS = ["111101101101111", "010110010010111", "111001111100111", "111001111001111", "101101111001001", "111100111001111", "111100111101111", "111001001001001", "111101111101111", "111101111001111"];
+
+/** Small, opaque numeric taskbar overlay, rendered locally without fonts or assets. */
+export function taskbarCountIcon(count: number): NativeImage {
+  const size = 32, bitmap = Buffer.alloc(size * size * 4);
+  const pixel = (x: number, y: number, color: [number, number, number]) => {
+    const offset = (y * size + x) * 4;
+    bitmap[offset] = color[2]; bitmap[offset + 1] = color[1]; bitmap[offset + 2] = color[0]; bitmap[offset + 3] = 255;
+  };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) if (Math.hypot(x - 15.5, y - 15.5) < 15) pixel(x, y, [154, 106, 12]);
+  const label = count > 99 ? "99+" : String(Math.max(1, Math.floor(count)));
+  const start = Math.floor((size - (label.length * 8 - 2)) / 2);
+  for (let digit = 0; digit < label.length; digit++) {
+    const glyph = label[digit] === "+" ? "000010111010000" : DIGITS[Number(label[digit])]!;
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (glyph[y * 3 + x] === "1") {
+      for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) pixel(start + digit * 8 + x * 2 + dx, 11 + y * 2 + dy, [255, 255, 255]);
+    }
+  }
+  return nativeImage.createFromBitmap(bitmap, { width: size, height: size, scaleFactor: 2 });
 }

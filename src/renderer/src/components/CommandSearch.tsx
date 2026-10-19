@@ -2,10 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { UiDialog } from "./ui/primitives";
 import type { UiAction } from "./ui/ActionMenu";
 import { matchesAllWords, searchWords } from "../../../shared/search-words";
+import { matchesShortcut, shortcutFor } from "../../../shared/shortcuts";
+import { useAppStore } from "../store";
 export function flattenActions(actions: UiAction[], prefix = ""): UiAction[] { return actions.flatMap(action => action.children?.length ? flattenActions(action.children, `${prefix}${action.label} / `) : [{ ...action, label: `${prefix}${action.label}` }]); }
 export function CommandSearch({ actions, onError }: { actions: UiAction[]; onError(message: string): void }) {
   const [open, setOpen] = useState(false); const [query, setQuery] = useState(""); const [index, setIndex] = useState(0);
-  useEffect(() => { const show = () => { if (document.querySelector('[role="dialog"][aria-modal="true"]')) return; setQuery(""); setIndex(0); setOpen(true); }; const key = (event: KeyboardEvent) => { if (!event.isComposing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); show(); } }; window.addEventListener("grok:command-search", show); window.addEventListener("keydown", key); return () => { window.removeEventListener("grok:command-search", show); window.removeEventListener("keydown", key); }; }, []);
+  useEffect(() => { const show = () => { if (document.querySelector('[role="dialog"][aria-modal="true"]')) return; setQuery(""); setIndex(0); setOpen(true); }; const key = (event: KeyboardEvent) => { if (!event.defaultPrevented && matchesShortcut(event, shortcutFor("command-search", useAppStore.getState().settings?.productivity))) { event.preventDefault(); show(); } }; window.addEventListener("grok:command-search", show); window.addEventListener("keydown", key); return () => { window.removeEventListener("grok:command-search", show); window.removeEventListener("keydown", key); }; }, []);
   const rows = useMemo(() => { const words = searchWords(query); return flattenActions(actions).filter(action => matchesAllWords(action.label, words)).slice(0, 100); }, [actions, query]);
   useEffect(()=>{document.getElementById(`command-${index}`)?.scrollIntoView({block:"nearest"});},[index]);
   const choose = async (action: UiAction | undefined) => { if (!action || action.disabled || !action.run) return; setOpen(false); try { await action.run(); } catch (error) { onError(error instanceof Error ? error.message : String(error)); } };

@@ -1,5 +1,7 @@
 import { extname, posix, win32 } from "node:path";
 import type { AppSettings, ComputerUseSettings } from "../shared/types";
+import { validateShortcutBindings } from "../shared/shortcuts";
+import type { DesktopProductivitySettings } from "../shared/productivity";
 
 const MAX_IPC_DEPTH = 16;
 const MAX_IPC_NODES = 50_000;
@@ -14,6 +16,20 @@ const isAbsoluteWindowsPath = (value: string): boolean => win32.isAbsolute(value
 type Rule = (args: unknown[]) => void;
 
 const RULES: Record<string, Rule> = {
+  "desktop:activity": noArgs,
+  "cli:config-state": noArgs,
+  "inbox:mark-all-read": noArgs,
+  "snippets:list": noArgs,
+  "snippets:save": args => {
+    const input = strictRecordArg(args, 0, ["id", "title", "body", "updatedAt"]);
+    optionalRecordString(input, "id", 160);
+    optionalRecordString(input, "updatedAt", 64);
+    requiredRecordString(input, "title", 400);
+    requiredRecordString(input, "body", 65_536);
+  },
+  "snippets:delete": args => { idArg(args, 0); stringArg(args, 1, 64); },
+  "session:export-preview": args => { idArg(args, 0); sessionExportOptions(args[1]); },
+  "session:export-save": args => { idArg(args, 0); sessionExportOptions(args[1]); },
   "native-runs:list": args => { if (args[0] !== undefined) idArg(args, 0); },
   "native-runs:control": args => {
     const value = strictRecordArg(args, 0, ["sessionId", "kind", "runId", "revision", "action", "operationId"]);
@@ -40,7 +56,16 @@ const RULES: Record<string, Rule> = {
   "preview:start":args=>{pathArg(args,0);stringArg(args,1,512)},
   "preview:list":args=>pathArg(args,0),
   "preview:stop":args=>idArg(args,0),
-  "workspace-browser:capture":args=>idArg(args,0),
+  "workspace-browser:capture":args=>{
+    idArg(args,0);
+    if (args[1] !== undefined) {
+      const pick = strictRecordArg(args,1,["x","y","url","revision","sessionId","workspace"]);
+      for (const key of ["x", "y"]) if (typeof pick[key] !== "number" || !Number.isFinite(pick[key]) || (pick[key] as number) < 0 || (pick[key] as number) >= 1) throw new Error("元素坐标须为截图内的比例");
+      requiredRecordInteger(pick,"revision",0,Number.MAX_SAFE_INTEGER);
+      requiredRecordString(pick,"url",8192); requiredRecordString(pick,"sessionId",512);
+      absoluteFilesystemPathArg([pick.workspace],0,"预览工作区");
+    }
+  },
   "workspace-browser:navigate":args=>{idArg(args,0);stringArg(args,1,8192)},
   "workspace-browser:command":args=>{idArg(args,0);enumArg(args,1,["back","forward","reload","stop"])},
   "workspace-browser:bounds":args=>{idArg(args,0);const bounds=strictRecordArg(args,1,["x","y","width","height","visible"]);for(const key of ["x","y","width","height"])if(typeof bounds[key]!=="number"||!Number.isFinite(bounds[key])||(bounds[key] as number)<0||(bounds[key] as number)>20000)throw Error("浏览器尺寸无效");if(typeof bounds.visible!=="boolean")throw Error("浏览器显示状态无效")},
@@ -296,7 +321,7 @@ const RULES: Record<string, Rule> = {
   "git:pull-request":args=>pathArg(args,0),
   "git:watch-pull-request":args=>{pathArg(args,0);idArg(args,1);booleanArg(args,2)},
   "settings:update": (args) => settingsPatchArg(args, 0),
-  "models:catalog": noArgs,
+  "models:catalog": args => { if (args[0] !== undefined && typeof args[0] !== "boolean") throw Error("模型目录刷新参数无效"); },
   "updates:auto-check": noArgs,
   "theme:get": noArgs,
   "theme:update": (args) => objectArg(args, 0),
@@ -638,7 +663,7 @@ const APP_SETTINGS_PATCH_KEYS = [
   "cliPath", "httpProxy", "httpsProxy", "defaultModel", "defaultEffort", "defaultMode",
   "showThinking", "expandToolDetails", "automaticUpdateChecks", "lastAutomaticUpdateCheckAt",
   "fontScale", "uiDensity", "conversationContentWidth", "conversationFontScale", "recentWorkspaces", "activeWorkspace",
-  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme", "notifications",
+  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme", "notifications", "productivity",
 ] as const satisfies readonly (keyof AppSettings)[];
 type MissingAppSettingsPatchKey = Exclude<keyof AppSettings, (typeof APP_SETTINGS_PATCH_KEYS)[number]>;
 const _assertAppSettingsPatchKeys: [MissingAppSettingsPatchKey] extends [never] ? true : MissingAppSettingsPatchKey = true;
@@ -653,6 +678,17 @@ void _assertComputerSettingsPatchKeys;
 
 function settingsPatchArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, APP_SETTINGS_PATCH_KEYS);
+  if (value.productivity !== undefined) {
+    const desktop = strictRecordArg([value.productivity], 0, ["closeAction", "quickAskShortcut", "screenshotShortcut", "preventSleepWhileWorking", "quotaWarningPercent", "quietUntil", "shortcuts"]);
+    requiredRecordEnum(desktop, "closeAction", ["ask", "tray", "quit"]);
+    for (const key of ["quickAskShortcut", "screenshotShortcut"]) if (typeof desktop[key] !== "string" || String(desktop[key]).length > 100) throw new Error("快捷键设置无效");
+    requiredRecordBoolean(desktop, "preventSleepWhileWorking");
+    optionalRecordInteger(desktop, "quotaWarningPercent", 0, 100);
+    const until = optionalRecordString(desktop, "quietUntil", 64);
+    if (until && !Number.isFinite(Date.parse(until))) throw new Error("勿扰结束时间无效");
+    if (desktop.shortcuts !== undefined && (!desktop.shortcuts || typeof desktop.shortcuts !== "object" || Array.isArray(desktop.shortcuts))) throw new Error("快捷键设置无效");
+    validateShortcutBindings(desktop as unknown as DesktopProductivitySettings);
+  }
   if(value.notifications!==undefined){const policy=strictRecordArg([value.notifications],0,["completion","failure","confirmation","sound"]);requiredRecordEnum(policy,"completion",["background","always","off"]);for(const key of ["failure","confirmation","sound"])if(typeof policy[key]!=="boolean")throw Error("通知设置无效");}
   if (value.cliPath !== undefined) cliPathSetting(value.cliPath);
   for (const key of ["httpProxy", "httpsProxy"] as const) {
@@ -941,6 +977,13 @@ function sessionCompactionPolicyArg(args: unknown[], index: number): void {
   const mode = requiredRecordEnum(value, "mode", ["inherit", "custom"]);
   if (mode === "custom") requiredRecordInteger(value, "thresholdPercent", 60, 95);
   else if (value.thresholdPercent !== undefined) throw new Error("继承 CLI 压缩策略时不能指定阈值");
+}
+function sessionExportOptions(input: unknown): void {
+  if (input === undefined) return;
+  const options = strictRecordArg([input], 0, ["format", "redaction", "includeTools", "includeThinking", "includeTurnSummary"]);
+  optionalRecordEnum(options, "format", ["markdown", "html"]);
+  optionalRecordEnum(options, "redaction", ["redacted", "original"]);
+  for (const name of ["includeTools", "includeThinking", "includeTurnSummary"]) optionalRecordBoolean(options, name);
 }
 function mediaSourceArg(args: unknown[], index: number, allowData: boolean): void {
   const value = stringArg(args, index, allowData ? 28 * 1024 * 1024 : 32_767);

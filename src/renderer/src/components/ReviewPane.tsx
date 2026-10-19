@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitReviewFile, GitReviewFileSummary, GitReviewIndex, GitReviewScope, GitWorkspaceCapability, NavigationIntent } from "../../../shared/types";
 import { UiIcon } from "../ui-icons";
 import type { ReviewCommentDraft } from "../review-comments";
+import { useDiffAnnotations } from "./DiffAnnotations";
+import type { DiffLineRange } from "./feedback-context";
 
 type ScopeKind = GitReviewScope["kind"];
 
@@ -28,8 +30,7 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
   const [loading, setLoading] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [busy, setBusy] = useState("");
-  const [commentTarget, setCommentTarget] = useState<{ path: string; line: number; side: "old" | "new" }>();
-  const [commentBody, setCommentBody] = useState("");
+  const annotations = useDiffAnnotations(onError);
   const [width, setWidth] = useState(() => Math.max(420, Math.min(760, Number(localStorage.getItem("grok:right-width:review")) || 620)));
   const mountedRef = useRef(true);
   const refreshGenerationRef = useRef(0);
@@ -101,6 +102,7 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
     if (!index || !selectedFileId) { setSelectedFile(undefined); return; }
     let cancelled = false;
     setLoadingFile(true);
+    setSelectedFile(undefined);
     void window.grokDesktop.getGitReviewFileDetail(cwd, scope, index.id, selectedFileId)
       .then((value) => { if (!cancelled) setSelectedFile(value.file); })
       .catch((error) => { if (!cancelled) { setSelectedFile(undefined); onError(errorMessage(error)); } })
@@ -187,7 +189,7 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
     {!loading && index && <div className="review-body">
       <main className="review-selected-file">
         {loadingFile && <div className="review-empty">正在读取所选文件 Diff…</div>}
-        {!loadingFile && selectedFile && <ReviewFileDetail file={selectedFile} index={index} kind={kind} busy={busy} cwd={cwd} sessionId={sessionId} onNavigate={onNavigate} onFileAction={runFileAction} onHunkAction={runHunkAction} onComment={(path, line, side) => { setCommentTarget({ path, line, side }); setCommentBody(""); }} />}
+        {!loadingFile && selectedFile && <ReviewFileDetail file={selectedFile} index={index} kind={kind} busy={busy} cwd={cwd} sessionId={sessionId} onNavigate={onNavigate} onFileAction={runFileAction} onHunkAction={runHunkAction} onComment={range => { const snapshotId=index.id; annotations.begin(range,sessionId,cwd,async()=>(await window.grokDesktop.getGitReviewIndex(cwd,scope)).id===snapshotId); }} />}
         {!loadingFile && !selectedFile && index.files.length > 0 && <div className="review-empty">从文件列表中选择一个文件。</div>}
         {!index.files.length && <div className="review-empty"><UiIcon name="check" /><strong>此范围没有变更</strong><span>切换范围或继续修改文件后刷新。</span></div>}
       </main>
@@ -197,7 +199,7 @@ export function ReviewPane({ cwd, sessionId, lastTurnPaths, initialKind = "unsta
         <footer>{filteredFiles.length} / {index.files.length} 个文件</footer>
       </aside>
     </div>}
-    {commentTarget && index && <div className="review-comment-editor"><strong>{commentTarget.path}:{commentTarget.line}</strong><textarea autoFocus value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="写下审核意见…" /><div><button onClick={() => setCommentTarget(undefined)}>取消</button><button className="primary" disabled={!commentBody.trim()} onClick={() => { onAddComment({ id: crypto.randomUUID(), ...commentTarget, body: commentBody.trim(), snapshotId: index.id, scope }); setCommentTarget(undefined); setCommentBody(""); }}>加入消息</button></div></div>}
+    {annotations.panel}
   </aside>;
 }
 
@@ -219,8 +221,16 @@ function ReviewFileDetail({ file, index, kind, busy, cwd, sessionId, onNavigate,
   onNavigate(intent: NavigationIntent): void;
   onFileAction(file: GitReviewFile, action: "stage" | "unstage" | "revert"): Promise<void>;
   onHunkAction(file: GitReviewFile, hunkId: string, action: "stage" | "unstage" | "revert"): Promise<void>;
-  onComment(path: string, line: number, side: "old" | "new"): void;
+  onComment(range: DiffLineRange): void;
 }): React.JSX.Element {
+  const [selection,setSelection]=useState<{hunkId:string;side:"old"|"new";anchor:number;start:number;end:number}>();
+  useEffect(()=>setSelection(undefined),[file.id,index.id]);
+  const selectLine=(hunkId:string,side:"old"|"new",line:number,extend:boolean):void=>{
+    setSelection(current=>{
+      const anchor=extend&&current?.hunkId===hunkId&&current.side===side?current.anchor:line;
+      return {hunkId,side,anchor,start:Math.min(anchor,line),end:Math.max(anchor,line)};
+    });
+  };
   return <div className="review-file-detail">
     <header><div><strong>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</strong><span>{statusLabel(file.kind)} · +{file.additions} −{file.deletions}</span></div><div className="review-file-actions"><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: file.path, surface: "diff" })}>完整 Diff</button><button onClick={() => onNavigate({ sessionId, executionRoot: cwd, targetPath: file.path, surface: "editor" })}>编辑文件</button>{!index.readOnly && kind === "unstaged" && <button disabled={Boolean(busy)} onClick={() => void onFileAction(file, "stage")}>暂存</button>}{!index.readOnly && kind === "staged" && <button disabled={Boolean(busy)} onClick={() => void onFileAction(file, "unstage")}>取消暂存</button>}{!index.readOnly && kind === "unstaged" && <button className="danger-text" disabled={Boolean(busy)} onClick={() => void onFileAction(file, "revert")}>恢复</button>}</div></header>
     {file.binary ? <div className="review-empty compact">二进制文件不显示行级 Diff</div> : file.hunks.map((hunk) => <section className="review-hunk" key={hunk.id}>
@@ -228,7 +238,9 @@ function ReviewFileDetail({ file, index, kind, busy, cwd, sessionId, onNavigate,
       <div className="review-lines">{hunk.lines.map((line, position) => {
         const targetLine = line.newLine ?? line.oldLine;
         const side = line.newLine !== undefined ? "new" : "old";
-        return <div className={`review-line ${line.kind}`} key={`${position}:${line.oldLine}:${line.newLine}`}><button className="review-comment-button" disabled={!targetLine} title="添加行级批注" onClick={() => targetLine && onComment(file.path, targetLine, side)}>+</button><button className="line-number" onClick={() => targetLine && onNavigate({ sessionId, executionRoot: cwd, targetPath: file.path, line: targetLine, surface: "editor" })}>{line.oldLine ?? ""}</button><button className="line-number" onClick={() => targetLine && onNavigate({ sessionId, executionRoot: cwd, targetPath: file.path, line: targetLine, surface: "editor" })}>{line.newLine ?? ""}</button><code>{line.kind === "addition" ? "+" : line.kind === "deletion" ? "−" : " "}{line.text}</code></div>;
+        const selectedNumber=selection?.side==="old"?line.oldLine:line.newLine;
+        const selected=selection?.hunkId===hunk.id&&selectedNumber!==undefined&&selectedNumber>=selection.start&&selectedNumber<=selection.end;
+        return <div className={`review-line ${line.kind}${selected?" annotation-selected":""}`} key={`${position}:${line.oldLine}:${line.newLine}`}><button className="review-comment-button" disabled={!targetLine} title="添加批注；点击行号，Shift 点击结束行可选择范围" onClick={() => {if(!targetLine)return;onComment({path:(selected&&selection?selection.side:side)==="old"&&file.oldPath?file.oldPath:file.path,side:selected&&selection?selection.side:side,startLine:selected&&selection?selection.start:targetLine,endLine:selected&&selection?selection.end:targetLine});}}>+</button><button className="line-number" disabled={line.oldLine===undefined} title="选择旧文件行；Shift 点击可选择连续范围" onClick={event => line.oldLine!==undefined&&selectLine(hunk.id,"old",line.oldLine,event.shiftKey)}>{line.oldLine ?? ""}</button><button className="line-number" disabled={line.newLine===undefined} title="选择新文件行；Shift 点击可选择连续范围" onClick={event => line.newLine!==undefined&&selectLine(hunk.id,"new",line.newLine,event.shiftKey)}>{line.newLine ?? ""}</button><code>{line.kind === "addition" ? "+" : line.kind === "deletion" ? "−" : " "}{line.text}</code></div>;
       })}</div>
     </section>)}
   </div>;

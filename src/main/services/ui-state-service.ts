@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { Attachment, ComposerCapabilitySelection, ComposerDraftState, NewTaskDraft } from "../../shared/types";
@@ -18,6 +19,10 @@ export class UiStateService {
   private readonly protectedDraftFiles = new Map<string, Map<string, number>>();
 
   constructor(userDataPath: string) {
+    // Windows short-name and junction aliases can fail recursive mkdir even
+    // when their target exists. Pin the existing root without trusting links
+    // inside any individual session's attachment directory.
+    try { userDataPath = realpathSync.native(userDataPath); } catch { /* first launch creates the root lazily */ }
     this.store = new JsonStore(join(userDataPath, "ui-state.json"), { drafts: {}, promptHistory: {} });
     this.draftAttachmentRoot = join(userDataPath, "composer-drafts");
   }

@@ -9,12 +9,13 @@ function load(relative, mocks) {
   const path = resolve(__dirname, "..", relative), mod = new Module(path);
   mod.paths = Module._nodeModulePaths(join(__dirname, ".."));
   mod.require = id => id in mocks ? mocks[id] : id in common ? common[id] : require(id);
-  mod._compile(ts.transpileModule(readFileSync(path, "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText, path);
+  mod._compile(ts.transpileModule(readFileSync(path, "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText, path);
   return mod.exports;
 }
 const chain = () => new Proxy(function () {}, { get: () => chain(), apply: () => chain() });
 const animated = { useSharedValue: value => ({ value }), useAnimatedStyle: () => ({}), useAnimatedKeyboard: () => ({ height: { value: 0 } }), withSpring: v => v, withTiming: v => v, runOnJS: f => f, interpolate: () => 0, FadeInDown: chain(), FadeOutDown: chain() };
 const common = {
+  "../../../src/shared/prompt-snippets": load("../../src/shared/prompt-snippets.ts", {}),
   "./src/media-cache": { setPrefetchWifiOnly() {} },
   "react-native-reanimated": { __esModule: true, default: { View: "AnimatedView" }, ...animated },
   "react-native-gesture-handler": { GestureDetector: ({ children }) => children, Gesture: chain(), GestureHandlerRootView: "GestureHandlerRootView", FlatList: "FlatList" },
@@ -377,6 +378,222 @@ test("a delayed snippet or recipe restore never replaces an edit", async () => {
     await renderer.act(async()=>{pending.resolve(["old"]);await settle();});
     assert.deepEqual(value[0],["my edit"]);assert.deepEqual(writes,[["my edit"]]);
   }finally{if(tree)await renderer.act(()=>tree.unmount());}
+});
+
+const snippetUi = { Button: "Button", Chip: "Chip", EmptyState: "EmptyState", ListRow: "ListRow", Section: "Section", Segmented: "Segmented", SearchField: "SearchField", font: { small: 13, body: 15 }, radius: {}, space: { xs: 4, sm: 8, md: 12 }, ui: { row: { flexDirection: "row" }, field: {} } };
+const computerSnippet = (patch = {}) => ({ id: "one", title: "电脑审查", body: "Review the change", ...patch });
+async function withSnippets(options, run) {
+  const calls = [], writes = [], inserted = [];
+  const { SnippetsSheet } = load("src/library.tsx", {
+    "react-native": native, "./ui": snippetUi, "./forms": {},
+    "./library-model": load("src/library-model.ts", {}),
+    "./cache": { savedRead: async () => options.local, savedWrite: async (...args) => writes.push(args) },
+  });
+  let client = { host: host(), query: (...args) => { calls.push(args); return options.query ? options.query(...args) : Promise.resolve({ supported: true, items: [computerSnippet()] }); } };
+  const props = () => ({ client, theme: {}, onInsert: value => inserted.push(value) });
+  let tree;
+  try {
+    await renderer.act(async () => { tree = renderer.create(React.createElement(SnippetsSheet, props())); await settle(); });
+    const f = {
+      calls, writes, inserted, tree,
+      button: title => tree.root.findAllByType("Button").find(node => node.props.title === title),
+      row: title => tree.root.findAllByType("ListRow").find(node => node.props.title === title),
+      input: label => tree.root.findAllByType("TextInput").find(node => node.props.accessibilityLabel === label),
+      scope: async value => renderer.act(async () => { tree.root.findByType("Segmented").props.onChange(value); await settle(); }),
+      update: async patch => renderer.act(async () => { client = { ...client, ...patch }; tree.update(React.createElement(SnippetsSheet, props())); await settle(); }),
+    };
+    await run(f);
+  } finally { if (tree) await renderer.act(() => tree.unmount()); }
+}
+
+test("snippet libraries read the computer only on explicit selection and keep phone edits private", async () => {
+  await withSnippets({ local: [{ id: "private", title: "手机私有", text: "private instruction" }] }, async f => {
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.inserted.length, 0);
+    await renderer.act(() => f.tree.root.findByType("Pressable").props.onPress());
+    await renderer.act(() => f.input("片段内容").props.onChangeText("edited private instruction"));
+    await renderer.act(() => f.button("保存").props.onPress());
+    assert.deepEqual(f.writes, [["prompt-snippets", [{ id: "private", title: "手机私有", text: "edited private instruction" }]]]);
+    assert.equal(f.calls.length, 0);
+    await renderer.act(() => f.row("手机私有").props.onPress());
+    assert.deepEqual(f.inserted, ["edited private instruction"]);
+    await f.scope("computer");
+    assert.deepEqual(f.calls, [["prompt-snippets"]]);
+    assert.equal(f.inserted.length, 1, "loading computer snippets must not insert anything");
+    await renderer.act(() => f.row("电脑审查").props.onPress());
+    assert.deepEqual(f.inserted, ["edited private instruction", "Review the change"]);
+    assert.equal(f.writes.length, 1, "computer reads never replace the phone library");
+    await f.scope("phone");
+    assert.equal(f.calls.length, 1);
+  });
+});
+
+test("snippet variables require explicit insertion and substitute literal values only once", async () => {
+  const body = "{{ first }} / {{second}} / {{first}} / {{constructor}} / {{__proto__}}";
+  await withSnippets({ query: async () => ({ supported: true, items: [computerSnippet({ body })] }) }, async f => {
+    await f.scope("computer");
+    await renderer.act(() => f.row("电脑审查").props.onPress());
+    assert.equal(f.tree.root.findAllByType("TextInput").length, 4, "repeated variables share a field");
+    assert.equal(f.input("填写 constructor").props.value, "");
+    assert.equal(f.input("填写 __proto__").props.value, "");
+    assert.equal(f.button("插入草稿").props.disabled, true);
+    await renderer.act(() => f.button("插入草稿").props.onPress());
+    assert.deepEqual(f.inserted, []);
+    for (const [name, value] of [["first", "{{second}} $&"], ["second", "literal"], ["constructor", "custom"], ["__proto__", "value"]]) {
+      await renderer.act(() => f.input(`填写 ${name}`).props.onChangeText(value));
+    }
+    assert.equal(f.button("插入草稿").props.disabled, false);
+    assert.deepEqual(f.inserted, []);
+    await renderer.act(() => f.button("插入草稿").props.onPress());
+    assert.deepEqual(f.inserted, ["{{second}} $& / literal / {{second}} $& / custom / value"]);
+    assert.deepEqual(f.calls, [["prompt-snippets"]]);
+    assert.deepEqual(f.writes, []);
+  });
+});
+
+test("mobile variable expansion stays bounded, including repeated and multibyte values", async () => {
+  for (const [body, value] of [["{{x}}".repeat(10), "a".repeat(8192)], ["{{x}}".repeat(4), "中".repeat(8192)]]) {
+    await withSnippets({ local: [{ id: "local", title: "模板", text: body }] }, async f => {
+      await renderer.act(() => f.row("模板").props.onPress());
+      await renderer.act(() => f.input("填写 x").props.onChangeText(" \n "));
+      assert.equal(f.button("插入草稿").props.disabled, true);
+      await renderer.act(() => f.input("填写 x").props.onChangeText(value));
+      assert.equal(f.button("插入草稿").props.disabled, true);
+      assert.match(text(f.tree), /64 KiB/);
+      await renderer.act(() => f.button("插入草稿").props.onPress());
+      assert.deepEqual(f.inserted, []);
+      await renderer.act(() => f.input("填写 x").props.onChangeText("ok"));
+      assert.equal(f.button("插入草稿").props.disabled, false);
+      await renderer.act(() => f.button("插入草稿").props.onPress());
+      assert.equal(f.inserted[0], body.replaceAll("{{x}}", "ok"));
+      assert.deepEqual(f.calls, []);
+    });
+  }
+});
+
+test("computer snippet reads reject unsupported, malformed and oversized responses", async t => {
+  const response = items => ({ supported: true, items });
+  const badResponses = [null, {}, { supported: "yes", items: [] }, { supported: false, items: [] }, response(null), response([null]), response(["text"]),
+    response([computerSnippet({ id: "" })]), response([computerSnippet({ id: "x".repeat(129) })]), response([computerSnippet(), computerSnippet()]),
+    response([computerSnippet({ title: " " })]), response([computerSnippet({ title: "中".repeat(101) })]), response([computerSnippet({ body: "" })]),
+    response([computerSnippet({ body: "x\0y" })]), response([computerSnippet({ body: "a".repeat(65_537) })]), response([computerSnippet({ body: "中".repeat(21_846) })]),
+    response(Array.from({ length: 201 }, (_, index) => computerSnippet({ id: String(index) })))];
+  for (let index = 0; index < badResponses.length; index++) {
+    await t.test(`invalid response ${index + 1}`, async () => withSnippets({ query: async () => badResponses[index] }, async f => {
+      await f.scope("computer");
+      assert.equal(f.row("电脑审查"), undefined);
+      assert.match(text(f.tree), /片段库暂不可用/);
+      assert.deepEqual(f.inserted, []);
+      assert.equal(f.button("刷新电脑片段").props.disabled, false);
+    }));
+  }
+});
+
+test("computer snippet reads accept boundary sizes and distinguish search from an empty library", async () => {
+  const title = "😀".repeat(100);
+  const items = Array.from({ length: 200 }, (_, index) => computerSnippet({ id: String(index), title: index ? `Snippet ${index}` : title, body: index ? "small" : "a".repeat(65_536) }));
+  await withSnippets({ query: async () => ({ supported: true, items }) }, async f => {
+    await f.scope("computer");
+    assert.equal(f.tree.root.findAllByType("ListRow").length, 200);
+    await renderer.act(() => f.tree.root.findByType("SearchField").props.onChangeText("no such snippet"));
+    assert.ok(f.row("没有匹配的电脑片段"));
+    await renderer.act(() => f.tree.root.findByType("SearchField").props.onChangeText("😀"));
+    await renderer.act(() => f.row(title).props.onPress());
+    assert.equal(f.inserted[0].length, 65_536);
+  });
+});
+
+test("refresh failures remove old computer snippets and retry is explicit", async () => {
+  const pending = deferred(); let count = 0;
+  await withSnippets({ query: () => ++count === 1 ? Promise.resolve({ supported: true, items: [computerSnippet()] }) : count === 2 ? pending.promise : Promise.resolve({ supported: true, items: [] }) }, async f => {
+    await f.scope("computer");
+    const stalePress = f.row("电脑审查").props.onPress;
+    await renderer.act(() => f.button("刷新电脑片段").props.onPress());
+    assert.equal(f.row("电脑审查"), undefined);
+    await renderer.act(() => stalePress());
+    assert.deepEqual(f.inserted, []);
+    await renderer.act(async () => { pending.reject(Error("read failed")); await settle(); });
+    assert.match(text(f.tree), /read failed/);
+    assert.equal(f.row("电脑审查"), undefined);
+    assert.equal(count, 2, "failure must not retry automatically");
+    await renderer.act(async () => { f.button("刷新电脑片段").props.onPress(); await settle(); });
+    assert.ok(f.row("还没有电脑片段"));
+    assert.ok(!text(f.tree).includes("read failed"));
+  });
+});
+
+test("host and endpoint changes reset snippet selection before reading the new computer", async () => {
+  for (const next of [host("b"), host("a", "https://new.example.invalid"), { ...host(), id: "paired-again" }, undefined]) {
+    for (const reject of [false, true]) {
+      const pending = deferred(); let count = 0;
+      await withSnippets({ query: () => ++count === 1 ? pending.promise : Promise.resolve({ supported: true, items: [computerSnippet({ title: "新的片段" })] }) }, async f => {
+        await f.scope("computer");
+        await f.update({ host: next });
+        assert.equal(count, 1, "switching computers must not implicitly open its snippet library");
+        await renderer.act(async () => { if (reject) pending.reject(Error("obsolete host")); else pending.resolve({ supported: true, items: [computerSnippet({ title: "旧的片段" })] }); await settle(); });
+        assert.equal(f.row("旧的片段"), undefined);
+        assert.ok(!text(f.tree).includes("obsolete host"));
+        assert.equal(f.tree.root.findAllByType("Segmented").length, next ? 1 : 0);
+        if (next) {
+          assert.equal(f.tree.root.findByType("Segmented").props.value, "phone");
+          await f.scope("computer");
+          assert.ok(f.row("新的片段"));
+          assert.equal(count, 2);
+        }
+      });
+    }
+  }
+});
+
+test("old computer row and variable callbacks cannot insert after leaving their owner", async () => {
+  await withSnippets({ query: async () => ({ supported: true, items: [computerSnippet({ body: "Hello {{name}}" })] }) }, async f => {
+    await f.scope("computer");
+    const staleRow = f.row("电脑审查").props.onPress;
+    await f.scope("phone");
+    await renderer.act(() => staleRow());
+    assert.equal(f.input("填写 name"), undefined);
+    await f.scope("computer");
+    await renderer.act(() => f.row("电脑审查").props.onPress());
+    await renderer.act(() => f.input("填写 name").props.onChangeText("private"));
+    const staleInsert = f.button("插入草稿").props.onPress;
+    await f.update({ host: host("b") });
+    await renderer.act(() => staleInsert());
+    assert.equal(f.input("填写 name"), undefined);
+    assert.deepEqual(f.inserted, []);
+    assert.deepEqual(f.calls, [["prompt-snippets"], ["prompt-snippets"]]);
+  });
+});
+
+test("the snippet sheet inserts into the latest draft and rejects obsolete session callbacks", async () => {
+  const drafts = [], closed = [], calls = [];
+  const { SheetHost } = load("src/session-sheets.tsx", {
+    "react-native": { ...native, Modal: "Modal" }, "expo-clipboard": {}, "./ui": { ...snippetUi, IconButton: "IconButton" },
+    "./library": { SnippetsSheet: "SnippetsSheet" }, "./library-model": load("src/library-model.ts", {}),
+    "./workbench": {}, "./workbench-panels": {}, "./code-image": {}, "./forms": {}, "./screens": {}, "./native-runs": {}, "./conversation": {},
+    "../../../src/shared/native-runs": {},
+  });
+  let client = { host: host(), sessionId: "one", draft: "original", setDraft: value => drafts.push(value), perform: (...args) => calls.push(args), mutate: (...args) => calls.push(args) };
+  let sheet = "snippets", tree;
+  const props = () => ({ sheet, client, theme: {}, setSheet: value => closed.push(value), children: [], rows: [], queue: [] });
+  try {
+    await renderer.act(() => { tree = renderer.create(React.createElement(SheetHost, props())); });
+    const insert = tree.root.findByType("SnippetsSheet").props.onInsert;
+    await renderer.act(() => { client = { ...client, draft: "latest draft" }; tree.update(React.createElement(SheetHost, props())); });
+    await renderer.act(() => insert("chosen text"));
+    assert.deepEqual(drafts, ["latest draft\n\nchosen text"]);
+    assert.deepEqual(closed, [null]);
+    for (const patch of [{ sessionId: "two" }, { host: host("b") }, { host: host("b", "https://new.example.invalid") }]) {
+      const stale = tree.root.findByType("SnippetsSheet").props.onInsert;
+      await renderer.act(() => { client = { ...client, ...patch }; tree.update(React.createElement(SheetHost, props())); });
+      await renderer.act(() => stale("obsolete"));
+    }
+    const stale = tree.root.findByType("SnippetsSheet").props.onInsert;
+    await renderer.act(() => { sheet = null; tree.update(React.createElement(SheetHost, props())); });
+    await renderer.act(() => stale("closed"));
+    assert.equal(drafts.length, 1);
+    assert.equal(closed.length, 1);
+    assert.deepEqual(calls, [], "snippet insertion never sends a prompt or uploads anything");
+  } finally { if (tree) await renderer.act(() => tree.unmount()); }
 });
 
 test("foreground reminders use the shared event ledger, not status transitions", async () => {

@@ -1,0 +1,21 @@
+.snippet-library { display:flex; flex-direction:column; gap:var(--space-3); width:100%; min-width:0; padding:4px 0; font-size:var(--text-base); }
+.snippet-library-tools { display:flex; gap:8px; }
+.snippet-library-tools input { flex:1; min-width:0; }
+.snippet-library form, .snippet-library label { display:flex; flex-direction:column; gap:6px; }
+.snippet-library form { gap:12px; }
+.snippet-library input, .snippet-library textarea { width:100%; box-sizing:border-box; padding:8px; border:1px solid var(--border); border-radius:6px; background:var(--input-bg, var(--bg)); color:var(--text); font:inherit; }
+.snippet-library textarea { resize:vertical; min-height:80px; }
+.snippet-help, .snippet-library small { margin:0; color:var(--muted); font-size:var(--font-xs, 12px); }
+.snippet-list { display:flex; flex-direction:column; gap:6px; }
+.snippet-list article { display:flex; align-items:center; gap:8px; border:1px solid var(--border); border-radius:8px; padding:8px; }
+.snippet-use { display:flex; flex:1; flex-direction:column; gap:5px; min-width:0; border:0; background:transparent; color:var(--text); text-align:left; cursor:pointer; }
+.snippet-use span { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); }
+.snippet-row-actions, .snippet-library footer { display:flex; flex-wrap:wrap; gap:6px; }
+.snippet-library footer { justify-content:flex-end; }
+.snippet-library button:not(.snippet-use), .ui-dialog:has(.snippet-library)>header button { font:inherit; padding:6px 10px; border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:var(--color-input); color:var(--color-fg); cursor:pointer; }
+.snippet-library button:hover:not(:disabled) { background:var(--color-hover); }
+.snippet-library button:disabled { opacity:.5; cursor:default; }
+.snippet-use strong { overflow-wrap:anywhere; }
+.snippet-library-tools>button, .snippet-row-actions { flex-shrink:0; }
+.snippet-error { margin:0; color:var(--danger, var(--text)); }
+@media (max-width:600px) { .snippet-list article { align-items:flex-start; flex-direction:column; } }

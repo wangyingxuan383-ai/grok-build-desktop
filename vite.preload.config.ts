@@ -8,7 +8,7 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: process.env.APP_BUILD_PROFILE === "local",
     target: "node24",
-    lib: { entry: resolve("src/preload/index.ts"), formats: ["cjs"], fileName: () => "index.cjs" },
+    lib: { entry: { index: resolve("src/preload/index.ts"), "quick-entry": resolve("src/preload/quick-entry.ts") }, formats: ["cjs"], fileName: (_format, name) => `${name}.cjs` },
     rollupOptions: { external: ["electron", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)] },
   },
 });

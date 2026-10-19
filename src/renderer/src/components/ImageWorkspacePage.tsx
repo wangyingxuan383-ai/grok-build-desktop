@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ImageConversation, ImageRecord, ImageWorkspace } from "../../../shared/image-workspace";
-import type { CustomProviderProfile, MediaAccessHandle, MediaArtifact, ModelInfo } from "../../../shared/types";
+import type { Attachment, CustomProviderProfile, MediaAccessHandle, MediaArtifact, ModelInfo } from "../../../shared/types";
 import type { ArtifactPreviewTarget } from "../artifact-preview";
 import { UiIcon } from "../ui-icons";
 import { useAppStore } from "../store";
@@ -30,7 +30,7 @@ type Pending =
  * switching modes changes the content, not the layout. A session is a real conversation that keeps its
  * context between generations; the gallery is a separate page across all sessions.
  */
-export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers" | "about"): void; onNotice?(message: string): void }): React.JSX.Element {
+export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers" | "about"): void; onNotice?(message: string): void; registerDrop?(receiver: ((attachments: Attachment[]) => void) | null): void }): React.JSX.Element {
   const defaultCliModel=useAppStore(state=>state.settings?.defaultModel||"");
   const [declaredModels,setDeclaredModels]=useState<ModelInfo[]>([]);
   const [modelsLoading,setModelsLoading]=useState(false);
@@ -77,6 +77,23 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice }: { onCode(): vo
   const workCount = useMemo(() => collectWorks(conversations).length, [conversations]);
 
   const fail = useCallback((value: unknown): void => { if (alive.current) setError(value instanceof Error ? value.message : String(value)); }, []);
+  useEffect(() => {
+    if (!registerDrop) return;
+    registerDrop(attachments => {
+      if (options.route !== "cli") { setError("当前提供商通道不支持参考图；切换到 CLI 通道后再添加。"); return; }
+      if (busy) { setError("图像任务正在执行，请完成后再添加参考图。"); return; }
+      const images = attachments.filter(item => item.kind === "image" && item.path);
+      if (!images.length) { setError("图像页只接受图片作为参考图。"); return; }
+      const remaining = Math.max(0, 8 - sources.length);
+      const combined = [...references, ...images].filter((item, index, list) => list.findIndex(other => other.path?.toLowerCase() === item.path?.toLowerCase()) === index);
+      setReferences(combined.slice(0, remaining));
+      if (combined.length > remaining) setError("参考图最多 8 张，超出的图片未添加。");
+      else if (images.length < attachments.length) setError("已添加图片参考；非图片文件未添加。");
+      else setError("");
+      setView("session");
+    });
+    return () => registerDrop(null);
+  }, [registerDrop, options.route, busy, references, sources.length]);
   const refreshModels=useCallback(async()=>{
     setModelsLoading(true);
     try { const models=await window.grokDesktop.listModelCatalog(); if(alive.current)setDeclaredModels(models); }
