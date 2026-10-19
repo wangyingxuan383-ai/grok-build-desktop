@@ -2170,7 +2170,7 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   onDesktopActivityChanged(listener: (state: DesktopActivitySnapshot) => void): () => void;
   onInboxChanged(listener: () => void): () => void;
   markAllInboxRead(): Promise<NotificationInboxItem[]>;
-  onRemoteStateChanged(listener: (state: import("./remote").RemoteGatewayState) => void): () => void;
+  onRemoteStateChanged(listener: () => void): () => void;
   getCliConfigState(): Promise<CliConfigState>;
   onCliConfigChanged(listener: (state: CliConfigState) => void): () => void;
   getRemoteState():Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;

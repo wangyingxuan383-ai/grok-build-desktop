@@ -2,12 +2,28 @@ import React,{useEffect,useRef,useState}from"react";
 import type{RemoteGatewayState}from"../../../shared/remote";
 import{Button}from"./ui/Button";
 import { MobileDownloadCard } from "./MobileDownloadCard";
+type RemoteState = RemoteGatewayState & { qrDataUrl?: string };
+/** Gateway events invalidate state; they do not carry a snapshot or pairing secrets. */
+export function observeRemoteConnectionState(api: { getRemoteState(): Promise<RemoteState>; onRemoteStateChanged(listener: () => void): () => void }, publish: (state: RemoteState) => void, fail: (error: unknown) => void) {
+ let disposed=false,reading=false,dirty=false,revision=0;
+ const refresh=()=>{
+  revision++;dirty=true;
+  if(reading||disposed)return;
+  reading=true;
+  void (async()=>{
+   try{while(dirty&&!disposed){dirty=false;const started=revision;try{const next=await api.getRemoteState();if(!disposed&&started===revision)publish(next)}catch(error){if(!disposed&&started===revision)fail(error)}}}
+   finally{reading=false}
+  })();
+ };
+ const off=api.onRemoteStateChanged(refresh);refresh();
+ return {refresh,dispose:()=>{disposed=true;revision++;off()}};
+}
 export function RemoteConnections(){
  const[state,setState]=useState<RemoteGatewayState&{qrDataUrl?:string}>(),[port,setPort]=useState("48975"),[busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState(""),[address,setAddress]=useState(""),[portChanged,setPortChanged]=useState(false);
- const requestVersion=useRef(0),actionRunning=useRef(false);const selectedAddress=address&&state?.addresses.includes(address)?address:state?.addresses[0]||"";
+ const refreshState=useRef<()=>void>(()=>{}),actionRunning=useRef(false);const selectedAddress=address&&state?.addresses.includes(address)?address:state?.addresses[0]||"";
  const pairedAddress=state?.pairing?new URL(state.pairing.uri).searchParams.get("host")||"":"";const qrCurrent=Boolean(state?.pairing&&pairedAddress===selectedAddress&&!busy);
- useEffect(()=>{let disposed=false;let revision=0;const apply=(next:RemoteGatewayState&{qrDataUrl?:string})=>{if(disposed||actionRunning.current)return;revision++;setState(previous=>({...next,qrDataUrl:next.qrDataUrl||(previous?.pairing?.uri===next.pairing?.uri?previous?.qrDataUrl:undefined)}));if(next.enabled)setPort(String(next.port))};const unsubscribe=window.grokDesktop.onRemoteStateChanged(apply);const requested=revision;void window.grokDesktop.getRemoteState().then(next=>{if(revision===requested)apply(next)}).catch(e=>{if(!disposed&&revision===requested)setError(e instanceof Error?e.message:String(e))});return()=>{disposed=true;unsubscribe()}},[]);
- const action=async(run:()=>Promise<RemoteGatewayState&{qrDataUrl?:string}>)=>{if(actionRunning.current)return;actionRunning.current=true;requestVersion.current++;setBusy(true);setError("");try{setState(await run())}catch(e){setError(e instanceof Error?e.message:String(e))}finally{actionRunning.current=false;setBusy(false)}};
+ useEffect(()=>{const observer=observeRemoteConnectionState(window.grokDesktop,next=>{if(actionRunning.current)return;setState(previous=>({...next,qrDataUrl:next.qrDataUrl||(previous?.pairing?.uri===next.pairing?.uri?previous?.qrDataUrl:undefined)}));if(next.enabled)setPort(String(next.port))},e=>setError(e instanceof Error?e.message:String(e)));refreshState.current=observer.refresh;return()=>{refreshState.current=()=>{};observer.dispose()}},[]);
+ const action=async(run:()=>Promise<RemoteGatewayState&{qrDataUrl?:string}>)=>{if(actionRunning.current)return;actionRunning.current=true;refreshState.current();setBusy(true);setError("");try{setState(await run())}catch(e){setError(e instanceof Error?e.message:String(e))}finally{actionRunning.current=false;setBusy(false);refreshState.current()}};
  return <section className="remote-settings" aria-label="手机连接"><header><h3>连接安卓手机</h3><p>手机与电脑连接同一局域网，扫码后即可查看会话和继续任务。</p></header>
   <MobileDownloadCard/>
   <div className="remote-controls"><span className={`remote-status ${state?.enabled?"online":""}`}>{state?.enabled?`${state.hostName} · 可配对`:"尚未开启"}</span><Button variant={state?.enabled?"secondary":"primary"} loading={busy} onClick={()=>void action(()=>window.grokDesktop.setRemoteEnabled(!state?.enabled,portChanged?Number(port):undefined))}>{state?.enabled?"关闭手机连接":"开启手机连接"}</Button></div>

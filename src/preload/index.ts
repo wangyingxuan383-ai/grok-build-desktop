@@ -42,7 +42,7 @@ const api: GrokDesktopApi = {
   getDesktopActivity: () => ipcRenderer.invoke("desktop:activity"),
   onDesktopActivityChanged: listener => { const handler = (_: Electron.IpcRendererEvent, value: import("../shared/desktop-activity").DesktopActivitySnapshot) => listener(value); ipcRenderer.on("grok:desktop-activity", handler); return () => ipcRenderer.removeListener("grok:desktop-activity", handler); },
   onInboxChanged: listener => { const handler = () => listener(); ipcRenderer.on("grok:inbox-changed", handler); return () => ipcRenderer.removeListener("grok:inbox-changed", handler); },
-  onRemoteStateChanged: listener => { const handler = (_: Electron.IpcRendererEvent, state: import("../shared/remote").RemoteGatewayState) => listener(state); ipcRenderer.on("grok:remote-state", handler); return () => ipcRenderer.removeListener("grok:remote-state", handler); },
+  onRemoteStateChanged: listener => { const handler = () => listener(); ipcRenderer.on("grok:remote-state", handler); return () => ipcRenderer.removeListener("grok:remote-state", handler); },
   markAllInboxRead: () => ipcRenderer.invoke("inbox:mark-all-read"),
   listPromptSnippets: () => ipcRenderer.invoke("snippets:list"),
   savePromptSnippet: input => ipcRenderer.invoke("snippets:save", input),
