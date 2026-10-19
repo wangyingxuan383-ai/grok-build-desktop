@@ -1,6 +1,6 @@
 {
   "name": "grok-build-desktop",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "private": true,
   "description": "Windows desktop GUI for the local Grok Build CLI",
   "main": "out/main/index.js",
@@ -20,6 +20,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:regression-dom": "node scripts/probe-regression-dom.mjs",
+    "test:productivity-dom": "node scripts/probe-productivity-dom.mjs",
     "test:computer-acceptance": "node scripts/run-powershell.mjs -File scripts/probe-computer-flows.ps1",
     "test:ui-acceptance": "node scripts/run-powershell.mjs -File scripts/probe-v070-ui.ps1",
     "package:win": "node scripts/run-powershell.mjs -File scripts/package-win.ps1",

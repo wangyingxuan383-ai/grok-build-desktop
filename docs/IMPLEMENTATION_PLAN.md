@@ -6,7 +6,7 @@
 - [x] Repair first-mount and already-open inbox navigation, protect attachment storage against Windows root aliases, and discard model probes from an older config revision.
 - [x] Verify sandboxed DOM behavior for duplicate/stale Diff feedback, explicit snippet variable insertion and redacted HTML/Markdown export.
 - [x] Complete final quick-entry and phone library ownership/concurrency checks.
-- [ ] Accept the existing visual language in light/dark, narrow layouts and larger text; keep the renderer budgets unchanged.
+- [x] Accept Desktop snippet/settings/export/inbox components in light/dark at 820px and 150% zoom; keep the renderer budgets unchanged. Phone rendered layout and package acceptance follow below.
 - [ ] Pass the final desktop/mobile regressions, public-content checks and signed local Windows/Android package gates.
 - [ ] Record physical Android IME, gestures, background restoration and system-install acceptance separately.
 
