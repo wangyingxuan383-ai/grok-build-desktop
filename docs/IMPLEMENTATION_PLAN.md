@@ -3,7 +3,8 @@
 ## Desktop companion (character review first)
 
 - [x] Deliver two raster character candidates with transparent masters, four expression previews and verified light/dark 128/192/256px comparisons.
-- [ ] Obtain character selection before producing animation samples or integrating the companion runtime.
+- [x] Retain both visual routes for animation pilots; replace the small character's whale apron motif with the application circular-G embroidery.
+- [x] Deliver both routes' first idle/awaiting-input/pickup-and-landing pilots, with independent controls, frame inspection and documented sandboxed Electron verification.
 - [ ] Accept idle/awaiting-input/pickup-and-landing samples, then validate the small transparent window on Windows.
 - [ ] Integrate existing activity/inbox and quick-entry flows behind an off-by-default quiet companion setting.
 - [ ] Add safe local image/animation-pack imports, then the separately accepted generation workshop.

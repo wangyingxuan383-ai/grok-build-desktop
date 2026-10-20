@@ -6,7 +6,7 @@ The desktop companion is a staged Windows feature. Character review precedes ani
 
 Two candidates use silver-white, charcoal and restrained ice-blue accents: an original softly shaded anime character, and a local recolor study of the previously selected DeepSeek-Pet character. Each candidate has a transparent full-body master, four static expression previews, light/dark backgrounds and 128/192/256 CSS-pixel comparisons. Preview scaling uses the visible silhouette rather than transparent canvas margins.
 
-Candidate artwork, source references, prompts and local review evidence stay outside public package inputs. The DeepSeek-Pet repository describes separate restrictions for character/media use; its recolor study must not enter public artifacts without verified adaptation and redistribution permission. See the [upstream material notice](https://github.com/nanonocturne-altago/DeepSeek-Pet#五许可说明).
+Candidate artwork, source references, prompts and local review evidence stay outside package inputs during art review. Preserve upstream attribution and notices for the adapted route: character design by ZipZipPipe, original pet material by PC2005-cloud / 宇宙之外的浩瀚宇, and integration reference by nanonocturne-altago. See the [upstream source and material notice](https://github.com/nanonocturne-altago/DeepSeek-Pet#五许可说明). Artwork attribution and provenance remain separate from the application's source-code license.
 
 The character must be selected before producing full animation sets. Contact sheets are visual studies, not runtime animation atlases.
 
@@ -14,7 +14,19 @@ The character must be selected before producing full animation sets. Contact she
 
 Both candidates now have transparent masters and four-expression raster sheets. One spacing-only revision removed neighboring-cell fragments from the sheet previews. The local comparison page normalizes visible silhouettes, supports light/dark backgrounds and separate A/B views, and displays exact 128/192/256 CSS-pixel samples. PNG decoding, controls, equal-height previews and a 393px layout passed a sandboxed Electron check; the resulting light/dark screenshots were visually inspected.
 
-These are simulated desktop backgrounds for character comparison, not evidence of a working overlay, click-through or physical-device behavior. The original route has more slender proportions; the DS route retains the larger head and shorter body. Generated recolor studies are not pixel-identical copies. No character has been selected, no animation has been accepted and no runtime or package has changed. Artwork and detailed local evidence remain outside the public repository.
+These are simulated desktop backgrounds for character comparison, not evidence of a working overlay, click-through or physical-device behavior. The original route has more slender proportions; the adapted route retains the larger head and shorter body. Generated recolor studies are not pixel-identical copies. At this static milestone, no animation had been accepted and no runtime or package had changed. Artwork and detailed local evidence remain outside the public repository.
+
+### Dual-character direction
+
+Both visual routes continue to the initial animation pilots. They remain alternatives for one active companion; this does not add two simultaneous desktop windows. The small character's whale motif is replaced by the application's circular G mark, softly embroidered in charcoal and ice blue on the original apron. The same change applies to its expression sheet and every animation frame.
+
+Production still proceeds through idle, awaiting-input and pickup/landing pilots before the remaining action set or runtime integration. Retain original credits and material notices as part of asset provenance.
+
+### Initial animation pilots delivered
+
+Each route has four idle blink frames, four awaiting-input frames and six pickup/fall/landing/recovery frames. The local review player offers independent actions, three sizes, light/dark backgrounds, pause, frame stepping, reduced motion and card-bounded drag/drop. It uses the untouched generated PNG sheets, alpha-derived foot anchors and one visibility-aware animation scheduler; action images are predecoded in separate nodes to avoid displaying a previous atlas while switching.
+
+Sandboxed Electron verification covers image completeness/transparency, route isolation, actual displayed reference heights, playback, pointer-input threshold and landing position, pause/reduced-motion behavior, visibility suspension, atlas switching and a 393px layout. Screenshots were visually reviewed. These remain sparse-keyframe pilots with minor generated detail changes, requiring art feedback and smoothing before production animation. They do not certify native overlay, multi-display/DPI or real session integration, and no runtime/package budget has changed.
 
 ## Animation and native validation
 
