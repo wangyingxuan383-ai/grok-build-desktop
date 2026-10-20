@@ -50,6 +50,7 @@ import { useConversationDerivedState } from "./hooks/use-conversation-derived-st
 import { useNavigationController } from "./hooks/use-navigation-controller";
 import { launchInputFromDraft } from "./new-task-launch";
 import { useSubmissionController } from "./hooks/use-submission-controller";
+import { observeAttachmentDrops, type AttachmentDropTarget } from "./attachment-drop";
 
 const LazySubagentConversation = lazy(()=>import("./components/SubagentConversation").then(module=>({default:module.SubagentConversation})));
 const LazySnippetLibrary = lazy(() => import("./components/SnippetLibrary").then(module => ({ default: module.SnippetLibrary })));
@@ -79,9 +80,10 @@ const panelLabels: Record<string,string> = { settings:"设置",accounts:"账号"
 export default function App(): React.JSX.Element {
   const [imageMode,setImageMode]=useState(()=>{try{return localStorage.getItem("grok.app-mode.v1")==="image"}catch{return false}});
   const imageModeRef = useRef(imageMode);
-  const imageDropRef = useRef<((attachments: Attachment[]) => void) | null>(null);
-  const registerImageDrop = useCallback((receive: ((attachments: Attachment[]) => void) | null) => { imageDropRef.current = receive; }, []);
-  const selectImageMode=(value:boolean)=>{imageModeRef.current=value;setImageMode(value);try{localStorage.setItem("grok.app-mode.v1",value?"image":"code")}catch{}};
+  const imageDropRef = useRef<(() => AttachmentDropTarget) | null>(null);
+  const dropModeGeneration = useRef(0);
+  const registerImageDrop = useCallback((capture: (() => AttachmentDropTarget) | null) => { imageDropRef.current = capture; }, []);
+  const selectImageMode=(value:boolean)=>{if(imageModeRef.current!==value)dropModeGeneration.current++;imageModeRef.current=value;setImageMode(value);try{localStorage.setItem("grok.app-mode.v1",value?"image":"code")}catch{}};
   const store = useAppStore(useShallow((state) => ({
     accounts: state.accounts,
     activeSessionId: state.activeSessionId,
@@ -311,11 +313,6 @@ export default function App(): React.JSX.Element {
     };
     const removeEvent = window.grokDesktop.onEvent(enqueue);
     const removeLogin = window.grokDesktop.onLogin((state) => useAppStore.getState().setLogin(state));
-    const removeDrop = window.grokDesktop.onDroppedAttachments((attachments) => {
-      if (!imageModeRef.current) { useAppStore.getState().addAttachments(attachments); return; }
-      if (imageDropRef.current) imageDropRef.current(attachments);
-      else useAppStore.getState().setError("图像输入尚未准备好，请打开图像会话后重新拖入参考图。");
-    });
     const removeNavigate = window.grokDesktop.onNavigateSession((target) => { selectImageMode(false); void openConversationTargetRef.current(target).catch((error) => useAppStore.getState().setError(errorMessage(error))); });
     const removeNotice=window.grokDesktop.onNotificationTarget(target=>{if(target.kind==="missing-session"){useAppStore.getState().setError("这条提醒对应的会话已不存在，可能已被删除或移动。");return}if(target.kind==="image"){localStorage.setItem("grok.image-notification-target",target.id);selectImageMode(true);window.dispatchEvent(new CustomEvent("grok:open-image-conversation",{detail:{id:target.id}}))}else{localStorage.setItem("grok.task-notification-run.v1",target.id);setPanel("tasks")}});
     const removeComputer = window.grokDesktop.onComputerStateChanged((state) => {
@@ -364,7 +361,7 @@ export default function App(): React.JSX.Element {
       if (frame) window.cancelAnimationFrame(frame);
       if (automaticUpdateTimer !== undefined) window.clearInterval(automaticUpdateTimer);
       flush();
-      removeEvent(); removeLogin(); removeDrop(); removeNavigate(); removeNotice(); removeComputer(); removeAutomation();
+      removeEvent(); removeLogin(); removeNavigate(); removeNotice(); removeComputer(); removeAutomation();
     };
   }, [updateSendingSessions]);
 
@@ -416,6 +413,28 @@ export default function App(): React.JSX.Element {
     onSessionChange: resetSessionTransients,
     onError: handleDraftPersistenceError,
   });
+
+  const codeDropKey = JSON.stringify([draftKey, store.settings?.activeWorkspace, activeCodexId, activeClaudeId]);
+  const codeDropOwner = useRef({ key: codeDropKey });
+  if (codeDropOwner.current.key !== codeDropKey) codeDropOwner.current = { key: codeDropKey };
+  useEffect(() => observeAttachmentDrops(listener => window.grokDesktop.onAttachmentDrop(listener), () => {
+    const mode = dropModeGeneration.current;
+    if (imageModeRef.current) {
+      const target = imageDropRef.current?.();
+      if (!target) { useAppStore.getState().setError("图像输入尚未准备好，请打开图像会话后重新拖入参考图。"); return; }
+      return { isCurrent: () => imageModeRef.current && mode === dropModeGeneration.current && target.isCurrent(), receive: target.receive };
+    }
+    const owner = codeDropOwner.current;
+    const { activeSessionId, settings } = useAppStore.getState();
+    return {
+      isCurrent: () => {
+        const current = useAppStore.getState();
+        return !imageModeRef.current && mode === dropModeGeneration.current && codeDropOwner.current === owner
+          && current.activeSessionId === activeSessionId && current.settings?.activeWorkspace === settings?.activeWorkspace;
+      },
+      receive: attachments => useAppStore.getState().addAttachments(attachments),
+    };
+  }, message => useAppStore.getState().setError(errorMessage(message))), []);
 
   useEffect(() => {
     const theme = store.settings?.theme;

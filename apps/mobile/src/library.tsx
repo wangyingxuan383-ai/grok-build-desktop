@@ -13,18 +13,32 @@ import { rememberRecipe, removeById, snippetMatches, type Bookmark, type Recipe,
 export type { Bookmark, Recipe, Snippet };
 
 /** Small shared stores: recipes and bookmarks per computer, snippets for the whole phone. */
-export function useStored<T>(key: string | undefined, initial: T): [T, (next: T) => void, boolean] {
-    const [value, setValue] = useState<T>(initial), [ready, setReady] = useState(false);
-    const revision = useRef(0);
+export function useStored<T>(key: string | undefined, initial: T): [T, (next: T) => void, boolean, { error: string; retry(): void }] {
+    const [value, setValue] = useState<T>(initial), [loaded, setLoaded] = useState<{ key?: string }>();
+    const [error, setError] = useState(""), [attempt, setAttempt] = useState(0);
+    const writable = useRef<{ key?: string } | undefined>(undefined);
+    const currentKey = useRef(key); currentKey.current = key;
     useEffect(() => {
-        let active = true; setReady(false); setValue(initial);
-        if (!key) { setReady(true); return; }
-        const started = revision.current;
-        void savedRead<T>(key).then(stored => { if (active) { if (revision.current === started && stored !== undefined && stored !== null) setValue(stored); setReady(true); } }).catch(() => { if (active) setReady(true); });
-        return () => { active = false; };
-    }, [key]);
-    const save = (next: T) => { revision.current++; setValue(next); if (key) void savedWrite(key, next).catch(() => undefined); };
-    return [value, save, ready];
+        let active = true; writable.current = undefined; setLoaded(undefined); setError(""); setValue(initial);
+        const accept = (stored: T | undefined) => {
+            if (!active || currentKey.current !== key) return;
+            if (stored !== undefined && stored !== null) setValue(stored);
+            writable.current = { key }; setLoaded({ key });
+        };
+        if (!key) accept(undefined);
+        else void savedRead<T>(key).then(accept).catch(() => { if (active && currentKey.current === key) setError("本机资料读取失败，重新读取成功后才能编辑。"); });
+        return () => { active = false; writable.current = undefined; };
+    }, [key, attempt]);
+    const save = (next: T) => {
+        // Never replace a whole library with its loading/error fallback, even from a stale callback.
+        if (!writable.current || writable.current.key !== key || currentKey.current !== key) return;
+        setValue(next); if (key) void savedWrite(key, next).catch(() => undefined);
+    };
+    return [value, save, Boolean(loaded && loaded.key === key), { error, retry: () => setAttempt(value => value + 1) }];
+}
+
+function StoredReadStatus({ theme, name, state }: { theme: Theme; name: string; state: { error: string; retry(): void } }) {
+    return <View style={{ gap: space.sm }}><Text accessibilityRole={state.error ? "alert" : undefined} style={{ color: state.error ? theme.danger : theme.muted, fontSize: font.small }}>{state.error || `正在读取${name}…`}</Text>{state.error ? <Button compact title="重新读取" theme={theme} onPress={state.retry}/> : null}</View>;
 }
 
 /**
@@ -38,12 +52,14 @@ export function RecipeBar({ storageKey, theme, current, available, apply }: {
     available: (modelId?: string, providerId?: string) => boolean;
     apply: (recipe: Recipe) => void;
 }) {
-    const [recipes, setRecipes] = useStored<Recipe[]>(storageKey, []);
+    const [recipes, setRecipes, ready, readState] = useStored<Recipe[]>(storageKey, []);
     const [naming, setNaming] = useState(false), [name, setName] = useState("");
     const save = () => {
+        if (!ready) return;
         const next = rememberRecipe(recipes, { name: name.trim(), modelId: current.modelId, providerId: current.providerId, effort: current.effort, mode: current.mode });
         setRecipes(next); setNaming(false); setName(""); haptic("success"); showToast("已保存配方");
     };
+    if (!ready) return <StoredReadStatus theme={theme} name="本机配方" state={readState}/>;
     return <View style={{ gap: space.sm }}>
       <View style={[ui.row, { flexWrap: "wrap", gap: space.sm }]}>
         {recipes.map(recipe => {
@@ -72,10 +88,11 @@ const STARTER: Snippet[] = [
 
 /** Reusable prompt fragments inserted into the draft; nothing is sent until the user sends. */
 function LocalSnippetsSheet({ theme, onInsert }: { theme: Theme; onInsert: (text: string) => void }) {
-    const [snippets, setSnippets, ready] = useStored<Snippet[] | undefined>("prompt-snippets", undefined);
+    const [snippets, setSnippets, ready, readState] = useStored<Snippet[] | undefined>("prompt-snippets", undefined);
     const list = snippets ?? STARTER;
     const [query, setQuery] = useState(""), [editing, setEditing] = useState<Snippet>();
     const save = (next: Snippet[]) => setSnippets(next);
+    if (!ready) return <StoredReadStatus theme={theme} name="本机片段" state={readState}/>;
     if (editing) return <View style={{ gap: space.sm }}>
       <TextInput accessibilityLabel="片段名称" value={editing.title} onChangeText={title => setEditing({ ...editing, title })} placeholder="名称" placeholderTextColor={theme.muted} style={[ui.field, { color: theme.text, borderColor: theme.border }]} />
       <TextInput accessibilityLabel="片段内容" value={editing.text} onChangeText={text => setEditing({ ...editing, text })} multiline placeholder="插入到输入框的内容" placeholderTextColor={theme.muted} style={[ui.field, { minHeight: 140, textAlignVertical: "top", color: theme.text, borderColor: theme.border }]} />
@@ -197,7 +214,8 @@ function ComputerSnippets({ client, theme, onInsert }: { client: SnippetClient; 
 
 /** Bookmarked messages for the current computer; opening one jumps to the message. */
 export function BookmarksSheet({ storageKey, theme, onOpen }: { storageKey?: string; theme: Theme; onOpen: (bookmark: Bookmark) => void }) {
-    const [bookmarks, setBookmarks] = useStored<Bookmark[]>(storageKey, []);
+    const [bookmarks, setBookmarks, ready, readState] = useStored<Bookmark[]>(storageKey, []);
+    if (!ready) return <StoredReadStatus theme={theme} name="本机书签" state={readState}/>;
     if (!bookmarks.length) return <EmptyState theme={theme} title="还没有书签" hint="长按会话中的消息，选择“加入书签”。" />;
     return <Section theme={theme} footer="书签只保存在这部手机上。长按删除。">
       {bookmarks.map(bookmark => <Pressable key={bookmark.id} accessibilityRole="button" accessibilityLabel={`打开书签：${bookmark.sessionTitle}`} onPress={() => onOpen(bookmark)}

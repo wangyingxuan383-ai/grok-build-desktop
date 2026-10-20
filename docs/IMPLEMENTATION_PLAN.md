@@ -1,5 +1,16 @@
 # Development roadmap
 
+## Reliability follow-up (unreleased)
+
+- [x] Prevent phone snippet/recipe/bookmark fallback data from replacing unread local libraries; keep failures read-only and support explicit retry.
+- [x] Keep quick-entry input-method composition separate from Escape-to-close and retain captured draft attachments.
+- [x] Bind asynchronous drops at their start, reject changed draft owners, handle preparation failures and merge consecutive image references.
+- [x] Check visible dialog semantics before displaying a native browser surface, including export and alert dialogs; restore the webpage after closing.
+- [x] Pass both type checks, Desktop regression (1399 passed, 9 environment skips), phone regression (135 passed), build and the existing renderer budget.
+- [x] Verify consecutive/stale image drops in sandboxed Electron DOM and actual export/alert visibility against a native WebContentsView.
+
+These source fixes have not been packaged or installed. Physical-device input-method behavior retains its own acceptance boundary.
+
 ## Desktop productivity candidate (0.13.0 / Grok Remote 0.4.3)
 
 - [x] Preserve the development snapshot and integrate event-driven activity, named notifications, a prioritized inbox and consistent close/exit behavior.

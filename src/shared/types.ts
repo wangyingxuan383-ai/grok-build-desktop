@@ -2509,7 +2509,7 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   exportLogs(): Promise<string | null>;
   onEvent(listener: (event: ChatEvent) => void): () => void;
   onLogin(listener: (state: LoginState) => void): () => void;
-  onDroppedAttachments(listener: (attachments: Attachment[]) => void): () => void;
+  onAttachmentDrop(listener: (event: import("./attachment-drop").AttachmentDropEvent) => void): () => void;
   onNavigateSession(listener: (target: { sessionId: string; cwd: string }) => void): () => void;
   onMenuCommand(listener: (command: AppMenuCommand) => void): () => void;
   onComputerStateChanged(listener: (state: ComputerTaskState) => void): () => void;

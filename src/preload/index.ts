@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AppMenuCommand, AppSettings, Attachment, AutomationRunRecord, AutomationTask, ChatEvent, ComputerTaskState, GrokDesktopApi, LoginState, MediaGenerationJob, ProviderScanProgress, ReasoningEffort, SessionMode } from "../shared/types";
+import type { AttachmentDropEvent } from "../shared/attachment-drop";
 
-const droppedAttachmentListeners = new Set<(attachments: Attachment[]) => void>();
+const droppedAttachmentListeners = new Set<(event: AttachmentDropEvent) => void>();
 const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string }) => void>();
 const computerStateListeners = new Set<(state: ComputerTaskState) => void>();
 const menuCommandListeners = new Set<(command: AppMenuCommand) => void>();
@@ -32,9 +33,13 @@ window.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const paths = Array.from(event.dataTransfer?.files ?? []).map((file) => webUtils.getPathForFile(file)).filter(Boolean);
     if (!paths.length) return;
+    const id = crypto.randomUUID();
+    const recipients = [...droppedAttachmentListeners];
+    const publish = (value: AttachmentDropEvent): void => { for (const listener of recipients) if (droppedAttachmentListeners.has(listener)) listener(value); };
+    publish({ phase: "started", id });
     void ipcRenderer.invoke("attachments:dropped", paths).then((attachments: Attachment[]) => {
-      for (const listener of droppedAttachmentListeners) listener(attachments);
-    });
+      publish({ phase: "completed", id, attachments });
+    }).catch(error => publish({ phase: "failed", id, message: error instanceof Error ? error.message : String(error) }));
   });
 });
 
@@ -404,7 +409,7 @@ const api: GrokDesktopApi = {
     ipcRenderer.on("grok:login", handler);
     return () => ipcRenderer.removeListener("grok:login", handler);
   },
-  onDroppedAttachments: (listener) => {
+  onAttachmentDrop: (listener) => {
     droppedAttachmentListeners.add(listener);
     return () => droppedAttachmentListeners.delete(listener);
   },

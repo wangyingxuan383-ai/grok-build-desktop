@@ -4,6 +4,7 @@ import type { Attachment, CustomProviderProfile, MediaAccessHandle, MediaArtifac
 import type { ArtifactPreviewTarget } from "../artifact-preview";
 import { UiIcon } from "../ui-icons";
 import { useAppStore } from "../store";
+import type { AttachmentDropTarget } from "../attachment-drop";
 import type { ImageComposerDraft } from "../../../shared/image-workspace";
 import { AppShell } from "./AppShell";
 import { ArtifactPreviewPane } from "./ArtifactPreviewPane";
@@ -30,7 +31,7 @@ type Pending =
  * switching modes changes the content, not the layout. A session is a real conversation that keeps its
  * context between generations; the gallery is a separate page across all sessions.
  */
-export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers" | "about"): void; onNotice?(message: string): void; registerDrop?(receiver: ((attachments: Attachment[]) => void) | null): void }): React.JSX.Element {
+export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: { onCode(): void; onPanel?(panel: "settings" | "accounts" | "diagnostics" | "providers" | "about"): void; onNotice?(message: string): void; registerDrop?(capture: (() => AttachmentDropTarget) | null): void }): React.JSX.Element {
   const defaultCliModel=useAppStore(state=>state.settings?.defaultModel||"");
   const [declaredModels,setDeclaredModels]=useState<ModelInfo[]>([]);
   const [modelsLoading,setModelsLoading]=useState(false);
@@ -77,23 +78,33 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: 
   const workCount = useMemo(() => collectWorks(conversations).length, [conversations]);
 
   const fail = useCallback((value: unknown): void => { if (alive.current) setError(value instanceof Error ? value.message : String(value)); }, []);
+  const dropState = useRef({ active, route: options.route, busy, references, sourceCount: sources.length });
+  dropState.current = { active, route: options.route, busy, references, sourceCount: sources.length };
   useEffect(() => {
     if (!registerDrop) return;
-    registerDrop(attachments => {
-      if (options.route !== "cli") { setError("当前提供商通道不支持参考图；切换到 CLI 通道后再添加。"); return; }
-      if (busy) { setError("图像任务正在执行，请完成后再添加参考图。"); return; }
-      const images = attachments.filter(item => item.kind === "image" && item.path);
-      if (!images.length) { setError("图像页只接受图片作为参考图。"); return; }
-      const remaining = Math.max(0, 8 - sources.length);
-      const combined = [...references, ...images].filter((item, index, list) => list.findIndex(other => other.path?.toLowerCase() === item.path?.toLowerCase()) === index);
-      setReferences(combined.slice(0, remaining));
-      if (combined.length > remaining) setError("参考图最多 8 张，超出的图片未添加。");
-      else if (images.length < attachments.length) setError("已添加图片参考；非图片文件未添加。");
-      else setError("");
-      setView("session");
+    registerDrop(() => {
+      const at = navigation.current, id = dropState.current.active;
+      return {
+        isCurrent: () => alive.current && at === navigation.current && id === dropState.current.active,
+        receive: attachments => {
+          const current = dropState.current;
+          if (current.route !== "cli") { setError("当前提供商通道不支持参考图；切换到 CLI 通道后再添加。"); return; }
+          if (current.busy || submittingRef.current) { setError("图像任务正在执行，请完成后再添加参考图。"); return; }
+          const images = attachments.filter(item => item.kind === "image" && item.path);
+          if (!images.length) { setError("图像页只接受图片作为参考图。"); return; }
+          const remaining = Math.max(0, 8 - current.sourceCount);
+          const combined = [...current.references, ...images].filter((item, index, list) => list.findIndex(other => other.path?.toLowerCase() === item.path?.toLowerCase()) === index);
+          current.references = combined.slice(0, remaining);
+          setReferences(current.references);
+          if (combined.length > remaining) setError("参考图最多 8 张，超出的图片未添加。");
+          else if (images.length < attachments.length) setError("已添加图片参考；非图片文件未添加。");
+          else setError("");
+          setView("session");
+        },
+      };
     });
     return () => registerDrop(null);
-  }, [registerDrop, options.route, busy, references, sources.length]);
+  }, [registerDrop]);
   const refreshModels=useCallback(async()=>{
     setModelsLoading(true);
     try { const models=await window.grokDesktop.listModelCatalog(); if(alive.current)setDeclaredModels(models); }

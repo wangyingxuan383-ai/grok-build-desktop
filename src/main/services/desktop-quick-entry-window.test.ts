@@ -57,6 +57,22 @@ describe("quick-entry sandbox and explicit capture", () => {
     if (process.platform === "win32") { await invoke("snip", draftId); expect(mocks.snip).toHaveBeenCalledWith("ms-screenclip:"); }
     window.dispose();
   });
+  it("keeps the draft when Escape cancels IME composition and closes on a later ordinary Escape", async () => {
+    const { window, invoke } = fixture(); window.open();
+    const { draftId } = await invoke("context") as { draftId: string };
+    mocks.readImage.mockReturnValue({ isEmpty: () => false, getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from("capture") });
+    await invoke("clipboard", draftId);
+    const input = mocks.windows[0].webContents.on.mock.calls.find(([name]: [string]) => name === "before-input-event")[1];
+    const preventDefault = vi.fn();
+    input({ preventDefault }, { type: "keyDown", key: "Escape", isComposing: true });
+    input({ preventDefault }, { type: "keyUp", key: "Escape", isComposing: false });
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(mocks.windows[0].isDestroyed()).toBe(false);
+    expect(await invoke("context")).toMatchObject({ draftId, attachments: [{ name: "剪贴板截图.png" }] });
+    input({ preventDefault }, { type: "keyDown", key: "Escape", isComposing: false });
+    expect(preventDefault).toHaveBeenCalledOnce(); expect(mocks.windows[0].isDestroyed()).toBe(true);
+    window.dispose();
+  });
   it("discards a captured image when closed and rejects stale requests on a new draft", async () => {
     const { window, invoke } = fixture(); window.open();
     const { draftId } = await invoke("context") as { draftId: string };

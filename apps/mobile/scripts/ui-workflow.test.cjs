@@ -368,15 +368,35 @@ test("a corrupt thumbnail offers explicit retry instead of redownloading forever
   }finally{if(tree)await renderer.act(()=>tree.unmount());}
 });
 
-test("a delayed snippet or recipe restore never replaces an edit", async () => {
+test("a local library cannot be overwritten until its original contents have loaded", async () => {
   const pending=deferred(),writes=[];let value;
   const {useStored}=load("src/library.tsx", {"react-native":native,"./cache":{savedRead:()=>pending.promise,savedWrite:async(k,v)=>writes.push(v)},"./forms":{},"./ui":{},"./library-model":{}});
   function Probe(){value=useStored("recipes",[]);return null;}let tree;
   try{
     await renderer.act(()=>{tree=renderer.create(React.createElement(Probe));});
     await renderer.act(()=>value[1](["my edit"]));
+    assert.deepEqual(writes,[]);assert.equal(value[2],false);
     await renderer.act(async()=>{pending.resolve(["old"]);await settle();});
-    assert.deepEqual(value[0],["my edit"]);assert.deepEqual(writes,[["my edit"]]);
+    assert.deepEqual(value[0],["old"]);assert.equal(value[2],true);
+    await renderer.act(()=>value[1]([...value[0],"my edit"]));
+    assert.deepEqual(value[0],["old","my edit"]);assert.deepEqual(writes,[["old","my edit"]]);
+  }finally{if(tree)await renderer.act(()=>tree.unmount());}
+});
+
+test("failed local reads remain read-only until retry and old-owner callbacks cannot write", async () => {
+  let key="a",value,reads=0;const writes=[];
+  const {useStored}=load("src/library.tsx", {"react-native":native,"./cache":{savedRead:async()=>{if(++reads===1)throw Error("database busy");return [key];},savedWrite:async(k,v)=>writes.push([k,v])},"./forms":{},"./ui":{},"./library-model":{}});
+  function Probe(){value=useStored(key,[]);return null;}let tree;
+  try{
+    await renderer.act(async()=>{tree=renderer.create(React.createElement(Probe));await settle();});
+    assert.equal(value[2],false);assert.ok(value[3].error);
+    await renderer.act(()=>value[1](["must not replace saved data"]));assert.deepEqual(writes,[]);
+    await renderer.act(async()=>{value[3].retry();await settle();});
+    assert.equal(value[2],true);assert.deepEqual(value[0],["a"]);
+    const oldSave=value[1];
+    await renderer.act(async()=>{key="b";tree.update(React.createElement(Probe));await settle();});
+    await renderer.act(()=>oldSave(["stale a edit"]));assert.deepEqual(writes,[]);
+    await renderer.act(()=>value[1]([...value[0],"edit b"]));assert.deepEqual(writes,[["b",["b","edit b"]]]);
   }finally{if(tree)await renderer.act(()=>tree.unmount());}
 });
 
@@ -387,7 +407,7 @@ async function withSnippets(options, run) {
   const { SnippetsSheet } = load("src/library.tsx", {
     "react-native": native, "./ui": snippetUi, "./forms": {},
     "./library-model": load("src/library-model.ts", {}),
-    "./cache": { savedRead: async () => options.local, savedWrite: async (...args) => writes.push(args) },
+    "./cache": { savedRead: options.read || (async () => options.local), savedWrite: async (...args) => writes.push(args) },
   });
   let client = { host: host(), query: (...args) => { calls.push(args); return options.query ? options.query(...args) : Promise.resolve({ supported: true, items: [computerSnippet()] }); } };
   const props = () => ({ client, theme: {}, onInsert: value => inserted.push(value) });
@@ -405,6 +425,30 @@ async function withSnippets(options, run) {
     await run(f);
   } finally { if (tree) await renderer.act(() => tree.unmount()); }
 }
+
+test("phone snippets hide editing while loading and retain every private row after saving", async () => {
+  const pending=deferred();
+  const local=[{id:"private-a",title:"私人 A",text:"keep a"},{id:"private-b",title:"私人 B",text:"keep b"}];
+  await withSnippets({read:()=>pending.promise},async f=>{
+    assert.equal(f.button("新建片段"),undefined);assert.equal(f.tree.root.findAllByType("ListRow").length,0);
+    assert.deepEqual(f.writes,[]);
+    await renderer.act(async()=>{pending.resolve(local);await settle();});
+    await renderer.act(()=>f.tree.root.findAllByType("Pressable")[0].props.onPress());
+    await renderer.act(()=>f.input("片段内容").props.onChangeText("updated a"));
+    await renderer.act(()=>f.button("保存").props.onPress());
+    assert.deepEqual(f.writes,[["prompt-snippets",[{...local[0],text:"updated a"},local[1]]]]);
+  });
+});
+
+test("phone snippets expose an explicit retry rather than editable defaults after a read error", async () => {
+  let reads=0;
+  await withSnippets({read:async()=>{if(++reads===1)throw Error("database unavailable");return [{id:"private",title:"Recovered",text:"keep this"}];}},async f=>{
+    assert.equal(f.button("新建片段"),undefined);assert.equal(f.tree.root.findAllByType("ListRow").length,0);
+    assert.ok(f.button("重新读取"));assert.deepEqual(f.writes,[]);
+    await renderer.act(async()=>{f.button("重新读取").props.onPress();await settle();});
+    assert.ok(f.row("Recovered"));assert.ok(f.button("新建片段"));assert.deepEqual(f.writes,[]);
+  });
+});
 
 test("snippet libraries read the computer only on explicit selection and keep phone edits private", async () => {
   await withSnippets({ local: [{ id: "private", title: "手机私有", text: "private instruction" }] }, async f => {

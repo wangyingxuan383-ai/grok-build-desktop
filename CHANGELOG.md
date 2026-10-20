@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Keep phone snippets, recipes and bookmarks read-only until their stored contents load successfully; provide explicit retry after a read failure instead of overwriting saved data with defaults.
+- Preserve the quick-question draft when Escape cancels input-method composition.
+- Bind dropped attachments to the original draft before file preparation; reject late results after conversation/mode changes and merge consecutive image drops.
+- Hide the native webpage behind visible export and confirmation dialogs, restoring it after closing; hidden dialogs do not block the webpage.
+
 ## 0.13.0 — Grok Remote 0.4.3 (local candidate)
 
 - Add event-driven tray activity, unread inbox counts, named session notifications, temporary quiet mode and a shared close-to-tray/quit transaction.

@@ -46,11 +46,11 @@ export function BrowserWorkbench({onError}:{onError(message:string):void}) {
  </UiDialog></section>;
 }
 function readActiveBrowser(){try{return localStorage.getItem("grok.active-browser.v1")||""}catch{return ""}}
-function BrowserSurface({id}:{id:string}) {
+export function BrowserSurface({id}:{id:string}) {
  const host=useRef<HTMLDivElement>(null);
  useEffect(()=>{const element=host.current;if(!element)return;let last="",disposed=false;let frame=0;
- const sync=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{if(disposed)return;const rect=element.getBoundingClientRect();const blocked=Boolean(document.querySelector('.ui-dialog,[role="menu"],.modal-backdrop,.add-palette-backdrop'));const bounds={x:Math.max(0,rect.x),y:Math.max(0,rect.y),width:Math.max(0,rect.width),height:Math.max(0,rect.height),visible:!blocked&&element.getClientRects().length>0};const signature=JSON.stringify(bounds);if(signature===last)return;last=signature;void window.grokDesktop.boundsWorkspaceBrowser(id,bounds).catch(()=>undefined)})};
- const resize=new ResizeObserver(sync);resize.observe(element);const mutations=new MutationObserver(sync);mutations.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:["hidden","class","data-state"]});window.addEventListener("resize",sync);sync();
+ const sync=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{if(disposed)return;const rect=element.getBoundingClientRect();const blocked=Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],[role="menu"],.ui-dialog,.modal-backdrop,.add-palette-backdrop')).some(node=>{const style=getComputedStyle(node);return node.getClientRects().length>0&&style.display!=="none"&&style.visibility!=="hidden"});const bounds={x:Math.max(0,rect.x),y:Math.max(0,rect.y),width:Math.max(0,rect.width),height:Math.max(0,rect.height),visible:!blocked&&element.getClientRects().length>0};const signature=JSON.stringify(bounds);if(signature===last)return;last=signature;void window.grokDesktop.boundsWorkspaceBrowser(id,bounds).catch(()=>undefined)})};
+ const resize=new ResizeObserver(sync);resize.observe(element);const mutations=new MutationObserver(sync);mutations.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:["hidden","class","style","role","aria-modal","data-state"]});window.addEventListener("resize",sync);sync();
  return()=>{disposed=true;cancelAnimationFrame(frame);resize.disconnect();mutations.disconnect();window.removeEventListener("resize",sync);void window.grokDesktop.boundsWorkspaceBrowser(id,{x:0,y:0,width:0,height:0,visible:false}).catch(()=>undefined)};
  },[id]);return <div className="browser-surface" ref={host} aria-label="隔离网页内容"/>;
 }

@@ -101,7 +101,7 @@ export class DesktopQuickEntryWindow {
     window.webContents.on("will-attach-webview", event => event.preventDefault());
     window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     window.webContents.session.setPermissionCheckHandler(() => false);
-    window.webContents.on("before-input-event", (event, input) => { if (input.type === "keyDown" && input.key === "Escape") { event.preventDefault(); this.close(); } });
+    window.webContents.on("before-input-event", (event, input) => { if (input.type === "keyDown" && input.key === "Escape" && !input.isComposing) { event.preventDefault(); this.close(); } });
     window.webContents.on("render-process-gone", () => this.close());
     window.once("ready-to-show", () => { if (!window.isDestroyed() && !this.disposed) { window.show(); window.focus(); } });
     window.on("closed", () => { if (this.window === window) { this.draft?.discard(); this.draft = undefined; this.window = undefined; } });
