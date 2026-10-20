@@ -1,5 +1,15 @@
 # Development roadmap
 
+## Desktop companion (character review first)
+
+- [x] Deliver two raster character candidates with transparent masters, four expression previews and verified light/dark 128/192/256px comparisons.
+- [ ] Obtain character selection before producing animation samples or integrating the companion runtime.
+- [ ] Accept idle/awaiting-input/pickup-and-landing samples, then validate the small transparent window on Windows.
+- [ ] Integrate existing activity/inbox and quick-entry flows behind an off-by-default quiet companion setting.
+- [ ] Add safe local image/animation-pack imports, then the separately accepted generation workshop.
+
+See [the companion plan](DESKTOP_PET_PLAN.md). This work is separate from the installed productivity candidate; no companion runtime is enabled by the visual-review milestone.
+
 ## Reliability follow-up (unreleased)
 
 - [x] Prevent phone snippet/recipe/bookmark fallback data from replacing unread local libraries; keep failures read-only and support explicit retry.

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Deliver the local desktop-companion A/B static review with transparent masters, four-expression previews and verified light/dark size comparisons; document selection/native-validation gates without enabling a companion runtime.
 - Keep phone snippets, recipes and bookmarks read-only until their stored contents load successfully; provide explicit retry after a read failure instead of overwriting saved data with defaults.
 - Preserve the quick-question draft when Escape cancels input-method composition.
 - Bind dropped attachments to the original draft before file preparation; reject late results after conversation/mode changes and merge consecutive image drops.
