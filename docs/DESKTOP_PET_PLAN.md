@@ -30,6 +30,10 @@ Sandboxed Electron verification covers image completeness/transparency, route is
 
 ## Animation and native validation
 
+The expanded local review now includes work, celebration, error/help, pat, wave and doze for both routes. Together with the initial groups this provides nine selectable action groups and 38 keyframes per character. Additional actions use a grouped selector rather than a larger permanent button grid; a separate overview compares representative frames on light/dark backgrounds. A light tap triggers pat without starting a drag, and replay remembers the last explicitly requested action after a one-shot returns to idle.
+
+Work loops, doze has an introduction followed by a quiet loop, celebration/pat/wave play once and return to idle, and error holds until explicitly changed. Both settled error previews stop the shared scheduler. All these triggers remain manual review behavior, with no connection to real task or notification events. The expanded page passes 16 documented Electron flow checks, and the overview verifies all 12 representative frames through its loopback server and narrow layout. Raw review PNGs are not a production art package; native integration and the unchanged final resource target remain separate gates.
+
 After selection, validate idle, awaiting-input and pickup/landing samples before completing working, success, failure and pat reactions. Keep one character identity, canvas, body proportion and foot anchor across clips. Use PNG/WebP for stills or short frame sequences and transparent VP9 WebM where continuous motion is useful.
 
 Use one small transparent Electron window with a restricted sandboxed preload. It must not steal focus; transparent areas pass clicks through, and the tray retains hide/reset/disable controls. Persist location within the owning display work area and recover from display removal and mixed DPI. Hide during lock, sleep, full-screen use and Computer Use execution. A restricted read-only mode in the existing native helper provides environment detection without a new native dependency.
