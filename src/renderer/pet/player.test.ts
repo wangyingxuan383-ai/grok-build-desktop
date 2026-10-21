@@ -5,6 +5,18 @@ import { desktopPetSettings,type PetSnapshot } from "../../shared/desktop-pet";
 const clip={file:"grok-pet://assets/b/idle.webp",width:200,height:200,referenceHeight:100,frames:[{x:0,y:0,width:100,height:200,anchorX:50,anchorY:180,duration:100},{x:100,y:0,width:100,height:200,anchorX:50,anchorY:180,duration:100}],loop:true};
 const snapshot:PetSnapshot={revision:1,transition:1,visibility:"visible",clip:"idle",settings:desktopPetSettings(),skin:{id:"b",name:"B",author:"",license:"",clips:{idle:clip,enter:{...clip,loop:false},exit:{...clip,loop:false}}},quiet:false,reducedMotion:false,targets:[],phones:0,unread:0,running:0,awaiting:0,theme:"dark"};
 describe("pet sandbox player",()=>{
+ it("animates pickup before holding and settles without replaying the falling frame",()=>{
+   const frames=Array.from({length:6},(_,index)=>({x:index*20,y:0,width:20,height:20,anchorX:10,anchorY:20,duration:100}));
+   const drag={...snapshot,clip:"pickup" as const,gesture:"dragging" as const,skin:{...snapshot.skin,clips:{...snapshot.skin.clips,pickup:{file:"grok-pet://assets/b/pickup.webp",width:120,height:20,referenceHeight:20,frames,loop:false}}}};
+   const p=new PetPlayer();p.set(drag,0,false);
+   expect(p.sample(0).frame?.x).toBe(0);expect(p.sample(110).frame?.x).toBe(20);expect(p.sample(5000).frame?.x).toBe(20);
+   p.set({...drag,revision:2},5100,false);expect(p.sample(5100).frame?.x).toBe(20);
+   p.set({...drag,transition:2,gesture:"settling"},5200,false);
+   expect(p.sample(5200).frame?.x).toBe(60);expect(p.sample(5310).frame?.x).toBe(80);expect(p.sample(5490).frame?.x).toBe(100);
+   expect(p.sample(5500).ended).toMatchObject({transition:2,clip:"pickup"});
+   p.set({...drag,transition:3,gesture:"landing"},5600,false);expect(p.sample(5600).frame?.x).toBe(40);
+   p.set({...drag,transition:4},5700,true);expect(p.sample(5700).frame?.x).toBe(20);
+ });
  it("accepts only local assets belonging to the selected skin",()=>{for(const url of ["file:///C:/private.png","https://example.com/a.png","grok-pet://assets/a/idle.webp","grok-pet://assets/b/../a/idle.webp","grok-pet://assets/b/x.svg"])expect(assetUrl(url,"b")).toBeUndefined();expect(assetUrl(clip.file,"b")).toBe(clip.file);});
  it("does not restart a loop for an unrelated activity revision",()=>{const p=new PetPlayer();p.set(snapshot,0,false);p.set({...snapshot,revision:2,phones:1},120,false);expect(p.sample(130).index).toBe(1);});
  it("explicitly pauses elapsed animation time",()=>{const p=new PetPlayer();p.set(snapshot,0,false);p.suspend(50);p.resume(1000);expect(p.sample(1030).index).toBe(0);});

@@ -1,5 +1,10 @@
 # Development roadmap
 
+## Companion drag animation follow-up (0.14.2 local candidate)
+
+- [x] Preserve pickup, suspended hold and an in-place release/recovery pose while retaining free placement and menu falling.
+- [ ] Verify animation phases, reduced motion, task preemption and stale callbacks; pass the existing build/package gates and update the local inspection checklist.
+
 ## Companion feedback follow-up (0.14.1 local candidate)
 
 - [x] Keep the companion at its released position and restore task posture; retain existing work-area boundaries and relative display coordinates.

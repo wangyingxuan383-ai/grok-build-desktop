@@ -69,7 +69,7 @@ export interface PetSnapshot {
     theme: "light" | "dark";
     warning?: string;
     doubleClickTime?: number;
-    gesture?: "dragging" | "landing";
+    gesture?: "dragging" | "landing" | "settling";
     colors?: {
         surface: string;
         text: string;

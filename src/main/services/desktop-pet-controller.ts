@@ -44,6 +44,7 @@ export class DesktopPetController {
     private initializing?: Promise<void>;
     private retireDone?: () => void;
     private actionTimer?: NodeJS.Timeout;
+    private settling = false;
     private drag?: {
         cursor: Electron.Point;
         bounds: Electron.Rectangle;
@@ -128,7 +129,7 @@ export class DesktopPetController {
             else if (old.size !== this.settings.size || old.customScale !== this.settings.customScale)
                 this.reposition();
         }
-        if ((this.quiet || !this.settings.idleActions || this.settings.mode === "status" || this.settings.reduceMotion) && ["success", "sleepy", "wave", "enter"].includes(this.clip))
+        if ((this.settling && this.reduced) || (this.quiet || !this.settings.idleActions || this.settings.mode === "status" || this.settings.reduceMotion) && ["success", "sleepy", "wave", "enter"].includes(this.clip))
             this.restore();
         this.publish();
         this.options.changed();
@@ -419,7 +420,7 @@ export class DesktopPetController {
         w.destroy(); }
     private baseClip(): PetClipId { return petActivity(petTargets(this.activity, this.inbox)); }
     private clearAction(): void { if (this.actionTimer)
-        clearTimeout(this.actionTimer); this.actionTimer = undefined; }
+        clearTimeout(this.actionTimer); this.actionTimer = undefined; this.settling = false; }
     private restore(): void { if (this.visibility === "exiting" || this.drag || this.landingTimer)
         return; const base = this.baseClip(); if (this.visibility === "visible" && this.clip === base) {
         this.publish();
@@ -434,7 +435,7 @@ export class DesktopPetController {
     private snapshot(): PetSnapshot {
         if (!this.skin)
             throw Error("桌宠未准备好");
-        return { revision: ++this.revision, transition: this.transition, visibility: this.visibility, clip: this.clip, settings: this.settings, skin: this.skin, reducedMotion: this.reduced, quiet: this.quiet, targets: petTargets(this.activity, this.inbox), unread: this.activity.inboxUnreadCount, phones: this.activity.livePhoneCount, running: petTargets(this.activity,this.inbox).filter(row=>row.status==="running").length, awaiting: petTargets(this.activity,this.inbox).filter(row=>row.status==="awaiting").length, colors: this.palette, theme: this.appSettings?.theme.mode === "light" || this.appSettings?.theme.mode === "custom" && this.appSettings.theme.customBase === "light" || this.appSettings?.theme.mode === "system" && !nativeTheme.shouldUseDarkColors ? "light" : "dark", warning: this.warning, doubleClickTime: this.environment.doubleClickTime ?? 500, gesture: this.drag ? "dragging" : this.landingTimer ? "landing" : undefined };
+        return { revision: ++this.revision, transition: this.transition, visibility: this.visibility, clip: this.clip, settings: this.settings, skin: this.skin, reducedMotion: this.reduced, quiet: this.quiet, targets: petTargets(this.activity, this.inbox), unread: this.activity.inboxUnreadCount, phones: this.activity.livePhoneCount, running: petTargets(this.activity,this.inbox).filter(row=>row.status==="running").length, awaiting: petTargets(this.activity,this.inbox).filter(row=>row.status==="awaiting").length, colors: this.palette, theme: this.appSettings?.theme.mode === "light" || this.appSettings?.theme.mode === "custom" && this.appSettings.theme.customBase === "light" || this.appSettings?.theme.mode === "system" && !nativeTheme.shouldUseDarkColors ? "light" : "dark", warning: this.warning, doubleClickTime: this.environment.doubleClickTime ?? 500, gesture: this.drag ? "dragging" : this.landingTimer ? "landing" : this.settling ? "settling" : undefined };
     }
     private publish(): void { if (this.loadedWindow && this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed() && this.skin)
         this.window.webContents.send("pet:changed", this.snapshot()); }
@@ -581,7 +582,19 @@ export class DesktopPetController {
             return;
         this.moveDrag();
         this.stopDrag();
-        this.restore();
+        const frames = this.skin?.clips.pickup?.frames;
+        if (this.reduced || !frames?.length || ["waiting", "error"].includes(this.baseClip())) {
+            this.restore();
+        } else {
+            // Finish the pose at the released location; this never moves the window.
+            this.visibility = "visible";
+            this.clip = "pickup";
+            this.transition++;
+            const duration = frames.slice(Math.min(3, frames.length - 1)).reduce((sum, frame) => sum + frame.duration, 0);
+            this.setActionTimeout(duration + 100);
+            this.settling = true;
+            this.publish();
+        }
         this.options.changed();
     }
     private canDropToBottom(): boolean {

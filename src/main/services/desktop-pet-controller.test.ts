@@ -30,11 +30,12 @@ function fixture(patch: Partial<DesktopPetSettings> = {}) {
     const pet = Object.assign(Object.create(DesktopPetController.prototype), {
         window, settings: desktopPetSettings(patch), appSettings: { productivity: {} }, intent: new PetIntent(),
         activity: EMPTY_DESKTOP_ACTIVITY, inbox: [], clip: "working", visibility: "visible", transition: 0, motionVersion: 0,
+        skin: { clips: { pickup: { frames: Array.from({ length: 6 }, () => ({ duration: 100 })) } } },
         options: { changed: vi.fn() }, publish: vi.fn(), bindShortcut: vi.fn(), updateEnvironment: vi.fn(),
         environment: { stop: vi.fn() },
     }) as {
-        menu: DesktopPetController["menu"]; applySettings: DesktopPetController["applySettings"]; intent: PetIntent;
-        settings: DesktopPetSettings; clip: string; transition: number; visibility: string;
+        menu: DesktopPetController["menu"]; applySettings: DesktopPetController["applySettings"]; applyActivity: DesktopPetController["applyActivity"]; intent: PetIntent;
+        settings: DesktopPetSettings; clip: string; transition: number; visibility: string; settling: boolean;
         startDrag(): void; moveDrag(): void; endDrag(): void; stopDrag(): void; dropToBottom(): void;
         restore(): void; landingTimer?: ReturnType<typeof setInterval>;
         update: ReturnType<typeof vi.fn>;
@@ -53,6 +54,35 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("companion free placement and explicit falling", () => {
+    it("plays the release pose at the same coordinates before returning to task posture", () => {
+        const { pet, window } = fixture();
+        pet.startDrag(); pet.endDrag();
+        const released = window.getBounds();
+        expect(pet.clip).toBe("pickup"); expect(pet.settling).toBe(true);
+        vi.advanceTimersByTime(200);
+        expect(pet.settling).toBe(true); expect(window.getBounds()).toEqual(released);
+        vi.advanceTimersByTime(250);
+        expect(pet.settling).toBe(false); expect(pet.clip).toBe("idle");
+        expect(window.getBounds()).toEqual(released);
+    });
+    it("lets an urgent task preempt settling without moving the window", () => {
+        const { pet, window } = fixture();
+        Object.assign(pet, { refreshInbox: vi.fn(async () => undefined) });
+        pet.startDrag(); pet.endDrag(); const released = window.getBounds();
+        pet.applyActivity({ ...EMPTY_DESKTOP_ACTIVITY, sessions: [{ sessionId: "waiting", title: "待确认", projectName: "", status: "awaiting" }], awaitingCount: 1 });
+        expect(pet.clip).toBe("waiting"); expect(pet.settling).toBe(false);
+        vi.advanceTimersByTime(1000);
+        expect(pet.clip).toBe("waiting"); expect(window.getBounds()).toEqual(released);
+    });
+    it("skips settling for reduced motion and prevents an old pose timeout from ending a new drag", () => {
+        const reduced = fixture({ reduceMotion: true }); reduced.pet.startDrag(); reduced.pet.endDrag();
+        expect(reduced.pet.clip).toBe("idle"); expect(vi.getTimerCount()).toBe(0);
+        const { pet } = fixture(); pet.startDrag(); pet.endDrag(); vi.advanceTimersByTime(100); pet.startDrag();
+        vi.advanceTimersByTime(600);
+        expect(pet.clip).toBe("pickup"); expect(pet.settling).toBe(false);
+        pet.endDrag(); vi.advanceTimersByTime(500);
+        expect(pet.clip).toBe("idle"); expect(vi.getTimerCount()).toBe(0);
+    });
     it.each([{ x: 500, y: 420 }, { x: -900, y: -700 }, { x: 3000, y: 3000 }])("stays at the clamped release point %j and restores task posture", cursor => {
         const { pet, window } = fixture();
         pet.startDrag(); desktop.cursor = cursor; pet.moveDrag();

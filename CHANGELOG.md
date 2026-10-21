@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.2 — Companion drag animation follow-up candidate
+
+- Restore the pickup transition before the suspended pose, rather than immediately displaying a held frame.
+- Play the release/recovery frames at the saved position after a drag. Keep free placement and explicit menu falling separate.
+- Let awaiting-input/error states preempt recovery, honor reduced motion and discard old recovery callbacks on a new gesture or hide.
+
+Reuse existing artwork without adding settings, permissions or dependencies.
+
 ## 0.14.1 — Companion placement follow-up candidate
 
 - Keep the companion where it is released instead of automatically dropping it to the bottom; persist its relative monitor position.

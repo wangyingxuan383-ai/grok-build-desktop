@@ -76,7 +76,13 @@ export class PetPlayer {
   set(snapshot: PetSnapshot, now: number, reduced: boolean): void {
     let selected = selectClip(snapshot.skin, snapshot.visibility === "entering" ? "enter" : snapshot.visibility === "exiting" ? "exit" : snapshot.clip);
     if(reduced&&(snapshot.visibility==="entering"||snapshot.visibility==="exiting"))selected=selectClip(snapshot.skin,"idle");
-    if(selected&&snapshot.clip==="pickup"&&snapshot.gesture){const frames=selected.clip.frames;selected={id:selected.id,clip:{...selected.clip,frames:snapshot.gesture==="dragging"?[{...frames[Math.min(1,frames.length-1)]!,duration:10000}]:frames.slice(Math.min(2,frames.length-1))}};}
+    if (selected?.id === "pickup" && snapshot.gesture) {
+      const frames = selected.clip.frames;
+      const held = { ...frames[Math.min(1, frames.length - 1)]!, duration: 10000 };
+      selected = { id: selected.id, clip: { ...selected.clip, frames: snapshot.gesture === "dragging"
+        ? !reduced && frames.length > 1 ? [frames[0]!, held] : [held]
+        : frames.slice(Math.min(snapshot.gesture === "settling" ? 3 : 2, frames.length - 1)) } };
+    }
     const key = `${snapshot.transition}:${snapshot.visibility}:${snapshot.clip}:${snapshot.skin.id}:${snapshot.gesture}:${selected?.clip.file ?? ""}`;
     if (key !== this.key) {
       this.key = key; this.started = now; this.reported = false; this.frozenIndex = 0;

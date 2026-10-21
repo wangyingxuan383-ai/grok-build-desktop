@@ -64,6 +64,8 @@ First support local transparent PNG/WebP and data-only animation packs, with pre
 
 Mark this section as unfinished even while collapsed. The workshop prepares explicit image drafts only; it does not generate a complete animated companion in one step.
 
+Keep gesture animation separate from screen travel: dragging plays the pickup transition before holding the suspended pose. Release plays recovery in place, then returns to the real task state. The explicit bottom command retains the falling/landing sequence. Awaiting-input/error may interrupt recovery; reduced motion skips it, and a new gesture invalidates old callbacks.
+
 A later workshop reuses the application's existing image sessions: description/reference, one base image, preview/selection, then an explicit next generation step. Retries are user-triggered. Development artwork uses the conversation's built-in image-generation tool; the application does not depend on that tool.
 
 ## Delivery gates

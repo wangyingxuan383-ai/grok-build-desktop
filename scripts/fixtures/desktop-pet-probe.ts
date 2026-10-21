@@ -73,7 +73,15 @@ app.whenReady().then(async()=>{
    // Main-process motion with a fixed real cursor; this is not physical drag acceptance.
    const area=screen.getDisplayMatching(window.getBounds()).workArea, b=window.getBounds();
    const middle={...b,y:area.y+Math.round((area.height-b.height)/2)};
-   window.setBounds(middle);p.startDrag();p.endDrag();await sleep(700);
+   window.setBounds(middle);p.startDrag();await sleep(80);
+   assert((p.snapshot() as {gesture?:string}).gesture==="dragging","pickup transitions into the held drag phase");
+   await writeFile(join(output,"b-pickup.png"),(await window.webContents.capturePage()).toPNG());
+   p.endDrag();
+   assert((p.snapshot() as {gesture?:string}).gesture==="settling","release keeps the recovery animation");
+   await sleep(100);
+   assert(window.getBounds().y===middle.y,"release animation does not move the window");
+   await writeFile(join(output,"b-release.png"),(await window.webContents.capturePage()).toPNG());
+   await sleep(700);
    const free=window.getBounds(),saved=settings.desktopPet!.position;
    assert(free.y===middle.y&&p.clip==="idle"&&!!saved&&saved.y<1,"release stays at middle and saves its relative position");
    await pet.command("hide");await pet.command("show");await until(()=>p.window?.isVisible(),"free position restoration");window=p.window!;await sleep(1300);
