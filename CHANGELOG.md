@@ -7,6 +7,7 @@
 - Reuse live task/inbox events, exact target navigation, existing quick question and explicit screenshot flows; configuration changes, history and cancelled turns stay quiet.
 - Add local PNG/WebP and data-only animation-pack import, sandboxed single-image alignment, and an image-workshop draft flow with no automatic generation.
 - Keep both eleven-group WebP packs under the combined 8 MiB target; preserve the circular-G embroidery and upstream artwork attribution.
+- Resolve long/8.3 temporary-directory aliases in the isolated scheduler acceptance probe without relaxing its file-name or overwrite restrictions; exclude Electron's stock demo from local-runtime packages.
 
 Window/IPC, import and rendered settings checks do not certify physical Windows click-through, lock/unlock or mixed-DPI/multi-monitor input. This is a local inspection candidate, not a public release.
 

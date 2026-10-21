@@ -14,6 +14,7 @@ if (basename(executablePath) !== "Grok Build Desktop.exe") throw new Error(`Unex
 const applicationRoot = dirname(executablePath);
 const resourcesRoot = join(applicationRoot, "resources");
 const asarPath = join(resourcesRoot, "app.asar");
+if (existsSync(join(resourcesRoot, "default_app.asar"))) throw new Error("The stock Electron demo application must not be packaged");
 if (!existsSync(asarPath) || statSync(asarPath).size < 1_000_000) throw new Error(`Application ASAR is missing or truncated: ${asarPath}`);
 
 const files = new Set(listPackage(asarPath).map((entry) => entry.replaceAll("\\", "/").replace(/^\//, "")));

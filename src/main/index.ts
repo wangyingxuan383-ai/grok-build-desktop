@@ -17,6 +17,7 @@ import { explicitUserDataDirectory, INSTALLED_APP_NAME, INSTALLED_APP_USER_MODEL
 import { productivitySettings } from "../shared/productivity";
 import { DesktopShellLifecycle } from "./services/desktop-shell-lifecycle";
 import { DesktopShellService } from "./services/desktop-shell-service";
+import { writeSchedulerProbeMarker } from "./scheduler-probe";
 
 let mainWindow: BrowserWindow | undefined;
 let controller: AppController | undefined;
@@ -73,13 +74,7 @@ if (schedulerProbeIndex >= 0) {
   // so this command cannot be used as an arbitrary file-write primitive.
   const requestedMarker = process.argv[schedulerProbeIndex + 1] || "";
   app.whenReady().then(async () => {
-    const tempRoot = resolve(app.getPath("temp"));
-    const marker = resolve(requestedMarker);
-    if (dirname(marker).toLowerCase() !== tempRoot.toLowerCase() || !basename(marker).startsWith("grok-build-desktop-scheduler-probe-")) {
-      throw new Error("计划任务探针路径无效");
-    }
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(marker, JSON.stringify({ ok: true, pid: process.pid, at: new Date().toISOString() }), { encoding: "utf8", flag: "wx" });
+    await writeSchedulerProbeMarker(app.getPath("temp"), requestedMarker);
   }).catch((error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)).finally(() => app.quit());
 } else if (schedulerUninstall) {
   process.env.GROK_DESKTOP_SCHEDULER_UNINSTALL = "1";

@@ -1,8 +1,11 @@
 const { join } = require("node:path");
+const { rm } = require("node:fs/promises");
 const { flipFuses, FuseVersion, FuseV1Options } = require("@electron/fuses");
 
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== "win32") return;
+  // A local Electron distribution may retain its stock demo application.
+  await rm(join(context.appOutDir, "resources", "default_app.asar"), { force: true });
   const executable = join(context.appOutDir, `${context.packager.appInfo.productFilename}.exe`);
   await flipFuses(executable, {
     version: FuseVersion.V1,
