@@ -3,7 +3,7 @@
 ## Companion drag animation follow-up (0.14.2 local candidate)
 
 - [x] Preserve pickup, suspended hold and an in-place release/recovery pose while retaining free placement and menu falling.
-- [ ] Verify animation phases, reduced motion, task preemption and stale callbacks; pass the existing build/package gates and update the local inspection checklist.
+- [x] Verify animation phases, reduced motion, task preemption and stale callbacks; pass types, 1444 tests (9 environment skips), build, unchanged resource budgets and 36 packaged window/IPC checks. Deliver the local Setup/Portable and updated inspection checklist; keep physical system input acceptance separate.
 
 ## Companion feedback follow-up (0.14.1 local candidate)
 
