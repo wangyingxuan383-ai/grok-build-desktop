@@ -56,7 +56,7 @@ export type ComposerCapabilitySelection = {
 } | { kind: "mcp"; label: string; command: ""; source?: string; selection: McpToolSelection };
 
 export type AppMenuCommand =
-  | "command-search" | "open-inbox"
+  | "command-search" | "open-inbox" | "open-pet-settings"
   | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
   | "search-sessions" | "search-conversation" | "focus-composer" | "stop-generation" | "copy-final-answer"
   | "toggle-sidebar" | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
@@ -288,6 +288,7 @@ export interface AttachmentPrivacyFinding {
 }
 
 export interface AppSettings {
+  desktopPet?: import("./desktop-pet").DesktopPetSettings;
   productivity?: import("./productivity").DesktopProductivitySettings;
   notifications?:{completion:"background"|"always"|"off";failure:boolean;confirmation:boolean;sound:boolean};
   cliPath: string;
@@ -2166,6 +2167,9 @@ export interface OfflineUiFixture {
 }
 
 export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
+  listPetSkins(): Promise<import("./desktop-pet").PetSkin[]>;
+  petCommand(command: "show" | "hide" | "reset" | "preview", clip?: import("./desktop-pet").PetClipId): Promise<void>;
+  importPetSkin(): Promise<import("./desktop-pet").PetSkin | null>;
   getDesktopActivity(): Promise<DesktopActivitySnapshot>;
   onDesktopActivityChanged(listener: (state: DesktopActivitySnapshot) => void): () => void;
   onInboxChanged(listener: () => void): () => void;
@@ -2510,7 +2514,7 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   onEvent(listener: (event: ChatEvent) => void): () => void;
   onLogin(listener: (state: LoginState) => void): () => void;
   onAttachmentDrop(listener: (event: import("./attachment-drop").AttachmentDropEvent) => void): () => void;
-  onNavigateSession(listener: (target: { sessionId: string; cwd: string }) => void): () => void;
+  onNavigateSession(listener: (target: { sessionId: string; cwd: string; previewOnly?: boolean }) => void): () => void;
   onMenuCommand(listener: (command: AppMenuCommand) => void): () => void;
   onComputerStateChanged(listener: (state: ComputerTaskState) => void): () => void;
   onAutomationEvent(listener: (event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask; pending?: AutomationPendingConfirmation }) => void): () => void;

@@ -61,6 +61,12 @@ export class NotificationInboxService {
     this.publish(data.items);
     return sortInboxItems(data.items);
   }
+  async markTargetRead(kind:"session"|"image"|"automation",id:string):Promise<void>{
+    const data=await this.store.mutate(value=>{value.items=value.items.map(item=>{
+      const matches=kind==="automation"?(item.automationRunId||item.taskId)===id:!item.automationRunId&&!item.taskId&&item.sessionId===id;
+      return matches&&item.kind!=="confirmation"?{...item,read:true}:item;
+    });});this.publish(data.items);
+  }
   async clear(): Promise<NotificationInboxItem[]> {
     await this.store.mutate((value) => { value.items = []; });
     this.publish([]);

@@ -1,6 +1,6 @@
 # Desktop companion delivery plan
 
-The desktop companion is a staged Windows feature. Character review precedes animation production and application integration. No companion window, background probe or model call is enabled by this planning milestone.
+The desktop companion is a staged Windows inspection candidate. It defaults to B at 192 DIP, retains explicit saved disables, and uses one restricted companion window. It reads owned activity and inbox events; it never starts a model for status or companionship. Physical Windows input acceptance is recorded separately from sandboxed window/IPC checks.
 
 ## Visual review
 
@@ -8,7 +8,7 @@ Two candidates use silver-white, charcoal and restrained ice-blue accents: an or
 
 Candidate artwork, source references, prompts and local review evidence stay outside package inputs during art review. Preserve upstream attribution and notices for the adapted route: character design by ZipZipPipe, original pet material by PC2005-cloud / 宇宙之外的浩瀚宇, and integration reference by nanonocturne-altago. See the [upstream source and material notice](https://github.com/nanonocturne-altago/DeepSeek-Pet#五许可说明). Artwork attribution and provenance remain separate from the application's source-code license.
 
-The character must be selected before producing full animation sets. Contact sheets are visual studies, not runtime animation atlases.
+The visual review retained both characters as selectable alternatives. Contact sheets are visual studies; the runtime uses normalized animation atlases.
 
 ### Static milestone accepted for review — 2026-10-20
 
@@ -20,7 +20,7 @@ These are simulated desktop backgrounds for character comparison, not evidence o
 
 Both visual routes continue to the initial animation pilots. They remain alternatives for one active companion; this does not add two simultaneous desktop windows. The small character's whale motif is replaced by the application's circular G mark, softly embroidered in charcoal and ice blue on the original apron. The same change applies to its expression sheet and every animation frame.
 
-Production still proceeds through idle, awaiting-input and pickup/landing pilots before the remaining action set or runtime integration. Retain original credits and material notices as part of asset provenance.
+Production proceeded through idle, awaiting-input and pickup/landing pilots before the remaining action set and runtime integration. Retain original credits and material notices as part of asset provenance.
 
 ### Initial animation pilots delivered
 
@@ -34,7 +34,7 @@ The expanded local review now includes work, celebration, error/help, pat, wave 
 
 Work loops, doze has an introduction followed by a quiet loop, celebration/pat/wave play once and return to idle, and error holds until explicitly changed. Both settled error previews stop the shared scheduler. All these triggers remain manual review behavior, with no connection to real task or notification events. The expanded page passes 16 documented Electron flow checks, and the overview verifies all 12 representative frames through its loopback server and narrow layout. Raw review PNGs are not a production art package; native integration and the unchanged final resource target remain separate gates.
 
-After selection, validate idle, awaiting-input and pickup/landing samples before completing working, success, failure and pat reactions. Keep one character identity, canvas, body proportion and foot anchor across clips. Use PNG/WebP for stills or short frame sequences and transparent VP9 WebM where continuous motion is useful.
+Keep one character identity, canvas, body proportion and foot anchor across clips. The candidate uses WebP frame sequences for both characters; transparent VP9 WebM remains an option if continuous motion is later required.
 
 Use one small transparent Electron window with a restricted sandboxed preload. It must not steal focus; transparent areas pass clicks through, and the tray retains hide/reset/disable controls. Persist location within the owning display work area and recover from display removal and mixed DPI. Hide during lock, sleep, full-screen use and Computer Use execution. A restricted read-only mode in the existing native helper provides environment detection without a new native dependency.
 
@@ -42,7 +42,13 @@ The accepted implementation defaults to enabled (B, 192 DIP); explicit saved dis
 
 ### Runtime artwork preparation — 2026-10-21
 
-Both routes now include separate illustrated entrance and farewell sheets, alongside the nine earlier action groups. The runtime atlases use fixed standing-reference scale and foot anchors, encoded as WebP. Two complete eleven-group packs plus manifests and attribution total about 3.53 MiB. Masters and prompts stay outside the package; the development-only preparation script accepts a review source directory. This milestone establishes resource preparation, not Windows input acceptance.
+Both routes now include separate illustrated entrance and farewell sheets, alongside the nine earlier action groups. The runtime atlases use fixed standing-reference scale and foot anchors, encoded as WebP. Two complete eleven-group packs plus manifests and attribution total about 3.52 MiB. Masters and prompts stay outside the package; the development-only preparation script accepts a review source directory. This milestone establishes resource preparation, not Windows input acceptance.
+
+### Runtime candidate — 2026-10-21
+
+The candidate includes settings, tray controls, restricted hover actions, owned-task state, bounded entrance/farewell transitions and independent suppression reasons. Local PNG/WebP imports use an isolated decoder; data-only ZIP validation runs in a bounded worker. The workshop prepares an image-session draft and requires an explicit send. Position writes merge atomically with the latest character settings. Stable environment probes do not rebuild the taskbar or tray.
+
+Automated evidence covers sandboxed player/preload integration, lifecycle races, receipt deduplication, imports and existing light/dark settings layouts. Native mouse input did not reach the isolated fixture in the available desktop session, so physical transparency/input, lock/unlock and mixed-DPI/monitor tests remain open. Local inspection packaging does not close those acceptance gates or authorize public release.
 
 ## Useful behavior
 

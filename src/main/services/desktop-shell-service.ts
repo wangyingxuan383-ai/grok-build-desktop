@@ -7,6 +7,8 @@ import { trayIcon, taskbarCountIcon } from "../tray-icon";
 import { DesktopQuickEntryWindow } from "./desktop-quick-entry-window";
 import { DesktopShellShortcuts } from "./desktop-shell-shortcuts";
 import { DesktopTaskbarService, EMPTY_DESKTOP_ACTIVITY, desktopShellState } from "./desktop-shell-state";
+import { DesktopPetController } from "./desktop-pet-controller";
+import { dirname, join } from "node:path";
 
 export class DesktopShellService {
   private tray?: Tray;
@@ -14,6 +16,7 @@ export class DesktopShellService {
   private activity: DesktopActivitySnapshot = EMPTY_DESKTOP_ACTIVITY;
   private readonly unsubscribers: Array<() => void> = [];
   private readonly quickEntry: DesktopQuickEntryWindow;
+  private readonly pet:DesktopPetController;
   private readonly shortcuts: DesktopShellShortcuts;
   private readonly taskbar: DesktopTaskbarService;
   private disposed = false;
@@ -26,9 +29,15 @@ export class DesktopShellService {
     getWindow(): BrowserWindow | undefined; showWindow(): void; quit(): void;
     rendererEntry: string; preloadEntry: string; developmentUrl?: string;
     onSettings(settings: AppSettings): void;
+    petBuiltins:string;petUserRoot:string;
   }) {
     this.quickEntry = new DesktopQuickEntryWindow(controller, { rendererEntry: options.rendererEntry, preloadEntry: options.preloadEntry,
-      developmentUrl: options.developmentUrl, showSession: target => this.navigate(target) });
+      developmentUrl: options.developmentUrl, showSession: target => this.navigate(target),screenshotVisibility:visible=>this.pet?.setSuppressed("screenshot",visible) });
+    this.pet=new DesktopPetController(controller,{rendererEntry:join(dirname(options.rendererEntry),"../pet/index.html"),preloadEntry:join(dirname(options.preloadEntry),"pet.cjs"),developmentUrl:options.developmentUrl,builtins:options.petBuiltins,userRoot:options.petUserRoot,showMain:options.showWindow,command:command=>this.command(command),quickEntry:intent=>this.quickEntry.open(intent),changed:()=>this.refresh()});
+    controller.setDesktopPetDelegate({list:()=>this.pet.assets.list(),command:(command,clip)=>this.pet.command(command,clip),import:async()=>{
+      const result=await dialog.showOpenDialog({title:"导入桌宠形象",properties:["openFile"],filters:[{name:"透明图片或形象包",extensions:["png","webp","zip"]}]});
+      return result.canceled||!result.filePaths[0]?null:this.pet.assets.import(result.filePaths[0]);
+    }});
     this.shortcuts = new DesktopShellShortcuts(globalShortcut, intent => this.quickEntry.open(intent));
     const window = () => { const value = options.getWindow(); return value && !value.isDestroyed() ? value : undefined; };
     this.taskbar = new DesktopTaskbarService({
@@ -57,14 +66,17 @@ export class DesktopShellService {
 
   canHideToTray(): boolean { return !!this.tray && !this.tray.isDestroyed() && !this.disposed; }
   focus(): void { this.taskbar.focus(); }
-  rendererReady(): void { this.broadcastActivity(); }
+  rendererReady(): void { this.broadcastActivity(); this.pet.rendererReady(); }
+  petResponse(url:string):Promise<Response>{return this.pet.assets.response(url);}
+  computerActive(active:boolean):void{this.pet.setSuppressed("computer",active);}
+  prepareQuit(animate=true):Promise<void>{return this.pet.prepareQuit(animate);}
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
     if (this.quietTimer) clearTimeout(this.quietTimer);
-    this.shortcuts.dispose(); this.quickEntry.dispose(); this.taskbar.dispose();
+    this.shortcuts.dispose(); this.quickEntry.dispose(); this.taskbar.dispose();this.pet.dispose();this.controller.setDesktopPetDelegate(undefined);
     if (this.tray && !this.tray.isDestroyed()) this.tray.destroy();
     this.tray = undefined;
   }
@@ -72,16 +84,17 @@ export class DesktopShellService {
   private applySettings(settings: AppSettings): void {
     if (this.disposed) return;
     this.settings = settings;
+    this.pet.applySettings(settings);
     this.shortcutWarnings = this.shortcuts.apply(settings.productivity);
     this.quickEntry.setWarnings(this.shortcutWarnings);
     this.options.onSettings(settings);
     if (this.quietTimer) clearTimeout(this.quietTimer);
     const remaining = Date.parse(settings.productivity?.quietUntil ?? "") - Date.now();
     // Only a quiet-period expiry needs a one-shot clock; phone state is live stream state.
-    if (remaining > 0) this.quietTimer = setTimeout(() => this.refresh(), Math.min(remaining + 10, 2_147_483_647)).unref();
+    if (remaining > 0) this.quietTimer = setTimeout(() => {if(this.settings)this.pet.applySettings(this.settings);this.refresh();}, Math.min(remaining + 10, 2_147_483_647)).unref();
     this.refresh();
   }
-  private applyActivity(activity: DesktopActivitySnapshot): void { if (!this.disposed) { this.activity = activity; this.broadcastActivity(); this.refresh(); } }
+  private applyActivity(activity: DesktopActivitySnapshot): void { if (!this.disposed) { this.activity = activity; this.pet.applyActivity(activity); this.broadcastActivity(); this.refresh(); } }
   private broadcastActivity(): void {
     if (this.disposed) return;
     const window = this.options.getWindow();
@@ -100,6 +113,7 @@ export class DesktopShellService {
       { label: "打开 Grok Build Desktop", click: this.options.showWindow },
       { label: "快速提问…", click: () => this.quickEntry.open("ask") },
       { label: "截图提问…", click: () => this.quickEntry.open("screenshot") },
+      { label: "桌面伴侣", submenu:this.pet.menu() },
       ...this.shortcutWarnings.map(label => ({ label, enabled: false })),
       { type: "separator" },
       { label: `收件箱${state.unread ? `（${state.unread} 条未读）` : ""}`, click: () => this.command("open-inbox") },
@@ -117,7 +131,7 @@ export class DesktopShellService {
     this.tray.setContextMenu(Menu.buildFromTemplate(menu));
   }
 
-  private command(command: "open-inbox" | "open-task-center" | "open-settings"): void {
+  private command(command: "open-inbox" | "open-task-center" | "open-settings" | "open-pet-settings"): void {
     this.options.showWindow();
     const window = this.options.getWindow();
     if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send("grok:menu-command", command);

@@ -11,18 +11,21 @@ await mkdir(output, {recursive:true});
 await build({configFile:false,define:{"process.env.NODE_ENV":JSON.stringify("production")},plugins:[react()],build:{emptyOutDir:false,outDir:output,lib:{entry:resolve("scripts/fixtures/productivity-dom.tsx"),name:"ProductivityFixture",formats:["iife"],fileName:()=>"fixture.js"}}});
 await writeFile(resolve(output,"index.html"),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="grok-build-desktop.css"><div id="root"></div><div id="overlay-root"></div><script src="fixture.js"></script>');
 const source = String.raw`
-const {app,BrowserWindow}=require('electron');
+const {app,BrowserWindow,protocol}=require('electron');
 const path=require('node:path'),fs=require('node:fs');
 app.setPath('userData',path.join(__dirname,'profile'));
+protocol.registerSchemesAsPrivileged([{scheme:'grok-pet',privileges:{standard:true,secure:true,corsEnabled:true}}]);
 const wait=()=>new Promise(r=>setTimeout(r,100));
 function assert(value,message){if(!value)throw Error(message)}
 app.whenReady().then(async()=>{
+ protocol.handle('grok-pet',async req=>{const u=new URL(req.url),parts=u.pathname.split('/').filter(Boolean);if(!['a','b'].includes(parts[0])||!/^[a-z-]+\.webp$/.test(parts[1]||''))return new Response(null,{status:404});return new Response(fs.readFileSync(path.join(process.cwd(),'resources/pets',parts[0],parts[1])),{headers:{'Content-Type':'image/webp','Access-Control-Allow-Origin':'*'}})});
  const win=new BrowserWindow({show:false,width:1200,height:900,webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true,backgroundThrottling:false}});
  const run=source=>win.webContents.executeJavaScript(source,true);
  const click=label=>run('Array.from(document.querySelectorAll("button")).find(b=>b.textContent.includes('+JSON.stringify(label)+')).click()');
  const type=async(selector,value)=>{await run('(()=>{const e=document.querySelector('+JSON.stringify(selector)+');Object.getOwnPropertyDescriptor(e.tagName==="TEXTAREA"?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,"value").set.call(e,'+JSON.stringify(value)+');e.dispatchEvent(new Event("input",{bubbles:true}))})()');await wait()};
  try{
   await win.loadFile(path.join(__dirname,'index.html'));
+  const petSkins=['a','b'].map(id=>{const s=JSON.parse(fs.readFileSync(path.join(process.cwd(),'resources/pets',id,'skin.json'),'utf8'));for(const c of Object.values(s.clips))c.file='grok-pet://assets/'+id+'/'+c.file;return s});await run('window.petFixtureSkins='+JSON.stringify(petSkins));
   await run('productivityFixture.inbox(true)');await wait();
   assert(await run('document.querySelector(".task-inbox")!==null'),'first-mount inbox navigation');
   await run('productivityFixture.inbox(false)');await wait();
@@ -48,7 +51,13 @@ app.whenReady().then(async()=>{
   assert(await run('!document.querySelector("[role=switch]").checked && !!document.querySelector(".session-export-markdown")'),'export defaults to a redacted local preview');
   await run('(()=>{const s=document.querySelector(".session-export-options select");s.value="html";s.dispatchEvent(new Event("change",{bubbles:true}))})()');await wait();
   assert(await run('document.querySelector("iframe").getAttribute("sandbox")===""'),'HTML export stays sandboxed');
-  for(const [name,show] of [['snippets','snippets'],['settings','settings'],['export','export'],['inbox','inbox']]){
+  await run('productivityFixture.petSettings()');await wait();
+  assert(await run('document.querySelector("input[type=checkbox]").checked'),'pet enabled by default');
+  await run('document.querySelector("input[type=checkbox]").click()');await wait();
+  assert(await run('!document.querySelector("input[type=checkbox]").checked&&window.petFixtureWrites===1'),'pet disable saves immediately');
+  await click('本次暂时隐藏');await wait();
+  await click('显示桌宠');await wait();assert(await run('window.petFixtureCommand==="show"'),'pet show action wired');
+  for(const [name,show] of [['snippets','snippets'],['settings','settings'],['pet','petSettings'],['export','export'],['inbox','inbox']]){
    for(const dark of [false,true]){
     await run('productivityFixture.theme('+dark+');productivityFixture.'+show+'('+ (show==='inbox'?'true':'') +')');await wait();
     for(const [width,zoom] of [[820,1.25],[820,1.5]]){

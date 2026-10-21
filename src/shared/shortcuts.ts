@@ -32,7 +32,7 @@ export function shortcutFor(command: AppMenuCommand, settings?: Partial<DesktopP
   return custom !== undefined ? custom : APP_SHORTCUTS.find(item => item.command === command)?.accelerator ?? "";
 }
 
-export function validateShortcutBindings(settings: Partial<DesktopProductivitySettings>): void {
+export function validateShortcutBindings(settings: Partial<DesktopProductivitySettings>, additional: Array<{label:string;value:string}> = []): void {
   const used = new Map<string, string>();
   // Standard editing, application-window and the Computer Use emergency keys stay available.
   for (const key of ["Control+C", "Control+V", "Control+X", "Control+A", "Control+Z", "Control+Shift+Z", "Control+Y", "Control+Alt+Escape", "Alt+F4", "F5", "F11", "F12", "Control+R", "Control+Shift+I", "Super+L", "Super+D"]) used.set(key.toLowerCase(), "系统或编辑操作");
@@ -41,6 +41,7 @@ export function validateShortcutBindings(settings: Partial<DesktopProductivitySe
     ...APP_SHORTCUTS.map(item => ({ label: item.label, value: shortcutFor(item.command, settings) })),
     { label: "快速提问", value: settings.quickAskShortcut ?? "" },
     { label: "截图提问", value: settings.screenshotShortcut ?? "" },
+    ...additional,
   ];
   for (const { label, value } of entries) {
     if (typeof value !== "string") throw new Error(`“${label}”的快捷键必须是文字`);

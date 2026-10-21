@@ -26,6 +26,7 @@ export class DesktopQuickEntryWindow {
   constructor(private readonly controller: AppController, private readonly options: {
     rendererEntry: string; preloadEntry: string; developmentUrl?: string;
     showSession(target: { cwd: string; sessionId: string }): void;
+    screenshotVisibility?(visible:boolean):void;
   }) {
     this.url = options.developmentUrl ? new URL("quick-entry/index.html", options.developmentUrl).href : pathToFileURL(options.rendererEntry).href;
     this.handle("context", ([cwd]) => {
@@ -59,6 +60,7 @@ export class DesktopQuickEntryWindow {
       this.active(id);
       if (process.platform !== "win32") throw new Error("请使用系统截图工具，截图后点“引用剪贴板”");
       // Fixed OS URI; opening the floater or pressing its global shortcut never captures.
+      this.options.screenshotVisibility?.(true);
       await shell.openExternal("ms-screenclip:");
     }, 1);
     this.handle("remove", ([id, attachmentId]) => this.active(id).remove(id, attachmentId), 2);
@@ -70,6 +72,7 @@ export class DesktopQuickEntryWindow {
 
   open(intent: QuickEntryIntent = "ask"): void {
     if (this.disposed) return;
+    if(intent==="screenshot")this.options.screenshotVisibility?.(true);
     if (this.window && !this.window.isDestroyed()) { this.window.show(); this.window.focus(); return; }
     const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     const width = Math.min(560, workArea.width), height = Math.min(500, workArea.height);
@@ -79,6 +82,7 @@ export class DesktopQuickEntryWindow {
       webPreferences: { preload: this.options.preloadEntry, nodeIntegration: false, contextIsolation: true, sandbox: true,
         partition: "grok-quick-entry", spellcheck: false, webviewTag: false, safeDialogs: true } });
     this.window = window;
+    if(intent==="screenshot")this.options.screenshotVisibility?.(true);
     window.setMenu(null);
     this.draft = new DesktopQuickEntryDraft(this.controller, intent, target => { this.close(); this.options.showSession(target); },
       (error, recovery) => {
@@ -104,7 +108,7 @@ export class DesktopQuickEntryWindow {
     window.webContents.on("before-input-event", (event, input) => { if (input.type === "keyDown" && input.key === "Escape" && !input.isComposing) { event.preventDefault(); this.close(); } });
     window.webContents.on("render-process-gone", () => this.close());
     window.once("ready-to-show", () => { if (!window.isDestroyed() && !this.disposed) { window.show(); window.focus(); } });
-    window.on("closed", () => { if (this.window === window) { this.draft?.discard(); this.draft = undefined; this.window = undefined; } });
+    window.on("closed", () => { if (this.window === window) { this.draft?.discard(); this.draft = undefined; this.window = undefined; this.options.screenshotVisibility?.(false); } });
     void window.loadURL(this.url).catch(error => {
       if (this.window !== window) return;
       this.close(); this.reportError(error);
@@ -115,6 +119,7 @@ export class DesktopQuickEntryWindow {
     const window = this.window;
     this.draft?.discard(); this.draft = undefined; this.window = undefined;
     if (window && !window.isDestroyed()) window.destroy();
+    this.options.screenshotVisibility?.(false);
   }
   dispose(): void { this.disposed = true; this.close(); this.recoveries.length = 0; for (const channel of this.channels) ipcMain.removeHandler(channel); }
 

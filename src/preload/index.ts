@@ -3,14 +3,14 @@ import type { AppMenuCommand, AppSettings, Attachment, AutomationRunRecord, Auto
 import type { AttachmentDropEvent } from "../shared/attachment-drop";
 
 const droppedAttachmentListeners = new Set<(event: AttachmentDropEvent) => void>();
-const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string }) => void>();
+const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string; previewOnly?: boolean }) => void>();
 const computerStateListeners = new Set<(state: ComputerTaskState) => void>();
 const menuCommandListeners = new Set<(command: AppMenuCommand) => void>();
 const automationEventListeners = new Set<(event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask }) => void>();
 const providerScanProgressListeners = new Set<(progress: ProviderScanProgress) => void>();
 const mediaGenerationListeners = new Set<(job: MediaGenerationJob) => void>();
 
-ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cwd: string }) => {
+ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cwd: string; previewOnly?: boolean }) => {
   for (const listener of navigateSessionListeners) listener(target);
 });
 ipcRenderer.on("grok:computer-state", (_event, state: ComputerTaskState) => {
@@ -282,6 +282,9 @@ const api: GrokDesktopApi = {
   openMedia: (source) => ipcRenderer.invoke("system:open-media", source),
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
+  listPetSkins: () => ipcRenderer.invoke("desktop-pet:skins"),
+  petCommand: (command, clip) => ipcRenderer.invoke("desktop-pet:command", command, clip),
+  importPetSkin: () => ipcRenderer.invoke("desktop-pet:import"),
   getPullRequestStatus:workspace=>ipcRenderer.invoke("git:pull-request",workspace),
   watchPullRequest:(workspace,sessionId,enabled)=>ipcRenderer.invoke("git:watch-pull-request",workspace,sessionId,enabled),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),

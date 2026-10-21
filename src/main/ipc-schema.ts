@@ -2,6 +2,7 @@ import { extname, posix, win32 } from "node:path";
 import type { AppSettings, ComputerUseSettings } from "../shared/types";
 import { validateShortcutBindings } from "../shared/shortcuts";
 import type { DesktopProductivitySettings } from "../shared/productivity";
+import { PET_CLIPS, validateDesktopPetSettings } from "../shared/desktop-pet";
 
 const MAX_IPC_DEPTH = 16;
 const MAX_IPC_NODES = 50_000;
@@ -16,6 +17,9 @@ const isAbsoluteWindowsPath = (value: string): boolean => win32.isAbsolute(value
 type Rule = (args: unknown[]) => void;
 
 const RULES: Record<string, Rule> = {
+  "desktop-pet:skins": noArgs,
+  "desktop-pet:import": noArgs,
+  "desktop-pet:command": args => { if (!["show", "hide", "reset", "preview"].includes(String(args[0])) || (args[1] !== undefined && !PET_CLIPS.includes(args[1] as never))) throw Error("桌宠操作无效"); },
   "desktop:activity": noArgs,
   "cli:config-state": noArgs,
   "inbox:mark-all-read": noArgs,
@@ -663,7 +667,7 @@ const APP_SETTINGS_PATCH_KEYS = [
   "cliPath", "httpProxy", "httpsProxy", "defaultModel", "defaultEffort", "defaultMode",
   "showThinking", "expandToolDetails", "automaticUpdateChecks", "lastAutomaticUpdateCheckAt",
   "fontScale", "uiDensity", "conversationContentWidth", "conversationFontScale", "recentWorkspaces", "activeWorkspace",
-  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme", "notifications", "productivity",
+  "codexGroupCollapsed", "claudeGroupCollapsed", "projectToolsOpen", "sessionGroupCollapsed", "showArchivedCodex", "theme", "notifications", "productivity", "desktopPet",
 ] as const satisfies readonly (keyof AppSettings)[];
 type MissingAppSettingsPatchKey = Exclude<keyof AppSettings, (typeof APP_SETTINGS_PATCH_KEYS)[number]>;
 const _assertAppSettingsPatchKeys: [MissingAppSettingsPatchKey] extends [never] ? true : MissingAppSettingsPatchKey = true;
@@ -678,6 +682,7 @@ void _assertComputerSettingsPatchKeys;
 
 function settingsPatchArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, APP_SETTINGS_PATCH_KEYS);
+  if (value.desktopPet !== undefined) validateDesktopPetSettings(value.desktopPet);
   if (value.productivity !== undefined) {
     const desktop = strictRecordArg([value.productivity], 0, ["closeAction", "quickAskShortcut", "screenshotShortcut", "preventSleepWhileWorking", "quotaWarningPercent", "quietUntil", "shortcuts"]);
     requiredRecordEnum(desktop, "closeAction", ["ask", "tray", "quit"]);

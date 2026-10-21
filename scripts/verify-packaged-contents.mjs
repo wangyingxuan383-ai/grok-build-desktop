@@ -17,7 +17,7 @@ const asarPath = join(resourcesRoot, "app.asar");
 if (!existsSync(asarPath) || statSync(asarPath).size < 1_000_000) throw new Error(`Application ASAR is missing or truncated: ${asarPath}`);
 
 const files = new Set(listPackage(asarPath).map((entry) => entry.replaceAll("\\", "/").replace(/^\//, "")));
-const requiredAsarEntries = ["package.json", "out/main/index.js", "out/main/token-activity-worker.js", "out/preload/index.cjs", "out/renderer/index.html"];
+const requiredAsarEntries = ["package.json", "out/main/index.js", "out/main/token-activity-worker.js", "out/main/pet-import-worker.js", "out/preload/index.cjs", "out/preload/pet.cjs", "out/renderer/index.html", "out/renderer/pet/index.html"];
 for (const entry of requiredAsarEntries) if (!files.has(entry)) throw new Error(`Application ASAR is missing: ${entry}`);
 for (const entry of files) if (/^node_modules\/.*(?:\.(?:map|log)$|\.test\.[^/]+$|\/(?:test|tests|__tests__|fixtures|coverage|example|examples)\/)/i.test(entry)) throw new Error(`Dependency debug/test material must not be packaged: ${entry}`);
 for (const entry of files) if (/^node_modules\/node-pty\/(?:build\/|.*\.pdb$)/i.test(entry)) throw new Error(`Native build intermediate must not be packaged: ${entry}`);
@@ -37,6 +37,10 @@ if (!rendererHtml.includes('<div id="root"></div>') || !rendererHtml.includes('<
 const rendererAssets = [...rendererHtml.matchAll(/(?:src|href)=["']\.?\/?(assets\/[^"'?#]+)["']/g)].map((match) => `out/renderer/${match[1]}`);
 if (rendererAssets.length < 2) throw new Error("Packaged Renderer HTML does not reference its production assets");
 for (const entry of rendererAssets) if (!files.has(entry)) throw new Error(`Packaged Renderer asset is missing: ${entry}`);
+const petHtml = extractAsar("out/renderer/pet/index.html").toString("utf8");
+const petAssets = [...petHtml.matchAll(/(?:src|href)=["']\.\.\/(assets\/[^"'?#]+)["']/g)].map(match => `out/renderer/${match[1]}`);
+if (petAssets.length < 2) throw new Error("Packaged companion does not reference its production player/style assets");
+for (const entry of petAssets) if (!files.has(entry)) throw new Error(`Packaged companion asset is missing: ${entry}`);
 
 const manifestPath = join(resourcesRoot, "resource-manifest.json");
 if (!existsSync(manifestPath)) throw new Error(`Packaged resource manifest is missing: ${manifestPath}`);
@@ -56,5 +60,11 @@ for (const entry of manifest.entries) {
 
 const manifestPaths = new Set(manifest.entries.map((entry) => entry.path.replaceAll("\\", "/")));
 if (!manifestPaths.has("native/win-x64/GrokComputerHost.exe") || !manifestPaths.has("plugins/grok-computer-use/plugin.json")) throw new Error("Packaged native host or Computer Use plugin is missing from the resource manifest");
+for (const id of ["a", "b"]) {
+  for (const file of ["skin.json", "idle.webp", "enter.webp", "exit.webp"])
+    if (!manifestPaths.has(`pets/${id}/${file}`)) throw new Error(`Packaged companion resource is missing: ${id}/${file}`);
+}
+const petBytes = manifest.entries.filter(entry => entry.path.replaceAll("\\", "/").startsWith("pets/")).reduce((sum, entry) => sum + entry.size, 0);
+if (petBytes > 8 * 1024 * 1024) throw new Error("Packaged companion exceeds the combined 8 MiB artwork budget");
 
-console.log(JSON.stringify({ ok: true, version: packagedPackage.version, asarEntries: files.size, rendererAssets: rendererAssets.length, verifiedResources: manifest.entries.length }));
+console.log(JSON.stringify({ ok: true, version: packagedPackage.version, asarEntries: files.size, rendererAssets: rendererAssets.length, petAssets: petAssets.length, petBytes, verifiedResources: manifest.entries.length }));

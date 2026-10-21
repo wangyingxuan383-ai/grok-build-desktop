@@ -16,6 +16,9 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
 
   handle("workspace-artifact:pick",(cwd:string)=>controller.pickWorkspaceArtifact(cwd));
   handle("desktop:activity", () => controller.getDesktopActivity());
+  handle("desktop-pet:skins", () => controller.listPetSkins());
+  handle("desktop-pet:command", (command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId) => controller.petCommand(command,clip));
+  handle("desktop-pet:import", () => controller.importPetSkin());
   handle("cli:config-state", () => controller.getCliConfigState());
   handle("inbox:mark-all-read", () => controller.markAllInboxRead());
   handle("snippets:list", () => controller.listPromptSnippets());

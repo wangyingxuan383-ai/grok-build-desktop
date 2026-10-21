@@ -1,15 +1,15 @@
 # Changelog
 
-## Desktop companion artwork preparation (unreleased)
+## 0.14.0 — Windows companion inspection candidate
 
-- Prepare illustrated greeting/farewell sequences for both selected characters and fixed-foot WebP atlases for eleven action groups per character, within the combined 8 MiB target.
-- Preserve the circular-G apron embroidery and separate upstream artwork attribution. Runtime interaction acceptance remains a separate milestone.
+- Add a default-enabled, quiet desktop companion with two illustrated characters and separate greeting/farewell animations; preserve explicit disables across restarts and upgrades.
+- Keep temporary hide, persistent disable and application exit distinct. Compose lock/fullscreen/Computer Use/capture suppression without reopening a manually hidden companion.
+- Reuse live task/inbox events, exact target navigation, existing quick question and explicit screenshot flows; configuration changes, history and cancelled turns stay quiet.
+- Add local PNG/WebP and data-only animation-pack import, sandboxed single-image alignment, and an image-workshop draft flow with no automatic generation.
+- Keep both eleven-group WebP packs under the combined 8 MiB target; preserve the circular-G embroidery and upstream artwork attribution.
 
-## Unreleased
+Window/IPC, import and rendered settings checks do not certify physical Windows click-through, lock/unlock or mixed-DPI/multi-monitor input. This is a local inspection candidate, not a public release.
 
-- Expand both local companion pilots with work, celebration, error/help, pat, wave and doze actions; add grouped action selection, replay, tap-to-pat and a side-by-side overview, with no installed runtime change.
-- Continue both desktop-companion character routes with the small character's circular-G embroidery and first idle/waiting/pickup-landing animation pilots; verify the local review player without enabling a native overlay or changing installed packages.
-- Deliver the local desktop-companion A/B static review with transparent masters, four-expression previews and verified light/dark size comparisons; document selection/native-validation gates without enabling a companion runtime.
 - Keep phone snippets, recipes and bookmarks read-only until their stored contents load successfully; provide explicit retry after a read failure instead of overwriting saved data with defaults.
 - Preserve the quick-question draft when Escape cancels input-method composition.
 - Bind dropped attachments to the original draft before file preparation; reject late results after conversation/mode changes and merge consecutive image drops.

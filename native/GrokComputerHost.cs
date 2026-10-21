@@ -17,7 +17,9 @@ internal static class GrokComputerHost
 {
     // Local namespace scopes ownership to the Windows logon session; abandoned
     // ownership is released by Windows when a worker crashes.
-    private static readonly Mutex DesktopMutex = new Mutex(false, @"Local\GrokBuildDesktop.ComputerUse");
+    // The restricted context worker must not even open the control mutex.
+    private static class DesktopLease { internal static readonly Mutex Mutex = new Mutex(false, @"Local\GrokBuildDesktop.ComputerUse"); }
+    private static Mutex DesktopMutex { get { return DesktopLease.Mutex; } }
     private static bool OwnsDesktop;
     private static void AcquireDesktop() {
         if (OwnsDesktop) return;
@@ -35,6 +37,7 @@ internal static class GrokComputerHost
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--desktop-context") return DesktopContext.Run();
         if (args.Length > 0 && args[0] == "--self-test") {
             Console.WriteLine(Json.Serialize(new Dictionary<string, object> { { "ok", true }, { "version", "0.3.1" }, { "platform", Environment.Is64BitProcess ? "win-x64" : "win-x86" } }));
             return Environment.Is64BitProcess ? 0 : 2;
@@ -62,6 +65,163 @@ internal static class GrokComputerHost
             }
         }
         return 0;
+    }
+
+    // Restricted JSONL protocol, deliberately separate from Execute/UIA/control:
+    // in:  {id: int(1..2147483647), method: "context", ownProcessIds?: int[0..32]}
+    //      IDs in ownProcessIds must be positive. No other fields/methods are accepted.
+    // out: {id, ok: true, result: {locked, presentation, fullScreen,
+    //       foregroundRect: {x,y,width,height}|null, doubleClickTime, leftButtonDown}}
+    // err: {id: valid request id|null, ok: false, error: {code, message}}
+    // Codes: invalid_request, unsupported_method, context_unavailable. No exception
+    // text, window titles, process names, screenshots or UIA data enter this channel.
+    // Rectangles are physical screen pixels; fullscreen tolerates 2 px at each edge.
+    private static class DesktopContext
+    {
+        private const int MaxLine = 4096;
+        private static readonly JavaScriptSerializer ContextJson = new JavaScriptSerializer { MaxJsonLength = MaxLine, RecursionLimit = 8 };
+        private enum NotificationState { NotPresent = 1, Busy = 2, RunningD3DFullScreen = 3, PresentationMode = 4, AcceptsNotifications = 5, QuietTime = 6, App = 7 }
+
+        internal static int Run()
+        {
+            try {
+                Console.InputEncoding = Encoding.UTF8; Console.OutputEncoding = new UTF8Encoding(false);
+                // Opt in only in this mode, preserving existing Computer Use coordinates.
+                bool physicalPixels = EnablePhysicalPixels();
+                string line; bool oversized;
+                while ((line = ReadLine(out oversized)) != null) {
+                    if (!oversized && String.IsNullOrWhiteSpace(line)) continue;
+                    object id = null;
+                    if (oversized) { ReplyError(id, "invalid_request"); continue; }
+                    Dictionary<string, object> request;
+                    HashSet<uint> ownProcesses = new HashSet<uint>();
+                    try {
+                        request = ContextJson.Deserialize<Dictionary<string, object>>(line);
+                        object rawId;
+                        if (request == null || !request.TryGetValue("id", out rawId) || !(rawId is int) || (int)rawId <= 0) {
+                            ReplyError(null, "invalid_request"); continue;
+                        }
+                        id = rawId;
+                        bool valid = true;
+                        foreach (string key in request.Keys) if (key != "id" && key != "method" && key != "ownProcessIds") valid = false;
+                        object method;
+                        if (!valid || !request.TryGetValue("method", out method) || !(method is string)) { ReplyError(id, "invalid_request"); continue; }
+                        if ((string)method != "context") { ReplyError(id, "unsupported_method"); continue; }
+                        object rawProcesses;
+                        if (request.TryGetValue("ownProcessIds", out rawProcesses)) {
+                            IList processes = rawProcesses as IList;
+                            if (processes == null || processes.Count > 32) valid = false;
+                            else foreach (object pid in processes) {
+                                if (!(pid is int) || (int)pid <= 0) { valid = false; break; }
+                                ownProcesses.Add((uint)(int)pid);
+                            }
+                        }
+                        if (!valid) { ReplyError(id, "invalid_request"); continue; }
+                    } catch { ReplyError(id, "invalid_request"); continue; }
+                    try {
+                        if (!physicalPixels) { ReplyError(id, "context_unavailable"); continue; }
+                        Console.WriteLine(ContextJson.Serialize(new Dictionary<string, object> { { "id", id }, { "ok", true }, { "result", ReadContext(ownProcesses) } }));
+                        Console.Out.Flush();
+                    } catch { ReplyError(id, "context_unavailable"); }
+                }
+                return 0;
+            } catch { return 1; } // Broken pipes/console failures never expose private exception text.
+        }
+
+        private static string ReadLine(out bool oversized)
+        {
+            StringBuilder line = new StringBuilder(); oversized = false;
+            int value;
+            while ((value = Console.In.Read()) != -1) {
+                if (value == '\n') return line.ToString();
+                if (line.Length < MaxLine) line.Append((char)value);
+                else oversized = true; // Drain the line without unbounded allocation.
+            }
+            return line.Length == 0 && !oversized ? null : line.ToString();
+        }
+
+        private static void ReplyError(object id, string code)
+        {
+            string message = code == "context_unavailable" ? "Desktop context is unavailable." : code == "unsupported_method" ? "Unsupported desktop-context method." : "Invalid desktop-context request.";
+            Console.WriteLine(ContextJson.Serialize(new Dictionary<string, object> { { "id", id }, { "ok", false }, { "error", new Dictionary<string, object> { { "code", code }, { "message", message } } } }));
+            Console.Out.Flush();
+        }
+
+        private static bool EnablePhysicalPixels()
+        {
+            try { if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return true; if (SetProcessDpiAwarenessContext(new IntPtr(-3))) return true; } catch (EntryPointNotFoundException) { }
+            try { return SetProcessDpiAwareness(2) == 0; } catch (DllNotFoundException) { return false; } catch (EntryPointNotFoundException) { return false; }
+        }
+
+        private static bool DefaultInputDesktop()
+        {
+            IntPtr desktop = IntPtr.Zero;
+            try {
+                if (!Environment.UserInteractive) return false;
+                desktop = OpenInputDesktop(0, false, 0x0001); // DESKTOP_READOBJECTS only; never switches desktops.
+                if (desktop == IntPtr.Zero) return false;
+                int needed;
+                GetUserObjectInformation(desktop, 2, null, 0, out needed);
+                if (needed <= 0 || needed > 1024) return false;
+                StringBuilder name = new StringBuilder((needed + 1) / 2);
+                return GetUserObjectInformation(desktop, 2, name, name.Capacity * 2, out needed) && String.Equals(name.ToString(), "Default", StringComparison.OrdinalIgnoreCase);
+            } catch { return false; }
+            finally { if (desktop != IntPtr.Zero) CloseDesktop(desktop); }
+        }
+
+        private static Dictionary<string, object> ReadContext(HashSet<uint> ownProcesses)
+        {
+            NotificationState state;
+            if (SHQueryUserNotificationState(out state) != 0 || !Enum.IsDefined(typeof(NotificationState), state)) throw new InvalidOperationException();
+            bool locked = state == NotificationState.NotPresent || !DefaultInputDesktop();
+            bool presentation = state == NotificationState.PresentationMode;
+            object foregroundRect = null; bool fullScreen = false;
+            IntPtr foreground = locked ? IntPtr.Zero : GetForegroundWindow();
+            if (!locked && foreground == IntPtr.Zero) locked = true;
+            if (!locked && !ExcludedWindow(foreground, ownProcesses)) {
+                RECT frame;
+                IntPtr monitor = MonitorFromWindow(foreground, 2); // MONITOR_DEFAULTTONEAREST
+                MONITORINFO info = new MONITORINFO(); info.Size = Marshal.SizeOf(typeof(MONITORINFO));
+                if (DwmGetWindowAttribute(foreground, 9, out frame, Marshal.SizeOf(typeof(RECT))) == 0 && frame.Right > frame.Left && frame.Bottom > frame.Top && monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info)) {
+                    foregroundRect = new Dictionary<string, object> { { "x", frame.Left }, { "y", frame.Top }, { "width", frame.Right - frame.Left }, { "height", frame.Bottom - frame.Top } };
+                    fullScreen = Near(frame.Left, info.Monitor.Left) && Near(frame.Top, info.Monitor.Top) && Near(frame.Right, info.Monitor.Right) && Near(frame.Bottom, info.Monitor.Bottom);
+                }
+            }
+            bool leftButtonDown = !locked && (GetAsyncKeyState(0x01) & 0x8000) != 0;
+            // Discard geometry during a foreground change and fail closed if the desktop changed.
+            if (!locked && !DefaultInputDesktop()) locked = true;
+            if (locked || foreground != GetForegroundWindow()) { foregroundRect = null; fullScreen = false; }
+            return new Dictionary<string, object> {
+                { "locked", locked }, { "presentation", presentation }, { "fullScreen", fullScreen }, { "foregroundRect", foregroundRect },
+                { "doubleClickTime", GetDoubleClickTime() }, { "leftButtonDown", !locked && leftButtonDown }
+            };
+        }
+
+        private static bool ExcludedWindow(IntPtr window, HashSet<uint> ownProcesses)
+        {
+            if (window == GetDesktopWindow() || window == GetShellWindow() || !IsWindowVisible(window) || IsIconic(window)) return true;
+            uint pid;
+            if (GetWindowThreadProcessId(window, out pid) == 0 || pid == 0 || pid == GetCurrentProcessId() || ownProcesses.Contains(pid)) return true;
+            StringBuilder className = new StringBuilder(256);
+            if (GetClassName(window, className, className.Capacity) == 0) return true;
+            string name = className.ToString();
+            return name == "Progman" || name == "WorkerW" || name == "Shell_TrayWnd" || name == "Shell_SecondaryTrayWnd";
+        }
+
+        private static bool Near(int left, int right) { return Math.Abs((long)left - right) <= 2; }
+        [StructLayout(LayoutKind.Sequential)] private struct MONITORINFO { public int Size; public RECT Monitor, Work; public uint Flags; }
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool SetProcessDpiAwarenessContext(IntPtr awareness);
+        [DllImport("shcore.dll")] private static extern int SetProcessDpiAwareness(int awareness);
+        [DllImport("shell32.dll")] private static extern int SHQueryUserNotificationState(out NotificationState state);
+        [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out RECT value, int size);
+        [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+        [DllImport("user32.dll")] private static extern IntPtr GetDesktopWindow();
+        [DllImport("user32.dll")] private static extern IntPtr GetShellWindow();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder value, int size);
+        [DllImport("kernel32.dll")] private static extern uint GetCurrentProcessId();
+        [DllImport("user32.dll")] private static extern uint GetDoubleClickTime();
+        [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
     }
 
     private static object Execute(string action, Dictionary<string, object> input)

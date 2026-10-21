@@ -25,6 +25,7 @@ let windowState: WindowStateService | undefined;
 let quitting = false;
 let desktopShell: DesktopShellService | undefined;
 let lifecycle: DesktopShellLifecycle | undefined;
+const computerActiveSessions=new Set<string>();
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 function liveMainWindow(): BrowserWindow | undefined { return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined; }
@@ -38,19 +39,20 @@ function shellDialog(options: MessageBoxOptions) {
   const window = liveMainWindow();
   return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
 }
-async function shutdownDesktop(): Promise<void> {
+async function shutdownDesktop(animate=true): Promise<void> {
   if (quitting) return;
   quitting = true;
-  desktopShell?.dispose(); desktopShell = undefined;
+  const farewell=desktopShell?.prepareQuit(animate);
   computerOverlay?.dispose(); computerOverlay = undefined;
   globalShortcut.unregisterAll();
   try {
     await windowState?.dispose(liveMainWindow()).catch(() => undefined);
-    await controller?.dispose().catch(error => process.stderr.write(`${String(error)}\n`));
-  } finally { app.quit(); }
+    await Promise.allSettled([farewell,controller?.dispose().catch(error => process.stderr.write(`${String(error)}\n`))]);
+  } finally { desktopShell?.dispose();desktopShell=undefined;app.quit(); }
 }
 
 protocol.registerSchemesAsPrivileged([
+  { scheme:"grok-pet",privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
   { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: "grok-html", privileges: {standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
   { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -123,6 +125,7 @@ else {
     const startupTheme = await controller.prepareAppearance();
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE!=="1") void controller.startRemoteIfEnabled().catch(()=>undefined);
     protocol.handle("grok-html", request => controller?.htmlPreviewResponse(request.url) ?? new Response("Not found",{status:404}));
+    protocol.handle("grok-pet",request=>desktopShell?.petResponse(request.url)??new Response(null,{status:404}));
     protocol.handle("grok-theme", async (request) => {
       if (!isAllowedThemeBackgroundUrl(request.url)) return new Response("Not found", { status: 404 });
       const background = await controller?.currentThemeBackground();
@@ -159,7 +162,7 @@ else {
     const emergencyShortcutRegistered = globalShortcut.register("CommandOrControl+Alt+Esc", () => controller?.emergencyStopComputer("Ctrl+Alt+Esc"));
     if (!emergencyShortcutRegistered) await controller.logEmergencyShortcutUnavailable();
     computerOverlay = new ComputerUseOverlay((source) => controller?.emergencyStopComputer(source), () => emergencyShortcutRegistered);
-    controller.setComputerStateObserver((state) => computerOverlay?.update(state));
+    controller.setComputerStateObserver((state) => {computerOverlay?.update(state);if(["running","paused","awaiting-risk-confirmation","awaiting-app-permission"].includes(state.status))computerActiveSessions.add(state.sessionId);else computerActiveSessions.delete(state.sessionId);desktopShell?.computerActive(computerActiveSessions.size>0);});
     const rendererEntry = join(currentDir, "../renderer/index.html");
     const developmentUrl = trustedDevelopmentUrl(process.env.ELECTRON_RENDERER_URL, app.isPackaged);
     const rendererTrust = createRendererTrustPolicy(rendererEntry, developmentUrl);
@@ -257,6 +260,7 @@ else {
     });
     mainWindow.on("close", event => { if (!quitting) { event.preventDefault(); void lifecycle?.close(); } });
     mainWindow.on("focus", () => desktopShell?.focus());
+    mainWindow.on("query-session-end",()=>{void shutdownDesktop(false);});
     mainWindow.webContents.on("did-finish-load", () => desktopShell?.rendererReady());
     const ownedWindow = mainWindow;
     mainWindow.on("closed", () => {
@@ -269,6 +273,7 @@ else {
       desktopShell = new DesktopShellService(controller, { getWindow: liveMainWindow, showWindow: showMainWindow,
         quit: () => { void lifecycle?.quit(); }, rendererEntry: join(currentDir, "../renderer/quick-entry/index.html"),
         preloadEntry: join(currentDir, "../preload/quick-entry.cjs"), developmentUrl,
+        petBuiltins:join(app.isPackaged?process.resourcesPath:join(app.getAppPath(),"resources"),"pets"),petUserRoot:join(app.getPath("userData"),"pets"),
         onSettings: settings => { const window = liveMainWindow(); if (window) installApplicationMenu(window, !app.isPackaged, settings.productivity); } });
       await desktopShell.start();
     }

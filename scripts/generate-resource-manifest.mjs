@@ -8,6 +8,7 @@ const required = [
   join(resources, "native", "win-x64", "GrokComputerHost.exe"),
   join(resources, "plugins", "grok-computer-use"),
   join(resources, "plugins", "grok-desktop"),
+  join(resources, "pets"),
 ];
 
 const files = [];

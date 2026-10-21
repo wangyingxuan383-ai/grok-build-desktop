@@ -11,6 +11,7 @@ vi.mock("electron", () => ({ Menu: { buildFromTemplate: (menu: unknown) => { moc
   dialog: { showMessageBox: vi.fn() }, globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() }, powerSaveBlocker: { start: mocks.start, stop: mocks.stop } }));
 vi.mock("../tray-icon", () => ({ trayIcon: (status: string) => status, taskbarCountIcon: (count: number) => count }));
 vi.mock("./desktop-quick-entry-window", () => ({ DesktopQuickEntryWindow: class { open = mocks.open; dispose = mocks.quickDispose; setWarnings = vi.fn(); } }));
+vi.mock("./desktop-pet-controller",()=>({DesktopPetController:class { assets={list:vi.fn(async()=>[])};applySettings=vi.fn();applyActivity=vi.fn();rendererReady=vi.fn();dispose=vi.fn();menu=()=>[]; }}));
 import { DesktopShellService } from "./desktop-shell-service";
 
 beforeEach(() => { vi.clearAllMocks(); mocks.trays.length = 0; mocks.menus.length = 0; });
@@ -19,13 +20,13 @@ it("updates from activity/settings observers and releases all subscriptions and 
   let activityListener!: (value: DesktopActivitySnapshot) => void, settingsListener!: (value: AppSettings) => void;
   const unsubscribeActivity = vi.fn(), unsubscribeSettings = vi.fn();
   const settings = { productivity: {} } as AppSettings;
-  const controller = { getSettings: vi.fn(async () => settings), getDesktopActivity: vi.fn(async () => EMPTY_DESKTOP_ACTIVITY),
+  const controller = { setDesktopPetDelegate:vi.fn(), getSettings: vi.fn(async () => settings), getDesktopActivity: vi.fn(async () => EMPTY_DESKTOP_ACTIVITY),
     observeSettings: (listener: typeof settingsListener) => { settingsListener = listener; return unsubscribeSettings; },
     observeDesktopActivity: (listener: typeof activityListener) => { activityListener = listener; return unsubscribeActivity; } };
   const window = { isDestroyed: () => false, isFocused: () => false, setProgressBar: vi.fn(), setOverlayIcon: vi.fn(), flashFrame: vi.fn(), webContents: { isDestroyed: () => false, send: vi.fn() } };
   const onSettings = vi.fn(), quit = vi.fn();
   const service = new DesktopShellService(controller as unknown as AppController, { getWindow: () => window as never, showWindow: vi.fn(), quit,
-    rendererEntry: "D:/app/quick-entry/index.html", preloadEntry: "D:/app/preload/quick-entry.cjs", onSettings });
+    rendererEntry: "D:/app/quick-entry/index.html", preloadEntry: "D:/app/preload/quick-entry.cjs", petBuiltins:"D:/resources/pets",petUserRoot:"D:/userdata/pets", onSettings });
   await service.start();
   settingsListener({ ...settings, productivity: productivitySettings({ preventSleepWhileWorking: true }) });
   activityListener({ ...EMPTY_DESKTOP_ACTIVITY, runningCount: 1, awaitingCount: 2, livePhoneCount: 3 });
@@ -44,10 +45,10 @@ it("updates from activity/settings observers and releases all subscriptions and 
 
 it("does not replace a newer observer snapshot with a delayed initial read", async () => {
   let finish!: (value: DesktopActivitySnapshot) => void, listener!: (value: DesktopActivitySnapshot) => void;
-  const controller = { getSettings: async () => ({ productivity: {} }), getDesktopActivity: () => new Promise<DesktopActivitySnapshot>(resolve => { finish = resolve; }),
+  const controller = { setDesktopPetDelegate:vi.fn(), getSettings: async () => ({ productivity: {} }), getDesktopActivity: () => new Promise<DesktopActivitySnapshot>(resolve => { finish = resolve; }),
     observeSettings: () => () => undefined, observeDesktopActivity: (callback: typeof listener) => { listener = callback; return () => undefined; } };
   const service = new DesktopShellService(controller as unknown as AppController, { getWindow: () => undefined, showWindow: vi.fn(), quit: vi.fn(),
-    rendererEntry: "D:/app/quick-entry/index.html", preloadEntry: "D:/app/preload/quick-entry.cjs", onSettings: vi.fn() });
+    rendererEntry: "D:/app/quick-entry/index.html", preloadEntry: "D:/app/preload/quick-entry.cjs", petBuiltins:"D:/resources/pets",petUserRoot:"D:/userdata/pets", onSettings: vi.fn() });
   const starting = service.start(); listener({ ...EMPTY_DESKTOP_ACTIVITY, awaitingCount: 1 }); finish(EMPTY_DESKTOP_ACTIVITY); await starting;
   expect(mocks.trays[0].setImage).toHaveBeenLastCalledWith("waiting"); service.dispose();
 });

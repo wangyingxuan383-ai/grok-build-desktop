@@ -8,10 +8,13 @@
 - [x] Expand each route with work, celebration, error, pat, wave and doze pilots: nine action groups and 38 keyframes per route, with grouped selection, replay and tap-to-pat review.
 - [x] Add distinct entrance/farewell illustrations for both routes and normalize eleven-group WebP packs within the unchanged combined 8 MiB resource target.
 - [ ] Accept idle/awaiting-input/pickup-and-landing samples, then validate the small transparent window on Windows.
-- [ ] Integrate existing activity/inbox and quick-entry flows with default-enabled quiet companionship; retain explicit disables across restarts and upgrades.
-- [ ] Add safe local image/animation-pack imports, then the separately accepted generation workshop.
+- [x] Integrate existing activity/inbox and quick-entry flows with default-enabled quiet companionship; retain explicit disables across restarts and upgrades. Verify window/IPC lifecycle separately from physical input.
+- [x] Add bounded worker-validated local image/animation imports with sandboxed single-image alignment, and an explicit per-item image-workshop draft flow.
+- [x] Verify immediate settings saves and light/dark layouts at 820px and 125/150% zoom; preserve the existing renderer and combined artwork budgets.
+- [ ] Validate system mouse click-through, physical lock/unlock, monitor removal and mixed-DPI input in an interactive Windows session.
+- [ ] Deliver a locally inspected candidate with package/provenance checks and clearly listed remaining system acceptance.
 
-See [the companion plan](DESKTOP_PET_PLAN.md). This work is separate from the installed productivity candidate; no companion runtime is enabled by the visual-review milestone.
+See [the companion plan](DESKTOP_PET_PLAN.md). The source candidate adds the companion runtime; it does not replace an installed build or constitute a public release.
 
 ## Reliability follow-up (unreleased)
 

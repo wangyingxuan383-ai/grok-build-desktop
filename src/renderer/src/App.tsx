@@ -952,6 +952,7 @@ export default function App(): React.JSX.Element {
     else if (command === "open-extensions") setPanel("extensions");
     else if (command === "open-computer") chooseComputerCapability();
     else if (command === "open-settings") setPanel("settings");
+    else if(command==="open-pet-settings"){try{localStorage.setItem("grok.pet-settings.once","1");}catch{}setPanel("settings");window.setTimeout(()=>window.dispatchEvent(new Event("grok:open-pet-settings")),0);}
     else if (command === "open-diagnostics") setPanel("diagnostics");
     else if (command === "open-onboarding") void window.grokDesktop.resetOnboarding().then((state) => { store.setOnboarding(state); setPanel("onboarding"); });
     else if (command === "open-about") setPanel("about");
@@ -960,6 +961,7 @@ export default function App(): React.JSX.Element {
   }, [activeSession?.id, focusComposer, setWorkbenchView, stopActiveSession, store.activeSessionId, turns]);
   menuCommandRef.current = handleMenuCommand;
   useEffect(() => window.grokDesktop.onMenuCommand(handleMenuCommand), [handleMenuCommand]);
+  useEffect(()=>{const open=()=>{selectImageMode(true);setPanel(null);};window.addEventListener("grok:pet-image-draft",open);return()=>window.removeEventListener("grok:pet-image-draft",open);},[]);
 
   const handleMediaPreview = useCallback((target:MediaPreview)=>{const owner=store.sessions.find(session=>session.id===target.sessionId);const workspace=owner?.cwd||target.workspace;if(!workspace)return false;setRightToolState(null);setArtifactPreview({...target,workspace});return true;},[store.sessions]);
   if (store.loading) return <div className="splash"><div className="grok-mark">G</div><h1>Grok Build Desktop</h1><p>正在连接本机 Grok CLI…</p></div>;

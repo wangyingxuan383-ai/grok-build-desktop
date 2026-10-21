@@ -1,4 +1,6 @@
 import { HtmlPreviewService } from "./services/html-preview-service";
+import { desktopPetSettings,validateDesktopPetSettings,type DesktopPetSettings } from "../shared/desktop-pet";
+import { validateShortcutBindings } from "../shared/shortcuts";
 import { prepareMediaProjectOutput, saveProjectMedia, type MediaProjectOutput } from "./services/media-project-output";
 import { recordOwnedMediaFile, removeProvenMediaFiles } from "./services/media-file-ownership";
 import { mergeTurnUsage } from "../shared/turn-usage";
@@ -381,6 +383,27 @@ export class AppController {
   }
   private readonly workspaceTerminals=new WorkspaceTerminalService(event=>{if(this.window&&!this.window.isDestroyed())this.window.webContents.send("grok:workspace-terminal",event)});
   private computerStateObserver?: (state: ComputerTaskState) => void;
+  readonly desktopInboxListeners = new Set<(items: NotificationInboxItem[]) => void>();
+  desktopContextHelperPath = "";
+  private desktopPetDelegate?: { list():Promise<import("../shared/desktop-pet").PetSkin[]>; command(command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId):Promise<void>; import():Promise<import("../shared/desktop-pet").PetSkin|null> };
+  setDesktopPetDelegate(value: AppController["desktopPetDelegate"]):void { this.desktopPetDelegate=value; }
+  listPetSkins(){ return this.desktopPetDelegate?.list()??Promise.resolve([]); }
+  petCommand(command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId){return this.desktopPetDelegate?.command(command,clip)??Promise.resolve();}
+  importPetSkin(){return this.desktopPetDelegate?.import()??Promise.resolve(null);}
+  observeDesktopInbox(listener: (items: NotificationInboxItem[]) => void): () => void {
+    this.desktopInboxListeners.add(listener);
+    return () => this.desktopInboxListeners.delete(listener);
+  }
+  isDesktopTargetVisible(id: string): boolean { return this.visibleConversationId === id && !!this.window?.isFocused() && !this.window.isMinimized(); }
+  async navigateDesktopPetTarget(target:NotificationTarget,current:()=>boolean=()=>true):Promise<void>{
+    if(target.kind!=="session"){if(current())await this.navigateNotification(target);}
+    else{
+      const row=this.processes.snapshot(target.id)??await this.sessionRuntime.get(target.id)??(await this.remoteSessions().catch(()=>[])).find(row=>row.id===target.id);
+      if(!current())return;if(!row)throw Error("会话历史已不存在");
+      if(this.window&&!this.window.isDestroyed()){if(this.window.isMinimized())this.window.restore();this.window.show();this.window.focus();this.window.webContents.send("grok:navigate-session",{sessionId:target.id,cwd:row.cwd,previewOnly:true});}
+    }
+    if(current())await this.inbox.markTargetRead(target.kind,target.id);
+  }
   private focusedSessionId = "";
   private visibleConversationId="";
   private desktopNotices?:DesktopNotifications;
@@ -475,13 +498,18 @@ export class AppController {
           for (const row of await this.catalog.list(cwd).catch(() => [])) names.set(row.id, row.title);
         }));
         const inbox = this.disposing ? [] : await this.listInbox();
+        const tasks: import("../shared/desktop-pet").PetTarget[] = [];
+        const media=[...(this.mediaJobs?.values()??[])].filter(row=>["running","cancelling"].includes(row.status));
+        const images=media.some(row=>row.sessionId.startsWith("image-"))?await this.imageWorkspace.list().catch(()=>undefined):undefined;
+        for(const row of media)tasks.push({kind:row.sessionId.startsWith("image-")?"image":"session",id:row.sessionId,title:notificationText(images?.conversations.find(value=>value.id===row.sessionId)?.title||names.get(row.sessionId)||(row.kind==="image"?"图像创作":"媒体创作"),72),status:"running"});
+        for(const row of await this.nativeRuns?.list().catch(()=>[])??[])if(!row.stale&&row.status==="running")tasks.push({kind:"session",id:row.sessionId,title:notificationText(names.get(row.sessionId)||row.title,72),status:"running"});
         const sessions: DesktopActivitySnapshot["sessions"] = [...states].map(([sessionId, status]) => ({
-          sessionId, status,
+          sessionId, status, activeTurn:this.runningSessions.has(sessionId),
           title: notificationText(this.noticeContexts.get(sessionId)?.title || names.get(sessionId) || "Grok 会话", 72),
           projectName: notificationProject(live.find(row => row.sessionId === sessionId)?.cwd),
         })).sort((a, b) => a.sessionId.localeCompare(b.sessionId));
         snapshot = { sessions, runningCount: sessions.filter(row => row.status === "running").length, awaitingCount: sessions.filter(row => row.status === "awaiting").length,
-          errorCount: sessions.filter(row => row.status === "error").length, inboxUnreadCount: inbox.filter(row => !row.read).length, livePhoneCount: this.remoteLiveDevices() };
+          errorCount: sessions.filter(row => row.status === "error").length, inboxUnreadCount: inbox.filter(row => !row.read).length, livePhoneCount: this.remoteLiveDevices(),...(tasks.length?{tasks}:{}) };
       } while (!this.disposing && revision !== this.activityRevision);
       return snapshot;
     };
@@ -571,6 +599,7 @@ export class AppController {
   private readonly mediaWaitExtensions = new Map<string, () => void>();
   private readonly mediaJobControls = new Map<string, { abort: AbortController; child?: ReturnType<typeof spawn>; transientSession?: { cwd: string; sessionId: string; keep?: boolean }; contextReset?: boolean; cancellationMessage?: string }>();
   private readonly mediaJobFlights = new Map<string, Promise<void>>();
+  private desktopMediaSignature="";
   private mediaCredentialChanges = 0;
   private disposing = false;
   private readonly trustedPickedPaths = new Set<string>();
@@ -623,6 +652,7 @@ export class AppController {
     const resourcesRoot = app.isPackaged ? process.resourcesPath : join(app.getAppPath(), "resources");
     this.resourceIntegrity = verifyResourceManifest(resourcesRoot, app.isPackaged);
     const resourceSuffix = this.resourceIntegrity.ok ? "" : ".integrity-failed";
+    this.desktopContextHelperPath = join(resourcesRoot, "native", "win-x64", `GrokComputerHost.exe${resourceSuffix}`);
     this.computer = new ComputerUseService(
       userDataPath,
       join(resourcesRoot, "native", "win-x64", `GrokComputerHost.exe${resourceSuffix}`),
@@ -768,7 +798,10 @@ export class AppController {
     this.codexPlugins = new CodexPluginService(userDataPath, this.log);
     this.appRelease = new AppReleaseService(this.buildInfo, this.log, createAppReleaseFetcher(this.buildInfo, () => this.settingsStore.get()));
     this.inbox = new NotificationInboxService(userDataPath);
-    this.inboxUnsubscribe = this.inbox.onChanged(() => this.inboxChanged());
+    this.inboxUnsubscribe = this.inbox.onChanged(items => {
+      this.inboxChanged();
+      for (const listener of this.desktopInboxListeners) this.deliverObserver(listener, items);
+    });
     this.watchPendingInbox();
     const workerBaseArgs = app.isPackaged ? [] : [app.getAppPath()];
     this.automations = new AutomationService(userDataPath, this.log, {
@@ -2650,6 +2683,8 @@ export class AppController {
   }
 
   private publishMediaJob(job: MediaGenerationJob): void {
+    const signature=JSON.stringify([...(this.mediaJobs?.values()??[])].map(row=>[row.jobId,row.status]));
+    if(signature!==this.desktopMediaSignature){this.desktopMediaSignature=signature;this.activityChanged();}
     if(job.sessionId.startsWith("image-") && this.persistedImageStates.get(job.jobId)!==job.status){this.persistedImageStates.set(job.jobId,job.status);void this.imageWorkspace.update(job).catch(error=>this.log.log(`图像记录保存失败：${String(error)}`).catch(()=>undefined));}
     if (this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed()) this.window.webContents.send("grok:media-progress", structuredClone(job));
   }
@@ -2923,6 +2958,11 @@ export class AppController {
   async updateSettings(patch: Partial<AppSettings>): Promise<AppSettings> {
     delete patch.lastAutomaticUpdateCheckAt;
     const current = await this.settingsStore.get();
+    if (patch.desktopPet || patch.productivity) {
+      const pet = desktopPetSettings(patch.desktopPet ?? current.desktopPet);
+      validateDesktopPetSettings(pet);
+      validateShortcutBindings(patch.productivity ?? current.productivity ?? {}, [{label:"桌宠",value:pet.shortcut}]);
+    }
     if (patch.activeWorkspace !== undefined && !samePath(patch.activeWorkspace, current.activeWorkspace)) {
       const canonical = patch.activeWorkspace
         ? await canonicalExistingPath(patch.activeWorkspace, "directory")
@@ -2951,10 +2991,21 @@ export class AppController {
     if (patch.defaultEffort !== undefined && !REASONING_EFFORTS.includes(patch.defaultEffort)) throw new Error("不支持的默认推理强度");
     if (patch.uiDensity !== undefined && !isUiDensity(patch.uiDensity)) throw new Error("不支持的界面密度");
     if (patch.theme !== undefined) patch.theme = mergeThemeSettings(current.theme ?? DEFAULT_THEME, patch.theme);
-    const settings = await this.settingsStore.patch(patch);
+    const settings = patch.desktopPet ? await this.settingsStore.mutate(value=>{
+      const position=value.desktopPet?.position;Object.assign(value,patch);
+      if(!Object.hasOwn(patch.desktopPet!,"position"))value.desktopPet={...patch.desktopPet!,position};
+    }) : await this.settingsStore.patch(patch);
     applyNativeTheme(settings.theme);
     for (const listener of this.settingsListeners) this.deliverObserver(listener, settings);
     return settings;
+  }
+  /** Native position/toggle changes merge inside the existing atomic settings transaction. */
+  async updateDesktopPetSettings(patch:Partial<DesktopPetSettings>):Promise<AppSettings>{
+    const settings=await this.settingsStore.mutate(value=>{
+      const pet={...desktopPetSettings(value.desktopPet),...patch};validateDesktopPetSettings(pet);
+      validateShortcutBindings(value.productivity??{},[{label:"桌宠",value:pet.shortcut}]);value.desktopPet=pet;
+    });
+    for(const listener of this.settingsListeners)this.deliverObserver(listener,settings);return settings;
   }
 
   async getTheme(): Promise<ThemeSettings> { return (await this.settingsStore.get()).theme; }
@@ -4241,6 +4292,7 @@ export class AppController {
     if (this.disposing) return;
     const replayingAtEntry=Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId));
     this.nativeRuns?.record(event, replayingAtEntry);
+    if(!replayingAtEntry&&event.type==="runtime-update"&&["goal","workflow"].includes(event.update.kind))this.activityChanged();
     this.nativeAgentCapabilities.record(event, { replaying: Boolean(event.sessionId && this.projectionReplaying.has(event.sessionId)) });
     if (!replayingAtEntry && event.type === "session-title") {
       await this.catalog.syncOfficialTitle(event.sessionId, event.title, event.manual);
@@ -4397,6 +4449,7 @@ export class AppController {
     // Only a live prompt turn counts as "work finished". Model/effort/mode switches and
     // session restore also toggle working→idle and must not raise completion notices.
     if (!replayingAtEntry && event.type === "turn-started" && event.presentation.origin !== "native-control") this.runningSessions.add(event.sessionId);
+    if(event.type==="turn-completed"&&["cancelled","interrupted"].includes(event.presentation?.outcome??""))this.runningSessions.delete(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && this.runningSessions.delete(event.sessionId)) {
       if (this.disposing) return;
       if(this.visibleConversationId!==event.sessionId||!this.window?.isFocused())await this.catalog.markUnread(event.sessionId, event.status === "error");
