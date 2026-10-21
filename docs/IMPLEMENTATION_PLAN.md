@@ -7,7 +7,7 @@
 - [x] Label custom import and image-workshop drafts as unfinished without disabling existing features.
 - [x] Merge question/screenshot launchers into one question entry across the companion, tray and shortcut settings; keep explicit capture/attachment tools in that window and a legacy shortcut fallback.
 - [x] Pass 1440 Desktop tests (9 environment skips), types, build, unchanged resource budgets, light/dark 820px 125/150% layouts and 34 isolated window/IPC checks including middle release, restored height and manual falling. Record physical Windows acceptance separately.
-- [ ] Deliver Windows 0.14.1 Setup/Portable local candidates, checksums and inspection checklist; no installation, phone changes or public upload.
+- [x] Deliver Windows 0.14.1 Setup/Portable local candidates, checksums and inspection checklist; pass packaged contents/Fuses, current UI, isolated Task Scheduler, Chinese/spaced-path Portable startup and 33 packaged window/IPC checks. Installation remains explicit; no phone changes or public upload.
 
 ## Desktop companion (staged Windows candidate)
 
