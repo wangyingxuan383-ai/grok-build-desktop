@@ -19,6 +19,7 @@ const assert=(value:unknown,name:string)=>{if(!value)throw Error(name);checks.pu
 const until=async(test:()=>unknown,name:string)=>{for(let i=0;i<100;i++){if(test())return;await sleep(100);}throw Error("Timed out: "+name);};
 app.whenReady().then(async()=>{
  let pet:DesktopPetController|undefined,back:BrowserWindow|undefined;
+ let releaseFall:{intermediateDIP:number;totalDIP:number;saved:boolean}|undefined;
  try{
   await mkdir(output,{recursive:true});
   await rm(join(output,"failure.txt"),{force:true});
@@ -81,6 +82,7 @@ app.whenReady().then(async()=>{
    assert((p.snapshot() as {gesture?:string}).gesture==="falling","release starts the falling pose");
    await sleep(100);
    assert(window.getBounds().x===middle.x&&window.getBounds().y>middle.y&&window.getBounds().y<middle.y+32,"release physically moves the native window downward");
+   const intermediateDIP=window.getBounds().y-middle.y;
    await writeFile(join(output,"b-short-fall.png"),(await window.webContents.capturePage()).toPNG());
    await sleep(180);
    assert((p.snapshot() as {gesture?:string}).gesture==="settling","short fall ends in recovery");
@@ -88,6 +90,7 @@ app.whenReady().then(async()=>{
    await sleep(700);
    const free=window.getBounds(),saved=settings.desktopPet!.position;
    assert(free.x===middle.x&&free.y===middle.y+31&&p.clip==="idle"&&!!saved&&saved.y<1,"release stops nearby and saves the final resting position");
+   releaseFall={intermediateDIP,totalDIP:free.y-middle.y,saved:!!saved};
    await pet.command("hide");await pet.command("show");await until(()=>p.window?.isVisible(),"free position restoration");window=p.window!;await sleep(1300);
    assert(Math.abs(window.getBounds().y-free.y)<=1,"hidden/reopened companion restores its saved resting height");
    const drop=pet.menu().find(item=>item.label==="落到底部")!;
@@ -130,7 +133,7 @@ app.whenReady().then(async()=>{
   const rejected=await p.window!.webContents.executeJavaScript("window.grokPet.action({type:'execute',command:'test'}).then(()=>false,()=>true)");assert(rejected,"pet transport rejects execution capability");
   await pet.prepareQuit();assert(!p.window,"normal quit releases companion window");pet.dispose();
   assert(!p.window,"disposed window remains absent");
-  await writeFile(join(output,"verification.json"),JSON.stringify({passed:true,entry:process.env.PET_PROBE_APP_ROOT?"packaged ASAR":"development output",checks,nativeInitial,nativeTopmost,environmentMode:systemInput?"native":"synthetic unblocked baseline for window/IPC; no OS input",idleRenderer:metric?{cpu:metric.cpu,memory:metric.memory}:undefined,systemAnimations:systemPreferences.getAnimationSettings(),systemInput:systemInput?"passed":"not verified: system input did not reach the isolated fixture window (Progman was the native foreground)", note:"Electron sandbox/native window integration; simulated lock reasons are not physical lock/DPI/monitor acceptance."},null,2));
+  await writeFile(join(output,"verification.json"),JSON.stringify({passed:true,entry:process.env.PET_PROBE_APP_ROOT?"packaged ASAR":"development output",checks,releaseFall,nativeInitial,nativeTopmost,environmentMode:systemInput?"native":"synthetic unblocked baseline for window/IPC; no OS input",idleRenderer:metric?{cpu:metric.cpu,memory:metric.memory}:undefined,systemAnimations:systemPreferences.getAnimationSettings(),systemInput:systemInput?"passed":"not verified: system input did not reach the isolated fixture window (Progman was the native foreground)", note:"Electron sandbox/native window integration; simulated lock reasons are not physical lock/DPI/monitor acceptance."},null,2));
   console.log("DESKTOP_PET_WINDOW_PASSED "+checks.length);app.exit(0);
  }catch(error){console.error(error);await writeFile(join(output,"failure.txt"),String(error));pet?.dispose();back?.destroy();app.exit(1);}
 });

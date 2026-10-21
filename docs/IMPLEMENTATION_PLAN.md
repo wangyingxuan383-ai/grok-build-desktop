@@ -3,7 +3,7 @@
 ## Short release fall (0.14.3 local candidate)
 
 - [x] Replace in-place-only recovery with a bounded 20–32 DIP physical fall followed by recovery near the release point; retain explicit full falling and existing position storage.
-- [ ] Verify actual window-coordinate travel, final persistence, cancellation and existing build/package gates; deliver local candidates and an updated inspection checklist.
+- [x] Verify actual window-coordinate travel (4 DIP mid-flight and 31 DIP at rest for B/192), final persistence and cancellation. Pass types, 1445 tests (9 environment skips), build, existing resource/package gates and 37 packaged window/IPC checks; deliver local candidates and an updated inspection checklist. Physical system input remains separate.
 
 ## Companion drag animation follow-up (0.14.2 local candidate)
 
