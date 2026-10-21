@@ -38,7 +38,11 @@ After selection, validate idle, awaiting-input and pickup/landing samples before
 
 Use one small transparent Electron window with a restricted sandboxed preload. It must not steal focus; transparent areas pass clicks through, and the tray retains hide/reset/disable controls. Persist location within the owning display work area and recover from display removal and mixed DPI. Hide during lock, sleep, full-screen use and Computer Use execution. A restricted read-only mode in the existing native helper provides environment detection without a new native dependency.
 
-Do not enable the application entry until actual Windows transparency, drag, click-through and display tests pass. The default setting remains off; hidden playback stops decoding/rendering. Do not raise the existing renderer JavaScript budget; target at most 8 MiB for the selected built-in art package.
+The accepted implementation defaults to enabled (B, 192 DIP); explicit saved disables survive restart and upgrade. First visibility and explicit show use a one-second greeting; explicit hide/disable/normal quit use a bounded 800ms farewell. Lock, suspend, fullscreen, Computer Use and capture suppression hide immediately. Restoring from automatic suppression does not replay a greeting. Do not raise the renderer JavaScript budget; both built-in art packs together must remain within 8 MiB.
+
+### Runtime artwork preparation — 2026-10-21
+
+Both routes now include separate illustrated entrance and farewell sheets, alongside the nine earlier action groups. The runtime atlases use fixed standing-reference scale and foot anchors, encoded as WebP. Two complete eleven-group packs plus manifests and attribution total about 3.53 MiB. Masters and prompts stay outside the package; the development-only preparation script accepts a review source directory. This milestone establishes resource preparation, not Windows input acceptance.
 
 ## Useful behavior
 
@@ -56,7 +60,7 @@ A later workshop reuses the application's existing image sessions: description/r
 
 1. Deliver both static candidates and verified local comparisons; obtain character selection.
 2. Accept initial animation samples, then actual Windows native interaction/performance checks.
-3. Integrate event-driven status, navigation and existing quick-entry flows behind an off-by-default setting.
+3. Integrate event-driven status, read-only navigation and existing quick-entry flows with default-enabled quiet companionship, while preserving saved disables.
 4. Add safe local imports, followed by the separately accepted generation workshop.
 5. Run regression, security/content and unchanged resource-budget gates; create a local inspection package before public publishing.
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## Desktop companion artwork preparation (unreleased)
+
+- Prepare illustrated greeting/farewell sequences for both selected characters and fixed-foot WebP atlases for eleven action groups per character, within the combined 8 MiB target.
+- Preserve the circular-G apron embroidery and separate upstream artwork attribution. Runtime interaction acceptance remains a separate milestone.
+
 ## Unreleased
 
 - Expand both local companion pilots with work, celebration, error/help, pat, wave and doze actions; add grouped action selection, replay, tap-to-pat and a side-by-side overview, with no installed runtime change.

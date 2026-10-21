@@ -1,13 +1,14 @@
 # Development roadmap
 
-## Desktop companion (character review first)
+## Desktop companion (staged Windows candidate)
 
 - [x] Deliver two raster character candidates with transparent masters, four expression previews and verified light/dark 128/192/256px comparisons.
 - [x] Retain both visual routes for animation pilots; replace the small character's whale apron motif with the application circular-G embroidery.
 - [x] Deliver both routes' first idle/awaiting-input/pickup-and-landing pilots, with independent controls, frame inspection and documented sandboxed Electron verification.
 - [x] Expand each route with work, celebration, error, pat, wave and doze pilots: nine action groups and 38 keyframes per route, with grouped selection, replay and tap-to-pat review.
+- [x] Add distinct entrance/farewell illustrations for both routes and normalize eleven-group WebP packs within the unchanged combined 8 MiB resource target.
 - [ ] Accept idle/awaiting-input/pickup-and-landing samples, then validate the small transparent window on Windows.
-- [ ] Integrate existing activity/inbox and quick-entry flows behind an off-by-default quiet companion setting.
+- [ ] Integrate existing activity/inbox and quick-entry flows with default-enabled quiet companionship; retain explicit disables across restarts and upgrades.
 - [ ] Add safe local image/animation-pack imports, then the separately accepted generation workshop.
 
 See [the companion plan](DESKTOP_PET_PLAN.md). This work is separate from the installed productivity candidate; no companion runtime is enabled by the visual-review milestone.
