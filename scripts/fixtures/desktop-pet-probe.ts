@@ -30,7 +30,7 @@ app.whenReady().then(async()=>{
    updateSettings:async(patch:Partial<AppSettings>)=>{settings={...settings,...patch};pet!.applySettings(settings);return settings;},updateDesktopPetSettings:async(patch:Partial<AppSettings["desktopPet"]>)=>{settings={...settings,desktopPet:{...desktopPetSettings(settings.desktopPet),...patch}};pet!.applySettings(settings);return settings;},isDesktopTargetVisible:()=>false,navigateDesktopPetTarget:async(t:unknown)=>{destinations.push(t);}};
   pet=new DesktopPetController(controller as unknown as AppController,{rendererEntry:join(appRoot,"out/renderer/pet/index.html"),preloadEntry:join(appRoot,"out/preload/pet.cjs"),builtins:join(resources,"pets"),userRoot:join(output,"profile/pets"),showMain:()=>destinations.push("main"),command:c=>destinations.push(c),quickEntry:i=>destinations.push(i),changed:()=>undefined});
   pet.applySettings(settings);pet.rendererReady();
-  const p=pet as unknown as {window?:BrowserWindow;clip:string;visibility:string;transition:number;environment:{start():void;stop():void;snapshot?:unknown};snapshot():unknown;context(v:unknown):void};
+  const p=pet as unknown as {window?:BrowserWindow;clip:string;visibility:string;transition:number;environment:{start():void;stop():void;snapshot?:unknown};snapshot():unknown;context(v:unknown):void;startDrag():void;endDrag():void};
   await until(()=>p.environment.snapshot,"initial native context");
   const nativeInitial=p.environment.snapshot;
   if(!systemInput){
@@ -66,6 +66,24 @@ app.whenReady().then(async()=>{
   // Electron input exercises the actual sandbox preload and renderer gesture path.
   window.webContents.sendInputEvent({type:"mouseMove",x:180,y:owned.height-100});await sleep(450);
   assert(await window.webContents.executeJavaScript("!document.querySelector('#toolbar').hidden"),"hover reveals toolbar");
+  assert(await window.webContents.executeJavaScript("document.querySelectorAll('#toolbar button').length===3&&!document.querySelector('#screenshot')"),"one question launcher retains a compact three-action toolbar");
+  await window.webContents.executeJavaScript("document.querySelector('#quick-ask').click()");await sleep(50);
+  assert(destinations.at(-1)==="ask","unified question launcher uses existing quick entry");
+  if(!systemInput){
+   // Main-process motion with a fixed real cursor; this is not physical drag acceptance.
+   const area=screen.getDisplayMatching(window.getBounds()).workArea, b=window.getBounds();
+   const middle={...b,y:area.y+Math.round((area.height-b.height)/2)};
+   window.setBounds(middle);p.startDrag();p.endDrag();await sleep(700);
+   const free=window.getBounds(),saved=settings.desktopPet!.position;
+   assert(free.y===middle.y&&p.clip==="idle"&&!!saved&&saved.y<1,"release stays at middle and saves its relative position");
+   await pet.command("hide");await pet.command("show");await until(()=>p.window?.isVisible(),"free position restoration");window=p.window!;await sleep(1300);
+   assert(Math.abs(window.getBounds().y-middle.y)<=1,"hidden/reopened companion restores its saved height");
+   const drop=pet.menu().find(item=>item.label==="落到底部")!;
+   assert(drop.enabled===true,"explicit falling is available away from bottom");
+   (drop.click as ()=>void)();await sleep(720);
+   assert(window.getBounds().x===free.x&&window.getBounds().y===area.y+area.height-window.getBounds().height&&settings.desktopPet!.position!.y===1,"menu falling retains horizontal position and saves the bottom");
+   assert(pet.menu().find(item=>item.label==="落到底部")!.enabled===false,"falling disabled after reaching bottom");
+  }
   if(process.env.PET_PROBE_SYSTEM_INPUT==="1"){back.setFullScreen(true);await until(()=>!p.window,"real native fullscreen suppression");assert(!p.window,"foreground fullscreen actually hides pet");back.setFullScreen(false);await until(()=>p.window?.isVisible(),"fullscreen restoration");window=p.window!;}
   pet.applyActivity({...EMPTY_DESKTOP_ACTIVITY,sessions:[{sessionId:"session-one",title:"会话一",projectName:"",status:"awaiting"},{sessionId:"session-two",title:"会话二",projectName:"",status:"running"}],runningCount:1,awaitingCount:1});await sleep(100);
   assert(p.clip==="waiting","awaiting preempts running");

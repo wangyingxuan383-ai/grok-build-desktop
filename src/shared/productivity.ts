@@ -4,6 +4,7 @@ import type { AppMenuCommand } from "./types";
 export interface DesktopProductivitySettings {
   closeAction: "ask" | "tray" | "quit";
   quickAskShortcut: string;
+  /** Legacy screenshot entry, read only as a fallback for the unified question shortcut. */
   screenshotShortcut: string;
   preventSleepWhileWorking: boolean;
   /** Zero disables warnings. Only explicitly reported, current allowance data is used. */
@@ -18,7 +19,7 @@ export const DEFAULT_PRODUCTIVITY: DesktopProductivitySettings = {
 };
 
 export function productivitySettings(value?: Partial<DesktopProductivitySettings>): DesktopProductivitySettings {
-  return { ...DEFAULT_PRODUCTIVITY, ...value };
+  return { ...DEFAULT_PRODUCTIVITY, ...value, quickAskShortcut: value?.quickAskShortcut || value?.screenshotShortcut || "", screenshotShortcut: "" };
 }
 
 export function notificationsQuiet(value?: Pick<DesktopProductivitySettings, "quietUntil">, now = Date.now()): boolean {

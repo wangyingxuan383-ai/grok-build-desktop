@@ -110,12 +110,12 @@ export function DesktopPetSettings({ value, onChanged }: {
    <label>显示／隐藏快捷键<input value={shortcut} disabled={busy} placeholder="留空禁用，例如 Control+Alt+P" onChange={e => setShortcut(e.target.value)} onBlur={() => { if (shortcut !== current.shortcut)
         void update({ shortcut }); }}/></label>
   </details>
-  <details><summary>自定义形象与生图工坊</summary>
-   <p className="settings-note">导入透明 PNG／WebP，或带 skin.json 的图片动画 ZIP 包。单图保留状态标记；缺失动作自动回退。</p>
+  <details><summary>自定义形象与生图工坊<span className="pet-unfinished"> · 未完善功能</span></summary>
+   <p className="settings-note">当前支持透明 PNG／WebP 和数据型图片动画包导入（ZIP 内含 skin.json）。单图保留状态标记；缺失动作自动回退。</p>
    <button type="button" disabled={busy} onClick={() => void run(async () => { const skin = await window.grokDesktop.importPetSkin(); if (!skin || !alive.current)
         return; setImported(skin); setSkins(await window.grokDesktop.listPetSkins()); })}>导入形象…</button>
    {imported && <div className="pet-import-preview"><PetPreview skin={imported}/><p>{imported.name} · {imported.author}</p><small>{imported.license}</small><button type="button" disabled={busy} onClick={() => void update({ skinId: imported.id })}>使用导入形象</button></div>}
-   <p className="settings-note">工坊会在现有图像会话中准备草稿。添加参考图、检查模型与费用后，由你发送；生成结果可保存后导入。一次只制作一项。</p>
+   <p className="settings-note">工坊目前只在现有图像会话中准备草稿，尚不提供一键生成完整桌宠。添加参考图、检查模型与费用后，由你发送；生成结果可保存后导入。</p>
    <label>制作阶段<select value={stage} onChange={e => setStage(e.target.value as typeof stage)}><option value="base">基础形象</option>{PET_CLIPS.map(id => <option key={id} value={id}>{labels[id]}</option>)}</select></label>
    <label>形象或动作描述<textarea rows={3} value={description} onChange={e => setDescription(e.target.value)} maxLength={4000} placeholder="例如：银白长发、冰蓝眼睛、圆润可爱的小只角色"/></label>
    <button type="button" disabled={busy || !description.trim()} onClick={() => void workshop()}>准备图像草稿…</button>

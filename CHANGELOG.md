@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.1 — Companion placement follow-up candidate
+
+- Keep the companion where it is released instead of automatically dropping it to the bottom; persist its relative monitor position.
+- Add “落到底部” to the companion context menu and tray submenu. Cancel an old fall on a new drag, hide, disable, lock, character or size change.
+- Mark custom characters and image-workshop drafts as unfinished; retain imports and make the draft-only workshop boundary explicit.
+- Merge question and screenshot launchers into one question entry, including tray and shortcut settings. Keep system capture, explicit clipboard attachment and file selection in the question window.
+
+Windows-only local candidate; no automatic installation or public upload. Physical click-through, mixed-DPI and monitor-switch acceptance remain separate from automated window/IPC evidence.
+
 ## 0.14.0 — Windows companion inspection candidate
 
 - Add a default-enabled, quiet desktop companion with two illustrated characters and separate greeting/farewell animations; preserve explicit disables across restarts and upgrades.

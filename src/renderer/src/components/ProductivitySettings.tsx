@@ -17,9 +17,8 @@ export function ProductivitySettings({ value, onChange }: { value?: DesktopProdu
       <label>暂时勿扰<select value={current.quietUntil && Date.parse(current.quietUntil) > Date.now() ? "on" : "off"} onChange={e => update({ quietUntil: e.target.value === "on" ? new Date(Date.now() + 60 * 60_000).toISOString() : undefined })}><option value="off">正常提醒</option><option value="on">暂停系统提醒 1 小时</option></select><small>收件箱继续记录，需要确认的请求仍保留。</small></label>
     </fieldset>
     <fieldset className="conversation-reading-settings"><legend>随手提问</legend>
-      <p className="settings-note">托盘中随时可打开快速提问。全局快捷键默认留空，不抢占其他应用的按键。</p>
-      <label>快速提问快捷键<input aria-label="快速提问快捷键" value={current.quickAskShortcut} placeholder="例如 Control+Shift+Space；留空禁用" onChange={e => update({ quickAskShortcut: e.target.value })}/></label>
-      <label>截图提问快捷键<input aria-label="截图提问快捷键" value={current.screenshotShortcut} placeholder="例如 Control+Alt+S；留空禁用" onChange={e => update({ screenshotShortcut: e.target.value })}/><small>截图和剪贴板内容由你明确选择后添加，发送前可查看与移除。语音听写可在输入框中使用 Windows 的 Win+H。</small></label>
+      <p className="settings-note">托盘中随时可打开提问窗口。全局快捷键默认留空，不抢占其他应用的按键。</p>
+      <label>提问快捷键<input aria-label="提问快捷键" value={current.quickAskShortcut} placeholder="例如 Control+Shift+Space；留空禁用" onChange={e => update({ quickAskShortcut: e.target.value })}/><small>截图、剪贴板与附件共用提问窗口，发送前可查看与移除。</small></label>
       <details><summary>应用内快捷键</summary>{APP_SHORTCUTS.map(item => <label key={item.command}>{item.label}<input aria-label={`${item.label}快捷键`} value={shortcutFor(item.command, current)} placeholder="留空禁用" onChange={e => update({ shortcuts: { ...current.shortcuts, [item.command]: e.target.value } })}/></label>)}<div className="button-row"><button type="button" onClick={() => update({ shortcuts: undefined, quickAskShortcut: DEFAULT_PRODUCTIVITY.quickAskShortcut, screenshotShortcut: DEFAULT_PRODUCTIVITY.screenshotShortcut })}>恢复默认快捷键</button></div></details>
       {error && <p role="alert" className="settings-note">{error}</p>}
     </fieldset>

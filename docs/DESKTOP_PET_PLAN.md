@@ -56,11 +56,13 @@ Window/IPC probes record the initial native environment separately and then use 
 
 Reuse the desktop activity and inbox event paths: awaiting input, failure, completion, running, idle. Completion reactions require a real terminal event and event-ID deduplication; configuration changes, queries and replay stay quiet. Waiting lasts until the interaction resolves. The companion opens the relevant conversation or existing task center; permission decisions remain in the main window.
 
-Reuse existing quick-question and explicit system-screenshot/clipboard flows. Show task/unread/phone status and already-enabled quota warnings without additional polling or billing inference. Head/body taps, double-click navigation, pickup after 6 DIP, landing, hover controls and context menus share one interaction state machine. Quiet companionship is the default when enabled: blink/breathe/tap reactions, with autonomous roaming, sound and unsolicited bubbles off.
+Reuse one question launcher with explicit system-screenshot/clipboard tools inside the existing question window. Show task/unread/phone status and already-enabled quota warnings without additional polling or billing inference. Head/body taps, double-click navigation, pickup after 6 DIP, hover controls and context menus share one interaction state machine. Releasing a drag keeps the current position and restores the actual task posture; falling is available only through the context/tray menu. New gestures, hiding and geometry changes invalidate old fall callbacks. Preserve existing work-area constraints, including the transparent window's space for controls, and relative monitor position storage. Quiet companionship is the default when enabled: blink/breathe/tap reactions, with autonomous roaming, sound and unsolicited bubbles off.
 
 ## Custom characters and later generation
 
 First support local transparent PNG/WebP and data-only animation packs, with preview, size, foot alignment and explicit fallback for missing actions. A still image uses limited motion and state markers rather than claiming complete character animation. Reject executable content, unsafe paths and oversized media.
+
+Mark this section as unfinished even while collapsed. The workshop prepares explicit image drafts only; it does not generate a complete animated companion in one step.
 
 A later workshop reuses the application's existing image sessions: description/reference, one base image, preview/selection, then an explicit next generation step. Retries are user-triggered. Development artwork uses the conversation's built-in image-generation tool; the application does not depend on that tool.
 

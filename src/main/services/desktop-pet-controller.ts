@@ -50,6 +50,7 @@ export class DesktopPetController {
     };
     private dragTimer?: NodeJS.Timeout;
     private landingTimer?: NodeJS.Timeout;
+    private motionVersion = 0;
     private lastWake = 0;
     private asleep = false;
     private crashCount = 0;
@@ -98,6 +99,10 @@ export class DesktopPetController {
         const old = this.settings;
         this.appSettings = settings;
         this.settings = desktopPetSettings(settings.desktopPet);
+        if (old.enabled !== this.settings.enabled || old.skinId !== this.settings.skinId || old.compatibility !== this.settings.compatibility || old.size !== this.settings.size || old.customScale !== this.settings.customScale || old.locked !== this.settings.locked) {
+            this.stopDrag();
+            this.restore();
+        }
         this.intent.enabled = this.settings.enabled;
         if (this.settings.enabled && !old.enabled) {
             this.intent.manuallyHidden = false;
@@ -160,6 +165,8 @@ export class DesktopPetController {
             this.startup = true;
         }
         else if (command === "reset") {
+            this.stopDrag();
+            this.restore();
             const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
             await this.update({ position: { displayId: display.id, x: 1, y: 1 } });
             this.reposition();
@@ -201,6 +208,7 @@ export class DesktopPetController {
             { label: "切换形象", submenu: [{ label: "A · 原创插画", type: "radio", checked: this.settings.skinId === "a", click: () => void this.update({ skinId: "a" }) }, { label: "B · 圆润 Q 版", type: "radio", checked: this.settings.skinId === "b", click: () => void this.update({ skinId: "b" }) }] },
             { label: "仅状态", type: "checkbox", checked: this.settings.mode === "status", click: () => void this.update({ mode: this.settings.mode === "status" ? "companion" : "status" }) },
             { label: "锁定位置", type: "checkbox", checked: this.settings.locked, click: () => void this.update({ locked: !this.settings.locked }) },
+            { label: "落到底部", enabled: this.canDropToBottom(), click: () => this.dropToBottom() },
             { label: "重置位置与交互", click: () => void this.command("reset") },
             { label: "桌宠设置…", click: () => this.options.command("open-pet-settings") },
             { label: "关闭桌宠", enabled: this.enabled, click: () => void this.update({ enabled: false }) },
@@ -382,7 +390,7 @@ export class DesktopPetController {
     }
     private display(): Electron.Display { return this.settings.position ? (screen.getAllDisplays().find(d => d.id === this.settings.position!.displayId) ?? screen.getPrimaryDisplay()) : this.window && !this.window.isDestroyed() ? screen.getDisplayMatching(this.window.getBounds()) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); }
     private bounds(): Electron.Rectangle { const display = this.settings.position ? this.display() : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); return petWindowBounds(display.workArea, Math.round(this.settings.size * (["a", "b"].includes(this.settings.skinId) ? 1 : this.settings.customScale)), this.settings.position); }
-    private reposition(): void { if (this.window && !this.window.isDestroyed()) {
+    private reposition(): void { this.stopDrag(); if (this.window && !this.window.isDestroyed()) {
         this.window.setBounds(this.bounds());
         this.publish();
     } }
@@ -412,13 +420,13 @@ export class DesktopPetController {
     private baseClip(): PetClipId { return petActivity(petTargets(this.activity, this.inbox)); }
     private clearAction(): void { if (this.actionTimer)
         clearTimeout(this.actionTimer); this.actionTimer = undefined; }
-    private restore(): void { if (this.visibility === "exiting" || this.drag)
+    private restore(): void { if (this.visibility === "exiting" || this.drag || this.landingTimer)
         return; const base = this.baseClip(); if (this.visibility === "visible" && this.clip === base) {
         this.publish();
         return;
     } this.clearAction(); this.clip = base; if (this.visibility === "entering")
         this.visibility = "visible"; this.transition++; this.publish(); }
-    private play(clip: PetClipId, timeout?: number): void { if (!this.intent.visible || !this.window || this.visibility === "exiting" || this.drag)
+    private play(clip: PetClipId, timeout?: number): void { if (!this.intent.visible || !this.window || this.visibility === "exiting" || this.drag || this.landingTimer)
         return; this.clearAction(); this.visibility = "visible"; this.clip = clip; this.transition++; this.publish(); if (timeout)
         this.setActionTimeout(timeout); }
     private setActionTimeout(ms: number): void { this.clearAction(); const transition = this.transition; this.actionTimer = setTimeout(() => { if (this.transition === transition)
@@ -467,7 +475,7 @@ export class DesktopPetController {
             throw Error("桌宠操作无效");
         const a = raw as PetAction;
         if (a.type === "animation-end") {
-            if (a.transition !== this.transition || a.clip !== this.clip || this.drag)
+            if (a.transition !== this.transition || a.clip !== this.clip || this.drag || this.landingTimer)
                 return;
             if (this.visibility === "exiting")
                 this.retireDone?.();
@@ -520,7 +528,7 @@ export class DesktopPetController {
                 this.options.quickEntry("ask");
                 break;
             case "screenshot":
-                this.options.quickEntry("screenshot");
+                this.options.quickEntry("ask");
                 break;
             case "tasks":
                 this.options.command("open-inbox");
@@ -553,8 +561,19 @@ export class DesktopPetController {
             default: throw Error("不支持的桌宠操作");
         }
     }
-    private startDrag(): void { if (this.settings.locked || !this.window || this.drag)
-        return; this.drag = { cursor: screen.getCursorScreenPoint(), bounds: this.window.getBounds() }; this.clearAction(); this.clip = "pickup"; this.transition++; this.publish(); this.dragTimer = setInterval(() => this.moveDrag(), 33); }
+    private startDrag(): void {
+        if (this.settings.locked || !this.window || this.window.isDestroyed() || this.drag)
+            return;
+        this.stopDrag();
+        this.drag = { cursor: screen.getCursorScreenPoint(), bounds: this.window.getBounds() };
+        this.clearAction();
+        this.visibility = "visible";
+        this.clip = "pickup";
+        this.transition++;
+        this.publish();
+        this.dragTimer = setInterval(() => this.moveDrag(), 33);
+        this.options.changed();
+    }
     private moveDrag(): void { if (!this.drag || !this.window || this.window.isDestroyed())
         return; const cursor = screen.getCursorScreenPoint(), d = screen.getDisplayNearestPoint(cursor), b = this.drag.bounds; const x = Math.round(Math.max(d.workArea.x, Math.min(d.workArea.x + d.workArea.width - b.width, b.x + cursor.x - this.drag.cursor.x))), y = Math.round(Math.max(d.workArea.y, Math.min(d.workArea.y + d.workArea.height - b.height, b.y + cursor.y - this.drag.cursor.y))); this.window.setPosition(x, y); }
     private endDrag(): void {
@@ -562,27 +581,60 @@ export class DesktopPetController {
             return;
         this.moveDrag();
         this.stopDrag();
-        const w = this.window, start = w.getBounds(), d = screen.getDisplayMatching(start), end = { ...start, y: d.workArea.y + d.workArea.height - start.height };
-        const finish = () => { if (w !== this.window || w.isDestroyed())
-            return; w.setBounds(end); void this.update({ position: petPosition(end, d.workArea, d.id) }).catch(() => undefined); this.restore(); };
+        this.restore();
+        this.options.changed();
+    }
+    private canDropToBottom(): boolean {
+        const w = this.window;
+        if (!this.intent.visible || this.settings.locked || !w || w.isDestroyed() || !w.isVisible() || this.visibility === "exiting" || this.drag || this.landingTimer)
+            return false;
+        const b = w.getBounds(), area = screen.getDisplayMatching(b).workArea;
+        return b.y < area.y + area.height - b.height - 1;
+    }
+    private dropToBottom(): void {
+        if (!this.canDropToBottom())
+            return;
+        this.stopDrag();
+        this.clearAction();
+        const w = this.window!, start = w.getBounds(), d = screen.getDisplayMatching(start), end = { ...start, y: d.workArea.y + d.workArea.height - start.height };
+        const version = this.motionVersion;
+        const current = () => version === this.motionVersion && w === this.window && !w.isDestroyed();
+        const finish = () => {
+            if (!current()) return;
+            w.setPosition(end.x, end.y);
+            const moving = !!this.landingTimer;
+            this.stopDrag();
+            if (!moving) this.rememberPosition();
+            this.restore();
+            this.options.changed();
+        };
         if (this.reduced) {
             finish();
             return;
         }
         const at = Date.now();
+        this.visibility = "visible";
+        this.clip = "pickup";
         this.transition++;
-        this.landingTimer = setInterval(() => { if (w !== this.window || w.isDestroyed()) {
-            if (this.landingTimer)
-                clearInterval(this.landingTimer);
-            return;
-        } const t = Math.min(1, (Date.now() - at) / 600); w.setPosition(end.x, Math.round(start.y + (end.y - start.y) * t * t)); if (t >= 1) {
-            clearInterval(this.landingTimer);
-            this.landingTimer = undefined;
-            finish();
-        } }, 33);
+        const timer = setInterval(() => {
+            if (!current()) { clearInterval(timer); return; }
+            const t = Math.min(1, (Date.now() - at) / 600);
+            w.setPosition(end.x, Math.round(start.y + (end.y - start.y) * t * t));
+            if (t >= 1) finish();
+        }, 33);
+        this.landingTimer = timer;
         this.publish();
+        this.options.changed();
     }
-    private stopDrag(): void { this.drag = undefined; if (this.dragTimer)
+    private rememberPosition(): void {
+        const w = this.window;
+        if (!w || w.isDestroyed()) return;
+        const b = w.getBounds(), d = screen.getDisplayMatching(b), position = petPosition(b, d.workArea, d.id);
+        // Use the current position for an immediate resize/rebuild, before the atomic store write completes.
+        this.settings = { ...this.settings, position };
+        void this.update({ position }).catch(() => undefined);
+    }
+    private stopDrag(): void { const moving = !!this.drag || !!this.landingTimer; this.motionVersion++; this.drag = undefined; if (this.dragTimer)
         clearInterval(this.dragTimer); if (this.landingTimer)
-        clearInterval(this.landingTimer); this.dragTimer = undefined; this.landingTimer = undefined; }
+        clearInterval(this.landingTimer); this.dragTimer = undefined; this.landingTimer = undefined; if (moving) this.rememberPosition(); }
 }

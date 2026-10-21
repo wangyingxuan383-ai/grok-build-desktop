@@ -7,10 +7,22 @@ describe("opt-in desktop global shortcuts", () => {
     const service = new DesktopShellShortcuts(host, open);
     service.apply(); expect(host.register).not.toHaveBeenCalled();
     service.apply({ quickAskShortcut: "Ctrl+Shift+Space", screenshotShortcut: "Ctrl+Alt+S" });
-    expect(host.register).toHaveBeenCalledTimes(2);
+    expect(host.register).toHaveBeenCalledTimes(1);
     (host.register.mock.calls[0] as unknown as [string, () => void])[1](); expect(open).toHaveBeenCalledWith("ask");
-    service.apply({ quickAskShortcut: "Ctrl+Shift+Space", screenshotShortcut: "Ctrl+Alt+S" }); expect(host.register).toHaveBeenCalledTimes(2);
-    service.apply(); expect(host.unregister).toHaveBeenCalledTimes(2); expect(host.unregister).not.toHaveBeenCalledWith("CommandOrControl+Alt+Esc");
+    service.apply({ quickAskShortcut: "Ctrl+Shift+Space", screenshotShortcut: "Ctrl+Alt+S" }); expect(host.register).toHaveBeenCalledTimes(1);
+    service.apply(); expect(host.unregister).toHaveBeenCalledTimes(1); expect(host.unregister).not.toHaveBeenCalledWith("CommandOrControl+Alt+Esc");
+  });
+  it("retains a legacy screenshot-only binding as the unified question entry", () => {
+    const host = { register: vi.fn((_key: string, _action: () => void) => true), unregister: vi.fn() }, open = vi.fn();
+    const service = new DesktopShellShortcuts(host, open);
+    service.apply({ screenshotShortcut: "Ctrl+Alt+S" });
+    expect(host.register).toHaveBeenCalledOnce();
+    host.register.mock.calls[0]![1]();
+    expect(open).toHaveBeenCalledWith("ask");
+    service.apply({ quickAskShortcut: "Ctrl+Alt+S", screenshotShortcut: "" });
+    expect(host.register).toHaveBeenCalledOnce();
+    service.apply({ quickAskShortcut: "", screenshotShortcut: "" });
+    expect(host.unregister).toHaveBeenCalledWith("Control+Alt+S");
   });
   it("reports OS conflicts without unregistering a shortcut owned by another feature", () => {
     const host = { register: vi.fn(() => false), unregister: vi.fn() };

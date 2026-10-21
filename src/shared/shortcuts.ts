@@ -1,5 +1,6 @@
 import type { AppMenuCommand } from "./types";
 import type { DesktopProductivitySettings } from "./productivity";
+import { productivitySettings } from "./productivity";
 
 export const APP_SHORTCUTS = [
   { command: "new-session", label: "新建会话", accelerator: "Control+N" },
@@ -39,8 +40,7 @@ export function validateShortcutBindings(settings: Partial<DesktopProductivitySe
   for (const key of Object.keys(settings.shortcuts ?? {})) if (!APP_SHORTCUTS.some(item => item.command === key)) throw new Error("不支持的自定义快捷键");
   const entries = [
     ...APP_SHORTCUTS.map(item => ({ label: item.label, value: shortcutFor(item.command, settings) })),
-    { label: "快速提问", value: settings.quickAskShortcut ?? "" },
-    { label: "截图提问", value: settings.screenshotShortcut ?? "" },
+    { label: "提问", value: productivitySettings(settings).quickAskShortcut },
     ...additional,
   ];
   for (const { label, value } of entries) {

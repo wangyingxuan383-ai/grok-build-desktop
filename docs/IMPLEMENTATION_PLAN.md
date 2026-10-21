@@ -1,5 +1,14 @@
 # Development roadmap
 
+## Companion feedback follow-up (0.14.1 local candidate)
+
+- [x] Keep the companion at its released position and restore task posture; retain existing work-area boundaries and relative display coordinates.
+- [x] Add explicit tray/context-menu falling with locking/visibility guards and cancellation identities for stale animation callbacks.
+- [x] Label custom import and image-workshop drafts as unfinished without disabling existing features.
+- [x] Merge question/screenshot launchers into one question entry across the companion, tray and shortcut settings; keep explicit capture/attachment tools in that window and a legacy shortcut fallback.
+- [x] Pass 1440 Desktop tests (9 environment skips), types, build, unchanged resource budgets, light/dark 820px 125/150% layouts and 34 isolated window/IPC checks including middle release, restored height and manual falling. Record physical Windows acceptance separately.
+- [ ] Deliver Windows 0.14.1 Setup/Portable local candidates, checksums and inspection checklist; no installation, phone changes or public upload.
+
 ## Desktop companion (staged Windows candidate)
 
 - [x] Deliver two raster character candidates with transparent masters, four expression previews and verified light/dark 128/192/256px comparisons.

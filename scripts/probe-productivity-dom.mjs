@@ -52,6 +52,7 @@ app.whenReady().then(async()=>{
   await run('(()=>{const s=document.querySelector(".session-export-options select");s.value="html";s.dispatchEvent(new Event("change",{bubbles:true}))})()');await wait();
   assert(await run('document.querySelector("iframe").getAttribute("sandbox")===""'),'HTML export stays sandboxed');
   await run('productivityFixture.petSettings()');await wait();
+  assert(await run('Array.from(document.querySelectorAll("summary")).some(s=>s.textContent==="自定义形象与生图工坊 · 未完善功能"&&!s.parentElement.open)'),'unfinished label visible before expansion');
   assert(await run('document.querySelector("input[type=checkbox]").checked'),'pet enabled by default');
   await run('document.querySelector("input[type=checkbox]").click()');await wait();
   assert(await run('!document.querySelector("input[type=checkbox]").checked&&window.petFixtureWrites===1'),'pet disable saves immediately');
@@ -62,6 +63,11 @@ app.whenReady().then(async()=>{
     await run('productivityFixture.theme('+dark+');productivityFixture.'+show+'('+ (show==='inbox'?'true':'') +')');await wait();
     for(const [width,zoom] of [[820,1.25],[820,1.5]]){
      win.setSize(width,900);win.webContents.setZoomFactor(zoom);await wait();
+     if(name==='pet'){
+      await run('(()=>{const s=Array.from(document.querySelectorAll("summary")).find(s=>s.textContent.includes("未完善功能"));s.parentElement.open=true;s.scrollIntoView({block:"start"})})()');await wait();
+      assert(await run('document.body.textContent.includes("尚不提供一键生成完整桌宠")'),'workshop draft boundary visible');
+      assert(await run('(()=>{const s=document.querySelector(".pet-unfinished");return s.getBoundingClientRect().right<=innerWidth})()'),'unfinished label stays inside viewport');
+     }
      assert(await run('document.documentElement.scrollWidth<=window.innerWidth+1'),'horizontal page overflow: '+name);
      assert(await run('Array.from(document.querySelectorAll(".snippet-library")).every(e=>e.scrollWidth<=e.clientWidth+1)'),'snippet inner overflow');
      await run('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');

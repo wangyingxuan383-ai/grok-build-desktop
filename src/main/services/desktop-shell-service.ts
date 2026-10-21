@@ -111,8 +111,7 @@ export class DesktopShellService {
     const sessions = [...this.activity.sessions].sort((a, b) => priority(a.status) - priority(b.status));
     const menu: MenuItemConstructorOptions[] = [
       { label: "打开 Grok Build Desktop", click: this.options.showWindow },
-      { label: "快速提问…", click: () => this.quickEntry.open("ask") },
-      { label: "截图提问…", click: () => this.quickEntry.open("screenshot") },
+      { label: "提问…", click: () => this.quickEntry.open("ask") },
       { label: "桌面伴侣", submenu:this.pet.menu() },
       ...this.shortcutWarnings.map(label => ({ label, enabled: false })),
       { type: "separator" },

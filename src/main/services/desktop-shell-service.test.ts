@@ -34,7 +34,8 @@ it("updates from activity/settings observers and releases all subscriptions and 
   expect(window.webContents.send).toHaveBeenLastCalledWith("grok:desktop-activity", expect.objectContaining({ awaitingCount: 2, livePhoneCount: 3 }));
   window.webContents.send.mockClear(); service.rendererReady(); expect(window.webContents.send).toHaveBeenCalledOnce();
   expect(window.setProgressBar).toHaveBeenLastCalledWith(2, { mode: "indeterminate" }); expect(mocks.start).toHaveBeenCalledWith("prevent-app-suspension");
-  const menu = mocks.menus.at(-1); menu.find((row: any) => row.label === "快速提问…").click(); expect(mocks.open).toHaveBeenCalledWith("ask");
+  const menu = mocks.menus.at(-1); menu.find((row: any) => row.label === "提问…").click(); expect(mocks.open).toHaveBeenCalledWith("ask");
+  expect(menu.filter((row: any) => row.label?.includes("提问"))).toHaveLength(1);
   menu.find((row: any) => row.label === "退出应用").click(); expect(quit).toHaveBeenCalledOnce();
   expect(controller.getDesktopActivity).toHaveBeenCalledOnce();
   service.dispose(); service.dispose(); expect(unsubscribeActivity).toHaveBeenCalledOnce(); expect(unsubscribeSettings).toHaveBeenCalledOnce();

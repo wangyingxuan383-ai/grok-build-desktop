@@ -10,5 +10,6 @@
 .pet-action-preview small,.pet-import-preview small { display:block;color:var(--color-fg-subtle);line-height:1.5;overflow-wrap:anywhere; }
 .desktop-pet-settings details { margin-top:12px; }
 .desktop-pet-settings details>summary { cursor:pointer;padding:8px 0;font-size:12px; }
+.pet-unfinished { color:var(--color-fg-subtle);font-weight:400; }
 .desktop-pet-settings textarea { width:100%;resize:vertical;min-height:70px; }
 @media(max-width:420px) { .pet-skin-choices,.pet-settings-grid { grid-template-columns:1fr; } }

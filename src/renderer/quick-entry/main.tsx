@@ -53,7 +53,7 @@ function QuickEntry() {
   const canSend = context?.workspace && (!sessionId || session && !["working", "needs-user", "queued"].includes(session.status)) && (text.trim() || context?.attachments.length);
 
   return <main onKeyDownCapture={event => { if (event.key === "Escape" && !busyRef.current && !event.nativeEvent.isComposing) { event.preventDefault(); void window.quickEntry.cancel(); } }}>
-    <header><div><h1>{context?.intent === "screenshot" ? "截图提问" : "快速提问"}</h1><p>选择项目与会话，继续手头的工作</p></div><button aria-label="关闭并丢弃草稿" className="close" onClick={() => void window.quickEntry.cancel()}>×</button></header>
+    <header><div><h1>提问</h1><p>选择项目与会话，继续手头的工作</p></div><button aria-label="关闭并丢弃草稿" className="close" onClick={() => void window.quickEntry.cancel()}>×</button></header>
     {context ? <>
       <div className="target">
         <label>项目<select value={context.workspace} disabled={busy} onChange={event => { setSessionId(""); void action(() => load(event.target.value)); }}>
@@ -76,7 +76,7 @@ function QuickEntry() {
         <button disabled={busy} onClick={() => void action(async () => { const value = await window.quickEntry.clipboard(context.draftId); setContext({ ...context, attachments: value.attachments }); if (value.text) setText(current => [current, value.text].filter(Boolean).join("\n")); else if (!value.attachments.length) setNotice("剪贴板中没有文字或图片。"); })}>引用剪贴板</button>
         <button disabled={busy} onClick={() => void action(async () => { await window.quickEntry.snip(context.draftId); setNotice("完成系统截图后，点“引用剪贴板”附上截图；取消截图则无需引用。"); })}>系统截图…</button>
       </div>
-      {(notice || context.intent === "screenshot") && <p className="hint" role="status">{notice || "点“系统截图”选择区域，再点“引用剪贴板”。截图会留在草稿中，等你确认发送。"}</p>}
+      {notice && <p className="hint" role="status">{notice}</p>}
       {context.warnings.map(warning => <p key={warning} className="warning">{warning}</p>)}
       <footer><span>Enter 发送 · Shift+Enter 换行 · Esc 关闭<br />关闭会丢弃此草稿，主窗口草稿保留。</span><button className="primary" disabled={busy || !canSend} onClick={() => void send()}>{busy ? "请稍候…" : "发送到会话"}</button></footer>
     </> : <p className="hint">正在读取项目与会话…</p>}

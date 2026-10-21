@@ -214,7 +214,6 @@ window.addEventListener("pointerleave", () => { if (!gestures.captured) {
     scheduler.wake();
 } });
 document.querySelector("#quick-ask")!.addEventListener("click", () => action({ type: "quick-ask" }));
-document.querySelector("#screenshot")!.addEventListener("click", () => action({ type: "screenshot" }));
 document.querySelector("#tasks")!.addEventListener("click", () => { cardOpen = !cardOpen; renderCard(); });
 document.querySelector("#more")!.addEventListener("click", () => action({ type: "menu" }));
 document.querySelector("#close-card")!.addEventListener("click", () => { cardOpen = false; renderCard(); });

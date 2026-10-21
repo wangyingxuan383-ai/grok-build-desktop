@@ -78,7 +78,7 @@ export class DesktopQuickEntryWindow {
     const width = Math.min(560, workArea.width), height = Math.min(500, workArea.height);
     const window = new BrowserWindow({ width, height, x: Math.round(workArea.x + (workArea.width - width) / 2), y: Math.round(workArea.y + (workArea.height - height) / 3),
       minWidth: Math.min(420, width), minHeight: Math.min(360, height), show: false, resizable: true, maximizable: false, fullscreenable: false,
-      title: "快速提问 · Grok Build Desktop", backgroundColor: "#121212", autoHideMenuBar: true,
+      title: "提问 · Grok Build Desktop", backgroundColor: "#121212", autoHideMenuBar: true,
       webPreferences: { preload: this.options.preloadEntry, nodeIntegration: false, contextIsolation: true, sandbox: true,
         partition: "grok-quick-entry", spellcheck: false, webviewTag: false, safeDialogs: true } });
     this.window = window;
