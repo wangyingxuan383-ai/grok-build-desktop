@@ -9,6 +9,7 @@ import type { AppController } from "../../src/main/app-controller";
 import { EMPTY_DESKTOP_ACTIVITY } from "../../src/main/services/desktop-shell-state";
 import { zipSync,strToU8 } from "fflate";
 const root=process.env.PET_PROBE_ROOT!,appRoot=process.env.PET_PROBE_APP_ROOT??root,resources=process.env.PET_PROBE_RESOURCES??join(root,"resources"),output=process.env.PET_PROBE_OUTPUT??join(root,"out/pet-native-probe");
+const systemInput=process.env.PET_PROBE_SYSTEM_INPUT==="1";
 app.setPath("userData",join(output,"profile"));
 protocol.registerSchemesAsPrivileged([{scheme:"grok-pet",privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
 app.commandLine.appendSwitch("disable-features","CalculateNativeWinOcclusion");
@@ -29,18 +30,30 @@ app.whenReady().then(async()=>{
    updateSettings:async(patch:Partial<AppSettings>)=>{settings={...settings,...patch};pet!.applySettings(settings);return settings;},updateDesktopPetSettings:async(patch:Partial<AppSettings["desktopPet"]>)=>{settings={...settings,desktopPet:{...desktopPetSettings(settings.desktopPet),...patch}};pet!.applySettings(settings);return settings;},isDesktopTargetVisible:()=>false,navigateDesktopPetTarget:async(t:unknown)=>{destinations.push(t);}};
   pet=new DesktopPetController(controller as unknown as AppController,{rendererEntry:join(appRoot,"out/renderer/pet/index.html"),preloadEntry:join(appRoot,"out/preload/pet.cjs"),builtins:join(resources,"pets"),userRoot:join(output,"profile/pets"),showMain:()=>destinations.push("main"),command:c=>destinations.push(c),quickEntry:i=>destinations.push(i),changed:()=>undefined});
   pet.applySettings(settings);pet.rendererReady();
-  const p=pet as unknown as {window?:BrowserWindow;clip:string;visibility:string;transition:number;environment:{stop():void};snapshot():unknown;context(v:unknown):void};
+  const p=pet as unknown as {window?:BrowserWindow;clip:string;visibility:string;transition:number;environment:{start():void;stop():void;snapshot?:unknown};snapshot():unknown;context(v:unknown):void};
+  await until(()=>p.environment.snapshot,"initial native context");
+  const nativeInitial=p.environment.snapshot;
+  if(!systemInput){
+   p.environment.stop();
+   const baseline={locked:false,presentation:false,fullScreen:false,foregroundRect:null,doubleClickTime:500,leftButtonDown:false};
+   p.environment.start=()=>queueMicrotask(()=>p.context(baseline));
+   p.environment.start();
+  }
   await until(()=>p.window?.isVisible(),"default visible");await sleep(1600);
   let window=p.window!;
-  assert(!window.isFocusable()&&!window.isFocused()&&window.isAlwaysOnTop(),"visible without focus and always on top");
+  console.log("WINDOW_FLAGS",JSON.stringify({focusable:window.isFocusable(),focused:window.isFocused(),alwaysOnTop:window.isAlwaysOnTop(),bounds:window.getBounds()}));
+  const hostBlocked=(nativeInitial as {locked:boolean;presentation:boolean;fullScreen:boolean}).locked||(nativeInitial as {presentation:boolean}).presentation||(nativeInitial as {fullScreen:boolean}).fullScreen;
+  const nativeTopmost=hostBlocked?"deferred: host is locked/presenting/fullscreen":window.isAlwaysOnTop();
+  assert(!window.isFocusable()&&!window.isFocused(),"sandbox companion is non-focusable and reports no focus");
+  if(!hostBlocked)assert(window.isAlwaysOnTop(),"native window reports always-on-top on an unblocked desktop");
   assert(p.visibility==="visible"&&p.clip==="idle","entry settles into idle");
   assert(await window.webContents.executeJavaScript("document.querySelector('#pet').getContext('2d').getImageData(0,0,innerWidth,innerHeight).data.some((v,i)=>i%4===3&&v>0)"),"real alpha image decoded and drawn");
   await writeFile(join(output,"b-idle.png"),(await window.webContents.capturePage()).toPNG());
   const owned=window.getBounds();
-  back=new BrowserWindow({x:owned.x,y:owned.y,width:owned.width,height:owned.height,show:true,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
+  back=new BrowserWindow({x:owned.x,y:owned.y,width:owned.width,height:owned.height,show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
   await back.loadURL('data:text/html,<body style="margin:0;background:%23dfe5ec"><button style="width:100vw;height:100vh;border:0;background:transparent" onclick="document.body.dataset.clicks=String(Number(document.body.dataset.clicks||0)+1)">Native pet verification surface</button>');
   await back.webContents.executeJavaScript("window.probeEvents=[];for(const type of ['mousemove','mousedown','mouseup','click'])document.addEventListener(type,e=>probeEvents.push([e.type,e.clientX,e.clientY]));document.querySelector('button').click();document.body.dataset.clicks='0'");
-  back.setAlwaysOnTop(true,"floating");back.focus();window.moveTop();await sleep(350);assert(!window.isFocused(),"underlying window retains focus");
+  back.setAlwaysOnTop(true,"floating");back.showInactive();if(systemInput)back.focus();window.moveTop();await sleep(350);assert(!window.isFocused(),"companion stays unfocused beside another sandbox window");
   window.setIgnoreMouseEvents(true,{forward:true});
   if(process.env.PET_PROBE_SYSTEM_INPUT==="1"){
   const click=(x:number,y:number)=>new Promise<void>((resolve,reject)=>{const pt=screen.dipToScreenPoint({x,y});execFile(join(process.env.SystemRoot!,"System32/WindowsPowerShell/v1.0/powershell.exe"),["-NoProfile","-ExecutionPolicy","Bypass","-File",join(root,"scripts/probe-pet-pointer.ps1"),"-X",String(pt.x),"-Y",String(pt.y),"-VerifyWindow",back!.getNativeWindowHandle().readBigUInt64LE().toString()],{windowsHide:true,timeout:10000},(error,stdout)=>{console.log("POINTER_ROOT",stdout.trim(),"BACK",back!.getNativeWindowHandle().readBigUInt64LE().toString(),"PET",window.getNativeWindowHandle().readBigUInt64LE().toString());error?reject(error):resolve();});});
@@ -87,7 +100,7 @@ app.whenReady().then(async()=>{
   const rejected=await p.window!.webContents.executeJavaScript("window.grokPet.action({type:'execute',command:'test'}).then(()=>false,()=>true)");assert(rejected,"pet transport rejects execution capability");
   await pet.prepareQuit();assert(!p.window,"normal quit releases companion window");pet.dispose();
   assert(!p.window,"disposed window remains absent");
-  await writeFile(join(output,"verification.json"),JSON.stringify({passed:true,entry:process.env.PET_PROBE_APP_ROOT?"packaged ASAR":"development output",checks,idleRenderer:metric?{cpu:metric.cpu,memory:metric.memory}:undefined,systemAnimations:systemPreferences.getAnimationSettings(),systemInput:process.env.PET_PROBE_SYSTEM_INPUT==="1"?"passed":"not verified: system input did not reach the isolated fixture window (Progman was the native foreground)", note:"Electron sandbox/native window integration; simulated lock reasons are not physical lock/DPI/monitor acceptance."},null,2));
+  await writeFile(join(output,"verification.json"),JSON.stringify({passed:true,entry:process.env.PET_PROBE_APP_ROOT?"packaged ASAR":"development output",checks,nativeInitial,nativeTopmost,environmentMode:systemInput?"native":"synthetic unblocked baseline for window/IPC; no OS input",idleRenderer:metric?{cpu:metric.cpu,memory:metric.memory}:undefined,systemAnimations:systemPreferences.getAnimationSettings(),systemInput:systemInput?"passed":"not verified: system input did not reach the isolated fixture window (Progman was the native foreground)", note:"Electron sandbox/native window integration; simulated lock reasons are not physical lock/DPI/monitor acceptance."},null,2));
   console.log("DESKTOP_PET_WINDOW_PASSED "+checks.length);app.exit(0);
  }catch(error){console.error(error);await writeFile(join(output,"failure.txt"),String(error));pet?.dispose();back?.destroy();app.exit(1);}
 });

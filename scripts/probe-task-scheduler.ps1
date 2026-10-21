@@ -35,8 +35,9 @@ $id = [Guid]::NewGuid().ToString("N")
 $taskName = "Grok Build Desktop Probe $id"
 $marker = Join-Path ([IO.Path]::GetTempPath()) "grok-build-desktop-scheduler-probe-$id.json"
 $xmlPath = Join-Path ([IO.Path]::GetTempPath()) "grok-build-desktop-scheduler-probe-$id.xml"
+$probeProfile = Join-Path ([IO.Path]::GetTempPath()) "Grok-Build-Desktop-scheduler-probe-$id"
 $start = (Get-Date).AddMinutes(2).ToString("yyyy-MM-dd'T'HH:mm:ss")
-$arguments = '--scheduler-probe "{0}"' -f $marker
+$arguments = '--user-data-dir="{0}" --scheduler-probe "{1}"' -f $probeProfile, $marker
 
 $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -79,6 +80,11 @@ if ($created) {
   }
 }
 Remove-Item -LiteralPath $marker, $xmlPath -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $probeProfile -PathType Container) {
+  $resolvedProfile = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $probeProfile).Path)
+  $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+  if ($resolvedProfile.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -and (Split-Path -Leaf $resolvedProfile) -eq "Grok-Build-Desktop-scheduler-probe-$id") { Remove-Item -LiteralPath $resolvedProfile -Recurse -Force }
+}
 
 if ($primaryFailure) {
   if ($cleanupFailure) { Write-Warning "任务调度探针清理也失败：$($cleanupFailure.Exception.Message)" }

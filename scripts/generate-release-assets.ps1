@@ -37,6 +37,8 @@ if ($LASTEXITCODE -ne 0) { throw "SBOM 生成失败：$SbomText" }
 
 npx license-checker-rseidelsohn --production --json --out (Join-Path $Release 'THIRD_PARTY_LICENSES.json')
 if ($LASTEXITCODE -ne 0) { throw '第三方许可证报告生成失败。' }
+node (Join-Path $PSScriptRoot 'normalize-license-report.mjs')
+if ($LASTEXITCODE -ne 0) { throw '第三方许可证报告路径清理失败。' }
 
 $ExpectedNames = @(
     "Grok-Build-Desktop-Setup-v$Version-x64.exe",

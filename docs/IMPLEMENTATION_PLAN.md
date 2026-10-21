@@ -14,7 +14,8 @@
 - [x] Canonicalize the scheduler probe's Windows temporary-directory aliases while retaining exact marker names and exclusive writes; exclude the stock Electron demo from local-runtime packaging.
 - [x] Verify immediate settings saves and light/dark layouts at 820px and 125/150% zoom; preserve the existing renderer and combined artwork budgets.
 - [ ] Validate system mouse click-through, physical lock/unlock, monitor removal and mixed-DPI input in an interactive Windows session.
-- [ ] Deliver a locally inspected candidate with package/provenance checks and clearly listed remaining system acceptance.
+- [x] Deliver a locally inspected Windows 0.14.0 Setup/Portable candidate with package/provenance checks and clearly listed remaining system acceptance; no replacement installation or public upload.
+- [x] Pass 1427 Desktop tests (9 environment skips), current-version packaged pages, isolated Task Scheduler and Chinese/spaced-path Portable startup. Keep window/IPC baseline tests distinct from native input/placement acceptance.
 
 See [the companion plan](DESKTOP_PET_PLAN.md). The source candidate adds the companion runtime; it does not replace an installed build or constitute a public release.
 
@@ -27,7 +28,7 @@ See [the companion plan](DESKTOP_PET_PLAN.md). The source candidate adds the com
 - [x] Pass both type checks, Desktop regression (1399 passed, 9 environment skips), phone regression (135 passed), build and the existing renderer budget.
 - [x] Verify consecutive/stale image drops in sandboxed Electron DOM and actual export/alert visibility against a native WebContentsView.
 
-These source fixes have not been packaged or installed. Physical-device input-method behavior retains its own acceptance boundary.
+The Desktop fixes are included in the 0.14.0 Windows inspection candidate. The phone source fixes do not constitute a new APK in this companion-only delivery. Physical-device input-method behavior retains its own acceptance boundary.
 
 ## Desktop productivity candidate (0.13.0 / Grok Remote 0.4.3)
 

@@ -50,6 +50,8 @@ The candidate includes settings, tray controls, restricted hover actions, owned-
 
 Automated evidence covers sandboxed player/preload integration, lifecycle races, receipt deduplication, imports and existing light/dark settings layouts. Native mouse input did not reach the isolated fixture in the available desktop session, so physical transparency/input, lock/unlock and mixed-DPI/monitor tests remain open. Local inspection packaging does not close those acceptance gates or authorize public release.
 
+Window/IPC probes record the initial native environment separately and then use an explicit unblocked baseline. A fullscreen/locked/presentation desktop does not certify native topmost placement; the strict system-input probe keeps the real environment path. The local candidate passes package contents/Fuses, current-version pages, isolated Task Scheduler and Portable startup in a Chinese/spaced path; installation replacement and public release are separate steps.
+
 ## Useful behavior
 
 Reuse the desktop activity and inbox event paths: awaiting input, failure, completion, running, idle. Completion reactions require a real terminal event and event-ID deduplication; configuration changes, queries and replay stay quiet. Waiting lasts until the interaction resolves. The companion opens the relevant conversation or existing task center; permission decisions remain in the main window.
