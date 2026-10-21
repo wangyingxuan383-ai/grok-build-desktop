@@ -5,8 +5,8 @@ const panelSelector = ({ ".task-entry": ".task-center", ".extensions-entry": ".e
 const mappedEntries = {
   // Current public navigation: sidebar pages and the Radix workspace menu.
   ".task-entry": {
-    exists: `Boolean([...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '定时任务'))`,
-    click: `(() => { [...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '定时任务')?.click(); return true; })()`,
+    exists: `Boolean(document.querySelector('.sb-nav-row[aria-label^="任务中心"]'))`,
+    click: `(() => { document.querySelector('.sb-nav-row[aria-label^="任务中心"]')?.click(); return true; })()`,
   },
   ".extensions-entry": {
     exists: `Boolean([...document.querySelectorAll('.sb-nav-row')].find(node => node.textContent?.trim() === '技能与扩展'))`,

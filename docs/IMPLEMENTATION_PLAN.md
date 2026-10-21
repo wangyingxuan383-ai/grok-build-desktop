@@ -10,6 +10,7 @@
 - [ ] Accept idle/awaiting-input/pickup-and-landing samples, then validate the small transparent window on Windows.
 - [x] Integrate existing activity/inbox and quick-entry flows with default-enabled quiet companionship; retain explicit disables across restarts and upgrades. Verify window/IPC lifecycle separately from physical input.
 - [x] Add bounded worker-validated local image/animation imports with sandboxed single-image alignment, and an explicit per-item image-workshop draft flow.
+- [x] Bound file reads before allocation, reject files changing during import, and align the packaged task-entry probe with the current task-center navigation.
 - [x] Verify immediate settings saves and light/dark layouts at 820px and 125/150% zoom; preserve the existing renderer and combined artwork budgets.
 - [ ] Validate system mouse click-through, physical lock/unlock, monitor removal and mixed-DPI input in an interactive Windows session.
 - [ ] Deliver a locally inspected candidate with package/provenance checks and clearly listed remaining system acceptance.

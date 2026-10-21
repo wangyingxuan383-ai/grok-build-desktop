@@ -1,4 +1,4 @@
-import { readFile, mkdir, readdir, writeFile, rename, rm, lstat, realpath } from "node:fs/promises";
+import { readFile, mkdir, readdir, writeFile, rename, rm, lstat, realpath, open } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
@@ -78,9 +78,27 @@ export class DesktopPetAssets {
         }
     }
     async import(path: string): Promise<PetSkin> {
-        const bytes = await readFile(path);
-        if (bytes.length > 24 * 1024 * 1024)
-            throw Error("形象包不能超过 24 MiB");
+        // Bound the read itself, not just the buffer after loading an arbitrary file.
+        const input = await open(path, "r");
+        let bytes: Buffer;
+        try {
+            const info = await input.stat();
+            if (!info.isFile() || info.size < 1 || info.size > 24 * 1024 * 1024)
+                throw Error("请选择不超过 24 MiB 的形象文件");
+            bytes = Buffer.alloc(info.size);
+            let offset = 0;
+            while (offset < bytes.length) {
+                const part = await input.read(bytes, offset, bytes.length - offset, null);
+                if (!part.bytesRead)
+                    break;
+                offset += part.bytesRead;
+            }
+            if (offset !== bytes.length || (await input.read(Buffer.alloc(1), 0, 1, null)).bytesRead)
+                throw Error("形象文件读取期间发生变化，请重试");
+        }
+        finally {
+            await input.close();
+        }
         // Decompression and untrusted JSON/header parsing never run on Electron's main thread.
         const result = await new Promise<{
             skin: PetSkin;
