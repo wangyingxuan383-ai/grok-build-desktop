@@ -39,7 +39,8 @@ app.whenReady().then(async()=>{
    p.environment.start=()=>queueMicrotask(()=>p.context(baseline));
    p.environment.start();
   }
-  await until(()=>p.window?.isVisible(),"default visible");await sleep(1600);
+  await until(()=>p.window?.isVisible(),"default visible");
+  await until(()=>p.visibility==="visible"&&p.clip==="idle","entry settles into idle");
   let window=p.window!;
   console.log("WINDOW_FLAGS",JSON.stringify({focusable:window.isFocusable(),focused:window.isFocused(),alwaysOnTop:window.isAlwaysOnTop(),bounds:window.getBounds()}));
   const hostBlocked=(nativeInitial as {locked:boolean;presentation:boolean;fullScreen:boolean}).locked||(nativeInitial as {presentation:boolean}).presentation||(nativeInitial as {fullScreen:boolean}).fullScreen;
@@ -77,15 +78,18 @@ app.whenReady().then(async()=>{
    assert((p.snapshot() as {gesture?:string}).gesture==="dragging","pickup transitions into the held drag phase");
    await writeFile(join(output,"b-pickup.png"),(await window.webContents.capturePage()).toPNG());
    p.endDrag();
-   assert((p.snapshot() as {gesture?:string}).gesture==="settling","release keeps the recovery animation");
+   assert((p.snapshot() as {gesture?:string}).gesture==="falling","release starts the falling pose");
    await sleep(100);
-   assert(window.getBounds().y===middle.y,"release animation does not move the window");
+   assert(window.getBounds().x===middle.x&&window.getBounds().y>middle.y&&window.getBounds().y<middle.y+32,"release physically moves the native window downward");
+   await writeFile(join(output,"b-short-fall.png"),(await window.webContents.capturePage()).toPNG());
+   await sleep(180);
+   assert((p.snapshot() as {gesture?:string}).gesture==="settling","short fall ends in recovery");
    await writeFile(join(output,"b-release.png"),(await window.webContents.capturePage()).toPNG());
    await sleep(700);
    const free=window.getBounds(),saved=settings.desktopPet!.position;
-   assert(free.y===middle.y&&p.clip==="idle"&&!!saved&&saved.y<1,"release stays at middle and saves its relative position");
+   assert(free.x===middle.x&&free.y===middle.y+31&&p.clip==="idle"&&!!saved&&saved.y<1,"release stops nearby and saves the final resting position");
    await pet.command("hide");await pet.command("show");await until(()=>p.window?.isVisible(),"free position restoration");window=p.window!;await sleep(1300);
-   assert(Math.abs(window.getBounds().y-middle.y)<=1,"hidden/reopened companion restores its saved height");
+   assert(Math.abs(window.getBounds().y-free.y)<=1,"hidden/reopened companion restores its saved resting height");
    const drop=pet.menu().find(item=>item.label==="落到底部")!;
    assert(drop.enabled===true,"explicit falling is available away from bottom");
    (drop.click as ()=>void)();await sleep(720);

@@ -1,5 +1,10 @@
 # Development roadmap
 
+## Short release fall (0.14.3 local candidate)
+
+- [x] Replace in-place-only recovery with a bounded 20–32 DIP physical fall followed by recovery near the release point; retain explicit full falling and existing position storage.
+- [ ] Verify actual window-coordinate travel, final persistence, cancellation and existing build/package gates; deliver local candidates and an updated inspection checklist.
+
 ## Companion drag animation follow-up (0.14.2 local candidate)
 
 - [x] Preserve pickup, suspended hold and an in-place release/recovery pose while retaining free placement and menu falling.

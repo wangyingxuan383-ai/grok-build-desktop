@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.3 — Short release fall candidate
+
+- Move the companion downward by 20–32 DIP after release, over about 240ms, then play the landing recovery and save the final position.
+- Stop near the release point, clamp travel at the work-area bottom, and retain the explicit full “落到底部” command.
+- Reuse the same guarded motion controller for both paths; reduced motion positions immediately and new gestures invalidate old callbacks.
+
+Reuse existing art, settings and permissions. No phone changes or public upload.
+
 ## 0.14.2 — Companion drag animation follow-up candidate
 
 - Restore the pickup transition before the suspended pose, rather than immediately displaying a held frame.

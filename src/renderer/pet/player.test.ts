@@ -16,6 +16,8 @@ describe("pet sandbox player",()=>{
    expect(p.sample(5500).ended).toMatchObject({transition:2,clip:"pickup"});
    p.set({...drag,transition:3,gesture:"landing"},5600,false);expect(p.sample(5600).frame?.x).toBe(40);
    p.set({...drag,transition:4},5700,true);expect(p.sample(5700).frame?.x).toBe(20);
+   p.set({...drag,transition:5,gesture:"falling"},5800,false);
+   expect(p.sample(5800).frame?.x).toBe(40);expect(p.sample(6030).frame?.x).toBe(40);
  });
  it("accepts only local assets belonging to the selected skin",()=>{for(const url of ["file:///C:/private.png","https://example.com/a.png","grok-pet://assets/a/idle.webp","grok-pet://assets/b/../a/idle.webp","grok-pet://assets/b/x.svg"])expect(assetUrl(url,"b")).toBeUndefined();expect(assetUrl(clip.file,"b")).toBe(clip.file);});
  it("does not restart a loop for an unrelated activity revision",()=>{const p=new PetPlayer();p.set(snapshot,0,false);p.set({...snapshot,revision:2,phones:1},120,false);expect(p.sample(130).index).toBe(1);});

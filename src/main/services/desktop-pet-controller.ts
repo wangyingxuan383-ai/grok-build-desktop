@@ -51,6 +51,7 @@ export class DesktopPetController {
     };
     private dragTimer?: NodeJS.Timeout;
     private landingTimer?: NodeJS.Timeout;
+    private landingMode?: "falling" | "landing";
     private motionVersion = 0;
     private lastWake = 0;
     private asleep = false;
@@ -435,7 +436,7 @@ export class DesktopPetController {
     private snapshot(): PetSnapshot {
         if (!this.skin)
             throw Error("桌宠未准备好");
-        return { revision: ++this.revision, transition: this.transition, visibility: this.visibility, clip: this.clip, settings: this.settings, skin: this.skin, reducedMotion: this.reduced, quiet: this.quiet, targets: petTargets(this.activity, this.inbox), unread: this.activity.inboxUnreadCount, phones: this.activity.livePhoneCount, running: petTargets(this.activity,this.inbox).filter(row=>row.status==="running").length, awaiting: petTargets(this.activity,this.inbox).filter(row=>row.status==="awaiting").length, colors: this.palette, theme: this.appSettings?.theme.mode === "light" || this.appSettings?.theme.mode === "custom" && this.appSettings.theme.customBase === "light" || this.appSettings?.theme.mode === "system" && !nativeTheme.shouldUseDarkColors ? "light" : "dark", warning: this.warning, doubleClickTime: this.environment.doubleClickTime ?? 500, gesture: this.drag ? "dragging" : this.landingTimer ? "landing" : this.settling ? "settling" : undefined };
+        return { revision: ++this.revision, transition: this.transition, visibility: this.visibility, clip: this.clip, settings: this.settings, skin: this.skin, reducedMotion: this.reduced, quiet: this.quiet, targets: petTargets(this.activity, this.inbox), unread: this.activity.inboxUnreadCount, phones: this.activity.livePhoneCount, running: petTargets(this.activity,this.inbox).filter(row=>row.status==="running").length, awaiting: petTargets(this.activity,this.inbox).filter(row=>row.status==="awaiting").length, colors: this.palette, theme: this.appSettings?.theme.mode === "light" || this.appSettings?.theme.mode === "custom" && this.appSettings.theme.customBase === "light" || this.appSettings?.theme.mode === "system" && !nativeTheme.shouldUseDarkColors ? "light" : "dark", warning: this.warning, doubleClickTime: this.environment.doubleClickTime ?? 500, gesture: this.drag ? "dragging" : this.landingTimer ? this.landingMode : this.settling ? "settling" : undefined };
     }
     private publish(): void { if (this.loadedWindow && this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed() && this.skin)
         this.window.webContents.send("pet:changed", this.snapshot()); }
@@ -582,11 +583,15 @@ export class DesktopPetController {
             return;
         this.moveDrag();
         this.stopDrag();
+        const b = this.window.getBounds();
+        this.fallTo(b.y + Math.min(32, Math.round(this.settings.size * .16)), 240, true);
+    }
+    private settleAtRest(): void {
         const frames = this.skin?.clips.pickup?.frames;
         if (this.reduced || !frames?.length || ["waiting", "error"].includes(this.baseClip())) {
             this.restore();
         } else {
-            // Finish the pose at the released location; this never moves the window.
+            // Finish the pose only after physical travel has stopped.
             this.visibility = "visible";
             this.clip = "pickup";
             this.transition++;
@@ -595,7 +600,6 @@ export class DesktopPetController {
             this.settling = true;
             this.publish();
         }
-        this.options.changed();
     }
     private canDropToBottom(): boolean {
         const w = this.window;
@@ -607,9 +611,14 @@ export class DesktopPetController {
     private dropToBottom(): void {
         if (!this.canDropToBottom())
             return;
+        const b = this.window!.getBounds(), area = screen.getDisplayMatching(b).workArea;
+        this.fallTo(area.y + area.height - b.height, 600, false);
+    }
+    private fallTo(y: number, duration: number, nearby: boolean): void {
         this.stopDrag();
         this.clearAction();
-        const w = this.window!, start = w.getBounds(), d = screen.getDisplayMatching(start), end = { ...start, y: d.workArea.y + d.workArea.height - start.height };
+        const w = this.window!, start = w.getBounds(), d = screen.getDisplayMatching(start);
+        const end = { ...start, y: Math.round(Math.max(d.workArea.y, Math.min(d.workArea.y + d.workArea.height - start.height, y))) };
         const version = this.motionVersion;
         const current = () => version === this.motionVersion && w === this.window && !w.isDestroyed();
         const finish = () => {
@@ -618,20 +627,22 @@ export class DesktopPetController {
             const moving = !!this.landingTimer;
             this.stopDrag();
             if (!moving) this.rememberPosition();
-            this.restore();
+            if (nearby) this.settleAtRest();
+            else this.restore();
             this.options.changed();
         };
-        if (this.reduced) {
+        if (this.reduced || start.y === end.y) {
             finish();
             return;
         }
         const at = Date.now();
         this.visibility = "visible";
         this.clip = "pickup";
+        this.landingMode = nearby ? "falling" : "landing";
         this.transition++;
         const timer = setInterval(() => {
             if (!current()) { clearInterval(timer); return; }
-            const t = Math.min(1, (Date.now() - at) / 600);
+            const t = this.reduced ? 1 : Math.min(1, (Date.now() - at) / duration);
             w.setPosition(end.x, Math.round(start.y + (end.y - start.y) * t * t));
             if (t >= 1) finish();
         }, 33);
@@ -649,5 +660,5 @@ export class DesktopPetController {
     }
     private stopDrag(): void { const moving = !!this.drag || !!this.landingTimer; this.motionVersion++; this.drag = undefined; if (this.dragTimer)
         clearInterval(this.dragTimer); if (this.landingTimer)
-        clearInterval(this.landingTimer); this.dragTimer = undefined; this.landingTimer = undefined; if (moving) this.rememberPosition(); }
+        clearInterval(this.landingTimer); this.dragTimer = undefined; this.landingTimer = undefined; this.landingMode = undefined; if (moving) this.rememberPosition(); }
 }

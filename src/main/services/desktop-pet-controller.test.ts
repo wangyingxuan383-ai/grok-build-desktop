@@ -54,21 +54,25 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe("companion free placement and explicit falling", () => {
-    it("plays the release pose at the same coordinates before returning to task posture", () => {
+    it("physically falls a short distance, then settles without continuing to the bottom", () => {
         const { pet, window } = fixture();
         pet.startDrag(); pet.endDrag();
         const released = window.getBounds();
-        expect(pet.clip).toBe("pickup"); expect(pet.settling).toBe(true);
-        vi.advanceTimersByTime(200);
-        expect(pet.settling).toBe(true); expect(window.getBounds()).toEqual(released);
-        vi.advanceTimersByTime(250);
+        expect(pet.clip).toBe("pickup"); expect(pet.landingTimer).toBeDefined();
+        vi.advanceTimersByTime(100);
+        expect(window.getBounds().y).toBeGreaterThan(released.y);
+        expect(window.getBounds().y).toBeLessThan(released.y + 31);
+        vi.advanceTimersByTime(170);
+        const resting = { ...released, y: released.y + 31 };
+        expect(pet.settling).toBe(true); expect(window.getBounds()).toEqual(resting);
+        vi.advanceTimersByTime(450);
         expect(pet.settling).toBe(false); expect(pet.clip).toBe("idle");
-        expect(window.getBounds()).toEqual(released);
+        expect(window.getBounds()).toEqual(resting);
     });
     it("lets an urgent task preempt settling without moving the window", () => {
         const { pet, window } = fixture();
         Object.assign(pet, { refreshInbox: vi.fn(async () => undefined) });
-        pet.startDrag(); pet.endDrag(); const released = window.getBounds();
+        pet.startDrag(); pet.endDrag(); vi.advanceTimersByTime(270); const released = window.getBounds();
         pet.applyActivity({ ...EMPTY_DESKTOP_ACTIVITY, sessions: [{ sessionId: "waiting", title: "待确认", projectName: "", status: "awaiting" }], awaitingCount: 1 });
         expect(pet.clip).toBe("waiting"); expect(pet.settling).toBe(false);
         vi.advanceTimersByTime(1000);
@@ -77,27 +81,28 @@ describe("companion free placement and explicit falling", () => {
     it("skips settling for reduced motion and prevents an old pose timeout from ending a new drag", () => {
         const reduced = fixture({ reduceMotion: true }); reduced.pet.startDrag(); reduced.pet.endDrag();
         expect(reduced.pet.clip).toBe("idle"); expect(vi.getTimerCount()).toBe(0);
-        const { pet } = fixture(); pet.startDrag(); pet.endDrag(); vi.advanceTimersByTime(100); pet.startDrag();
+        const { pet } = fixture(); pet.startDrag(); pet.endDrag(); vi.advanceTimersByTime(270); pet.startDrag();
         vi.advanceTimersByTime(600);
         expect(pet.clip).toBe("pickup"); expect(pet.settling).toBe(false);
-        pet.endDrag(); vi.advanceTimersByTime(500);
+        pet.endDrag(); vi.advanceTimersByTime(1000);
         expect(pet.clip).toBe("idle"); expect(vi.getTimerCount()).toBe(0);
     });
-    it.each([{ x: 500, y: 420 }, { x: -900, y: -700 }, { x: 3000, y: 3000 }])("stays at the clamped release point %j and restores task posture", cursor => {
+    it.each([{ cursor: { x: 500, y: 420 }, y: 331 }, { cursor: { x: -900, y: -700 }, y: 31 }, { cursor: { x: 3000, y: 3000 }, y: 578 }])("stops near the clamped release point %j and saves its resting position", ({ cursor, y }) => {
         const { pet, window } = fixture();
         pet.startDrag(); desktop.cursor = cursor; pet.moveDrag();
         const released = window.getBounds();
         pet.endDrag(); vi.advanceTimersByTime(1500);
-        expect(window.getBounds()).toEqual(released);
+        const resting = { ...released, y };
+        expect(window.getBounds()).toEqual(resting);
         expect(pet.clip).toBe("idle");
         expect(vi.getTimerCount()).toBe(0);
-        expect(pet.update).toHaveBeenLastCalledWith({ position: petPosition(released, desktop.area, 2) });
-        expect(petWindowBounds(desktop.area, 192, pet.settings.position)).toEqual(released);
+        expect(pet.update).toHaveBeenLastCalledWith({ position: petPosition(resting, desktop.area, 2) });
+        expect(petWindowBounds(desktop.area, 192, pet.settings.position)).toEqual(resting);
     });
-    it("persists a negative-coordinate monitor position and falls only on menu request", () => {
+    it("persists a nearby resting position on a negative monitor and keeps full falling explicit", () => {
         desktop.area = { x: -1600, y: -1000, width: 1600, height: 1000 };
         const { pet, window, drop } = fixture();
-        pet.startDrag(); pet.endDrag();
+        pet.startDrag(); pet.endDrag(); vi.advanceTimersByTime(750);
         const released = window.getBounds();
         expect(drop().enabled).toBe(true);
         (drop().click as () => void)();
@@ -132,10 +137,22 @@ describe("companion free placement and explicit falling", () => {
         const stale = interval.mock.calls[0]![0] as () => void;
         vi.advanceTimersByTime(220);
         pet.startDrag(); desktop.cursor = { x: 420, y: 320 }; pet.endDrag();
+        vi.advanceTimersByTime(1000);
         const released = window.getBounds(), writes = pet.update.mock.calls.length;
-        vi.advanceTimersByTime(1000); stale();
+        stale();
         expect(window.getBounds()).toEqual(released);
         expect(pet.update).toHaveBeenCalledTimes(writes);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it("invalidates a queued short-fall callback when grabbed again", () => {
+        const interval = vi.spyOn(globalThis, "setInterval"), { pet, window } = fixture();
+        pet.startDrag(); pet.endDrag();
+        const stale = interval.mock.calls[1]![0] as () => void;
+        vi.advanceTimersByTime(100); pet.startDrag();
+        const grabbed = window.getBounds(), writes = pet.update.mock.calls.length;
+        vi.advanceTimersByTime(1000); stale();
+        expect(window.getBounds()).toEqual(grabbed); expect(pet.update).toHaveBeenCalledTimes(writes);
+        pet.endDrag(); vi.advanceTimersByTime(1000);
         expect(vi.getTimerCount()).toBe(0);
     });
     it("disables falling while locked, hidden, or dragging", () => {

@@ -81,6 +81,7 @@ export class PetPlayer {
       const held = { ...frames[Math.min(1, frames.length - 1)]!, duration: 10000 };
       selected = { id: selected.id, clip: { ...selected.clip, frames: snapshot.gesture === "dragging"
         ? !reduced && frames.length > 1 ? [frames[0]!, held] : [held]
+        : snapshot.gesture === "falling" ? [{ ...frames[Math.min(2, frames.length - 1)]!, duration: 10000 }]
         : frames.slice(Math.min(snapshot.gesture === "settling" ? 3 : 2, frames.length - 1)) } };
     }
     const key = `${snapshot.transition}:${snapshot.visibility}:${snapshot.clip}:${snapshot.skin.id}:${snapshot.gesture}:${selected?.clip.file ?? ""}`;
