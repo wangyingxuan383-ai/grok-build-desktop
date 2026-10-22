@@ -134,6 +134,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force downloaded | Out-Null
           gh release download "${{ github.ref_name }}" --dir downloaded
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed.' }
       - name: Verify SHA-256 manifest and provenance
         shell: powershell
         env:
@@ -157,9 +158,12 @@ jobs:
           $setup = Get-ChildItem downloaded\Grok-Build-Desktop-Setup-*.exe | Select-Object -First 1
           $portable = Get-ChildItem downloaded\Grok-Build-Desktop-Portable-*.zip | Select-Object -First 1
           gh attestation verify $setup.FullName --repo "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Installer provenance verification failed.' }
           gh attestation verify $portable.FullName --repo "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable provenance verification failed.' }
           $env:GITHUB_BUILD_COMMIT = '${{ github.sha }}'
           npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Verification dependency installation failed.' }
           ./scripts/verify-companion-release.ps1 -Directory downloaded
       - name: 校验后发布为 Latest
         shell: powershell

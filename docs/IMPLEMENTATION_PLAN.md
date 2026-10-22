@@ -4,6 +4,7 @@
 
 - [x] Bump Desktop to 0.14.4 and Android to 0.4.4/code 16; retain the existing signing identity.
 - [x] Restrict public release attachments to Setup, Portable, signed APK, APK verification metadata and SHA-256 sums; retain build reports and private acceptance evidence locally.
+- [x] Stop publication immediately if download, provenance verification or verification-dependency installation fails.
 - [x] Patch the Vite build tool to 8.2.4 for the security gate without relaxing audit thresholds or changing runtime dependencies.
 - [x] Separate companion-image metadata from executable sandbox code; verify real sandbox decoding, alpha bounds and decoder cleanup for distinct images.
 - [x] Build, inspect package contents and verify signatures/hashes before staging the exact release files.
