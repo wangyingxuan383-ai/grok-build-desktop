@@ -3,6 +3,7 @@
 ## 0.14.4 — Desktop reliability
 
 - Patch the Vite build tool to 8.2.4 without changing application runtime dependencies.
+- Keep imported companion-image metadata out of executable sandbox code while preserving transparent-image alignment.
 - Bind send preparation, failure restoration and text-to-attachment conversion to their owning draft; switching conversations cannot clear another draft. Preserve the explicit new-task-to-session hand-off.
 - Stop cancellation recovery when the original turn ends or changes, preserving the next queued turn and other conversations.
 - Keep sessions connected when a saved model is missing from the current CLI catalog. Require an explicit model choice before sending, without silently changing provider or overwriting the saved preference.
