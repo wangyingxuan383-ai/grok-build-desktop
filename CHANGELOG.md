@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Desktop reliability fixes
+## 0.14.4 — Desktop reliability
 
 - Bind send preparation, failure restoration and text-to-attachment conversion to their owning draft; switching conversations cannot clear another draft. Preserve the explicit new-task-to-session hand-off.
 - Stop cancellation recovery when the original turn ends or changes, preserving the next queued turn and other conversations.
@@ -8,7 +8,7 @@
 - Isolate malformed or unresolved external provider addresses so healthy providers and associated task data remain readable; resolve environment placeholders only for address classification.
 - Allow the companion near the screen's top and side edges without reserving invisible margins. Keep edge controls inside the visible area, preserve saved positions and retain the short release fall.
 
-Source fixes only; installed applications and existing candidate packages are unchanged. Native multi-monitor and mixed-DPI acceptance remain separate.
+Includes Android companion 0.4.4 (versionCode 16), signed with the existing certificate. Native multi-monitor and mixed-DPI acceptance remain separate.
 
 ## 0.14.3 — Short release fall candidate
 

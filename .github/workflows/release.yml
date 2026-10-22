@@ -51,6 +51,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content apps/mobile/package.json -Raw | ConvertFrom-Json).version
+          "MOBILE_RELEASE_VERSION=$version" >> $env:GITHUB_ENV
           New-Item -ItemType Directory -Force release | Out-Null
           $complete = $false
           for ($attempt=0; $attempt -lt 40; $attempt++) {
@@ -72,13 +73,11 @@ jobs:
         with:
           name: grok-build-desktop-${{ github.ref_name }}-x64
           path: |
-            release/Grok-Build-Desktop-Setup-*.exe
-            release/Grok-Build-Desktop-Portable-*.zip
+            release/Grok-Build-Desktop-Setup-${{ github.ref_name }}-x64.exe
+            release/Grok-Build-Desktop-Portable-${{ github.ref_name }}-x64.zip
             release/SHA256SUMS.txt
-            release/*SBOM*.json
-            release/THIRD_PARTY_LICENSES.json
-            release/Grok-Remote-v*.apk
-            release/Grok-Remote-v*-build.json
+            release/Grok-Remote-v${{ env.MOBILE_RELEASE_VERSION }}.apk
+            release/Grok-Remote-v${{ env.MOBILE_RELEASE_VERSION }}-build.json
           if-no-files-found: error
       - name: Attest installer
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
@@ -100,19 +99,18 @@ jobs:
           if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf)) { throw "缺少当前版本的中文发布说明：$notesPath" }
           gh release view "${{ github.ref_name }}" --json isDraft
           if ($LASTEXITCODE -ne 0) {
-            gh release create "${{ github.ref_name }}" --draft --verify-tag --title "Grok Build Desktop ${{ github.ref_name }}｜桌面与安卓" --notes-file $notesPath
+            gh release create "${{ github.ref_name }}" --draft --verify-tag --title "Grok Build Desktop ${{ github.ref_name }}" --notes-file $notesPath
           }
           $draft = gh release view "${{ github.ref_name }}" --json isDraft | ConvertFrom-Json
           if (-not $draft.isDraft) { throw 'Refusing to overwrite an already published release.' }
-          gh release edit "${{ github.ref_name }}" --title "Grok Build Desktop ${{ github.ref_name }}｜桌面与安卓" --notes-file $notesPath
+          gh release edit "${{ github.ref_name }}" --title "Grok Build Desktop ${{ github.ref_name }}" --notes-file $notesPath
+          $mobileVersion = (Get-Content apps/mobile/package.json -Raw | ConvertFrom-Json).version
           gh release upload "${{ github.ref_name }}" --clobber `
-            release/Grok-Build-Desktop-Setup-*.exe `
-            release/Grok-Build-Desktop-Portable-*.zip `
+            "release/Grok-Build-Desktop-Setup-${{ github.ref_name }}-x64.exe" `
+            "release/Grok-Build-Desktop-Portable-${{ github.ref_name }}-x64.zip" `
             release/SHA256SUMS.txt `
-            release/*SBOM*.json `
-            release/THIRD_PARTY_LICENSES.json `
-            release/Grok-Remote-v*.apk `
-            release/Grok-Remote-v*-build.json
+            "release/Grok-Remote-v$mobileVersion.apk" `
+            "release/Grok-Remote-v$mobileVersion-build.json"
 
   download-verify-and-publish:
     needs: build
@@ -142,11 +140,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $lines = Get-Content downloaded\SHA256SUMS.txt | Where-Object { $_ -match '^([0-9a-fA-F]{64})\s+(.+)$' }
-          if ($lines.Count -lt 6) { throw 'SHA256SUMS.txt is missing release assets.' }
+          $mobileVersion = (Get-Content apps/mobile/package.json -Raw | ConvertFrom-Json).version
+          $expectedNames = @("Grok-Build-Desktop-Setup-${{ github.ref_name }}-x64.exe", "Grok-Build-Desktop-Portable-${{ github.ref_name }}-x64.zip", "Grok-Remote-v$mobileVersion.apk", "Grok-Remote-v$mobileVersion-build.json")
+          if ($lines.Count -ne $expectedNames.Count -or @(Get-ChildItem downloaded -File).Count -ne 5) { throw 'Release must contain only the four delivery payloads and their checksum manifest.' }
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
           foreach ($line in $lines) {
             $null = $line -match '^([0-9a-fA-F]{64})\s+(.+)$'
             $expected = $Matches[1].ToLowerInvariant()
-            $asset = Join-Path downloaded $Matches[2].Trim()
+            $name = $Matches[2].Trim()
+            if ($name -notin $expectedNames -or -not $seen.Add($name)) { throw 'Unexpected or duplicate release payload.' }
+            $asset = Join-Path downloaded $name
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Asset listed in SHA256SUMS.txt is missing: $asset" }
             $actual = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($asset)))).Replace('-', '').ToLowerInvariant()
             if ($actual -ne $expected) { throw "SHA-256 mismatch: $asset" }
@@ -196,7 +199,7 @@ jobs:
           gh release download $tag --dir downloaded
           if ($LASTEXITCODE -ne 0) { throw 'Release download failed.' }
           $lines = @(Get-Content downloaded/SHA256SUMS.txt)
-          if ($lines.Count -lt 6) { throw 'Companion assets are missing from checksums.' }
+          if ($lines.Count -lt 4) { throw 'Companion assets are missing from checksums.' }
           foreach ($line in $lines) {
             if ($line -notmatch '^([0-9a-fA-F]{64})\s+(.+)$') { throw 'Invalid checksum manifest.' }
             $hash = $Matches[1].ToLowerInvariant(); $name = $Matches[2].Trim()

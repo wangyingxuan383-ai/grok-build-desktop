@@ -1,5 +1,12 @@
 # Development roadmap
 
+## 0.14.4 release
+
+- [x] Bump Desktop to 0.14.4 and Android to 0.4.4/code 16; retain the existing signing identity.
+- [x] Restrict public release attachments to Setup, Portable, signed APK, APK verification metadata and SHA-256 sums; retain build reports and private acceptance evidence locally.
+- [ ] Build, inspect package contents and verify signatures/hashes before staging the exact release files.
+- [ ] Verify downloaded release payloads and provenance before publication; preserve the documented physical-input acceptance limits.
+
 ## Focused desktop audit repairs (unreleased)
 
 - [x] Repair owning-draft claims and explicitly permitted new-session migration; cover unrelated navigation, failure return, parallel claims and late text attachments with real React DOM regressions.
