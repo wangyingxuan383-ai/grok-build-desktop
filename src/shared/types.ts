@@ -1762,7 +1762,7 @@ export type ChatEvent =
   | { type: "session-hydration"; sessionId: string; state: SessionHydrationState; generation: number; message?: string }
   | { type: "conversation-projection-restore"; sessionId: string; projection: ConversationProjection }
   | { type: "history-recovery"; sessionId: string; status: "recovered" | "unavailable"; message: string }
-  | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[] }
+  | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[]; modelSelectionRequired?: string }
   | { type: "user-message"; sessionId: string; text: string; id?: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
   | { type: "interjection"; sessionId: string; id: string; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; source: "local" | "remote" | "queued" }
   | { type: "user-message-status"; sessionId: string; clientMessageId: string; delivery: UserMessageDeliveryState }

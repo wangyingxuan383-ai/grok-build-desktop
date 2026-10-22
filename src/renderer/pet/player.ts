@@ -46,6 +46,12 @@ export function selectClip(skin: PetSkin, requested: PetClipId): { id: PetClipId
 }
 
 export interface FramePlacement { x: number; y: number; width: number; height: number; }
+export function petControlsLayout(viewportHeight: number, visibleTop = 0): { toolbarTop: number; cardTop: number; cardHeight: number } {
+  if (visibleTop <= 0) return { toolbarTop: 176, cardTop: 10, cardHeight: 156 };
+  const toolbarTop = Math.min(viewportHeight - 42, visibleTop + 6);
+  const cardTop = toolbarTop + 44;
+  return { toolbarTop, cardTop, cardHeight: Math.max(48, Math.min(156, viewportHeight - cardTop - 8)) };
+}
 export function placeFrame(frame: PetFrame, referenceHeight: number, size: number, viewportWidth: number, viewportHeight: number): FramePlacement {
   const scale = size / referenceHeight;
   return { x: viewportWidth / 2 - frame.anchorX * scale, y: viewportHeight - 14 - frame.anchorY * scale,

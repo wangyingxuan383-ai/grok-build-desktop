@@ -395,12 +395,14 @@ export default function App(): React.JSX.Element {
     newTask,
     setNewTask,
     beginDraftSubmission,
+    allowDraftSubmissionMigration,
     clearClaimedDraft,
     shouldRestoreClaimedDraft,
     endDraftSubmission,
     discardCurrentDraft,
     reloadDraft,
     draftEditRevision,
+    convertTextToAttachment,
   } = useSessionDraft({
     activeSessionId: store.activeSessionId,
     workspace: store.settings?.activeWorkspace || "",
@@ -596,25 +598,33 @@ export default function App(): React.JSX.Element {
     if (requestId === listRequestRef.current && useAppStore.getState().settings?.activeWorkspace === workspace) store.setSessions(sessions);
   };
 
-  const createSession = async (launch?: ExecutionProfileLaunchInput): Promise<string | undefined> => {
+  const createSession = async (launch?: ExecutionProfileLaunchInput, activateCreated?: (sessionId: string, workspace: string) => boolean): Promise<string | undefined> => {
     let cwd = launch?.workspacePath || useAppStore.getState().settings?.activeWorkspace || "";
+    let pickedSettings: typeof store.settings;
+    let pickedSessions: SessionSummary[] | undefined;
     if (!cwd) {
       cwd = await window.grokDesktop.chooseWorkspace() || "";
       if (!cwd) return;
-      store.setSettings(await window.grokDesktop.getSettings());
-      store.setSessions(await window.grokDesktop.listSessions(cwd));
+      pickedSettings = await window.grokDesktop.getSettings();
+      pickedSessions = await window.grokDesktop.listSessions(cwd);
     }
     setOperationBusy(true);
     try {
       const result = await window.grokDesktop.createSession(launch ?? cwd);
-      setActiveCodexId(""); setCodexDetail(null);
-      setActiveClaudeId(""); setClaudeDetail(null);
-      store.setActiveSession(result.sessionId);
-      forceFollowRef.current = true;
-      followTurnRef.current = false;
-      atBottomRef.current = true;
-      setAtBottom(true);
-      focusComposer();
+      // A first send explicitly authorizes only its own new-draft migration.
+      // Finishing creation in the background must not navigate away from B.
+      if (!activateCreated || activateCreated(result.sessionId, pickedSettings?.activeWorkspace || store.settings?.activeWorkspace || cwd)) {
+        if (pickedSettings) store.setSettings(pickedSettings);
+        if (pickedSessions) store.setSessions(pickedSessions);
+        setActiveCodexId(""); setCodexDetail(null);
+        setActiveClaudeId(""); setClaudeDetail(null);
+        store.setActiveSession(result.sessionId);
+        forceFollowRef.current = true;
+        followTurnRef.current = false;
+        atBottomRef.current = true;
+        setAtBottom(true);
+        focusComposer();
+      }
       void refreshSessions().catch((error) => store.setError(errorMessage(error)));
       return result.sessionId;
     } catch (error) {
@@ -783,7 +793,13 @@ export default function App(): React.JSX.Element {
       // preflight. A follow-up autosave clears this marker, so the main process
       // can never delete a newer draft row while the older prompt is sending.
       if (sourceDraftKey) await window.grokDesktop.setDraft(sourceDraftKey, text, submittedCapability, attachments, newTask, draftSubmissionId);
-      if (!sessionId) sessionId = await createSession(newTask ? launchInputFromDraft(newTask) : undefined) || "";
+      if (!sessionId) sessionId = await createSession(newTask ? launchInputFromDraft(newTask)
+        : store.settings?.activeWorkspace ? { workspacePath: store.settings.activeWorkspace } : undefined, (targetId, targetWorkspace) => {
+        const mayActivate = allowDraftSubmissionMigration(draftClaimId, targetId, targetWorkspace);
+        const current = useAppStore.getState();
+        return mayActivate && current.activeSessionId === store.activeSessionId
+          && current.settings?.activeWorkspace === store.settings?.activeWorkspace;
+      }) || "";
       if (!sessionId) return;
       if (sourceDraftKey && sourceDraftKey !== sessionId) {
         const moved = await window.grokDesktop.moveDraft(sourceDraftKey, sessionId);
@@ -808,7 +824,7 @@ export default function App(): React.JSX.Element {
         setPromptHistory((values) => [text, ...values.filter((value) => value !== text)].slice(0, 50));
         setHistoryIndex(-1);
       }
-      setReviewComments([]);
+      if (useAppStore.getState().activeSessionId === sessionId) setReviewComments([]);
       if (sourceDraftKey.startsWith("new:")) {
         void window.grokDesktop.discoverWorkspaces(true).then(store.setWorkspaces).catch(() => undefined);
       }
@@ -844,7 +860,7 @@ export default function App(): React.JSX.Element {
       const currentWorkspace = current.workspaces.find((workspace) => sameWorkspacePath(workspace.cwd, current.settings?.activeWorkspace || ""));
       const currentDraftKey = current.activeSessionId || (currentWorkspace ? `new:${currentWorkspace.projectId}` : current.settings?.activeWorkspace ? `new:${normalizedWorkspacePath(current.settings.activeWorkspace)}` : "");
       const ownsCurrentComposer = currentDraftKey === sessionId || currentDraftKey === sourceDraftKey;
-      const mayRestore = ownsCurrentComposer && shouldRestoreClaimedDraft(draftClaimId);
+      const mayRestore = ownsCurrentComposer && current.attachments.length === 0 && shouldRestoreClaimedDraft(draftClaimId);
       // Never let a late transport failure overwrite a follow-up the user has
       // already typed. If the user navigated away, the failed prompt is still
       // preserved under the session/draft it actually belonged to.
@@ -912,6 +928,19 @@ export default function App(): React.JSX.Element {
   const chooseComputerCapability = (): void => {
     setCapability({ kind: "computer", label: "Computer", command: "/computer", source: "内置 Grok Computer Use" });
     focusComposer();
+  };
+
+  const convertComposerText = async (text: string, notice: string): Promise<void> => {
+    const sourceSessionId = store.activeSessionId, sourceWorkspace = store.settings?.activeWorkspace;
+    const sourceAttachments = useAppStore.getState().attachments;
+    const ownsComposer = (): boolean => {
+      const current = useAppStore.getState();
+      return current.activeSessionId === sourceSessionId && current.settings?.activeWorkspace === sourceWorkspace;
+    };
+    try {
+      const converted = await convertTextToAttachment(text, () => ownsComposer() && useAppStore.getState().attachments === sourceAttachments);
+      if (converted && ownsComposer()) setComposerNotice(notice);
+    } catch (error) { if (ownsComposer()) store.setError(errorMessage(error)); }
   };
 
   const stopActiveSession = useCallback(async (): Promise<void> => {
@@ -1225,16 +1254,8 @@ export default function App(): React.JSX.Element {
           onAdd={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachments()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
           onAddFolders={async () => { try { store.addAttachments(await window.grokDesktop.pickAttachmentFolders()); } catch (error) { store.setError(errorMessage(error)); } finally { focusComposer(); } }}
           onPaste={async (files) => { try { store.addAttachments(await pastedImageAttachments(files)); } catch (error) { store.setError(errorMessage(error)); } }}
-          onPasteText={(text) => { void window.grokDesktop.createTextDraftAttachment(draftKey || "new:unassigned", text).then((attachment) => {
-            store.addAttachments([attachment]);
-            setComposer("");
-            setComposerNotice(`已将 ${text.length.toLocaleString()} 字符写入本地文本草稿附件，发送时不会重复放入正文。`);
-          }).catch((error) => store.setError(errorMessage(error))); }}
-          onConvertText={() => { if (!composer) return; const text = composer; void window.grokDesktop.createTextDraftAttachment(draftKey || "new:unassigned", text).then((attachment) => {
-            store.addAttachments([attachment]);
-            setComposer("");
-            setComposerNotice("已将输入内容写入本地 .txt 草稿附件。");
-          }).catch((error) => store.setError(errorMessage(error))); }}
+          onPasteText={(text) => { void convertComposerText(text, `已将 ${text.length.toLocaleString()} 字符写入本地文本草稿附件，发送时不会重复放入正文。`); }}
+          onConvertText={() => { if (composer) void convertComposerText(composer, "已将输入内容写入本地 .txt 草稿附件。"); }}
           onRestoreText={(attachment) => { void (async () => {
             const restored = attachment.data
               ? decodeTextAttachment(attachment.data)

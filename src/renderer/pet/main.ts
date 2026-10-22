@@ -1,5 +1,5 @@
 import type { PetAction, PetSnapshot } from "../../shared/desktop-pet";
-import { PetPlayer, assetUrl, navigationTarget, placeFrame, sortedTargets, selectClip } from "./player";
+import { PetPlayer, assetUrl, navigationTarget, petControlsLayout, placeFrame, sortedTargets, selectClip } from "./player";
 import { PetGestures, type GestureEffect } from "./gestures";
 import { PetScheduler } from "./scheduler";
 const canvas = document.querySelector<HTMLCanvasElement>("#pet")!;
@@ -155,6 +155,14 @@ function receive(value: PetSnapshot): void {
     if (disposed || snapshot && value.revision < snapshot.revision)
         return;
     snapshot = value;
+    const layout = petControlsLayout(innerHeight, value.visibleTop);
+    toolbar.style.top = `${layout.toolbarTop}px`;
+    card.style.top = `${layout.cardTop}px`;
+    card.style.maxHeight = `${layout.cardHeight}px`;
+    const left = value.visibleLeft ?? 0, right = value.visibleRight ?? 0;
+    toolbar.style.left = `${(left + innerWidth - right) / 2}px`;
+    card.style.left = `${left + 12}px`;
+    card.style.right = `${right + 12}px`;
     document.documentElement.dataset.theme = value.theme;
     document.body.classList.toggle("compatibility", value.settings.compatibility);
     for (const [name, key] of [["card", "surface"], ["fg", "text"], ["muted", "muted"], ["accent", "accent"], ["border", "border"]] as const) {

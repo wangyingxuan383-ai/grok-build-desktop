@@ -9,7 +9,7 @@ import { CommandSearch } from "../../src/renderer/src/components/CommandSearch";
 import "../../src/renderer/src/styles.css";
 import { AutomationConfirmations } from "../../src/renderer/src/components/AutomationConfirmations";
 import { TaskCenterPanel } from "../../src/renderer/src/components/TaskCenterPanel";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { SessionListRow } from "../../src/renderer/src/components/SessionListRow";
 import { GlobalErrorToast } from "../../src/renderer/src/components/GlobalErrorToast";
@@ -17,10 +17,16 @@ import { CliUpdateControls } from "../../src/renderer/src/components/CliUpdateCo
 import { McpElicitationCard } from "../../src/renderer/src/components/McpElicitationCard";
 import { useSessionDraft } from "../../src/renderer/src/hooks/use-session-draft";
 import type { Attachment, ComposerDraftState, SessionSummary } from "../../src/shared/types";
+import { Composer } from "../../src/renderer/src/components/Composer";
+import { emptyView } from "../../src/renderer/src/store";
 
 const root = createRoot(document.getElementById("root")!);
 const noop = () => undefined;
 const waiting: Array<{ key: string; resolve(value: ComposerDraftState | null): void }> = [];
+const draftWrites: Array<{ key: string; text: string; attachments: Attachment[] }> = [];
+const textDrafts: Array<{ key: string; text: string; resolve(value: Attachment): void; reject(error: Error): void }> = [];
+const deletedTextDrafts: string[] = [];
+const conversionResults: Array<boolean | string> = [];
 let updateState: any = { phase: "idle", recovery: { previousVersion: "1.0.3", targetVersion: "2.0.0", retained: true } };
 const updateCalls: any[] = [];
 let mcpCalls = 0;
@@ -39,7 +45,9 @@ const api = {
   readAutomationInstructions: async () => "Fixture instructions",
   updateAutomation: async (_id: string, input: unknown) => { savedAutomation = input; return [automation]; },
   getDraft: (key: string) => new Promise<ComposerDraftState | null>((resolve) => waiting.push({ key, resolve })),
-  setDraft: async () => undefined,
+  setDraft: async (key: string, text: string, _capability: unknown, attachments: Attachment[]) => { draftWrites.push({ key, text, attachments }); },
+  createTextDraftAttachment: (key: string, text: string) => new Promise<Attachment>((resolve, reject) => textDrafts.push({ key, text, resolve, reject })),
+  deleteTextDraftAttachment: async (path: string) => { deletedTextDrafts.push(path); },
   getCliUpdateState: async () => updateState,
   previewCliUpdate: async (policy: string, action: string) => ({ fromVersion: "1.0.3", targetVersion: action === "verify" ? "1.0.3" : "2.0.0", policy, confirmationToken: "fixture-token", majorUpgrade: true }),
   applyCliUpdate: async (input: unknown) => { updateCalls.push(input); throw Error("fixture update failed"); },
@@ -60,11 +68,23 @@ function Menus() {
 }
 let edit: (value: string) => void = noop;
 let reload: () => void = noop;
-function Draft({ sessionId }: { sessionId: string }) {
+let draftControls: ReturnType<typeof useSessionDraft>;
+let draftAttachments: Attachment[] = [];
+let addDraftAttachments: (values: Attachment[]) => void = noop;
+let modelGateSends = 0, modelGateChoices: string[] = [], releaseModelGate = noop;
+function ModelGateFixture() {
+  const [pending, setPending] = useState(true), [text, setText] = useState("Important unsent draft");
+  releaseModelGate = () => setPending(false);
+  const view = { ...emptyView(), currentModelId: "current", models: [{ modelId: "current", name: "Current model" }], modelSelectionRequired: pending ? "原模型已不可用，请重新选择模型后继续，草稿会保留。" : undefined };
+  return <Composer inputRef={useRef(null)} text={text} setText={setText} busy={false} controlsDisabled={false} sessionId="model-gate" attachments={[]} reviewComments={[]} commandMatches={[]} fileMatches={[]} view={view}
+    onSend={() => modelGateSends++} onInterject={() => modelGateSends++} onBlockedSubmit={noop} onStop={noop} onAdd={noop} onAddFolders={noop} onPaste={noop} onPasteText={noop} onConvertText={noop} onRestoreText={noop} onRemove={noop} onRemoveReviewComment={noop} onCommand={noop} onFile={noop} onFileMenu={noop} computerTask={null} onCapability={noop} onComputer={noop} onClearCapability={noop} onManageExtensions={noop} onHistory={noop} onControlSettled={noop} onDismissNotice={noop} />;
+}
+function Draft({ sessionId, workspace = "fixture", newDraftKey }: { sessionId: string; workspace?: string; newDraftKey?: string }) {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const clear = useCallback(() => setAttachments([]), []);
   const add = useCallback((values: Attachment[]) => setAttachments((old) => [...old, ...values]), []);
-  const draft = useSessionDraft({ activeSessionId: sessionId, workspace: "fixture", foreignSessionOpen: false, sendingSessionIds: new Set(), attachments, clearAttachments: clear, addAttachments: add, onSessionChange: noop, onError: noop });
+  const draft = useSessionDraft({ activeSessionId: sessionId, workspace, newDraftKey, foreignSessionOpen: false, sendingSessionIds: new Set(), attachments, clearAttachments: clear, addAttachments: add, onSessionChange: noop, onError: noop });
+  draftControls = draft; draftAttachments = attachments; addDraftAttachments = add;
   edit = draft.setComposer; reload = draft.reloadDraft;
   return <input id="draft" value={draft.composer} onChange={(event) => draft.setComposer(event.target.value)} />;
 }
@@ -85,6 +105,12 @@ function DirtyDeckFixture() {
   return <><button id="dirty-second" onClick={()=>{const file=useWorkbenchStore.getState().tabs[1];setTarget({kind:"file",workspace:file.document.workspacePath,id:file.key,title:file.document.relativePath})}}>第二个文件</button><WorkspaceDeck target={target} onActivate={async next=>setTarget(next)} onError={message=>{throw Error(message)}}><span>隔离的文件编辑夹具</span></WorkspaceDeck></>;
 }
 Object.assign(window, { fixture: {
+  modelGate: () => {
+    modelGateSends = 0; modelGateChoices = [];
+    Object.assign(api, { getCliSessionInfo: async () => ({ supported: false }), setModel: async (_id: string, model: string) => { modelGateChoices.push(model); releaseModelGate(); } });
+    root.render(<ModelGateFixture />);
+  },
+  modelGateResult: () => ({ sent: modelGateSends, choices: modelGateChoices }),
   archives:()=>{localStorage.removeItem("grok.archives-expanded.v1");root.render(<ArchiveFixture/>);},
   dirtyDeck:()=>{
     localStorage.removeItem("grok.workbench-layout.v1");savedFiles.length=0;
@@ -126,8 +152,24 @@ Object.assign(window, { fixture: {
   phase: (phase: string) => { updateState = { ...updateState, phase }; },
   mcp: () => root.render(<McpElicitationCard sessionId="s" message={{ id: "m", kind: "mcp-elicitation", request: { requestId: "r", sessionId: "s", serverName: "fixture", message: "Fixture constraints", mode: "form", schemaSupported: true, requestedSchema: { type: "object", required: ["count"], properties: { count: { type: "integer", minimum: 2, maximum: 4 } } } } }} onResolved={() => root.render(<div>mcp resolved</div>)} />),
   mcpCalls: () => mcpCalls, mcpResolve: () => mcpResolve?.(),
-  draft: (sessionId: string) => root.render(<Draft sessionId={sessionId} />),
+  draft: (sessionId: string, workspace = "fixture", newDraftKey?: string) => root.render(<Draft sessionId={sessionId} workspace={workspace} newDraftKey={newDraftKey} />),
+  draftState: () => ({ key: draftControls.draftKey, text: draftControls.composer, attachments: draftAttachments, writes: draftWrites }),
+  claimDraft: () => draftControls.beginDraftSubmission(),
+  migrateDraft: (id: number, key: string, workspace?: string) => draftControls.allowDraftSubmissionMigration(id, key, workspace),
+  clearClaim: (id: number) => draftControls.clearClaimedDraft(id),
+  endClaim: (id: number) => draftControls.endDraftSubmission(id),
+  canRestoreClaim: (id: number) => draftControls.shouldRestoreClaimedDraft(id),
+  restoreClaim: (id: number, text: string, attachments: Attachment[]) => {
+    if (!draftControls.shouldRestoreClaimedDraft(id)) return false;
+    draftControls.setComposer(text); addDraftAttachments(attachments); return true;
+  },
+  addDraftAttachment: (id: string) => addDraftAttachments([{ id, name: id, kind: "file", path: `fixture/${id}` }]),
+  convertDraft: () => { void draftControls.convertTextToAttachment(draftControls.composer).then(value => conversionResults.push(value), error => conversionResults.push(error.message)); },
+  resolveTextDraft: (id: string) => { const pending = textDrafts.shift(); if (!pending) throw Error("No text draft request"); pending.resolve({ id, name: `${id}.txt`, kind: "file", path: `fixture/${id}.txt`, draftText: true }); },
+  rejectTextDraft: () => { const pending = textDrafts.shift(); if (!pending) throw Error("No text draft request"); pending.reject(Error("fixture write failed")); },
+  textDraftState: () => ({ pending: textDrafts.map(row => ({ key: row.key, text: row.text })), deleted: deletedTextDrafts, results: conversionResults }),
+  unmountDraft: () => root.render(<div>draft unmounted</div>),
   edit: (value: string) => edit(value), reload: () => reload(),
   pending: () => waiting.map((item) => item.key),
-  resolve: (key: string, text: string) => { const index = waiting.findIndex((item) => item.key === key); if (index < 0) throw new Error(`No draft request ${key}`); waiting.splice(index, 1)[0].resolve({ key, text, updatedAt: new Date().toISOString() }); },
+  resolve: (key: string, text: string, attachments: Attachment[] = []) => { const index = waiting.findIndex((item) => item.key === key); if (index < 0) throw new Error(`No draft request ${key}`); waiting.splice(index, 1)[0].resolve({ key, text, attachments, updatedAt: new Date().toISOString() }); },
 } });

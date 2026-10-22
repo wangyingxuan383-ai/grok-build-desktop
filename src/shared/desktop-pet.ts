@@ -70,6 +70,9 @@ export interface PetSnapshot {
     warning?: string;
     doubleClickTime?: number;
     gesture?: "dragging" | "falling" | "landing" | "settling";
+    visibleTop?: number;
+    visibleLeft?: number;
+    visibleRight?: number;
     colors?: {
         surface: string;
         text: string;
@@ -132,7 +135,8 @@ export function validateDesktopPetSettings(value: unknown): asserts value is Des
     if (row.position !== undefined) {
         const p = row.position as Record<string, unknown>;
         if (!p || Array.isArray(p) || Object.keys(p).some(key => !["displayId", "x", "y"].includes(key)) || !Number.isInteger(p.displayId)
-            || ![p.x, p.y].every(n => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1))
+            || typeof p.x !== "number" || !Number.isFinite(p.x) || p.x < -1 || p.x > 2
+            || typeof p.y !== "number" || !Number.isFinite(p.y) || p.y < -1 || p.y > 1)
             throw Error("桌宠位置无效");
     }
 }

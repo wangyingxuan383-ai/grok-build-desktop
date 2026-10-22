@@ -1242,10 +1242,29 @@ export class ProviderService {
     const parsed = snapshot.table;
     const models = asRecord(parsed.model);
     const updatedAt = snapshot.updatedAt;
-    return Object.entries(models).filter(([id]) => !managedModels.has(id)).map(([id, value]) => {
+    return Promise.all(Object.entries(models).filter(([id]) => !managedModels.has(id)).map(async ([id, value]): Promise<CustomProviderProfile> => {
       const item = asRecord(value);
       const envKey = typeof item.env_key === "string" ? item.env_key : undefined;
       const baseUrl = typeof item.base_url === "string" ? item.base_url : "";
+      let insecureHttp = false;
+      let diagnostic = "来自外部 config.toml，仅供查看";
+      if (baseUrl) {
+        try {
+          // Resolve only for classification; never expose expanded environment
+          // values or let one invalid external row hide the remaining providers.
+          let resolved = baseUrl;
+          for (const match of baseUrl.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+            const value = await (this.environment.readFresh?.(match[1]!) ?? this.environment.read(match[1]!));
+            if (!value) throw new Error("unresolved environment variable");
+            resolved = resolved.replaceAll(match[0], value);
+          }
+          const url = new URL(resolved);
+          if (!/^https?:$/.test(url.protocol)) throw new Error("unsupported URL");
+          insecureHttp = isInsecureRemote(resolved);
+        } catch {
+          diagnostic += "；地址暂不可解析，请检查地址或环境变量";
+        }
+      }
       return {
         id: `external-${id}`,
         enabled: true,
@@ -1270,12 +1289,12 @@ export class ProviderService {
         }],
         owned: false,
         hasCredential: false,
-        insecureHttp: baseUrl ? isInsecureRemote(baseUrl) : false,
+        insecureHttp,
         createdAt: updatedAt,
         updatedAt,
-        diagnostic: "来自外部 config.toml，仅供查看",
+        diagnostic,
       };
-    });
+    }));
   }
 }
 

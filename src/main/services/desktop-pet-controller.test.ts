@@ -87,7 +87,7 @@ describe("companion free placement and explicit falling", () => {
         pet.endDrag(); vi.advanceTimersByTime(1000);
         expect(pet.clip).toBe("idle"); expect(vi.getTimerCount()).toBe(0);
     });
-    it.each([{ cursor: { x: 500, y: 420 }, y: 331 }, { cursor: { x: -900, y: -700 }, y: 31 }, { cursor: { x: 3000, y: 3000 }, y: 578 }])("stops near the clamped release point %j and saves its resting position", ({ cursor, y }) => {
+    it.each([{ cursor: { x: 500, y: 420 }, y: 331 }, { cursor: { x: -900, y: -700 }, y: -177 }, { cursor: { x: 3000, y: 3000 }, y: 578 }])("stops near the clamped release point %j and saves its resting position", ({ cursor, y }) => {
         const { pet, window } = fixture();
         pet.startDrag(); desktop.cursor = cursor; pet.moveDrag();
         const released = window.getBounds();

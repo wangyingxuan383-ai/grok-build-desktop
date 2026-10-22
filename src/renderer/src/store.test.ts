@@ -23,6 +23,12 @@ function apply(state: any, event: ChatEvent): any {
 }
 
 describe("session event reducer", () => {
+  it("keeps the model-selection gate until the adapter confirms an explicit selection", () => {
+    let state = apply(baseState(), { type: "session-ready", sessionId: "session", models: [], currentModelId: "current", effort: "", modelSelectionRequired: "请重新选择模型" });
+    expect(state.views.session.modelSelectionRequired).toBe("请重新选择模型");
+    state = apply(state, { type: "session-ready", sessionId: "session", models: [], currentModelId: "chosen", effort: "" });
+    expect(state.views.session.modelSelectionRequired).toBeUndefined();
+  });
   it("does not downgrade a sent message when a slow echo arrives and clears a recovered offline banner",()=>{
     let state=apply(baseState(),{type:"user-message",sessionId:"session",clientMessageId:"one",text:"你好",delivery:"sent"});
     state=apply(state,{type:"user-message",sessionId:"session",clientMessageId:"one",text:"你好",delivery:"sending"});

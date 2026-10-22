@@ -50,14 +50,28 @@ export interface PetArea {
 export function petWindowBounds(area: PetArea, size: number, position?: {
     x: number;
     y: number;
-}): PetArea {
+}, characterWidth = size): PetArea {
     const width = Math.min(360, area.width), height = Math.min(size + 230, area.height);
-    const x = area.x + (position?.x ?? 1) * Math.max(0, area.width - width);
-    const y = area.y + (position?.y ?? 1) * Math.max(0, area.height - height);
-    return { x: Math.round(Math.max(area.x, Math.min(area.x + area.width - width, x))), y: Math.round(Math.max(area.y, Math.min(area.y + area.height - height, y))), width, height };
+    const relativeX = position?.x ?? 1, spanX = Math.max(0, area.width - width), side = petSideInset(width, characterWidth);
+    const x = area.x + (relativeX < 0 ? relativeX * side : relativeX > 1 ? spanX + (relativeX - 1) * side : relativeX * spanX);
+    // Existing non-negative positions retain their exact meaning. Negative
+    // values use the transparent header, allowing the character to reach the top.
+    const relativeY = position?.y ?? 1;
+    const y = area.y + relativeY * (relativeY < 0 ? petTopInset(height, size) : Math.max(0, area.height - height));
+    return clampPetBounds({ x, y, width, height }, area, size, characterWidth);
 }
-export function petPosition(bounds: PetArea, area: PetArea, displayId: number) {
-    return { displayId, x: Math.max(0, Math.min(1, (bounds.x - area.x) / Math.max(1, area.width - bounds.width))), y: Math.max(0, Math.min(1, (bounds.y - area.y) / Math.max(1, area.height - bounds.height))) };
+export function petTopInset(height: number, size: number): number { return Math.max(0, height - 14 - size - 8); }
+export function petSideInset(width: number, size: number): number { return Math.max(0, (width - size) / 2 - 8); }
+export function clampPetBounds(bounds: PetArea, area: PetArea, size: number, characterWidth = size): PetArea {
+    return { ...bounds,
+        x: Math.round(Math.max(area.x - petSideInset(bounds.width, characterWidth), Math.min(area.x + area.width - bounds.width + petSideInset(bounds.width, characterWidth), bounds.x))),
+        y: Math.round(Math.max(area.y - petTopInset(bounds.height, size), Math.min(area.y + area.height - bounds.height, bounds.y))),
+    };
+}
+export function petPosition(bounds: PetArea, area: PetArea, displayId: number, size = bounds.height - 230, characterWidth = size) {
+    const dy = bounds.y - area.y, dx = bounds.x - area.x, spanX = Math.max(0, area.width - bounds.width), side = Math.max(1, petSideInset(bounds.width, characterWidth));
+    return { displayId, x: Math.max(-1, Math.min(2, dx < 0 ? dx / side : dx > spanX ? 1 + (dx - spanX) / side : dx / Math.max(1, spanX))),
+        y: Math.max(-1, Math.min(1, dy / Math.max(1, dy < 0 ? petTopInset(bounds.height, size) : area.height - bounds.height))) };
 }
 /** All asynchronous loads and retire callbacks must retain this identity. */
 export class PetIntent {

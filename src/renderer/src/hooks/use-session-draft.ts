@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Attachment, ComposerCapabilitySelection, NewTaskDraft } from "../../../shared/types";
 import { hasSessionSubmission } from "../session-submission-state";
-import { canRestoreClaimedDraft, shouldApplyDraftHydration, shouldPauseDraftAutosaveForSubmission, shouldSuspendDraftHydrationForSubmission } from "../session-ui-guards";
+import { canRestoreClaimedDraft, ownsDraftSubmission, shouldApplyDraftHydration, shouldPauseDraftAutosaveForSubmission, shouldSuspendDraftHydrationForSubmission, type DraftOwner, type DraftSubmissionClaim } from "../session-ui-guards";
 
 /** Owns the composer state that must never bleed between concurrent sessions. */
 export function useSessionDraft(input: {
@@ -25,12 +25,14 @@ export function useSessionDraft(input: {
   newTask: NewTaskDraft | undefined;
   setNewTask: React.Dispatch<React.SetStateAction<NewTaskDraft | undefined>>;
   beginDraftSubmission(): number;
+  allowDraftSubmissionMigration(claimId: number, targetDraftKey: string, targetWorkspace?: string): boolean;
   clearClaimedDraft(claimId: number): void;
   shouldRestoreClaimedDraft(claimId: number): boolean;
   endDraftSubmission(claimId: number): void;
   discardCurrentDraft(): Promise<void>;
   reloadDraft(fallback?: NewTaskDraft): void;
   draftEditRevision(): number;
+  convertTextToAttachment(text: string, stillOwned?: () => boolean): Promise<boolean>;
 } {
   const [composer, setComposerState] = useState("");
   const [capability, setCapabilityState] = useState<ComposerCapabilitySelection>();
@@ -58,9 +60,22 @@ export function useSessionDraft(input: {
   const userRevisionRef = useRef(0);
   const draftEditRevision = useCallback(() => userRevisionRef.current + attachmentRevisionRef.current, []);
   const nextSubmissionClaimRef = useRef(0);
-  const submissionClaimRef = useRef<{ id: number; phase: "claiming" | "sent"; userRevision: number; attachmentRevision: number } | undefined>(undefined);
+  const submissionClaimsRef = useRef(new Map<number, DraftSubmissionClaim>());
   const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
+  const ownerRef = useRef<DraftOwner>({ draftKey, workspace: input.workspace, foreignSessionOpen: input.foreignSessionOpen });
+  ownerRef.current = { draftKey, workspace: input.workspace, foreignSessionOpen: input.foreignSessionOpen };
+  const editEpochRef = useRef(0);
+  const aliveRef = useRef(true);
+  useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; editEpochRef.current++; }; }, []);
+  const currentClaim = (): DraftSubmissionClaim | undefined => [...submissionClaimsRef.current.values()].reverse().find(claim => ownsDraftSubmission(claim, ownerRef.current));
   const activeSending = hasSessionSubmission(input.sendingSessionIds, input.activeSessionId, draftKey);
+
+  const captureDraftEdit = useCallback((): (() => boolean) => {
+    const owner = ownerRef.current, epoch = editEpochRef.current, revision = draftEditRevision();
+    return () => aliveRef.current && epoch === editEpochRef.current && revision === draftEditRevision()
+      && owner.draftKey === ownerRef.current.draftKey && owner.workspace === ownerRef.current.workspace
+      && owner.foreignSessionOpen === ownerRef.current.foreignSessionOpen;
+  }, [draftEditRevision]);
 
   const setComposer = useCallback<React.Dispatch<React.SetStateAction<string>>>((value) => {
     if (loadGenerationRef.current) touchedGenerationRef.current = loadGenerationRef.current;
@@ -78,14 +93,35 @@ export function useSessionDraft(input: {
     setNewTaskState(value);
   }, []);
 
+  const convertTextToAttachment = useCallback(async (text: string, stillOwned: () => boolean = () => true): Promise<boolean> => {
+    const isCurrent = captureDraftEdit();
+    try {
+      const attachment = await window.grokDesktop.createTextDraftAttachment(ownerRef.current.draftKey || "new:unassigned", text);
+      if (!isCurrent() || !stillOwned()) {
+        // Only the unused file issued by this operation may be removed.
+        if (attachment.draftText && attachment.path) await window.grokDesktop.deleteTextDraftAttachment(attachment.path).catch(() => undefined);
+        return false;
+      }
+      input.addAttachments([attachment]);
+      setComposer("");
+      return true;
+    } catch (error) {
+      if (!isCurrent() || !stillOwned()) return false;
+      throw error;
+    }
+  }, [captureDraftEdit, input.addAttachments, setComposer]);
+
   const beginDraftSubmission = useCallback((): number => {
     const id = ++nextSubmissionClaimRef.current;
-    submissionClaimRef.current = {
+    for (const claim of submissionClaimsRef.current.values()) if (ownsDraftSubmission(claim, ownerRef.current)) claim.invalidated = true;
+    submissionClaimsRef.current.set(id, {
       id,
       phase: "claiming",
+      source: { ...ownerRef.current },
       userRevision: userRevisionRef.current,
       attachmentRevision: attachmentRevisionRef.current,
-    };
+    });
+    editEpochRef.current++;
     if (saveTimerRef.current !== undefined) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = undefined;
@@ -94,16 +130,30 @@ export function useSessionDraft(input: {
     return id;
   }, []);
 
+  const allowDraftSubmissionMigration = useCallback((claimId: number, targetDraftKey: string, targetWorkspace?: string): boolean => {
+    const claim = submissionClaimsRef.current.get(claimId);
+    if (!claim || claim.phase !== "claiming" || (claim.source.draftKey && !claim.source.draftKey.startsWith("new:"))
+      || !targetDraftKey || targetDraftKey.startsWith("new:")
+      || (claim.targetDraftKey && (claim.targetDraftKey !== targetDraftKey || claim.targetWorkspace !== (targetWorkspace ?? claim.source.workspace)))) return false;
+    const mayActivate = ownsDraftSubmission(claim, ownerRef.current);
+    claim.targetDraftKey = targetDraftKey;
+    claim.targetWorkspace = targetWorkspace ?? claim.source.workspace;
+    return mayActivate;
+  }, []);
+
   const clearClaimedDraft = useCallback((claimId: number): void => {
-    const claim = submissionClaimRef.current;
-    if (!claim || claim.id !== claimId) return;
+    const claim = submissionClaimsRef.current.get(claimId);
+    if (!claim || claim.phase !== "claiming") return;
     const changedSinceClaim = claim.userRevision !== userRevisionRef.current
       || claim.attachmentRevision !== attachmentRevisionRef.current;
     // This is the send operation consuming its own snapshot, not a new user
     // edit. Keep the revision stable so a later transport failure can restore
     // only when the user has not already typed a follow-up.
     claim.phase = "sent";
-    if (!changedSinceClaim) {
+    if (ownsDraftSubmission(claim, ownerRef.current) && !changedSinceClaim) {
+      claim.cleared = true;
+      editEpochRef.current++;
+      claim.clearedEpoch = editEpochRef.current;
       setComposerState("");
       setCapabilityState(undefined);
       setNewTaskState(undefined);
@@ -116,20 +166,20 @@ export function useSessionDraft(input: {
   }, [input.clearAttachments]);
 
   const shouldRestoreClaimedDraft = useCallback((claimId: number): boolean => {
-    const claim = submissionClaimRef.current;
-    return Boolean(claim && canRestoreClaimedDraft({
+    const claim = submissionClaimsRef.current.get(claimId);
+    return Boolean(claim?.cleared && claim.clearedEpoch === editEpochRef.current && canRestoreClaimedDraft({
       claimId,
       activeClaimId: claim.id,
       claimedUserRevision: claim.userRevision,
       currentUserRevision: userRevisionRef.current,
       claimedAttachmentRevision: claim.attachmentRevision,
       currentAttachmentRevision: attachmentRevisionRef.current,
+      ownsClaim: ownsDraftSubmission(claim, ownerRef.current),
     }));
   }, []);
 
   const endDraftSubmission = useCallback((claimId: number): void => {
-    if (submissionClaimRef.current?.id === claimId) {
-      submissionClaimRef.current = undefined;
+    if (submissionClaimsRef.current.delete(claimId)) {
       setSubmissionRevision((value) => value + 1);
     }
   }, []);
@@ -137,6 +187,8 @@ export function useSessionDraft(input: {
   const discardCurrentDraft = useCallback(async (): Promise<void> => {
     const key = draftKey;
     if (!key) return;
+    editEpochRef.current++;
+    for (const claim of submissionClaimsRef.current.values()) if (ownsDraftSubmission(claim, ownerRef.current)) claim.invalidated = true;
     // Invalidate an in-flight hydration and suspend autosave for this still
     // mounted key. Without this, the render caused by clearing the fields can
     // schedule a new empty draft immediately after clearDraft succeeds.
@@ -169,6 +221,10 @@ export function useSessionDraft(input: {
     let cancelled = false;
     fallbackTaskRef.current = input.activeSessionId ? undefined : fallbackTaskRef.current;
     const generation = ++loadGenerationRef.current;
+    const claim = currentClaim();
+    const migrating = claim?.targetDraftKey === draftKey && !claim.migrated;
+    if (!migrating) editEpochRef.current++;
+    for (const claim of submissionClaimsRef.current.values()) if (!ownsDraftSubmission(claim, ownerRef.current)) claim.invalidated = true;
     touchedGenerationRef.current = 0;
     setLoadedKey("");
     input.onSessionChange();
@@ -176,7 +232,8 @@ export function useSessionDraft(input: {
     // the session id. The in-flight send owns that transition; hydrating the
     // just-moved row here would resurrect the submitted prompt or erase text
     // typed after it. Mark the target ready without reading or clearing it.
-    if (shouldSuspendDraftHydrationForSubmission(submissionClaimRef.current?.phase)) {
+    if (shouldSuspendDraftHydrationForSubmission(claim, ownerRef.current)) {
+      if (migrating && claim) claim.migrated = true;
       touchedGenerationRef.current = generation;
       setLoadedKey(draftKey);
       return () => { cancelled = true; };
@@ -204,6 +261,7 @@ export function useSessionDraft(input: {
         baselineAttachmentRevision,
         currentAttachmentRevision: attachmentRevisionRef.current,
       })) {
+        editEpochRef.current++;
         setComposerState(draft?.text || "");
         setCapabilityState(draft?.capability);
         setNewTaskState(draft?.newTask ?? fallbackTaskRef.current);
@@ -218,10 +276,10 @@ export function useSessionDraft(input: {
       if (!cancelled && generation === loadGenerationRef.current) setLoadedKey(draftKey);
     });
     return () => { cancelled = true; };
-  }, [draftKey, input.foreignSessionOpen, input.onSessionChange, input.clearAttachments, input.addAttachments, reloadRevision]);
+  }, [draftKey, input.workspace, input.foreignSessionOpen, input.onSessionChange, input.clearAttachments, input.addAttachments, reloadRevision]);
 
   useEffect(() => {
-    if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || shouldPauseDraftAutosaveForSubmission(submissionClaimRef.current?.phase)) return;
+    if (!draftKey || loadedKey !== draftKey || input.foreignSessionOpen || shouldPauseDraftAutosaveForSubmission(currentClaim(), ownerRef.current)) return;
     const timer = window.setTimeout(() => {
       if (saveTimerRef.current === timer) saveTimerRef.current = undefined;
       void window.grokDesktop.setDraft(draftKey, composer, capability, input.attachments, newTask).catch(input.onError);
@@ -243,12 +301,14 @@ export function useSessionDraft(input: {
     newTask,
     setNewTask,
     beginDraftSubmission,
+    allowDraftSubmissionMigration,
     clearClaimedDraft,
     shouldRestoreClaimedDraft,
     endDraftSubmission,
     discardCurrentDraft,
     reloadDraft,
     draftEditRevision,
+    convertTextToAttachment,
   };
 }
 

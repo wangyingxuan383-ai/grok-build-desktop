@@ -1,10 +1,19 @@
 import { describe,it,expect } from "vitest";
-import { PetPlayer,assetUrl,placeFrame,navigationTarget } from "./player";
+import { PetPlayer,assetUrl,petControlsLayout,placeFrame,navigationTarget } from "./player";
 import { PetGestures } from "./gestures";
 import { desktopPetSettings,type PetSnapshot } from "../../shared/desktop-pet";
 const clip={file:"grok-pet://assets/b/idle.webp",width:200,height:200,referenceHeight:100,frames:[{x:0,y:0,width:100,height:200,anchorX:50,anchorY:180,duration:100},{x:100,y:0,width:100,height:200,anchorX:50,anchorY:180,duration:100}],loop:true};
 const snapshot:PetSnapshot={revision:1,transition:1,visibility:"visible",clip:"idle",settings:desktopPetSettings(),skin:{id:"b",name:"B",author:"",license:"",clips:{idle:clip,enter:{...clip,loop:false},exit:{...clip,loop:false}}},quiet:false,reducedMotion:false,targets:[],phones:0,unread:0,running:0,awaiting:0,theme:"dark"};
 describe("pet sandbox player",()=>{
+ it("keeps the toolbar and scrollable status card visible at the top edge",()=>{
+   for(const size of [128,192,256]){
+     const height=size+230,visibleTop=208,layout=petControlsLayout(height,visibleTop);
+     expect(layout.toolbarTop).toBeGreaterThanOrEqual(visibleTop);
+     expect(layout.cardTop).toBeGreaterThan(layout.toolbarTop+36);
+     expect(layout.cardTop+layout.cardHeight).toBeLessThanOrEqual(height-8);
+   }
+   expect(petControlsLayout(422)).toEqual({toolbarTop:176,cardTop:10,cardHeight:156});
+ });
  it("animates pickup before holding and settles without replaying the falling frame",()=>{
    const frames=Array.from({length:6},(_,index)=>({x:index*20,y:0,width:20,height:20,anchorX:10,anchorY:20,duration:100}));
    const drag={...snapshot,clip:"pickup" as const,gesture:"dragging" as const,skin:{...snapshot.skin,clips:{...snapshot.skin.clips,pickup:{file:"grok-pet://assets/b/pickup.webp",width:120,height:20,referenceHeight:20,frames,loop:false}}}};

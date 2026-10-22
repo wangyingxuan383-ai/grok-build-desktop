@@ -33,6 +33,23 @@ function input(patch: Partial<CustomProviderInput> = {}): CustomProviderInput { 
 function draft(baseUrl: string, patch: Partial<ProviderConnectionDraft> = {}): ProviderConnectionDraft { return { id: "draft", name: "草稿提供商", baseUrl, protocol: "chat_completions", authScheme: "bearer", credentialMode: "none", headers: [], models: [], ...patch }; }
 
 describe("ProviderService", () => {
+  it("keeps healthy providers visible beside unresolved or malformed external URLs", async () => {
+    const config = '[model.good]\nbase_url = "https://example.test/v1"\n[model.templated]\nbase_url = "${EXTERNAL_BASE}/v1"\n[model.missing]\nbase_url = "${MISSING_BASE}"\n[model.broken]\nbase_url = "invalid address"\n';
+    const { service, grokHome, environment } = await fixture(config);
+    environment.values.set("EXTERNAL_BASE", "http://remote.example.test");
+    try {
+      const rows = await service.list();
+      expect(rows).toHaveLength(4);
+      expect(rows.find(row => row.id === "external-good")).toMatchObject({ insecureHttp: false });
+      expect(rows.find(row => row.id === "external-templated")).toMatchObject({ baseUrl: "${EXTERNAL_BASE}/v1", insecureHttp: true });
+      for (const id of ["external-missing", "external-broken"]) {
+        expect(rows.find(row => row.id === id)?.diagnostic).toContain("地址暂不可解析");
+      }
+      expect(JSON.stringify(rows)).not.toContain("remote.example.test");
+      expect(await readFile(join(grokHome, "config.toml"), "utf8")).toBe(config);
+    } finally { await service.dispose(); }
+  });
+
   it("preserves unrelated TOML and stores credentials only in the user environment abstraction", async () => {
     const { service, grokHome, environment } = await fixture();
     const values = await service.upsert(input());

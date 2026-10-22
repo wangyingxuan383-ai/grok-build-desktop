@@ -413,6 +413,8 @@ export class GrokAcpAdapter extends EventEmitter {
   private providerLocalModelId?: string;
   private upstreamModelId = "";
   private suspendModelRuntimePersistence = false;
+  private attaching = false;
+  private unavailableRequestedModelId?: string;
   private planGateReleased = false;
   /** Desktop Auto is a local approval overlay; ACP only reports plan/default. */
   private planExecutionMode: "agent" | "auto" = "agent";
@@ -488,6 +490,12 @@ export class GrokAcpAdapter extends EventEmitter {
   }
   queuedPrompts(): PromptQueueEntry[] { return this.promptQueue.map((entry) => ({ ...entry })); }
   get activeTurnId(): string | undefined { return this.activeTurn?.turnId; }
+  get launchModelId(): string { return this.unavailableRequestedModelId ?? this.currentModelId; }
+  get modelSelectionRequired(): string | undefined {
+    return this.unavailableRequestedModelId
+      ? `原模型“${this.unavailableRequestedModelId}”已不在当前目录。会话已连接，CLI 当前报告“${this.currentModelId}”；请重新选择模型后继续，草稿会保留。`
+      : undefined;
+  }
   get nativeRunControllable(): boolean { return this.nativeControlEnabled; }
   get nativeRunControlBusy(): boolean { return this.nativeControlPending; }
   reserveNativeRunControl(): () => void {
@@ -546,6 +554,12 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async start(resumeSessionId?: string): Promise<{ sessionId: string }> {
+    this.attaching = true;
+    try { return await this.attachSession(resumeSessionId); }
+    finally { this.attaching = false; }
+  }
+
+  private async attachSession(resumeSessionId?: string): Promise<{ sessionId: string }> {
     this.sessionMcpTools.reset();
     // Bind a resumed adapter before initialize.  Grok may publish MCP/session
     // notifications while session/resume is still in flight; leaving the id
@@ -747,7 +761,19 @@ export class GrokAcpAdapter extends EventEmitter {
     // model really reapplies its route instead of silently using the official
     // model while the renderer still shows the provider-prefixed alias.
     if (this.options.modelId && this.options.modelId !== reportedModelId) {
-      await this.setModel(this.options.modelId, { localModelId: this.providerLocalModelId });
+      if (this.models.length
+        && !this.models.some(model => model.modelId === this.options.modelId)) {
+        // A retired launch preference must not turn a successful native resume
+        // into an attach failure or silently authorize the reported replacement.
+        this.unavailableRequestedModelId = this.options.modelId;
+        // Manager launch contexts also carry localModelId for official models.
+        // A missing local id cannot stand in for the CLI's reported model. Keep
+        // the saved launch identity separately until the user explicitly chooses.
+        this.providerLocalModelId = undefined;
+        this.currentModelId = reportedModelId ?? "";
+      } else {
+        await this.setModel(this.options.modelId, { localModelId: this.providerLocalModelId });
+      }
     }
     const reportedModeId = response.modes?.currentModeId;
     if (resumeSessionId && (reportedModeId || this.mode === "auto")) {
@@ -763,6 +789,7 @@ export class GrokAcpAdapter extends EventEmitter {
     } else {
       await this.applyMode(this.mode, false);
     }
+    this.attaching = false;
     this.emitEvent({
       type: "session-ready",
       sessionId: this.sessionId,
@@ -804,6 +831,7 @@ export class GrokAcpAdapter extends EventEmitter {
    * unsupported receipt instead of silently turning it into a queue item.
    */
   async btw(text: string): Promise<CliBtwReceipt> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     const value = text.trim();
     if (!value) throw new Error("旁路提问不能为空");
     if (!this.runtimeSupportsExtension("x.ai/btw")) {
@@ -927,6 +955,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async compact(): Promise<SessionCompactReceipt> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     if (!this.sessionId) throw new Error("会话尚未就绪");
     if (this.working || this.needsUser) throw new Error("当前会话正在运行或等待操作，请先停止或处理当前请求");
     const startedAt = new Date().toISOString();
@@ -988,6 +1017,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     if (this.nativeControlPending && !presentation.nativeControl) throw new Error("原生控制正在进行；草稿已保留，请稍后发送");
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const clientMessageId = presentation.clientMessageId || crypto.randomUUID();
@@ -1077,6 +1107,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async queuePrompt(text: string, attachments: Attachment[] = [], sendNow = false, presentation: UserPromptPresentation = {}): Promise<QueueOperationReceipt> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后再提交队列");
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const id = crypto.randomUUID();
@@ -1109,6 +1140,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   async interjectPrompt(text: string, attachments: Attachment[] = [], presentation: UserPromptPresentation = {}): Promise<QueueOperationReceipt> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     if (!this.sessionId) throw new Error("会话尚未就绪");
     // The turn can finish between the Renderer click and this main-process
     // handler. Calling x.ai/interject after that boundary lets the CLI choose
@@ -1187,6 +1219,7 @@ export class GrokAcpAdapter extends EventEmitter {
     };
   }
   async interjectQueuedPrompt(id: string, text?: string): Promise<QueueOperationReceipt> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     const entry = this.promptQueue.find((value) => value.id === id);
     if (!entry || entry.state !== "queued") throw new Error("该消息已不在等待队列中");
     const operationId = crypto.randomUUID();
@@ -1337,8 +1370,11 @@ export class GrokAcpAdapter extends EventEmitter {
       const result = await this.request("session/set_model", { sessionId: this.sessionId, modelId }) as { _meta?: { model?: { Ok?: string } } };
       this.upstreamModelId = result._meta?.model?.Ok || modelId;
       this.currentModelId = this.providerLocalModelId ?? resolveModelId(this.upstreamModelId, this.models, this.requestedModelId) ?? modelId;
+      const wasAwaitingModel = Boolean(this.unavailableRequestedModelId);
+      this.unavailableRequestedModelId = undefined;
       if (identity.persistRuntime !== false) this.persistRuntimePatch({ modelId: this.currentModelId });
       this.emitEvent({ type: "session-ready", sessionId: this.sessionId, models: this.models, currentModelId: this.currentModelId, effort: this.effort });
+      if (wasAwaitingModel) this.scheduleLocalQueueDrain();
     } catch (error) {
       this.requestedModelId = previousRequestedModelId;
       this.providerLocalModelId = previousLocalModelId;
@@ -2609,7 +2645,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private scheduleLocalQueueDrain(): void {
-    if (this.queueDrainScheduled || this.queueDrainInProgress || this.disposed) return;
+    if (this.queueDrainScheduled || this.queueDrainInProgress || this.disposed || this.modelSelectionRequired) return;
     this.queueDrainScheduled = true;
     const timer = setTimeout(() => {
       this.queueDrainScheduled = false;
@@ -2619,7 +2655,7 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private async drainLocalPromptQueue(): Promise<void> {
-    if (this.queueDrainInProgress || this.disposed || !this.sessionId) return;
+    if (this.queueDrainInProgress || this.disposed || !this.sessionId || this.modelSelectionRequired) return;
     if (this.activeTurn || this.working || this.needsUser || this.pendingPlanRequest !== undefined || this.pendingPermissionRequests.size || this.pendingQuestionRequests.size) return;
     const entry = this.promptQueue
       .slice()
@@ -2770,6 +2806,10 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private emitEvent(event: ChatEvent): void {
+    if (event.type === "session-ready") {
+      if (this.attaching) return;
+      event = { ...event, modelSelectionRequired: this.modelSelectionRequired };
+    }
     bindNativeRunEventOwner(event, this);
     if (event.type === "prompt-queue") {
       const persist = this.options.onPromptQueueChanged;
@@ -2781,6 +2821,10 @@ export class GrokAcpAdapter extends EventEmitter {
   }
 
   private persistRuntimePatch(patch: { modelId?: string; effort?: ReasoningEffort; mode?: SessionMode }): void {
+    if (this.attaching || this.unavailableRequestedModelId) {
+      patch = { ...patch };
+      delete patch.modelId;
+    }
     if (!this.sessionId || !this.options.onRuntimeChanged || !Object.keys(patch).length) return;
     void Promise.resolve(this.options.onRuntimeChanged(this.sessionId, patch)).catch((error: unknown) => {
       void this.options.log.log(`session runtime persistence failed: ${error instanceof Error ? error.message : String(error)}`);

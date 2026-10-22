@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canOpenRecentFileDiff, canRestoreClaimedDraft, preferredOpenLocation, sessionScopedPaneKey, shouldApplyDraftHydration, shouldPauseDraftAutosaveForSubmission, shouldSuspendDraftHydrationForSubmission } from "./session-ui-guards";
+import { canOpenRecentFileDiff, canRestoreClaimedDraft, ownsDraftSubmission, preferredOpenLocation, sessionScopedPaneKey, shouldApplyDraftHydration, shouldPauseDraftAutosaveForSubmission, shouldSuspendDraftHydrationForSubmission, type DraftSubmissionClaim } from "./session-ui-guards";
 
 describe("session UI isolation guards", () => {
   it("changes the dock identity for a session, execution root, or tool change", () => {
@@ -26,10 +26,25 @@ describe("session UI isolation guards", () => {
   });
 
   it("gives a first-send claim ownership of migration without overwriting later input", () => {
-    expect(shouldSuspendDraftHydrationForSubmission("claiming")).toBe(true);
-    expect(shouldSuspendDraftHydrationForSubmission("sent")).toBe(false);
-    expect(shouldPauseDraftAutosaveForSubmission("claiming")).toBe(true);
-    expect(shouldPauseDraftAutosaveForSubmission("sent")).toBe(false);
+    const owner = { draftKey: "new:project-a", workspace: "C:/repo", foreignSessionOpen: false };
+    const claim: DraftSubmissionClaim = { id: 7, phase: "claiming", source: owner, userRevision: 3, attachmentRevision: 2 };
+    expect(shouldSuspendDraftHydrationForSubmission(claim, owner)).toBe(true);
+    expect(shouldSuspendDraftHydrationForSubmission({ ...claim, phase: "sent" }, owner)).toBe(false);
+    expect(shouldPauseDraftAutosaveForSubmission(claim, owner)).toBe(true);
+    expect(shouldPauseDraftAutosaveForSubmission({ ...claim, phase: "sent" }, owner)).toBe(false);
+    expect(ownsDraftSubmission(claim, { ...owner, draftKey: "session-a" })).toBe(false);
+    const migrated = { ...claim, targetDraftKey: "session-a" };
+    expect(shouldSuspendDraftHydrationForSubmission(migrated, { ...owner, draftKey: "session-a" })).toBe(true);
+    expect(shouldPauseDraftAutosaveForSubmission(migrated, { ...owner, draftKey: "session-b" })).toBe(false);
+    expect(ownsDraftSubmission(migrated, { ...owner, workspace: "C:/other" })).toBe(false);
+    expect(ownsDraftSubmission(migrated, { ...owner, foreignSessionOpen: true })).toBe(false);
+    expect(ownsDraftSubmission({ ...migrated, invalidated: true }, owner)).toBe(false);
+    const target = { ...owner, draftKey: "session-a" };
+    expect(shouldSuspendDraftHydrationForSubmission({ ...migrated, phase: "sent" }, target)).toBe(true);
+    expect(shouldSuspendDraftHydrationForSubmission({ ...migrated, migrated: true, phase: "sent" }, target)).toBe(false);
+    expect(ownsDraftSubmission({ ...migrated, migrated: true }, owner)).toBe(false);
+    expect(ownsDraftSubmission({ ...migrated, targetWorkspace: "C:/picked", migrated: true }, { ...target, workspace: "C:/picked" })).toBe(true);
+    expect(ownsDraftSubmission({ ...migrated, targetWorkspace: "C:/picked", migrated: true }, target)).toBe(false);
     const baseline = {
       claimId: 7,
       activeClaimId: 7,
@@ -37,11 +52,13 @@ describe("session UI isolation guards", () => {
       currentUserRevision: 3,
       claimedAttachmentRevision: 2,
       currentAttachmentRevision: 2,
+      ownsClaim: true,
     };
     expect(canRestoreClaimedDraft(baseline)).toBe(true);
     expect(canRestoreClaimedDraft({ ...baseline, activeClaimId: 8 })).toBe(false);
     expect(canRestoreClaimedDraft({ ...baseline, currentUserRevision: 4 })).toBe(false);
     expect(canRestoreClaimedDraft({ ...baseline, currentAttachmentRevision: 3 })).toBe(false);
+    expect(canRestoreClaimedDraft({ ...baseline, ownsClaim: false })).toBe(false);
   });
 
   it("prefers the real execution root over a stale catalog cwd", () => {

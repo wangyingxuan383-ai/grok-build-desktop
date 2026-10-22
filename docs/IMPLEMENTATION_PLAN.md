@@ -1,5 +1,15 @@
 # Development roadmap
 
+## Focused desktop audit repairs (unreleased)
+
+- [x] Repair owning-draft claims and explicitly permitted new-session migration; cover unrelated navigation, failure return, parallel claims and late text attachments with real React DOM regressions.
+- [x] Bind cancellation recovery to the original turn identity, including a queued turn starting between polls.
+- [x] Preserve unavailable launch preferences across restore/restart and require explicit model selection before inference; keep managed Provider aliases and unsent queues intact.
+- [x] Read external provider rows independently, retaining healthy entries beside invalid URLs or unresolved environment placeholders without modifying TOML or issuing network probes.
+- [x] Constrain companion placement by its character area at top/side edges, reposition controls into view and retain existing non-negative saved positions and short falling.
+- [x] Pass desktop types, 1454 tests (9 environment skips), regression/productivity DOM checks, an explicit-selection Composer DOM probe, build and unchanged resource limits. Renderer total: 19366.7 KiB.
+- [ ] Complete physical top-edge drag/hover, mixed-DPI/multi-monitor input and real-CLI queued cancellation/recovery acceptance. Keep these separate from isolated protocol, motion and DOM results; no new package or installation is claimed.
+
 ## Short release fall (0.14.3 local candidate)
 
 - [x] Replace in-place-only recovery with a bounded 20–32 DIP physical fall followed by recovery near the release point; retain explicit full falling and existing position storage.

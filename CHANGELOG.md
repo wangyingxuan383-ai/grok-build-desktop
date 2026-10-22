@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Desktop reliability fixes
+
+- Bind send preparation, failure restoration and text-to-attachment conversion to their owning draft; switching conversations cannot clear another draft. Preserve the explicit new-task-to-session hand-off.
+- Stop cancellation recovery when the original turn ends or changes, preserving the next queued turn and other conversations.
+- Keep sessions connected when a saved model is missing from the current CLI catalog. Require an explicit model choice before sending, without silently changing provider or overwriting the saved preference.
+- Isolate malformed or unresolved external provider addresses so healthy providers and associated task data remain readable; resolve environment placeholders only for address classification.
+- Allow the companion near the screen's top and side edges without reserving invisible margins. Keep edge controls inside the visible area, preserve saved positions and retain the short release fall.
+
+Source fixes only; installed applications and existing candidate packages are unchanged. Native multi-monitor and mixed-DPI acceptance remain separate.
+
 ## 0.14.3 — Short release fall candidate
 
 - Move the companion downward by 20–32 DIP after release, over about 240ms, then play the landing recovery and save the final position.

@@ -9,7 +9,7 @@ import { notificationsQuiet } from "../../shared/productivity";
 import { normalizeAccelerator, validateShortcutBindings } from "../../shared/shortcuts";
 import { DesktopPetEnvironment, type DesktopPetEnvironmentValue } from "./desktop-pet-environment";
 import { DesktopPetAssets } from "./desktop-pet-assets";
-import { PetIntent, inboxTarget, petActivity, petPosition, petTargets, petWindowBounds } from "./desktop-pet-model";
+import { PetIntent, clampPetBounds, inboxTarget, petActivity, petPosition, petTargets, petWindowBounds } from "./desktop-pet-model";
 import { trustedQuickEntryFrame } from "./desktop-quick-entry-window";
 const EMPTY: DesktopActivitySnapshot = { sessions: [], runningCount: 0, awaitingCount: 0, errorCount: 0, inboxUnreadCount: 0, livePhoneCount: 0 };
 export interface PetControllerOptions {
@@ -391,7 +391,19 @@ export class DesktopPetController {
         } });
     }
     private display(): Electron.Display { return this.settings.position ? (screen.getAllDisplays().find(d => d.id === this.settings.position!.displayId) ?? screen.getPrimaryDisplay()) : this.window && !this.window.isDestroyed() ? screen.getDisplayMatching(this.window.getBounds()) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); }
-    private bounds(): Electron.Rectangle { const display = this.settings.position ? this.display() : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); return petWindowBounds(display.workArea, Math.round(this.settings.size * (["a", "b"].includes(this.settings.skinId) ? 1 : this.settings.customScale)), this.settings.position); }
+    private renderedSize(): number { return Math.round(this.settings.size * (["a", "b"].includes(this.settings.skinId) ? 1 : this.settings.customScale)); }
+    private placementWidth(): number {
+        const size = this.renderedSize();
+        return ["a", "b"].includes(this.settings.skinId) ? size : Math.max(size, ...Object.values(this.skin?.clips ?? {}).flatMap(clip => clip.frames.map(frame => frame.width * size / clip.referenceHeight)));
+    }
+    private windowDisplay(bounds: Electron.Rectangle): Electron.Display { return screen.getDisplayNearestPoint({ x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height - 14) }); }
+    private visibleInsets(): Pick<PetSnapshot, "visibleTop" | "visibleLeft" | "visibleRight"> {
+        if (!this.window || this.window.isDestroyed()) return {};
+        const bounds = this.window.getBounds();
+        const area = this.windowDisplay(bounds).workArea;
+        return { visibleTop: Math.max(0, area.y - bounds.y), visibleLeft: Math.max(0, area.x - bounds.x), visibleRight: Math.max(0, bounds.x + bounds.width - area.x - area.width) };
+    }
+    private bounds(): Electron.Rectangle { const display = this.settings.position ? this.display() : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()); return petWindowBounds(display.workArea, this.renderedSize(), this.settings.position, this.placementWidth()); }
     private reposition(): void { this.stopDrag(); if (this.window && !this.window.isDestroyed()) {
         this.window.setBounds(this.bounds());
         this.publish();
@@ -436,7 +448,7 @@ export class DesktopPetController {
     private snapshot(): PetSnapshot {
         if (!this.skin)
             throw Error("桌宠未准备好");
-        return { revision: ++this.revision, transition: this.transition, visibility: this.visibility, clip: this.clip, settings: this.settings, skin: this.skin, reducedMotion: this.reduced, quiet: this.quiet, targets: petTargets(this.activity, this.inbox), unread: this.activity.inboxUnreadCount, phones: this.activity.livePhoneCount, running: petTargets(this.activity,this.inbox).filter(row=>row.status==="running").length, awaiting: petTargets(this.activity,this.inbox).filter(row=>row.status==="awaiting").length, colors: this.palette, theme: this.appSettings?.theme.mode === "light" || this.appSettings?.theme.mode === "custom" && this.appSettings.theme.customBase === "light" || this.appSettings?.theme.mode === "system" && !nativeTheme.shouldUseDarkColors ? "light" : "dark", warning: this.warning, doubleClickTime: this.environment.doubleClickTime ?? 500, gesture: this.drag ? "dragging" : this.landingTimer ? this.landingMode : this.settling ? "settling" : undefined };
+        return { ...this.visibleInsets(), revision: ++this.revision, transition: this.transition, visibility: this.visibility, clip: this.clip, settings: this.settings, skin: this.skin, reducedMotion: this.reduced, quiet: this.quiet, targets: petTargets(this.activity, this.inbox), unread: this.activity.inboxUnreadCount, phones: this.activity.livePhoneCount, running: petTargets(this.activity,this.inbox).filter(row=>row.status==="running").length, awaiting: petTargets(this.activity,this.inbox).filter(row=>row.status==="awaiting").length, colors: this.palette, theme: this.appSettings?.theme.mode === "light" || this.appSettings?.theme.mode === "custom" && this.appSettings.theme.customBase === "light" || this.appSettings?.theme.mode === "system" && !nativeTheme.shouldUseDarkColors ? "light" : "dark", warning: this.warning, doubleClickTime: this.environment.doubleClickTime ?? 500, gesture: this.drag ? "dragging" : this.landingTimer ? this.landingMode : this.settling ? "settling" : undefined };
     }
     private publish(): void { if (this.loadedWindow && this.window && !this.window.isDestroyed() && !this.window.webContents.isDestroyed() && this.skin)
         this.window.webContents.send("pet:changed", this.snapshot()); }
@@ -497,7 +509,7 @@ export class DesktopPetController {
                     this.setActionTimeout(1100);
                 if (!this.settings.position && this.window) {
                     const d = this.display();
-                    void this.update({ position: petPosition(this.window.getBounds(), d.workArea, d.id) }).catch(() => undefined);
+                    void this.update({ position: petPosition(this.window.getBounds(), d.workArea, d.id, this.renderedSize(), this.placementWidth()) }).catch(() => undefined);
                 }
                 break;
             case "hit":
@@ -576,8 +588,13 @@ export class DesktopPetController {
         this.dragTimer = setInterval(() => this.moveDrag(), 33);
         this.options.changed();
     }
-    private moveDrag(): void { if (!this.drag || !this.window || this.window.isDestroyed())
-        return; const cursor = screen.getCursorScreenPoint(), d = screen.getDisplayNearestPoint(cursor), b = this.drag.bounds; const x = Math.round(Math.max(d.workArea.x, Math.min(d.workArea.x + d.workArea.width - b.width, b.x + cursor.x - this.drag.cursor.x))), y = Math.round(Math.max(d.workArea.y, Math.min(d.workArea.y + d.workArea.height - b.height, b.y + cursor.y - this.drag.cursor.y))); this.window.setPosition(x, y); }
+    private moveDrag(): void {
+        if (!this.drag || !this.window || this.window.isDestroyed()) return;
+        const cursor = screen.getCursorScreenPoint(), display = screen.getDisplayNearestPoint(cursor), start = this.drag.bounds;
+        const bounds = clampPetBounds({ ...start, x: start.x + cursor.x - this.drag.cursor.x, y: start.y + cursor.y - this.drag.cursor.y }, display.workArea, this.renderedSize(), this.placementWidth());
+        this.window.setPosition(bounds.x, bounds.y);
+        this.publish();
+    }
     private endDrag(): void {
         if (!this.drag || !this.window)
             return;
@@ -605,20 +622,20 @@ export class DesktopPetController {
         const w = this.window;
         if (!this.intent.visible || this.settings.locked || !w || w.isDestroyed() || !w.isVisible() || this.visibility === "exiting" || this.drag || this.landingTimer)
             return false;
-        const b = w.getBounds(), area = screen.getDisplayMatching(b).workArea;
+        const b = w.getBounds(), area = this.windowDisplay(b).workArea;
         return b.y < area.y + area.height - b.height - 1;
     }
     private dropToBottom(): void {
         if (!this.canDropToBottom())
             return;
-        const b = this.window!.getBounds(), area = screen.getDisplayMatching(b).workArea;
+        const b = this.window!.getBounds(), area = this.windowDisplay(b).workArea;
         this.fallTo(area.y + area.height - b.height, 600, false);
     }
     private fallTo(y: number, duration: number, nearby: boolean): void {
         this.stopDrag();
         this.clearAction();
-        const w = this.window!, start = w.getBounds(), d = screen.getDisplayMatching(start);
-        const end = { ...start, y: Math.round(Math.max(d.workArea.y, Math.min(d.workArea.y + d.workArea.height - start.height, y))) };
+        const w = this.window!, start = w.getBounds(), d = this.windowDisplay(start);
+        const end = clampPetBounds({ ...start, y }, d.workArea, this.renderedSize(), this.placementWidth());
         const version = this.motionVersion;
         const current = () => version === this.motionVersion && w === this.window && !w.isDestroyed();
         const finish = () => {
@@ -644,6 +661,7 @@ export class DesktopPetController {
             if (!current()) { clearInterval(timer); return; }
             const t = this.reduced ? 1 : Math.min(1, (Date.now() - at) / duration);
             w.setPosition(end.x, Math.round(start.y + (end.y - start.y) * t * t));
+            this.publish();
             if (t >= 1) finish();
         }, 33);
         this.landingTimer = timer;
@@ -653,7 +671,7 @@ export class DesktopPetController {
     private rememberPosition(): void {
         const w = this.window;
         if (!w || w.isDestroyed()) return;
-        const b = w.getBounds(), d = screen.getDisplayMatching(b), position = petPosition(b, d.workArea, d.id);
+        const b = w.getBounds(), d = this.windowDisplay(b), position = petPosition(b, d.workArea, d.id, this.renderedSize(), this.placementWidth());
         // Use the current position for an immediate resize/rebuild, before the atomic store write completes.
         this.settings = { ...this.settings, position };
         void this.update({ position }).catch(() => undefined);

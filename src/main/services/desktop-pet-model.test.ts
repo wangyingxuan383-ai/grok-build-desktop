@@ -24,5 +24,29 @@ describe("desktop companion policy", () => {
     expect(petTargets(activity, [{ id: "q", kind: "confirmation", sessionId: "old", title: "等待", read: false, createdAt: "" }])).toEqual([]);
     expect(petTargets({ ...activity, sessions: [{ sessionId: "old", title: "失败", projectName: "", status: "error" }] }, [{ id: "e", kind: "failure", sessionId: "old", title: "失败", read: true, createdAt: "" }])).toEqual([]);
   });
-  it("clamps a restored position to the available monitor", () => { const area = { x: -1920, y: 0, width: 1920, height: 1040 }; const bounds = petWindowBounds(area, 192, { x: 4, y: -3 }); expect(bounds.x + bounds.width).toBe(0); expect(bounds.y).toBe(0); expect(petPosition(bounds, area, 2)).toEqual({ displayId: 2, x: 1, y: 0 }); });
+  it("constrains the character instead of reserving an invisible header at the top", () => {
+    const area = { x: -1920, y: -1080, width: 1920, height: 1040 };
+    for (const size of [128, 192, 256]) {
+      const bounds = petWindowBounds(area, size, { x: 4, y: -3 });
+      expect(bounds.x + bounds.width).toBe((360 - size) / 2 - 8);
+      expect(bounds.y + bounds.height - 14 - size).toBe(area.y + 8);
+      const position = petPosition(bounds, area, 2, size);
+      expect(position).toEqual({ displayId: 2, x: 2, y: -1 });
+      expect(petWindowBounds(area, size, position)).toEqual(bounds);
+      expect(() => validateDesktopPetSettings({ ...DEFAULT_DESKTOP_PET, position })).not.toThrow();
+    }
+  });
+  it("preserves the meaning of existing saved positions", () => {
+    const area = { x: 0, y: 0, width: 1600, height: 1000 };
+    for (const y of [0, .25, .5, 1]) {
+      expect(petWindowBounds(area, 192, { x: .5, y }).y).toBe(Math.round(y * 578));
+    }
+  });
+  it("restores left-edge positions without losing the character on a small display", () => {
+    const area = { x: 20, y: 30, width: 800, height: 600 };
+    const bounds = petWindowBounds(area, 192, { x: -1, y: -.5 });
+    expect(bounds.x).toBe(-56);
+    expect(petPosition(bounds, area, 3, 192)).toEqual({ displayId: 3, x: -1, y: -.5 });
+    expect(petWindowBounds(area, 192, petPosition(bounds, area, 3, 192))).toEqual(bounds);
+  });
 });

@@ -72,6 +72,7 @@ export interface SessionView {
   messages: UiMessage[];
   models: ModelInfo[];
   currentModelId: string;
+  modelSelectionRequired?: string;
   effort: ReasoningEffort;
   commands: CommandInfo[];
   mode: SessionMode;
@@ -250,6 +251,7 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       }
       next.models = event.models;
       next.currentModelId = event.currentModelId || next.currentModelId;
+      next.modelSelectionRequired = event.modelSelectionRequired;
       next.effort = event.effort ?? next.effort;
       break;
     case "user-message": {

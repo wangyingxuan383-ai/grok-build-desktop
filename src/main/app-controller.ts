@@ -3323,7 +3323,7 @@ export class AppController {
         if (!samePath(adapter.cwd, task.workspace)) {
           const source = (await this.catalog.list(adapter.cwd)).find(session => session.id === task.targetSessionId);
           if (!source) throw new Error("原工作区中未找到绑定会话，未改变执行目录");
-          await this.rebindSession(source, await canonicalExistingPath(task.workspace, "directory"), (cwd, id) => this.processes.openConfigured(cwd, id, adapter.effort, adapter.mode, adapter.currentModelId ?? "", undefined, undefined, adapter.processOptions, true));
+          await this.rebindSession(source, await canonicalExistingPath(task.workspace, "directory"), (cwd, id) => this.processes.openConfigured(cwd, id, adapter.effort, adapter.mode, adapter.launchModelId ?? adapter.currentModelId ?? "", undefined, undefined, adapter.processOptions, true));
           adapter = this.processes.get(task.targetSessionId);
         }
         const execution = resolveAutomationExecutionPolicy(task.profile);
@@ -4333,7 +4333,7 @@ export class AppController {
       }
       this.modelCatalog = [...byId.values()];
     }
-    if (event.type === "session-ready" && sessionId && readyModelId) {
+    if (event.type === "session-ready" && sessionId && readyModelId && !event.modelSelectionRequired) {
       void this.providers.managedProviderForModel(readyModelId).then(async (provider) => {
         // Reconcile atomically: a managed session keeps its provider-scoped
         // local id even when ACP reports only the upstream alias.
