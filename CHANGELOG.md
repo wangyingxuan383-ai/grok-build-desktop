@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.14.4 — Desktop reliability
+
+- Patch the Vite build tool to 8.2.4 without changing application runtime dependencies.
+- Keep imported companion-image metadata out of executable sandbox code while preserving transparent-image alignment.
+- Bind send preparation, failure restoration and text-to-attachment conversion to their owning draft; switching conversations cannot clear another draft. Preserve the explicit new-task-to-session hand-off.
+- Stop cancellation recovery when the original turn ends or changes, preserving the next queued turn and other conversations.
+- Keep sessions connected when a saved model is missing from the current CLI catalog. Require an explicit model choice before sending, without silently changing provider or overwriting the saved preference.
+- Isolate malformed or unresolved external provider addresses so healthy providers and associated task data remain readable; resolve environment placeholders only for address classification.
+- Allow the companion near the screen's top and side edges without reserving invisible margins. Keep edge controls inside the visible area, preserve saved positions and retain the short release fall.
+
+Includes Android companion 0.4.4 (versionCode 16), signed with the existing certificate. Native multi-monitor and mixed-DPI acceptance remain separate.
+
+## 0.14.3 — Short release fall candidate
+
+- Move the companion downward by 20–32 DIP after release, over about 240ms, then play the landing recovery and save the final position.
+- Stop near the release point, clamp travel at the work-area bottom, and retain the explicit full “落到底部” command.
+- Reuse the same guarded motion controller for both paths; reduced motion positions immediately and new gestures invalidate old callbacks.
+
+Reuse existing art, settings and permissions. No phone changes or public upload.
+
+## 0.14.2 — Companion drag animation follow-up candidate
+
+- Restore the pickup transition before the suspended pose, rather than immediately displaying a held frame.
+- Play the release/recovery frames at the saved position after a drag. Keep free placement and explicit menu falling separate.
+- Let awaiting-input/error states preempt recovery, honor reduced motion and discard old recovery callbacks on a new gesture or hide.
+
+Reuse existing artwork without adding settings, permissions or dependencies.
+
+## 0.14.1 — Companion placement follow-up candidate
+
+- Keep the companion where it is released instead of automatically dropping it to the bottom; persist its relative monitor position.
+- Add “落到底部” to the companion context menu and tray submenu. Cancel an old fall on a new drag, hide, disable, lock, character or size change.
+- Mark custom characters and image-workshop drafts as unfinished; retain imports and make the draft-only workshop boundary explicit.
+- Merge question and screenshot launchers into one question entry, including tray and shortcut settings. Keep system capture, explicit clipboard attachment and file selection in the question window.
+
+Windows-only local candidate; no automatic installation or public upload. Physical click-through, mixed-DPI and monitor-switch acceptance remain separate from automated window/IPC evidence.
+
+## 0.14.0 — Windows companion inspection candidate
+
+- Add a default-enabled, quiet desktop companion with two illustrated characters and separate greeting/farewell animations; preserve explicit disables across restarts and upgrades.
+- Keep temporary hide, persistent disable and application exit distinct. Compose lock/fullscreen/Computer Use/capture suppression without reopening a manually hidden companion.
+- Reuse live task/inbox events, exact target navigation, existing quick question and explicit screenshot flows; configuration changes, history and cancelled turns stay quiet.
+- Add local PNG/WebP and data-only animation-pack import, sandboxed single-image alignment, and an image-workshop draft flow with no automatic generation.
+- Keep both eleven-group WebP packs under the combined 8 MiB target; preserve the circular-G embroidery and upstream artwork attribution.
+- Resolve long/8.3 temporary-directory aliases in the isolated scheduler acceptance probe without relaxing its file-name or overwrite restrictions; keep its profile separate from the installed application and exclude Electron's stock demo from local-runtime packages.
+- Remove machine-local filesystem fields from the dependency-license report while retaining package licenses and references.
+
+Window/IPC, import and rendered settings checks do not certify physical Windows click-through, lock/unlock or mixed-DPI/multi-monitor input. This is a local inspection candidate, not a public release.
+
+- Keep phone snippets, recipes and bookmarks read-only until their stored contents load successfully; provide explicit retry after a read failure instead of overwriting saved data with defaults.
+- Preserve the quick-question draft when Escape cancels input-method composition.
+- Bind dropped attachments to the original draft before file preparation; reject late results after conversation/mode changes and merge consecutive image drops.
+- Hide the native webpage behind visible export and confirmation dialogs, restoring it after closing; hidden dialogs do not block the webpage.
+
+## 0.13.0 — Grok Remote 0.4.3 (local candidate)
+
+- Add event-driven tray activity, unread inbox counts, named session notifications, temporary quiet mode and a shared close-to-tray/quit transaction.
+- Add a sandboxed quick-question window, optional global shortcuts, explicit system-screenshot/clipboard attachments, taskbar activity and opt-in sleep prevention.
+- Add a prompt snippet library with explicit variable insertion; the phone can read the paired computer's library while keeping phone snippets private.
+- Route dropped image references to the image conversation instead of the coding draft.
+- Add selected-element screenshot feedback and exact-line Diff annotations to conversation drafts, without automatically sending them.
+- Export stored conversations as redacted Markdown or sandboxed static HTML with a preview before saving.
+- Observe valid external CLI configuration changes without restarting active work; preserve last-good configuration and reject late model probes.
+- Add compact reported turn statistics, configurable application shortcuts, event-driven phone status and opt-in inbox quota warnings based on explicit current-period data.
+- Fix tray inbox navigation, duplicate annotation insertion, Windows aliased draft directories and unsupported interjection fallback; unsupported interjections enter the removable next-turn queue while current work continues.
+- Read event-driven phone state as invalidations, so pairing requests and device changes appear without polling; focus quick-entry input after its first rendered frame and support Escape to close.
+
+Local Windows/Android candidates passed their package, content and signing checks, including packaged pairing and Portable startup. Physical-device interaction and system-installer acceptance remain separate; this entry does not claim a public release.
+
 ## 0.12.2 — Grok Remote 0.4.2
 
 Includes the changes of the unpublished 0.12.1 / 0.4.1 inspection build. Mobile guides now point to the latest release instead of a fixed version.

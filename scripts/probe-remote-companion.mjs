@@ -10,7 +10,7 @@ const run=async expression=>{const r=await send("Runtime.evaluate",{expression,a
 const call=async(functionDeclaration,...args)=>{const r=await send("Runtime.callFunctionOn",{objectId:global,functionDeclaration,arguments:args.map(value=>({value})),awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result?.value};
 const wait=async expression=>{for(let i=0;i<120;i++){if(await run(expression))return;await new Promise(r=>setTimeout(r,70))}throw Error("Not ready: "+expression)};
 const click=async selector=>{const point=await call("function(selector){const e=document.querySelector(selector);if(!e)throw Error('Missing '+selector);e.scrollIntoView({block:'center'});const b=e.getBoundingClientRect();return {x:b.x+b.width/2,y:b.y+b.height/2}}",selector);await send("Input.dispatchMouseEvent",{type:"mouseMoved",...point});for(const type of ["mousePressed","mouseReleased"])await send("Input.dispatchMouseEvent",{type,button:"left",clickCount:1,...point})};
-const choose=async text=>{await call("function(text){document.querySelector('[data-remote-target]')?.removeAttribute('data-remote-target');const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===text);if(!e)throw Error('Missing '+text);e.dataset.remoteTarget='1'}",text);await click('[data-remote-target="1"]')};
+const choose=async text=>{await wait('Array.from(document.querySelectorAll("button")).some(b=>b.textContent.trim()==='+JSON.stringify(text)+'&&!b.disabled)');await call("function(text){document.querySelector('[data-remote-target]')?.removeAttribute('data-remote-target');const e=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===text);if(!e)throw Error('Missing '+text);e.dataset.remoteTarget='1'}",text);await click('[data-remote-target="1"]')};
 try{
  await send("Runtime.enable");await wait('Boolean(document.querySelector(".app-shell"))');global=(await send("Runtime.evaluate",{expression:"globalThis"})).result.objectId;
  const settings=await run("window.grokDesktop.getSettings()");if(!settings.activeWorkspace.includes("Grok-Build-Desktop-smoke-"))throw Error("Not isolated");
@@ -38,9 +38,21 @@ try{
  const root=settings.activeWorkspace.replace(/[\\/]Remote Demo$/,"");const stored=JSON.parse(await readFile(join(root,"remote","gateway.json"),"utf8"));
  const api=(path,body,token="",binary=false)=>new Promise((resolve,reject)=>{const req=request({hostname:"127.0.0.1",port:state.port,path,method:body===undefined?"GET":"POST",ca:stored.certificate,checkServerIdentity:(_,cert)=>new X509Certificate(cert.raw).fingerprint256.replaceAll(":","").toLowerCase()===state.fingerprint?undefined:Error("Pinned identity mismatch"),headers:token?{Authorization:`Bearer ${token}`} : {}},response=>{const chunks=[];response.on("data",d=>chunks.push(d));response.on("end",()=>{try{const raw=Buffer.concat(chunks);resolve({status:response.statusCode,body:binary?raw:JSON.parse(raw.toString("utf8")),mimeType:response.headers["content-type"]})}catch(error){reject(error)}})});req.on("error",reject);req.end(body===undefined?undefined:JSON.stringify(body))});
  const pendingPair=await api("/v1/pair",{code:state.pairing.code,name:"验收安卓手机"});if(pendingPair.status!==202)throw Error("Pair failed");await wait('document.body.innerText.includes("验收安卓手机")');await choose("允许配对");
- const approved=await api("/v1/pair/status",{code:state.pairing.code,requestId:pendingPair.body.requestId});if(!approved.body.deviceToken)throw Error("Consent was not applied");
+ let approved;
+ for(let attempt=0;attempt<100;attempt++){
+  approved=await api("/v1/pair/status",{code:state.pairing.code,requestId:pendingPair.body.requestId});
+  if(approved.body.deviceToken)break;
+  if(approved.status!==200||approved.body.status==='denied')throw Error('Pair consent rejected: '+approved.status);
+  await new Promise(resolve=>setTimeout(resolve,50));
+ }
+ if(!approved.body.deviceToken)throw Error("Consent was not applied");
  const sessions=await api("/v1/sessions",undefined,approved.body.deviceToken);if(!sessions.body.sessions.some(s=>s.id==="remote-smoke-session"))throw Error("Known Desktop session missing");
  const options=await api('/v1/options',undefined,approved.body.deviceToken);if(options.status!==200)throw Error('Options query failed: '+options.body.error);if(!options.body.capabilities.includes('session.create')||!options.body.workspaces.length)throw Error('Native Desktop project/capability mapping missing');
+ const snippetPath='/v1/workbench?kind=prompt-snippets';
+ if((await api(snippetPath)).status!==401)throw Error('Computer snippets must require pairing authentication');
+ await run('window.grokDesktop.savePromptSnippet({title:"共享片段验收",body:"核对 {{文件}}，只插入草稿。"})');
+ const snippets=await api(snippetPath,undefined,approved.body.deviceToken);
+ if(snippets.status!==200||snippets.body.supported!==true||!snippets.body.items.some(item=>item.title==='共享片段验收'&&item.body==='核对 {{文件}}，只插入草稿。'))throw Error('Paired computer snippet read failed');
  if(options.body.workspaces.some(row=>row.name==='Removed Project')||!options.body.notices?.some(value=>value.includes('部分项目')))throw Error('Stale project was not isolated from creation options');
  const modelOptions=await api('/v1/options?models=refresh&scope=models',undefined,approved.body.deviceToken);if(modelOptions.status!==200||modelOptions.body.workspaces.length)throw Error('Independent model-only request failed');
  const outline=await api('/v1/workbench?kind=outline&sessionId=remote-smoke-session',undefined,approved.body.deviceToken);if(outline.status!==200||outline.body.entries[0]?.index!==0||outline.body.entries[0]?.preview!=='这是隔离数据的历史回答。')throw Error('Actual projection outline missing');
@@ -63,5 +75,5 @@ try{
  await choose("撤销访问");const denied=await api("/v1/sessions",undefined,approved.body.deviceToken);if(denied.status!==401)throw Error("Revocation was not immediate");
  await choose("关闭手机连接");await wait('!document.querySelector(".remote-status.online")');
  const png=await send("Page.captureScreenshot",{format:"png"});await writeFile(new URL("../out/remote-desktop-smoke.png",import.meta.url),Buffer.from(png.data,"base64"));
- console.log("REMOTE_DESKTOP_UI_PASSED real settings, TLS identity, explicit pairing consent, known session history without activation, device revocation and stop; no model requests");
+ console.log("REMOTE_DESKTOP_UI_PASSED real settings, TLS identity, explicit pairing consent, authenticated snippets, known session history without activation, device revocation and stop; no model requests");
 }finally{try{await run("window.grokDesktop.setRemoteEnabled(false)")}catch{}socket.close()}

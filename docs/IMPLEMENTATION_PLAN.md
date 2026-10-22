@@ -1,5 +1,88 @@
 # Development roadmap
 
+## 0.14.4 release
+
+- [x] Bump Desktop to 0.14.4 and Android to 0.4.4/code 16; retain the existing signing identity.
+- [x] Restrict public release attachments to Setup, Portable, signed APK, APK verification metadata and SHA-256 sums; retain build reports and private acceptance evidence locally.
+- [x] Stop publication immediately if download, provenance verification or verification-dependency installation fails.
+- [x] Patch the Vite build tool to 8.2.4 for the security gate without relaxing audit thresholds or changing runtime dependencies.
+- [x] Separate companion-image metadata from executable sandbox code; verify real sandbox decoding, alpha bounds and decoder cleanup for distinct images.
+- [x] Build, inspect package contents and verify signatures/hashes before staging the exact release files.
+- [x] Verify downloaded release payloads and provenance before publication; preserve the documented physical-input acceptance limits.
+
+## Focused desktop audit repairs (0.14.4)
+
+- [x] Repair owning-draft claims and explicitly permitted new-session migration; cover unrelated navigation, failure return, parallel claims and late text attachments with real React DOM regressions.
+- [x] Bind cancellation recovery to the original turn identity, including a queued turn starting between polls.
+- [x] Preserve unavailable launch preferences across restore/restart and require explicit model selection before inference; keep managed Provider aliases and unsent queues intact.
+- [x] Read external provider rows independently, retaining healthy entries beside invalid URLs or unresolved environment placeholders without modifying TOML or issuing network probes.
+- [x] Constrain companion placement by its character area at top/side edges, reposition controls into view and retain existing non-negative saved positions and short falling.
+- [x] Pass desktop types, 1454 tests (9 environment skips), regression/productivity DOM checks, an explicit-selection Composer DOM probe, build and unchanged resource limits. Renderer total: 19366.7 KiB.
+- [ ] Complete physical top-edge drag/hover, mixed-DPI/multi-monitor input and real-CLI queued cancellation/recovery acceptance. Keep these separate from isolated protocol, motion and DOM results; no new package or installation is claimed.
+
+## Short release fall (0.14.3 local candidate)
+
+- [x] Replace in-place-only recovery with a bounded 20–32 DIP physical fall followed by recovery near the release point; retain explicit full falling and existing position storage.
+- [x] Verify actual window-coordinate travel (4 DIP mid-flight and 31 DIP at rest for B/192), final persistence and cancellation. Pass types, 1445 tests (9 environment skips), build, existing resource/package gates and 37 packaged window/IPC checks; deliver local candidates and an updated inspection checklist. Physical system input remains separate.
+
+## Companion drag animation follow-up (0.14.2 local candidate)
+
+- [x] Preserve pickup, suspended hold and an in-place release/recovery pose while retaining free placement and menu falling.
+- [x] Verify animation phases, reduced motion, task preemption and stale callbacks; pass types, 1444 tests (9 environment skips), build, unchanged resource budgets and 36 packaged window/IPC checks. Deliver the local Setup/Portable and updated inspection checklist; keep physical system input acceptance separate.
+
+## Companion feedback follow-up (0.14.1 local candidate)
+
+- [x] Keep the companion at its released position and restore task posture; retain existing work-area boundaries and relative display coordinates.
+- [x] Add explicit tray/context-menu falling with locking/visibility guards and cancellation identities for stale animation callbacks.
+- [x] Label custom import and image-workshop drafts as unfinished without disabling existing features.
+- [x] Merge question/screenshot launchers into one question entry across the companion, tray and shortcut settings; keep explicit capture/attachment tools in that window and a legacy shortcut fallback.
+- [x] Pass 1440 Desktop tests (9 environment skips), types, build, unchanged resource budgets, light/dark 820px 125/150% layouts and 34 isolated window/IPC checks including middle release, restored height and manual falling. Record physical Windows acceptance separately.
+- [x] Deliver Windows 0.14.1 Setup/Portable local candidates, checksums and inspection checklist; pass packaged contents/Fuses, current UI, isolated Task Scheduler, Chinese/spaced-path Portable startup and 33 packaged window/IPC checks. Installation remains explicit; no phone changes or public upload.
+
+## Desktop companion (staged Windows candidate)
+
+- [x] Deliver two raster character candidates with transparent masters, four expression previews and verified light/dark 128/192/256px comparisons.
+- [x] Retain both visual routes for animation pilots; replace the small character's whale apron motif with the application circular-G embroidery.
+- [x] Deliver both routes' first idle/awaiting-input/pickup-and-landing pilots, with independent controls, frame inspection and documented sandboxed Electron verification.
+- [x] Expand each route with work, celebration, error, pat, wave and doze pilots: nine action groups and 38 keyframes per route, with grouped selection, replay and tap-to-pat review.
+- [x] Add distinct entrance/farewell illustrations for both routes and normalize eleven-group WebP packs within the unchanged combined 8 MiB resource target.
+- [ ] Accept idle/awaiting-input/pickup-and-landing samples, then validate the small transparent window on Windows.
+- [x] Integrate existing activity/inbox and quick-entry flows with default-enabled quiet companionship; retain explicit disables across restarts and upgrades. Verify window/IPC lifecycle separately from physical input.
+- [x] Add bounded worker-validated local image/animation imports with sandboxed single-image alignment, and an explicit per-item image-workshop draft flow.
+- [x] Bound file reads before allocation, reject files changing during import, and align the packaged task-entry probe with the current task-center navigation.
+- [x] Canonicalize the scheduler probe's Windows temporary-directory aliases while retaining exact marker names and exclusive writes; exclude the stock Electron demo from local-runtime packaging.
+- [x] Verify immediate settings saves and light/dark layouts at 820px and 125/150% zoom; preserve the existing renderer and combined artwork budgets.
+- [ ] Validate system mouse click-through, physical lock/unlock, monitor removal and mixed-DPI input in an interactive Windows session.
+- [x] Deliver a locally inspected Windows 0.14.0 Setup/Portable candidate with package/provenance checks and clearly listed remaining system acceptance; no replacement installation or public upload.
+- [x] Pass 1427 Desktop tests (9 environment skips), current-version packaged pages, isolated Task Scheduler and Chinese/spaced-path Portable startup. Keep window/IPC baseline tests distinct from native input/placement acceptance.
+
+See [the companion plan](DESKTOP_PET_PLAN.md). The source candidate adds the companion runtime; it does not replace an installed build or constitute a public release.
+
+## Reliability follow-up (unreleased)
+
+- [x] Prevent phone snippet/recipe/bookmark fallback data from replacing unread local libraries; keep failures read-only and support explicit retry.
+- [x] Keep quick-entry input-method composition separate from Escape-to-close and retain captured draft attachments.
+- [x] Bind asynchronous drops at their start, reject changed draft owners, handle preparation failures and merge consecutive image references.
+- [x] Check visible dialog semantics before displaying a native browser surface, including export and alert dialogs; restore the webpage after closing.
+- [x] Pass both type checks, Desktop regression (1399 passed, 9 environment skips), phone regression (135 passed), build and the existing renderer budget.
+- [x] Verify consecutive/stale image drops in sandboxed Electron DOM and actual export/alert visibility against a native WebContentsView.
+
+The Desktop fixes are included in the 0.14.0 Windows inspection candidate. The phone source fixes do not constitute a new APK in this companion-only delivery. Physical-device input-method behavior retains its own acceptance boundary.
+
+## Desktop productivity candidate (0.13.0 / Grok Remote 0.4.3)
+
+- [x] Preserve the development snapshot and integrate event-driven activity, named notifications, a prioritized inbox and consistent close/exit behavior.
+- [x] Repair first-mount and already-open inbox navigation, protect attachment storage against Windows root aliases, and discard model probes from an older config revision.
+- [x] Verify sandboxed DOM behavior for duplicate/stale Diff feedback, explicit snippet variable insertion and redacted HTML/Markdown export.
+- [x] Complete final quick-entry and phone library ownership/concurrency checks.
+- [x] Accept Desktop snippet/settings/export/inbox components in light/dark at 820px and 125/150% zoom and wide-screen rendering; inspect phone snippets/variables at 320/360/393px and larger text. Keep physical-device evidence separate.
+- [x] Verify real pairing/TLS consent, authenticated computer snippet reads, passive session history and device revocation; fix payload-free state notifications without reintroducing polling.
+- [x] Pass final Desktop regression (1392 passed, 9 environment skips), phone regression (132 passed), both type checks and the unchanged renderer budget.
+- [x] Verify final Windows Setup/Portable contents, Fuses, current-version UI, paired TLS/snippet flows and Portable startup under a Chinese/spaced path; verify same-signature Android 0.4.3/code 15 and its source trees. Deliver local candidates; no public upload.
+- [ ] Record physical Android IME, gestures, background restoration and system-install acceptance separately.
+
+This candidate excludes desktop pets, voice models, new worktree orchestration and independent conversation windows. Screenshot entry uses the system snipping tool followed by an explicit clipboard attachment. New global shortcuts, sleep prevention and quota warnings are opt-in. Public publishing is separate from local candidate delivery.
+
 ## CLI compatibility and native-run management (Desktop 0.12.2 / Grok Remote 0.4.2)
 
 - [x] Preserve validated context capacity in initialize, new-session catalogs and resume fallbacks.

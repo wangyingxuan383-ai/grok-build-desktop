@@ -8,11 +8,11 @@ Grok Build Desktop 是面向 Windows 用户的 Grok Build CLI 图形客户端。
 
 ![编程工作台：项目、会话、标签与消息](docs/assets/coding-workspace.png)
 
-当前桌面版本为 0.12.2，配套 Grok Remote 为 0.4.2；下方桌面截图展示 0.10.4 的工作流。截图使用隔离演示数据；示例文字与插画不代表真实模型生成或性能结果。公开安装包以 Releases 中的版本为准。
+当前桌面版本为 0.14.4，配套 Grok Remote 为 0.4.4。下方截图使用旧版隔离演示数据，不代表真实模型产出；安装包以 Releases 为准。
 
 ## 手机连接与更新
 
-[下载 Android APK 0.4.2](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.12.2/Grok-Remote-v0.4.2.apk)。手机安装后，在电脑“设置 → 手机连接”开启配对，手机扫码并由电脑允许。支持局域网或已有 VPN；电脑负责模型和任务执行。手机提供会话、任务、作品与设备四个入口，以及收藏、长按菜单和全屏看图。
+[下载 Android APK 0.4.4](https://github.com/wangyingxuan383-ai/grok-build-desktop/releases/download/v0.14.4/Grok-Remote-v0.4.4.apk)。手机安装后，在电脑“设置 → 手机连接”开启配对，手机扫码并由电脑允许。支持局域网或已有 VPN；电脑负责模型和任务执行。手机提供会话、任务、作品与设备四个入口，以及收藏、长按菜单和全屏看图。
 
 桌面安装版可在应用内下载安装更新；手机 0.3.6 起可独立检查和下载 APK，校验后打开系统安装确认。覆盖安装保留数据，便携版通过替换目录升级。详见[中文手机指南](apps/mobile/README.md)。
 
@@ -50,6 +50,8 @@ Grok Build Desktop 是面向 Windows 用户的 Grok Build CLI 图形客户端。
 ![持久任务：工作日预设与高级配置](docs/assets/scheduled-tasks.png)
 
 ## 能力边界
+
+桌面伴侣提供双形象、出入场、任务状态、拎起与短落、自由停留、菜单落底和提问入口。默认开启，可在设置或托盘关闭；自定义形象与工坊仍未完善。多屏、混合 DPI 与锁屏的验收边界见[功能说明](docs/FEATURE_MATRIX.md)。
 
 - 子智能体由 Grok CLI 原生调度；桌面展示状态、结果和可读取的子会话。跟进、取消与恢复按所选 CLI 的实际合同开放。
 - Computer 的能力选择、观察与实际操作分别记录；本机 Host 就绪不代表模型已完成操作。

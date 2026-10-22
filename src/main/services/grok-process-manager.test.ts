@@ -42,6 +42,18 @@ function fixture(effort: ReasoningEffort, setEffort = vi.fn().mockResolvedValue(
 }
 
 describe("Grok process reasoning effort switching", () => {
+  it("preserves an unavailable launch preference across persistence and restart snapshots", async () => {
+    const { manager, adapter } = fixture("");
+    const runtime = { get: vi.fn().mockResolvedValue({ modelId: "old" }), save: vi.fn() };
+    Object.assign(manager, { runtimeState: runtime });
+    Object.assign(adapter, { currentModelId: "reported", launchModelId: "old", cwd: "fixture", mode: "agent" });
+    try {
+      await (manager as any).rememberSession("session", adapter);
+      expect(runtime.save).toHaveBeenCalledWith(expect.objectContaining({ modelId: "old" }));
+      expect(manager.snapshot("session")?.modelId).toBe("old");
+      expect(manager.snapshots()[0]?.modelId).toBe("old");
+    } finally { await manager.dispose(); }
+  });
   it("does not spawn a quarantined CLI, while ordinary missing evidence remains advisory", async () => {
     const locate=vi.spyOn(locator,"locateGrokCli").mockResolvedValue("fixture.exe");
     const version=vi.spyOn(locator,"readCliVersion").mockResolvedValue("1.0.46 (fixture)");
@@ -468,6 +480,41 @@ describe("session cancellation recovery", () => {
       expect(spawn).not.toHaveBeenCalled();
     } finally {
       await manager.dispose();
+    }
+  });
+
+  it("does not terminate the next queued turn when cancellation settles between polls", async () => {
+    vi.useFakeTimers();
+    const manager = new GrokProcessManager(async () => settings, async () => undefined, { log: vi.fn().mockResolvedValue(undefined) } as any, vi.fn());
+    const adapter = {
+      activeTurnId: "turn-a" as string | undefined,
+      working: true,
+      needsUser: false,
+      cancel: vi.fn(() => setTimeout(() => {
+        adapter.activeTurnId = undefined;
+        adapter.working = false;
+        setTimeout(() => { adapter.activeTurnId = "queued-turn-b"; adapter.working = true; }, 0);
+      }, 10)),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const other = { working: true, activeTurnId: "other-turn", dispose: vi.fn() };
+    (manager as any).sessions.set("session", adapter);
+    (manager as any).sessions.set("other", other);
+    const spawn = vi.spyOn(manager as any, "spawn");
+    try {
+      const stopped = manager.cancelSession("session");
+      await vi.advanceTimersByTimeAsync(8_500);
+      await stopped;
+      expect(adapter.activeTurnId).toBe("queued-turn-b");
+      expect(adapter.working).toBe(true);
+      expect(adapter.dispose).not.toHaveBeenCalled();
+      expect(other.dispose).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+      expect(manager.get("session")).toBe(adapter);
+    } finally {
+      (manager as any).sessions.clear();
+      await manager.dispose();
+      vi.useRealTimers();
     }
   });
 });

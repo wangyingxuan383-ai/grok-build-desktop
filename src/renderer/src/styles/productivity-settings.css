@@ -1,0 +1,9 @@
+.productivity-settings{display:grid;gap:var(--space-5);min-width:0;font-size:var(--text-caption)}
+.productivity-settings fieldset{min-width:0;margin:0}
+.productivity-settings label,.productivity-settings details{min-width:0}
+.productivity-settings small{color:var(--color-fg-subtle);line-height:1.55}
+.productivity-settings input:not([type=checkbox]),.productivity-settings select{width:100%;min-width:0;font:inherit}
+.productivity-settings details>label{margin-top:var(--space-3)}
+.productivity-settings summary{cursor:pointer;color:var(--color-fg)}
+.productivity-settings button{padding:6px 10px;border:1px solid var(--color-border-strong);border-radius:var(--radius-md);background:var(--color-input);color:var(--color-fg);font:inherit;cursor:pointer}
+.productivity-settings .button-row{margin-top:var(--space-3)}

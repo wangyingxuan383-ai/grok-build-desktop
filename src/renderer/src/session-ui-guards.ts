@@ -25,15 +25,42 @@ export function shouldApplyDraftHydration(input: {
     && input.baselineAttachmentRevision === input.currentAttachmentRevision;
 }
 
-export function shouldSuspendDraftHydrationForSubmission(phase: "claiming" | "sent" | undefined): boolean {
-  return phase === "claiming";
+export interface DraftOwner {
+  draftKey: string;
+  workspace: string;
+  foreignSessionOpen: boolean;
 }
 
-export function shouldPauseDraftAutosaveForSubmission(phase: "claiming" | "sent" | undefined): boolean {
+export interface DraftSubmissionClaim {
+  id: number;
+  phase: "claiming" | "sent";
+  source: DraftOwner;
+  targetDraftKey?: string;
+  targetWorkspace?: string;
+  migrated?: boolean;
+  invalidated?: boolean;
+  cleared?: boolean;
+  clearedEpoch?: number;
+  userRevision: number;
+  attachmentRevision: number;
+}
+
+export function ownsDraftSubmission(claim: DraftSubmissionClaim | undefined, owner: DraftOwner): boolean {
+  return Boolean(claim && !claim.invalidated && !owner.foreignSessionOpen && !claim.source.foreignSessionOpen
+    && ((!claim.migrated && claim.source.draftKey === owner.draftKey && claim.source.workspace === owner.workspace)
+      || (claim.targetDraftKey === owner.draftKey && (claim.targetWorkspace ?? claim.source.workspace) === owner.workspace)));
+}
+
+export function shouldSuspendDraftHydrationForSubmission(claim: DraftSubmissionClaim | undefined, owner: DraftOwner): boolean {
+  return ownsDraftSubmission(claim, owner) && (claim?.phase === "claiming"
+    || Boolean(claim?.targetDraftKey === owner.draftKey && !claim.migrated));
+}
+
+export function shouldPauseDraftAutosaveForSubmission(claim: DraftSubmissionClaim | undefined, owner: DraftOwner): boolean {
   // Once the submitted snapshot has been consumed, the composer belongs to a
   // possible follow-up even if the original prompt RPC remains open for a long
   // turn. Only the short claim/migration window blocks autosave.
-  return phase === "claiming";
+  return claim?.phase === "claiming" && ownsDraftSubmission(claim, owner);
 }
 
 export function canRestoreClaimedDraft(input: {
@@ -43,8 +70,9 @@ export function canRestoreClaimedDraft(input: {
   currentUserRevision: number;
   claimedAttachmentRevision: number;
   currentAttachmentRevision: number;
+  ownsClaim: boolean;
 }): boolean {
-  return input.activeClaimId === input.claimId
+  return input.ownsClaim && input.activeClaimId === input.claimId
     && input.claimedUserRevision === input.currentUserRevision
     && input.claimedAttachmentRevision === input.currentAttachmentRevision;
 }

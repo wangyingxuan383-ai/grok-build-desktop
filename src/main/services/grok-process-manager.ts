@@ -170,7 +170,7 @@ export class GrokProcessManager {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
     const snapshots = Array.from(this.sessions.entries()).map(([sessionId, session]) => ({
-      sessionId, session, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId, processOptions: session.processOptions,
+      sessionId, session, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.launchModelId ?? session.currentModelId, processOptions: session.processOptions,
     }));
     const failures: string[] = [];
     for (const snapshot of snapshots) {
@@ -234,11 +234,11 @@ export class GrokProcessManager {
 
   snapshot(sessionId: string): LiveSessionSnapshot | undefined {
     const session = this.sessions.get(sessionId);
-    return session ? { sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId, processOptions: session.processOptions } : undefined;
+    return session ? { sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.launchModelId ?? session.currentModelId, processOptions: session.processOptions } : undefined;
   }
 
   snapshots(): LiveSessionSnapshot[] {
-    return Array.from(this.sessions, ([sessionId, session]) => ({ sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.currentModelId, processOptions: session.processOptions }));
+    return Array.from(this.sessions, ([sessionId, session]) => ({ sessionId, cwd: session.cwd, effort: session.effort, mode: session.mode, modelId: session.launchModelId ?? session.currentModelId, processOptions: session.processOptions }));
   }
 
   /** Prefer the official 1.0 Git status extension only when a matching live
@@ -354,7 +354,7 @@ export class GrokProcessManager {
     if (existing) {
       existing.lastTouched = Date.now();
       this.focusedId = sessionId;
-      this.onEvent({ type: "session-ready", sessionId, models: existing.models, currentModelId: existing.currentModelId, effort: existing.effort });
+      this.onEvent({ type: "session-ready", sessionId, models: existing.models, currentModelId: existing.currentModelId, effort: existing.effort, modelSelectionRequired: existing.modelSelectionRequired });
       return { sessionId };
     }
     return this.joinSessionOpen(sessionId, async () => {
@@ -417,7 +417,7 @@ export class GrokProcessManager {
     if (previous.working || previous.needsUser) throw new Error("当前会话正在运行或等待操作，完成后再更改推理强度");
     const cwd = previous.cwd;
     const mode = previous.mode;
-    const model = previous.currentModelId;
+    const model = previous.launchModelId ?? previous.currentModelId;
     const previousEffort = previous.effort;
     const processOptions = previous.processOptions;
     this.onEvent({ type: "status", sessionId, status: "working", text: "正在应用推理强度并恢复会话…" });
@@ -458,7 +458,8 @@ export class GrokProcessManager {
   async restartSession(sessionId: string, statusText = "正在重启并恢复会话…"): Promise<void> {
     const previous = this.get(sessionId);
     if (previous.working || previous.needsUser) throw new Error("当前会话正在运行或等待操作，完成后再重启");
-    const { cwd, mode, effort, currentModelId: model, processOptions } = previous;
+    const { cwd, mode, effort, processOptions } = previous;
+    const model = previous.launchModelId ?? previous.currentModelId;
     this.onEvent({ type: "status", sessionId, status: "working", text: statusText });
     await previous.dispose();
     this.sessions.delete(sessionId);
@@ -479,7 +480,7 @@ export class GrokProcessManager {
   async setModel(sessionId: string, modelId: string, identity: ModelSwitchIdentity = { target: {}, previous: {} }): Promise<void> {
     const current = this.get(sessionId);
     if ((current.working || current.needsUser) && !current.planDecisionPending) throw new Error("当前会话正在运行或等待操作，完成后再更改模型");
-    const previousModelId = current.currentModelId;
+    const previousModelId = current.launchModelId ?? current.currentModelId;
     try {
       await current.setModel(modelId, { localModelId: identity.target.localModelId, persistRuntime: false });
       await this.rememberSession(sessionId, current, identity.target);
@@ -540,15 +541,20 @@ export class GrokProcessManager {
    */
   async cancelSession(sessionId: string, graceMs = 8_000): Promise<void> {
     const current = this.get(sessionId);
+    const cancelledTurnId = current.activeTurnId;
+    const settled = () => this.sessions.get(sessionId) !== current
+      || current.activeTurnId !== cancelledTurnId
+      || (!current.working && !current.needsUser);
     current.cancel();
     const deadline = Date.now() + Math.max(0, graceMs);
     while (Date.now() < deadline) {
-      if (this.sessions.get(sessionId) !== current || (!current.working && !current.needsUser)) return;
+      if (settled()) return;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    if (this.sessions.get(sessionId) !== current || (!current.working && !current.needsUser)) return;
+    if (settled()) return;
 
-    const { cwd, mode, effort, currentModelId: model, processOptions } = current;
+    const { cwd, mode, effort, processOptions } = current;
+    const model = current.launchModelId ?? current.currentModelId;
     this.onEvent({ type: "status", sessionId, status: "working", text: "CLI 未确认停止，正在恢复该会话…" });
     await current.dispose(2_000);
     this.sessions.delete(sessionId);
@@ -589,7 +595,7 @@ export class GrokProcessManager {
       cwd: session.cwd,
       effort: session.effort,
       mode: session.mode,
-      modelId: session.currentModelId,
+      modelId: session.launchModelId ?? session.currentModelId,
       processOptions: session.processOptions,
     }));
     await this.stopAll(false);
@@ -734,7 +740,7 @@ export class GrokProcessManager {
     await this.runtimeState.save({
       sessionId,
       cwd: adapter.cwd,
-      modelId: identity?.localModelId ?? (adapter.currentModelId || previous?.modelId),
+      modelId: identity?.localModelId ?? (adapter.launchModelId || adapter.currentModelId || previous?.modelId),
       providerId: identity ? identity.providerId : previous?.providerId,
       effort: adapter.effort,
       mode: adapter.mode,

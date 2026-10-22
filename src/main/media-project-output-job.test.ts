@@ -13,7 +13,8 @@ async function setup() {
   const output=await prepareMediaProjectOutput(workspace,"generated/images");
   const job:any={jobId:"job",sessionId:"original-session",route:"provider",kind:"image",artifacts:[]};
   const controller:any={mediaJobs:new Map([["job",job]]),mediaJobControls:new Map([["job",{abort:new AbortController()}]]),mediaWaitExtensions:new Map(),
-    inbox:{add:vi.fn(async()=>undefined)},notices:()=>({show:vi.fn(async()=>undefined)}),
+    inbox:{add:vi.fn(async()=>undefined),addOnce:vi.fn(async()=>({added:true,item:{id:"media-notice"}}))},notices:()=>({show:vi.fn(async()=>undefined)}),
+    sessionNoticeContent:vi.fn(async(_id,kind,detail)=>({title:kind,body:detail})),
     publishMediaJob:vi.fn(),runProviderMedia:vi.fn(async()=>[{id:"image",media:"image",source:"provider-data"}]),
     providerMediaAllowedOrigins:async()=>[],cacheMediaArtifact:vi.fn(async()=>({id:"image",media:"image",source:"grok-media://access/fixture",mimeType:"image/png"})),
     mediaAccess:{resolve:vi.fn(async()=>({path:source,mimeType:"image/png"}))},handleEvent:vi.fn(async()=>{})};

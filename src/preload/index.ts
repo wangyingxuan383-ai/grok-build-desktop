@@ -1,15 +1,16 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { AppMenuCommand, AppSettings, Attachment, AutomationRunRecord, AutomationTask, ChatEvent, ComputerTaskState, GrokDesktopApi, LoginState, MediaGenerationJob, ProviderScanProgress, ReasoningEffort, SessionMode } from "../shared/types";
+import type { AttachmentDropEvent } from "../shared/attachment-drop";
 
-const droppedAttachmentListeners = new Set<(attachments: Attachment[]) => void>();
-const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string }) => void>();
+const droppedAttachmentListeners = new Set<(event: AttachmentDropEvent) => void>();
+const navigateSessionListeners = new Set<(target: { sessionId: string; cwd: string; previewOnly?: boolean }) => void>();
 const computerStateListeners = new Set<(state: ComputerTaskState) => void>();
 const menuCommandListeners = new Set<(command: AppMenuCommand) => void>();
 const automationEventListeners = new Set<(event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask }) => void>();
 const providerScanProgressListeners = new Set<(progress: ProviderScanProgress) => void>();
 const mediaGenerationListeners = new Set<(job: MediaGenerationJob) => void>();
 
-ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cwd: string }) => {
+ipcRenderer.on("grok:navigate-session", (_event, target: { sessionId: string; cwd: string; previewOnly?: boolean }) => {
   for (const listener of navigateSessionListeners) listener(target);
 });
 ipcRenderer.on("grok:computer-state", (_event, state: ComputerTaskState) => {
@@ -32,13 +33,29 @@ window.addEventListener("DOMContentLoaded", () => {
     event.preventDefault();
     const paths = Array.from(event.dataTransfer?.files ?? []).map((file) => webUtils.getPathForFile(file)).filter(Boolean);
     if (!paths.length) return;
+    const id = crypto.randomUUID();
+    const recipients = [...droppedAttachmentListeners];
+    const publish = (value: AttachmentDropEvent): void => { for (const listener of recipients) if (droppedAttachmentListeners.has(listener)) listener(value); };
+    publish({ phase: "started", id });
     void ipcRenderer.invoke("attachments:dropped", paths).then((attachments: Attachment[]) => {
-      for (const listener of droppedAttachmentListeners) listener(attachments);
-    });
+      publish({ phase: "completed", id, attachments });
+    }).catch(error => publish({ phase: "failed", id, message: error instanceof Error ? error.message : String(error) }));
   });
 });
 
 const api: GrokDesktopApi = {
+  getDesktopActivity: () => ipcRenderer.invoke("desktop:activity"),
+  onDesktopActivityChanged: listener => { const handler = (_: Electron.IpcRendererEvent, value: import("../shared/desktop-activity").DesktopActivitySnapshot) => listener(value); ipcRenderer.on("grok:desktop-activity", handler); return () => ipcRenderer.removeListener("grok:desktop-activity", handler); },
+  onInboxChanged: listener => { const handler = () => listener(); ipcRenderer.on("grok:inbox-changed", handler); return () => ipcRenderer.removeListener("grok:inbox-changed", handler); },
+  onRemoteStateChanged: listener => { const handler = () => listener(); ipcRenderer.on("grok:remote-state", handler); return () => ipcRenderer.removeListener("grok:remote-state", handler); },
+  markAllInboxRead: () => ipcRenderer.invoke("inbox:mark-all-read"),
+  listPromptSnippets: () => ipcRenderer.invoke("snippets:list"),
+  savePromptSnippet: input => ipcRenderer.invoke("snippets:save", input),
+  deletePromptSnippet: (id, updatedAt) => ipcRenderer.invoke("snippets:delete", id, updatedAt),
+  previewSessionExport: (id, options) => ipcRenderer.invoke("session:export-preview", id, options),
+  saveSessionExport: (id, options) => ipcRenderer.invoke("session:export-save", id, options),
+  getCliConfigState: () => ipcRenderer.invoke("cli:config-state"),
+  onCliConfigChanged: listener => { const handler = (_: Electron.IpcRendererEvent, state: import("../shared/cli-config-state").CliConfigState) => listener(state); ipcRenderer.on("grok:cli-config-changed", handler); return () => ipcRenderer.removeListener("grok:cli-config-changed", handler); },
   getRemoteState:()=>ipcRenderer.invoke("remote:state"),
   setRemoteEnabled:(enabled,port)=>ipcRenderer.invoke("remote:enable",enabled,port),
   beginRemotePairing:address=>ipcRenderer.invoke("remote:pair",address),
@@ -54,7 +71,7 @@ const api: GrokDesktopApi = {
   startPreviewServer:(workspace,script)=>ipcRenderer.invoke("preview:start",workspace,script),
   listPreviewServers:workspace=>ipcRenderer.invoke("preview:list",workspace),
   stopPreviewServer:id=>ipcRenderer.invoke("preview:stop",id),
-  captureBrowserFeedback:id=>ipcRenderer.invoke("workspace-browser:capture",id),
+  captureBrowserFeedback:(id,pick)=>ipcRenderer.invoke("workspace-browser:capture",id,pick),
   navigateWorkspaceBrowser:(id,url)=>ipcRenderer.invoke("workspace-browser:navigate",id,url),
   commandWorkspaceBrowser:(id,action)=>ipcRenderer.invoke("workspace-browser:command",id,action),
   boundsWorkspaceBrowser:(id,bounds)=>ipcRenderer.invoke("workspace-browser:bounds",id,bounds),
@@ -265,10 +282,13 @@ const api: GrokDesktopApi = {
   openMedia: (source) => ipcRenderer.invoke("system:open-media", source),
   openExternal: (url) => ipcRenderer.invoke("system:open-external", url),
   getSettings: () => ipcRenderer.invoke("settings:get"),
+  listPetSkins: () => ipcRenderer.invoke("desktop-pet:skins"),
+  petCommand: (command, clip) => ipcRenderer.invoke("desktop-pet:command", command, clip),
+  importPetSkin: () => ipcRenderer.invoke("desktop-pet:import"),
   getPullRequestStatus:workspace=>ipcRenderer.invoke("git:pull-request",workspace),
   watchPullRequest:(workspace,sessionId,enabled)=>ipcRenderer.invoke("git:watch-pull-request",workspace,sessionId,enabled),
   updateSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke("settings:update", patch),
-  listModelCatalog: () => ipcRenderer.invoke("models:catalog"),
+  listModelCatalog: refresh => ipcRenderer.invoke("models:catalog", refresh),
   getTheme: () => ipcRenderer.invoke("theme:get"),
   updateTheme: (patch) => ipcRenderer.invoke("theme:update", patch),
   pickThemeBackground: () => ipcRenderer.invoke("theme:pick-background"),
@@ -392,7 +412,7 @@ const api: GrokDesktopApi = {
     ipcRenderer.on("grok:login", handler);
     return () => ipcRenderer.removeListener("grok:login", handler);
   },
-  onDroppedAttachments: (listener) => {
+  onAttachmentDrop: (listener) => {
     droppedAttachmentListeners.add(listener);
     return () => droppedAttachmentListeners.delete(listener);
   },

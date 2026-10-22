@@ -1,6 +1,8 @@
 import { app, Menu, shell, type BrowserWindow, type MenuItemConstructorOptions } from "electron";
 import type { AppMenuCommand } from "../shared/types";
 import { isAllowedExternalUrl } from "./security-policy";
+import { shortcutFor } from "../shared/shortcuts";
+import type { DesktopProductivitySettings } from "../shared/productivity";
 
 export const PUBLIC_REPOSITORY_URLS = {
   repository: "https://github.com/wangyingxuan383-ai/grok-build-desktop",
@@ -15,18 +17,18 @@ export function isAllowedApplicationMenuUrl(url: string): boolean {
   return isAllowedExternalUrl(url) && (Object.values(PUBLIC_REPOSITORY_URLS) as string[]).includes(url);
 }
 
-export function installApplicationMenu(window: BrowserWindow, development = !app.isPackaged): void {
+export function installApplicationMenu(window: BrowserWindow, development = !app.isPackaged, settings?: Partial<DesktopProductivitySettings>): void {
   const command = (value: AppMenuCommand): (() => void) => () => {
     if (!window.isDestroyed()) window.webContents.send("grok:menu-command", value);
   };
   const open = (url: string): (() => void) => () => { if (isAllowedApplicationMenuUrl(url)) void shell.openExternal(url); };
   const template: MenuItemConstructorOptions[] = [
     { label: "文件", submenu: [
-      { label: "新建会话", accelerator: "CmdOrCtrl+N", click: command("new-session") },
+      { label: "新建会话", accelerator: shortcutFor("new-session", settings) || undefined, registerAccelerator: false, click: command("new-session") },
       { label: "选择工作区…", click: command("choose-workspace") },
       { label: "添加附件…", click: command("add-attachment") },
       { type: "separator" },
-      { label: "导出当前会话为 Markdown…", click: command("export-session") },
+      { label: "导出当前会话…", click: command("export-session") },
       { type: "separator" },
       { label: "退出", role: "quit" },
     ] },
@@ -36,15 +38,16 @@ export function installApplicationMenu(window: BrowserWindow, development = !app
       { label: "全选", role: "selectAll" },
     ] },
     { label: "会话", submenu: [
-      { label: "搜索会话", accelerator: "CmdOrCtrl+F", click: command("search-sessions") },
-      { label: "搜索当前会话", accelerator: "CmdOrCtrl+Shift+F", click: command("search-conversation") },
-      { label: "聚焦输入框", accelerator: "CmdOrCtrl+L", click: command("focus-composer") },
+      { label: "搜索会话", accelerator: shortcutFor("search-sessions", settings) || undefined, registerAccelerator: false, click: command("search-sessions") },
+      { label: "搜索当前会话", accelerator: shortcutFor("search-conversation", settings) || undefined, registerAccelerator: false, click: command("search-conversation") },
+      { label: "聚焦输入框", accelerator: shortcutFor("focus-composer", settings) || undefined, registerAccelerator: false, click: command("focus-composer") },
+      { label: "命令面板", accelerator: shortcutFor("command-search", settings) || undefined, registerAccelerator: false, click: command("command-search") },
       { type: "separator" },
       { label: "停止生成", click: command("stop-generation") },
       { label: "复制最终回复", click: command("copy-final-answer") },
     ] },
     { label: "视图", submenu: [
-      { label: "显示或隐藏侧栏", click: command("toggle-sidebar") },
+      { label: "显示或隐藏侧栏", accelerator: shortcutFor("toggle-sidebar", settings) || undefined, registerAccelerator: false, click: command("toggle-sidebar") },
       { type: "separator" },
       { label: "放大", role: "zoomIn" }, { label: "缩小", role: "zoomOut" }, { label: "恢复缩放", role: "resetZoom" },
       { label: "全屏", role: "togglefullscreen" }, { label: "重新加载", role: "reload" },
@@ -52,12 +55,12 @@ export function installApplicationMenu(window: BrowserWindow, development = !app
     ] },
     { label: "功能", submenu: [
       { label: "账号与额度", click: command("open-accounts") },
-      { label: "任务中心与定时任务", click: command("open-task-center") },
+      { label: "任务中心与定时任务", accelerator: shortcutFor("open-task-center", settings) || undefined, registerAccelerator: false, click: command("open-task-center") },
       { label: "媒体创作", click: command("open-media") },
       { label: "扩展中心", click: command("open-extensions") },
       { label: "本次使用 Computer Use", click: command("open-computer") },
       { type: "separator" },
-      { label: "设置", click: command("open-settings") },
+      { label: "设置", accelerator: shortcutFor("open-settings", settings) || undefined, registerAccelerator: false, click: command("open-settings") },
       { label: "兼容诊断中心", click: command("open-diagnostics") },
       { label: "重新运行首次设置", click: command("open-onboarding") },
     ] },

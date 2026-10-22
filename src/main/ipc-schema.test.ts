@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { hasIpcRuntimeSchema, validateIpcInvocation } from "./ipc-schema";
 
 describe("IPC runtime schemas", () => {
+  it("bounds preview picking to one screenshot and rejects script-shaped inputs", () => {
+    const input = { x: .25, y: .75, url: "https://preview.example.invalid/", revision: 1, sessionId: "session-a", workspace: "D:/project" };
+    expect(() => validateIpcInvocation("workspace-browser:capture", ["tab-a", input], 2)).not.toThrow();
+    for (const patch of [{ x: 1 }, { y: -1 }, { x: "alert(1)" }, { script: "document.body" }]) expect(() => validateIpcInvocation("workspace-browser:capture", ["tab-a", { ...input, ...patch }], 2)).toThrow();
+  });
+  it("validates snippet revisions, export options and effective shortcut conflicts", () => {
+    expect(() => validateIpcInvocation("snippets:save", [{ title: "审查", body: "检查 {{文件}}" }], 1)).not.toThrow();
+    expect(() => validateIpcInvocation("snippets:delete", ["snippet-a"], 2)).toThrow();
+    expect(() => validateIpcInvocation("session:export-preview", ["session-a", { format: "html", redaction: "redacted", path: "C:/private" }], 2)).toThrow();
+    expect(() => validateIpcInvocation("settings:update", [{ productivity: { closeAction: "ask", quickAskShortcut: "Control+K", screenshotShortcut: "", preventSleepWhileWorking: false, quotaWarningPercent: 0 } }], 1)).toThrow("冲突");
+  });
   it("requires exact native control identities and rejects unknown action fields", () => {
     const input={sessionId:"session-a",kind:"workflow",runId:"wf-one",revision:"a".repeat(64),action:"pause",operationId:"operation-a"};
     expect(()=>validateIpcInvocation("native-runs:control",[input],1)).not.toThrow();

@@ -1,7 +1,7 @@
 import {cliMediaTurnUsage} from "./media-cli-runner";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse, stringify, type TomlTable } from "smol-toml";
@@ -44,6 +44,8 @@ import type { LogService } from "./log-service";
 import { ProviderGatewayService } from "./provider-gateway-service";
 import { ProviderRouteReceiptStore } from "./provider-route-receipt-store";
 import { ProviderProfileRecoveryStore } from "./provider-profile-recovery-store";
+import { CliConfigObserver } from "./cli-config-observer";
+import type { CliConfigState } from "../../shared/cli-config-state";
 
 const START = "# >>> Grok Build Desktop managed models >>>";
 const END = "# <<< Grok Build Desktop managed models <<<";
@@ -78,6 +80,7 @@ export interface ProviderServiceOptions {
 
 export class ProviderService {
   private readonly configPath: string;
+  private readonly configObserver: CliConfigObserver;
   private readonly store: JsonStore<ProviderStoreData>;
   private readonly capabilityStore: JsonStore<ProviderCapabilityStoreData>;
   private readonly fetcher: ProviderFetcher;
@@ -94,6 +97,7 @@ export class ProviderService {
 
   constructor(userDataPath: string, private readonly log: LogService, private readonly options: ProviderServiceOptions = {}) {
     this.configPath = join(options.grokHome ?? join(homedir(), ".grok"), "config.toml");
+    this.configObserver = new CliConfigObserver(this.configPath);
     this.store = new JsonStore(join(userDataPath, "providers.json"), { providers: [] });
     this.capabilityStore = new JsonStore(join(userDataPath, "provider-capabilities.json"), { snapshots: [] });
     this.profileRecovery = new ProviderProfileRecoveryStore(userDataPath);
@@ -137,7 +141,9 @@ export class ProviderService {
         reasoningEfforts: providerReasoningEfforts(model.model, model.reasoningEfforts),
         capabilities: snapshots.find((snapshot) => snapshot.providerId === provider.id)?.models.find((capability) => capability.modelId === model.id) ?? model.capabilities,
       })) : provider.models,
-      hasCredential: provider.credentialMode === "none" ? true : Boolean(provider.credentialEnv && await this.environment.read(provider.credentialEnv)),
+      hasCredential: provider.owned
+        ? provider.credentialMode === "none" || Boolean(provider.credentialEnv && await this.environment.read(provider.credentialEnv))
+        : provider.credentialMode === "none",
     })));
     return values.sort((a, b) => Number(b.owned) - Number(a.owned) || a.name.localeCompare(b.name, "zh-CN"));
   }
@@ -327,7 +333,17 @@ export class ProviderService {
     return environment;
   }
 
-  dispose(): Promise<void> { return this.gateway.dispose(); }
+  /** Opt-in read-only config observation. Parent owns catalog/UI refresh and IPC. */
+  startConfigObserver(onChange: (state: CliConfigState) => void): Promise<() => void> {
+    return this.configObserver.start(onChange);
+  }
+
+  getCliConfigState(): CliConfigState { return this.configObserver.getState(); }
+
+  dispose(): Promise<void> {
+    this.configObserver.dispose();
+    return this.gateway.dispose();
+  }
 
   /**
    * Finds which managed provider serves a local model id, so a failed turn can
@@ -1221,14 +1237,34 @@ export class ProviderService {
   }
 
   private async readExternalProviders(managedModels: Set<string>): Promise<CustomProviderProfile[]> {
-    const raw = await readFile(this.configPath, "utf8").catch(() => "");
-    let parsed: TomlTable; try { parsed = raw.trim() ? parse(raw) : {}; } catch { return []; }
+    const snapshot = await this.configObserver.read();
+    if (!snapshot) return [];
+    const parsed = snapshot.table;
     const models = asRecord(parsed.model);
-    const updatedAt = (await stat(this.configPath).catch(() => undefined))?.mtime.toISOString() ?? new Date(0).toISOString();
-    return Object.entries(models).filter(([id]) => !managedModels.has(id)).map(([id, value]) => {
+    const updatedAt = snapshot.updatedAt;
+    return Promise.all(Object.entries(models).filter(([id]) => !managedModels.has(id)).map(async ([id, value]): Promise<CustomProviderProfile> => {
       const item = asRecord(value);
       const envKey = typeof item.env_key === "string" ? item.env_key : undefined;
       const baseUrl = typeof item.base_url === "string" ? item.base_url : "";
+      let insecureHttp = false;
+      let diagnostic = "来自外部 config.toml，仅供查看";
+      if (baseUrl) {
+        try {
+          // Resolve only for classification; never expose expanded environment
+          // values or let one invalid external row hide the remaining providers.
+          let resolved = baseUrl;
+          for (const match of baseUrl.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) {
+            const value = await (this.environment.readFresh?.(match[1]!) ?? this.environment.read(match[1]!));
+            if (!value) throw new Error("unresolved environment variable");
+            resolved = resolved.replaceAll(match[0], value);
+          }
+          const url = new URL(resolved);
+          if (!/^https?:$/.test(url.protocol)) throw new Error("unsupported URL");
+          insecureHttp = isInsecureRemote(resolved);
+        } catch {
+          diagnostic += "；地址暂不可解析，请检查地址或环境变量";
+        }
+      }
       return {
         id: `external-${id}`,
         enabled: true,
@@ -1253,12 +1289,12 @@ export class ProviderService {
         }],
         owned: false,
         hasCredential: false,
-        insecureHttp: baseUrl ? isInsecureRemote(baseUrl) : false,
+        insecureHttp,
         createdAt: updatedAt,
         updatedAt,
-        diagnostic: "来自外部 config.toml，仅供查看",
+        diagnostic,
       };
-    });
+    }));
   }
 }
 

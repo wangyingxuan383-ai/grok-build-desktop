@@ -1,3 +1,8 @@
+import type { PromptSnippetApi } from "./prompt-snippets";
+import type { SessionExportApi } from "./conversation-export";
+import type { DesktopActivitySnapshot } from "./desktop-activity";
+import type { CliConfigState } from "./cli-config-state";
+
 export const REASONING_EFFORTS = ["", "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 export type SessionMode = "agent" | "plan" | "auto";
@@ -51,6 +56,7 @@ export type ComposerCapabilitySelection = {
 } | { kind: "mcp"; label: string; command: ""; source?: string; selection: McpToolSelection };
 
 export type AppMenuCommand =
+  | "command-search" | "open-inbox" | "open-pet-settings"
   | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
   | "search-sessions" | "search-conversation" | "focus-composer" | "stop-generation" | "copy-final-answer"
   | "toggle-sidebar" | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
@@ -282,6 +288,8 @@ export interface AttachmentPrivacyFinding {
 }
 
 export interface AppSettings {
+  desktopPet?: import("./desktop-pet").DesktopPetSettings;
+  productivity?: import("./productivity").DesktopProductivitySettings;
   notifications?:{completion:"background"|"always"|"off";failure:boolean;confirmation:boolean;sound:boolean};
   cliPath: string;
   httpProxy: string;
@@ -1754,7 +1762,7 @@ export type ChatEvent =
   | { type: "session-hydration"; sessionId: string; state: SessionHydrationState; generation: number; message?: string }
   | { type: "conversation-projection-restore"; sessionId: string; projection: ConversationProjection }
   | { type: "history-recovery"; sessionId: string; status: "recovered" | "unavailable"; message: string }
-  | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[] }
+  | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[]; modelSelectionRequired?: string }
   | { type: "user-message"; sessionId: string; text: string; id?: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
   | { type: "interjection"; sessionId: string; id: string; text: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; source: "local" | "remote" | "queued" }
   | { type: "user-message-status"; sessionId: string; clientMessageId: string; delivery: UserMessageDeliveryState }
@@ -2158,7 +2166,17 @@ export interface OfflineUiFixture {
   activeSessionId?: string;
 }
 
-export interface GrokDesktopApi {
+export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
+  listPetSkins(): Promise<import("./desktop-pet").PetSkin[]>;
+  petCommand(command: "show" | "hide" | "reset" | "preview", clip?: import("./desktop-pet").PetClipId): Promise<void>;
+  importPetSkin(): Promise<import("./desktop-pet").PetSkin | null>;
+  getDesktopActivity(): Promise<DesktopActivitySnapshot>;
+  onDesktopActivityChanged(listener: (state: DesktopActivitySnapshot) => void): () => void;
+  onInboxChanged(listener: () => void): () => void;
+  markAllInboxRead(): Promise<NotificationInboxItem[]>;
+  onRemoteStateChanged(listener: () => void): () => void;
+  getCliConfigState(): Promise<CliConfigState>;
+  onCliConfigChanged(listener: (state: CliConfigState) => void): () => void;
   getRemoteState():Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
   setRemoteEnabled(enabled:boolean,port?:number):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
   beginRemotePairing(address?:string):Promise<import("./remote").RemoteGatewayState&{qrDataUrl?:string}>;
@@ -2171,7 +2189,7 @@ export interface GrokDesktopApi {
   startPreviewServer(workspace:string,script:string):Promise<string>;
   listPreviewServers(workspace:string):Promise<import("./workspace-tools").PreviewServer[]>;
   stopPreviewServer(id:string):Promise<void>;
-  captureBrowserFeedback(id:string):Promise<{tab:import("./workspace-tools").WorkspaceBrowserTab;previewUrl:string;attachment:Attachment}>;
+  captureBrowserFeedback(id:string,pick?:import("./preview-feedback").PreviewElementPick):Promise<import("./preview-feedback").PreviewFeedbackCapture>;
   navigateWorkspaceBrowser(id:string,url:string):Promise<void>;
   commandWorkspaceBrowser(id:string,action:"back"|"forward"|"reload"|"stop"):Promise<void>;
   boundsWorkspaceBrowser(id:string,bounds:import("./workspace-tools").WorkspaceViewBounds):Promise<void>;
@@ -2359,7 +2377,7 @@ export interface GrokDesktopApi {
   getPullRequestStatus(workspace:string):Promise<import("./workspace-tools").PullRequestStatus>;
   watchPullRequest(workspace:string,sessionId:string,enabled:boolean):Promise<void>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
-  listModelCatalog(): Promise<ModelInfo[]>;
+  listModelCatalog(refresh?: boolean): Promise<ModelInfo[]>;
   getTheme(): Promise<ThemeSettings>;
   updateTheme(patch: Partial<ThemeSettings>): Promise<AppSettings>;
   pickThemeBackground(): Promise<AppSettings | null>;
@@ -2495,8 +2513,8 @@ export interface GrokDesktopApi {
   exportLogs(): Promise<string | null>;
   onEvent(listener: (event: ChatEvent) => void): () => void;
   onLogin(listener: (state: LoginState) => void): () => void;
-  onDroppedAttachments(listener: (attachments: Attachment[]) => void): () => void;
-  onNavigateSession(listener: (target: { sessionId: string; cwd: string }) => void): () => void;
+  onAttachmentDrop(listener: (event: import("./attachment-drop").AttachmentDropEvent) => void): () => void;
+  onNavigateSession(listener: (target: { sessionId: string; cwd: string; previewOnly?: boolean }) => void): () => void;
   onMenuCommand(listener: (command: AppMenuCommand) => void): () => void;
   onComputerStateChanged(listener: (state: ComputerTaskState) => void): () => void;
   onAutomationEvent(listener: (event: { taskId: string; run?: AutomationRunRecord; task?: AutomationTask; pending?: AutomationPendingConfirmation }) => void): () => void;

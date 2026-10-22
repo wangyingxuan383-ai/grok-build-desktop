@@ -1,0 +1,11 @@
+import { build } from "vite";
+import { resolve } from "node:path";
+import { spawn } from "node:child_process";
+import { createRequire,builtinModules } from "node:module";
+const require=createRequire(import.meta.url),root=resolve("."),out=resolve("out/pet-native-probe");
+await build({configFile:false,build:{outDir:out,emptyOutDir:false,target:"node24",lib:{entry:resolve("scripts/fixtures/desktop-pet-probe.ts"),formats:["es"],fileName:()=>"main.mjs"},rollupOptions:{external:["electron",...builtinModules,...builtinModules.map(m=>`node:${m}`)]}}});
+const packaged=process.argv.includes("--packaged");
+const env={...process.env,PET_PROBE_ROOT:root,PET_PROBE_SYSTEM_INPUT:process.argv.includes("--system-input")?"1":"0",...(packaged?{PET_PROBE_APP_ROOT:resolve("release/win-unpacked/resources/app.asar"),PET_PROBE_RESOURCES:resolve("release/win-unpacked/resources"),PET_PROBE_OUTPUT:resolve("out/pet-packaged-probe")}:{})};delete env.ELECTRON_RUN_AS_NODE;
+const child=spawn(require("electron"),[resolve(out,"main.mjs")],{env,stdio:"inherit",windowsHide:true});
+const timer=setTimeout(()=>child.kill(),90000);
+child.on("exit",code=>{clearTimeout(timer);process.exitCode=code??1;});

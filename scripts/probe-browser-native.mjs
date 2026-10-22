@@ -1,4 +1,5 @@
 import {build} from "vite";
+import react from "@vitejs/plugin-react";
 import {mkdir,writeFile,rm} from "node:fs/promises";
 import {resolve,sep} from "node:path";
 import {createRequire} from "node:module";
@@ -7,8 +8,11 @@ const require=createRequire(import.meta.url),output=resolve("out/browser-native-
 const profile=resolve(output,"profile-"+Date.now());
 await mkdir(output,{recursive:true});
 await build({configFile:false,build:{emptyOutDir:false,outDir:output,lib:{entry:resolve("src/main/services/workspace-browser-service.ts"),formats:["es"],fileName:()=>"service.mjs"},rolldownOptions:{external:["electron","node:path","node:crypto"]}}});
+await build({configFile:false,define:{"process.env.NODE_ENV":JSON.stringify("production")},plugins:[react()],build:{emptyOutDir:false,outDir:output,lib:{entry:resolve("scripts/fixtures/browser-overlay.tsx"),name:"BrowserOverlayFixture",formats:["iife"],fileName:()=>"fixture.js"}}});
+await writeFile(resolve(output,"fixture.html"),'<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="grok-build-desktop.css"><div id="root"></div><div id="overlay-root"></div><script src="fixture.js"></script>');
+await writeFile(resolve(output,"preload.cjs"),'const {contextBridge,ipcRenderer}=require("electron");contextBridge.exposeInMainWorld("browserProbe",{bounds:(id,bounds)=>ipcRenderer.invoke("probe:browser-bounds",id,bounds)});');
 await writeFile(resolve(output,"main.cjs"),String.raw`
-const {app,BrowserWindow,session,dialog}=require("electron"),path=require("node:path"),fs=require("node:fs/promises"),http=require("node:http");
+const {app,BrowserWindow,session,dialog,ipcMain}=require("electron"),path=require("node:path"),fs=require("node:fs/promises"),http=require("node:http");
 app.setPath("userData",process.env.GROK_NATIVE_BROWSER_PROBE_PROFILE);
 const assert=(value,message)=>{if(!value)throw Error(message)},pause=()=>new Promise(r=>setTimeout(r,50));
 const until=async(check)=>{for(let i=0;i<100;i++){if(await check())return;await pause()}throw Error("native browser probe timeout")};
@@ -18,13 +22,23 @@ app.whenReady().then(async()=>{
  await new Promise(resolve=>server.listen(0,resolve));const port=server.address().port;
  const one="http://127.0.0.1:"+port,two="http://localhost:"+port;
  const {WorkspaceBrowserService}=await import("./service.mjs");
- win=new BrowserWindow({show:false,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
+ win=new BrowserWindow({show:false,width:1200,height:900,webPreferences:{preload:path.join(__dirname,"preload.cjs"),nodeIntegration:false,contextIsolation:true,sandbox:true,backgroundThrottling:false}});
  service=new WorkspaceBrowserService(win,()=>{});
+ ipcMain.handle("probe:browser-bounds",(_event,id,bounds)=>service.bounds(id,bounds));
  const partition=session.fromPartition("persist:grok-workspace-browser");await partition.setProxy({mode:"direct"});
  const first=await service.create(one),second=await service.create(two);
  await until(()=>service.list().every(tab=>!tab.loading&&tab.title==="Isolated browser"));
  const contents=win.contentView.children.map(view=>view.webContents),firstContents=contents.find(c=>c.getURL().startsWith(one)),secondContents=contents.find(c=>c.getURL().startsWith(two));
  assert(await firstContents.executeJavaScript('typeof window.grokDesktop==="undefined"&&typeof require==="undefined"'),"browser exposed application bridge");
+ const firstView=win.contentView.children.find(view=>view.webContents===firstContents);
+ const run=source=>win.webContents.executeJavaScript(source,true);
+ await win.loadFile(path.join(__dirname,"fixture.html"));
+ await run('showBrowserFixture('+JSON.stringify(first.id)+')');await until(()=>firstView.getVisible());
+ await run('setBrowserOverlay("export")');await until(()=>!firstView.getVisible());
+ assert(await run('!!document.querySelector(".session-export-panel")'),"actual export dialog did not mount");
+ await run('setBrowserOverlay("")');await until(()=>firstView.getVisible());
+ await run('setBrowserOverlay("alert")');await until(()=>!firstView.getVisible());
+ await run('setBrowserOverlay("hidden")');await until(()=>firstView.getVisible());
  await partition.cookies.set({url:one,name:"first",value:"first"});await partition.cookies.set({url:two,name:"other",value:"other"});
  const destination=path.join(app.getPath("userData"),"fixture.txt");
  partition.on("will-download",(_event,item)=>item.setSavePath(destination));firstContents.downloadURL(one+"/download");
@@ -41,7 +55,7 @@ app.whenReady().then(async()=>{
  await service.navigate(first.id,one+"/empty");
  await until(()=>!service.list().find(tab=>tab.id===first.id).loading);
  assert(await firstContents.executeJavaScript('localStorage.getItem("fixture")===null'),"target localStorage was not cleared");
- console.log("BROWSER_NATIVE_PASSED isolated WebContents, real download, target clear, unrelated cookies/storage kept; dialog answer simulated");
+ console.log("BROWSER_NATIVE_PASSED actual export/alert dialogs hide native webpage and closing restores it; hidden dialogs do not block; isolated WebContents, real download, scoped cleanup; dialog answer simulated");
  service.dispose();win.destroy();server.close();app.exit(0);
  }catch(error){console.error(error.stack);service?.dispose();win?.destroy();server.close();app.exit(1)}
 });

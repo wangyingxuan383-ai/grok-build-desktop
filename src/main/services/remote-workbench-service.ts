@@ -32,6 +32,7 @@ export class RemoteWorkbenchService {
  private ticket(asset:Omit<Asset,"expires">){for(const [key,value]of this.assets)if(value.expires<Date.now())this.assets.delete(key);if(this.assets.size>256)this.assets.delete(this.assets.keys().next().value!);const ticket=randomUUID();this.assets.set(ticket,{...asset,expires:Date.now()+3600000});return {ticket,name:asset.name,mimeType:asset.mimeType,sessionId:asset.sessionId}}
  async query(params:URLSearchParams,owner:string):Promise<unknown>{
   const kind=params.get("kind")??"overview",sessionId=params.get("sessionId")??"";
+  if(kind==="prompt-snippets")return {supported:true,items:await this.controller.listPromptSnippets()};
   if(kind==="notifications")return {serverTime:Date.now(),items:(await this.controller.listInbox()).filter(item=>!item.read).slice(0,50)};
   if(kind==="push-status")return this.controller.remotePushStatus(owner);
   if(kind==="overview"){

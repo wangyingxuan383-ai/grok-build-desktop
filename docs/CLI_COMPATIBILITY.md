@@ -24,4 +24,6 @@ On October 17, the stable distribution was 1.0.62; its published changes concern
 
 ## Revalidation
 
+Desktop 0.13.0 does not change the minimum CLI version or auto-upgrade the runtime. The existing interjection extension remains the first control path; if the CLI reports it missing, the message remains in the ordinary removable next-turn queue and does not stop the active turn. External configuration observation affects displayed catalogs and future launches, retaining the last valid parse without reconnecting current sessions.
+
 Use the update center to preview, verify or roll back a specific version. CLI replacement invalidates identity-bound caches. Never infer successful GUI operations from tool selection, replayed messages or display titles.

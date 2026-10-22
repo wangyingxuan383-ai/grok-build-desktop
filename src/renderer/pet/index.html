@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' grok-pet: data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>桌面伙伴 · Grok Build Desktop</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <canvas id="pet" role="button" tabindex="0" aria-label="桌面伙伴。轻点互动，双击打开任务，右键打开菜单。" aria-haspopup="menu"></canvas>
+    <section id="status-card" class="status-card" data-pet-interactive hidden aria-label="桌面状态">
+      <header><strong>桌面伙伴</strong><button id="close-card" type="button" aria-label="关闭状态卡">×</button></header>
+      <p id="counts" class="counts" role="status" aria-live="polite"></p>
+      <div id="targets" class="targets"></div>
+      <p id="warning" class="warning" hidden></p>
+    </section>
+    <nav id="toolbar" class="toolbar" data-pet-interactive aria-label="伙伴快捷操作" hidden>
+      <button id="quick-ask" type="button" title="提问" aria-label="提问"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-3 3V11.5a10 10 0 0 1 20 0Z"/></svg><span>提问</span></button>
+      <button id="tasks" type="button" title="任务状态" aria-label="任务状态"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 6 1 1 2-2m3 1h12M3 12h3m3 0h12M3 18h3m3 0h12"/></svg><span>任务</span></button>
+      <button id="more" type="button" title="更多操作" aria-label="更多操作" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg><span>更多</span></button>
+    </nav>
+    <p id="unavailable" class="unavailable" data-pet-interactive hidden><button id="open-status" type="button">查看伙伴状态</button></p>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

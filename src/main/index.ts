@@ -1,5 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, screen, shell,Tray,Menu } from "electron";
-import { trayIcon } from "./tray-icon";
+import { app, BrowserWindow, dialog, globalShortcut, nativeTheme, protocol, screen, shell, type MessageBoxOptions } from "electron";
 import type { Event as ElectronEvent } from "electron";
 import { createReadStream } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -15,16 +14,46 @@ import { isAllowedThemeBackgroundUrl } from "./services/theme-service";
 import { createRendererTrustPolicy, isAllowedExternalUrl, isTrustedRendererUrl, trustedDevelopmentUrl } from "./security-policy";
 import { WindowStateService } from "./services/window-state-service";
 import { explicitUserDataDirectory, INSTALLED_APP_NAME, INSTALLED_APP_USER_MODEL_ID, sourcePreviewIdentity } from "./source-preview-identity";
+import { productivitySettings } from "../shared/productivity";
+import { DesktopShellLifecycle } from "./services/desktop-shell-lifecycle";
+import { DesktopShellService } from "./services/desktop-shell-service";
+import { writeSchedulerProbeMarker } from "./scheduler-probe";
 
 let mainWindow: BrowserWindow | undefined;
 let controller: AppController | undefined;
 let computerOverlay: ComputerUseOverlay | undefined;
 let windowState: WindowStateService | undefined;
 let quitting = false;
-let tray:Tray|undefined;
+let desktopShell: DesktopShellService | undefined;
+let lifecycle: DesktopShellLifecycle | undefined;
+const computerActiveSessions=new Set<string>();
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
+function liveMainWindow(): BrowserWindow | undefined { return mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined; }
+function showMainWindow(): void {
+  const window = liveMainWindow();
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show(); window.focus();
+}
+function shellDialog(options: MessageBoxOptions) {
+  const window = liveMainWindow();
+  return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
+}
+async function shutdownDesktop(animate=true): Promise<void> {
+  if (quitting) return;
+  quitting = true;
+  const farewell=desktopShell?.prepareQuit(animate);
+  computerOverlay?.dispose(); computerOverlay = undefined;
+  globalShortcut.unregisterAll();
+  try {
+    await windowState?.dispose(liveMainWindow()).catch(() => undefined);
+    await Promise.allSettled([farewell,controller?.dispose().catch(error => process.stderr.write(`${String(error)}\n`))]);
+  } finally { desktopShell?.dispose();desktopShell=undefined;app.quit(); }
+}
+
 protocol.registerSchemesAsPrivileged([
+  { scheme:"grok-pet",privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
   { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: "grok-html", privileges: {standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
   { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -45,13 +74,7 @@ if (schedulerProbeIndex >= 0) {
   // so this command cannot be used as an arbitrary file-write primitive.
   const requestedMarker = process.argv[schedulerProbeIndex + 1] || "";
   app.whenReady().then(async () => {
-    const tempRoot = resolve(app.getPath("temp"));
-    const marker = resolve(requestedMarker);
-    if (dirname(marker).toLowerCase() !== tempRoot.toLowerCase() || !basename(marker).startsWith("grok-build-desktop-scheduler-probe-")) {
-      throw new Error("计划任务探针路径无效");
-    }
-    const { writeFile } = await import("node:fs/promises");
-    await writeFile(marker, JSON.stringify({ ok: true, pid: process.pid, at: new Date().toISOString() }), { encoding: "utf8", flag: "wx" });
+    await writeSchedulerProbeMarker(app.getPath("temp"), requestedMarker);
   }).catch((error) => process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)).finally(() => app.quit());
 } else if (schedulerUninstall) {
   process.env.GROK_DESKTOP_SCHEDULER_UNINSTALL = "1";
@@ -82,11 +105,10 @@ if (schedulerProbeIndex >= 0) {
 else {
   const openTaskCenterOnReady = process.argv.includes("--open-task-center");
   app.on("second-instance", (_event, commandLine) => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    if (commandLine.includes("--open-task-center")) mainWindow.webContents.send("grok:menu-command", "open-task-center");
+    const window = liveMainWindow();
+    if (!window) return;
+    showMainWindow();
+    if (commandLine.includes("--open-task-center")) window.webContents.send("grok:menu-command", "open-task-center");
     const notice=commandLine.find(value=>value.startsWith("grok-desktop://"));if(notice)void controller?.handleNotificationUrl(notice);
   });
 
@@ -98,6 +120,7 @@ else {
     const startupTheme = await controller.prepareAppearance();
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE!=="1") void controller.startRemoteIfEnabled().catch(()=>undefined);
     protocol.handle("grok-html", request => controller?.htmlPreviewResponse(request.url) ?? new Response("Not found",{status:404}));
+    protocol.handle("grok-pet",request=>desktopShell?.petResponse(request.url)??new Response(null,{status:404}));
     protocol.handle("grok-theme", async (request) => {
       if (!isAllowedThemeBackgroundUrl(request.url)) return new Response("Not found", { status: 404 });
       const background = await controller?.currentThemeBackground();
@@ -134,7 +157,7 @@ else {
     const emergencyShortcutRegistered = globalShortcut.register("CommandOrControl+Alt+Esc", () => controller?.emergencyStopComputer("Ctrl+Alt+Esc"));
     if (!emergencyShortcutRegistered) await controller.logEmergencyShortcutUnavailable();
     computerOverlay = new ComputerUseOverlay((source) => controller?.emergencyStopComputer(source), () => emergencyShortcutRegistered);
-    controller.setComputerStateObserver((state) => computerOverlay?.update(state));
+    controller.setComputerStateObserver((state) => {computerOverlay?.update(state);if(["running","paused","awaiting-risk-confirmation","awaiting-app-permission"].includes(state.status))computerActiveSessions.add(state.sessionId);else computerActiveSessions.delete(state.sessionId);desktopShell?.computerActive(computerActiveSessions.size>0);});
     const rendererEntry = join(currentDir, "../renderer/index.html");
     const developmentUrl = trustedDevelopmentUrl(process.env.ELECTRON_RENDERER_URL, app.isPackaged);
     const rendererTrust = createRendererTrustPolicy(rendererEntry, developmentUrl);
@@ -159,17 +182,18 @@ else {
     if (previewIdentity) {
       mainWindow.on("page-title-updated", (event) => {
         event.preventDefault();
-        mainWindow?.setTitle(previewIdentity.name);
+        liveMainWindow()?.setTitle(previewIdentity.name);
       });
     }
-    mainWindow.on("move", () => mainWindow && windowState?.scheduleSave(mainWindow));
-    mainWindow.on("resize", () => mainWindow && windowState?.scheduleSave(mainWindow));
-    mainWindow.on("maximize", () => mainWindow && windowState?.scheduleSave(mainWindow));
-    mainWindow.on("unmaximize", () => mainWindow && windowState?.scheduleSave(mainWindow));
+    const saveWindowState = () => { const window = liveMainWindow(); if (window) windowState?.scheduleSave(window); };
+    mainWindow.on("move", saveWindowState);
+    mainWindow.on("resize", saveWindowState);
+    mainWindow.on("maximize", saveWindowState);
+    mainWindow.on("unmaximize", saveWindowState);
     controller.setWindow(mainWindow);
     mainWindow.webContents.on("context-menu", (_event, params) => controller?.showContextMenu(params));
     registerIpc(controller, mainWindow, rendererTrust);
-    installApplicationMenu(mainWindow, !app.isPackaged);
+    installApplicationMenu(mainWindow, !app.isPackaged, (await controller.getSettings()).productivity);
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (isAllowedExternalUrl(url)) void shell.openExternal(url).catch(() => undefined);
       return { action: "deny" };
@@ -177,22 +201,24 @@ else {
     let showingStartupError = false;
     const loadRenderer = async (): Promise<void> => {
       showingStartupError = false;
-      if (developmentUrl) await mainWindow!.loadURL(developmentUrl);
-      else await mainWindow!.loadFile(rendererEntry);
+      const window = liveMainWindow();
+      if (!window) return;
+      if (developmentUrl) await window.loadURL(developmentUrl);
+      else await window.loadFile(rendererEntry);
     };
     const showStartupError = async (description: string): Promise<void> => {
       showingStartupError = true;
       const safeDescription = escapeHtml(description);
       const page = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Grok Build Desktop 启动失败</title><style>html,body{height:100%;margin:0;background:#0f1115;color:#e7e9ec;font-family:"Segoe UI","Microsoft YaHei UI",sans-serif}body{display:grid;place-items:center}.card{width:min(680px,calc(100% - 48px));padding:28px;border:1px solid #3a424b;border-radius:16px;background:#171a1f;box-shadow:0 24px 80px #0009}h1{font-size:22px}p{color:#aeb6bf;line-height:1.6}code{display:block;padding:12px;border-radius:8px;background:#090b0e;overflow-wrap:anywhere}.actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:20px}a{padding:9px 13px;border:1px solid #3a424b;border-radius:8px;color:#e7e9ec;text-decoration:none;background:#22272e}a.primary{background:#247cae;border-color:#318fbd}</style><body><section class="card"><h1>界面未能正常启动</h1><p>应用没有继续停留在黑屏。你可以重新加载、恢复默认窗口状态或导出脱敏诊断。</p><code>${safeDescription}</code><div class="actions"><a class="primary" href="grok-action://reload">重新加载界面</a><a href="grok-action://reset-window">恢复默认窗口状态</a><a href="grok-action://open-logs">打开日志目录</a><a href="grok-action://export-support">导出诊断</a></div></section></body></html>`;
-      await mainWindow?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`);
-      mainWindow?.show();
+      await liveMainWindow()?.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`);
+      liveMainWindow()?.show();
     };
     const guardNavigation = (event: ElectronEvent, url: string): void => {
       if (url.startsWith("grok-action://")) {
         event.preventDefault();
         const action = new URL(url).hostname;
         if (action === "reload") void loadRenderer().catch((error) => showStartupError(String(error)));
-        else if (action === "reset-window") { void windowState?.reset(); mainWindow?.unmaximize(); mainWindow?.setSize(1280, 800); mainWindow?.center(); void loadRenderer().catch((error) => showStartupError(String(error))); }
+        else if (action === "reset-window") { void windowState?.reset(); liveMainWindow()?.unmaximize(); liveMainWindow()?.setSize(1280, 800); liveMainWindow()?.center(); void loadRenderer().catch((error) => showStartupError(String(error))); }
         else if (action === "open-logs") void shell.openPath(join(app.getPath("userData"), "logs"));
         else if (action === "export-support") void controller?.exportSupportBundle();
         return;
@@ -205,69 +231,58 @@ else {
     mainWindow.webContents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
       if (isMainFrame && code !== -3 && !showingStartupError) void showStartupError(`${description}（错误码 ${code}）`);
     });
-    mainWindow.on("close", (event) => {
-      if (quitting) return;
-      if(controller?.remoteKeepAlive()){event.preventDefault();mainWindow?.hide();return;}
-      if (controller?.hasCliUpdateInProgress()) {
-        event.preventDefault();
-        dialog.showMessageBoxSync(mainWindow!, {
-          type: "warning",
-          title: "Grok CLI 正在更新",
-          message: "正在替换并验证 Grok CLI。为避免损坏可执行文件或丢失回滚点，更新结束前不能退出应用。",
-          buttons: ["继续等待"],
-          defaultId: 0,
-        });
-        mainWindow?.focus();
-        return;
-      }
-      if (!controller?.hasWorking()) return;
-      const answer = dialog.showMessageBoxSync(mainWindow!, {
-        type: "warning",
-        title: "仍有任务运行",
-        message: "关闭应用会停止正在运行或等待确认的 Grok 会话，以及图片和视频生成任务。",
-        buttons: ["继续使用", "停止任务并退出"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-      if (answer === 0) {
-        event.preventDefault();
-        mainWindow?.focus();
-        mainWindow?.webContents.focus();
-      }
+    lifecycle = new DesktopShellLifecycle({
+      getCloseAction: async () => productivitySettings((await controller!.getSettings()).productivity).closeAction,
+      chooseCloseAction: async () => {
+        const result = await shellDialog({ type: "question", title: "关闭 Grok Build Desktop", message: "关闭窗口后，你希望应用如何运行？",
+          detail: "留在托盘可继续任务和手机连接；退出会结束应用。", buttons: ["留在托盘", "退出应用", "取消"], defaultId: 0, cancelId: 2,
+          checkboxLabel: "记住我的选择（可在设置中修改）", checkboxChecked: false });
+        return { action: result.response === 0 ? "tray" : result.response === 1 ? "quit" : "cancel", remember: result.checkboxChecked };
+      },
+      rememberCloseAction: async closeAction => {
+        const settings = await controller!.getSettings();
+        await controller!.updateSettings({ productivity: { ...productivitySettings(settings.productivity), closeAction } });
+      },
+      canHideToTray: () => desktopShell?.canHideToTray() ?? false,
+      hide: () => liveMainWindow()?.hide(), show: showMainWindow,
+      updateInProgress: () => controller?.hasCliUpdateInProgress() ?? false,
+      warnUpdate: async () => { await shellDialog({ type: "warning", title: "Grok CLI 正在更新", message: "CLI 更新事务尚未完成。请等待验证、必要回滚和会话恢复结束后再退出。", buttons: ["继续等待"], defaultId: 0 }); },
+      hasWork: () => controller?.hasWorking() ?? false,
+      livePhones: () => controller?.remoteLiveDevices() ?? 0,
+      confirmQuit: async () => (await shellDialog({ type: "warning", title: "确认退出 Grok Build Desktop", message: "退出会停止正在运行或等待确认的会话、图片和视频任务，并断开手机连接。", buttons: ["继续运行", "停止并退出"], defaultId: 0, cancelId: 0 })).response === 1,
+      shutdown: shutdownDesktop,
+      reportError: error => { void shellDialog({ type: "error", title: "无法完成关闭操作", message: error instanceof Error ? error.message : String(error), buttons: ["知道了"] }); },
     });
-    if(process.env.GROK_DESKTOP_OFFLINE_SMOKE!=="1"){try{const show=()=>{mainWindow?.show();mainWindow?.focus()};tray=new Tray(trayIcon());tray.setToolTip("Grok Build Desktop");let phones=-1;const refreshTray=()=>{const count=controller?.remoteLiveDevices()??0;if(!tray||tray.isDestroyed()||count===phones)return;phones=count;tray.setImage(trayIcon(count>0));tray.setToolTip(count?`Grok Build Desktop · 已连接 ${count} 台手机`:"Grok Build Desktop");tray.setContextMenu(Menu.buildFromTemplate([{label:"打开 Grok Build Desktop",click:show},{label:count?`手机连接：${count} 台在线`:"手机连接：无在线设备",enabled:false},{type:"separator"},{label:"退出应用",click:()=>app.quit()}]))};setInterval(refreshTray,4000).unref();refreshTray();tray.on("double-click",show)}catch{}}
-    mainWindow.once("ready-to-show", () => mainWindow?.show());
+    mainWindow.on("close", event => { if (!quitting) { event.preventDefault(); void lifecycle?.close(); } });
+    mainWindow.on("focus", () => desktopShell?.focus());
+    mainWindow.on("query-session-end",()=>{void shutdownDesktop(false);});
+    mainWindow.webContents.on("did-finish-load", () => desktopShell?.rendererReady());
+    const ownedWindow = mainWindow;
+    mainWindow.on("closed", () => {
+      if (mainWindow === ownedWindow) mainWindow = undefined;
+      // Normal closes go through lifecycle above; this covers external destruction.
+      if (!quitting) void lifecycle?.quit();
+    });
+    mainWindow.once("ready-to-show", () => liveMainWindow()?.show());
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1") {
+      desktopShell = new DesktopShellService(controller, { getWindow: liveMainWindow, showWindow: showMainWindow,
+        quit: () => { void lifecycle?.quit(); }, rendererEntry: join(currentDir, "../renderer/quick-entry/index.html"),
+        preloadEntry: join(currentDir, "../preload/quick-entry.cjs"), developmentUrl,
+        petBuiltins:join(app.isPackaged?process.resourcesPath:join(app.getAppPath(),"resources"),"pets"),petUserRoot:join(app.getPath("userData"),"pets"),
+        onSettings: settings => { const window = liveMainWindow(); if (window) installApplicationMenu(window, !app.isPackaged, settings.productivity); } });
+      await desktopShell.start();
+    }
     await loadRenderer().catch((error) => showStartupError(error instanceof Error ? error.message : String(error)));
     if (openTaskCenterOnReady && !showingStartupError) {
-      setTimeout(() => mainWindow?.webContents.send("grok:menu-command", "open-task-center"), 500);
+      setTimeout(() => liveMainWindow()?.webContents.send("grok:menu-command", "open-task-center"), 500);
     }
   });
 
   app.on("before-quit", (event) => {
     if (quitting) return;
-    if(controller?.hasWorking()&&mainWindow&&!mainWindow.isDestroyed()){const choice=dialog.showMessageBoxSync(mainWindow,{type:"question",title:"仍有任务运行",message:"退出会停止当前编程、媒体任务和手机连接。",buttons:["继续运行","停止并退出"],defaultId:0,cancelId:0});if(choice===0){event.preventDefault();mainWindow.show();return}}
-    if (controller?.hasCliUpdateInProgress()) {
-      event.preventDefault();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        dialog.showMessageBoxSync(mainWindow, {
-          type: "warning",
-          title: "Grok CLI 正在更新",
-          message: "CLI 更新事务尚未完成。请等待验证、必要回滚和会话恢复结束后再退出。",
-          buttons: ["继续等待"],
-          defaultId: 0,
-        });
-        mainWindow.show();
-        mainWindow.focus();
-      }
-      return;
-    }
     event.preventDefault();
-    quitting = true;
-    tray?.destroy();tray=undefined;
-    computerOverlay?.dispose();
-    computerOverlay = undefined;
-    globalShortcut.unregisterAll();
-    void windowState?.dispose(mainWindow).catch(() => undefined).finally(() => controller?.dispose().finally(() => app.quit()));
+    if (lifecycle) void lifecycle.quit();
+    else void shutdownDesktop();
   });
 }
 

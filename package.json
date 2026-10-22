@@ -1,6 +1,6 @@
 {
   "name": "grok-build-desktop",
-  "version": "0.12.2",
+  "version": "0.14.4",
   "private": true,
   "description": "Windows desktop GUI for the local Grok Build CLI",
   "main": "out/main/index.js",
@@ -15,11 +15,13 @@
     "build:preload": "vite build --config vite.preload.config.ts",
     "build:renderer": "vite build --config vite.renderer.config.ts",
     "build:computer-host": "node scripts/run-powershell.mjs -File scripts/build-computer-host.ps1 -SelfTest",
-    "build:resources": "npm run build:computer-host && node scripts/generate-resource-manifest.mjs",
+    "build:resources": "npm run build:computer-host && node scripts/check-pet-assets.mjs && node scripts/generate-resource-manifest.mjs",
+    "test:pet": "node scripts/probe-desktop-pet.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:regression-dom": "node scripts/probe-regression-dom.mjs",
+    "test:productivity-dom": "node scripts/probe-productivity-dom.mjs",
     "test:computer-acceptance": "node scripts/run-powershell.mjs -File scripts/probe-computer-flows.ps1",
     "test:ui-acceptance": "node scripts/run-powershell.mjs -File scripts/probe-v070-ui.ps1",
     "package:win": "node scripts/run-powershell.mjs -File scripts/package-win.ps1",
@@ -79,7 +81,7 @@
     "electron-builder": "26.15.3",
     "license-checker-rseidelsohn": "5.0.1",
     "typescript": "6.0.3",
-    "vite": "8.2.1",
+    "vite": "8.2.4",
     "vitest": "4.1.11"
   },
   "overrides": {
@@ -172,6 +174,7 @@
       "language": "2052"
     },
     "extraResources": [
+      { "from": "resources/pets", "to": "pets", "filter": ["**/*.webp", "**/*.json", "NOTICES.md"] },
       {
         "from": "resources/native/win-x64",
         "to": "native/win-x64",

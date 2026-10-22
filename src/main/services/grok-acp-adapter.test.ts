@@ -6,6 +6,53 @@ import { buildAcpClientCapabilities, buildGrokAgentArgs, buildPromptText, buildS
 import { PROVIDER_THINKING_END, PROVIDER_THINKING_START } from "../../shared/provider-gateway-markers";
 
 describe("Grok ACP process arguments", () => {
+  it.each([undefined, "existing-session"])("retains history and requires an explicit choice for an unavailable launch model (%s)", async (resume) => {
+    const root = await mkdtemp(join(tmpdir(), "grok-retired-model-"));
+    const onRuntimeChanged = vi.fn();
+    const adapter = new GrokAcpAdapter({ cliPath: "grok", cwd: root, env: process.env, effort: "", mode: "agent", modelId: "grok-old", localModelId: "grok-old", log: { log: vi.fn() } as any, onRuntimeChanged });
+    const internal = adapter as any;
+    const events: any[] = [];
+    adapter.on("event", event => events.push(event));
+    const request = vi.fn().mockResolvedValue({ _meta: { model: { Ok: "grok-current" } } });
+    internal.request = request;
+    internal.applyMode = vi.fn();
+    internal.sessionId = "existing-session";
+    internal.attaching = true;
+    try {
+      internal.emitEvent({ type: "session-ready", sessionId: adapter.sessionId, models: [], currentModelId: "grok-current", effort: "" });
+      internal.persistRuntimePatch({ modelId: "grok-current" });
+      expect(events).toHaveLength(0);
+      expect(onRuntimeChanged).not.toHaveBeenCalled();
+      await internal.completeSessionAttach({ models: { currentModelId: "grok-current", availableModels: [{ modelId: "grok-current", name: "Current" }] } }, resume);
+      expect(request).not.toHaveBeenCalled();
+      expect(adapter.currentModelId).toBe("grok-current");
+      expect(adapter.launchModelId).toBe("grok-old");
+      expect(events).toContainEqual(expect.objectContaining({ type: "session-ready", modelSelectionRequired: expect.stringContaining("重新选择模型") }));
+      internal.persistRuntimePatch({ modelId: "grok-current" });
+      expect(onRuntimeChanged).not.toHaveBeenCalled();
+      await expect(adapter.prompt("keep this draft")).rejects.toThrow("重新选择模型");
+      await expect(adapter.queuePrompt("keep this draft")).rejects.toThrow("重新选择模型");
+      await expect(adapter.interjectPrompt("keep this draft")).rejects.toThrow("重新选择模型");
+      await expect(adapter.btw("keep this draft")).rejects.toThrow("重新选择模型");
+      await expect(adapter.compact()).rejects.toThrow("重新选择模型");
+      expect(request).not.toHaveBeenCalled();
+      internal.promptQueue = [{ id: "unsent", state: "queued", text: "not yet submitted", position: 0 }];
+      await internal.drainLocalPromptQueue();
+      expect(internal.promptQueue[0].state).toBe("queued");
+      request.mockRejectedValueOnce(new Error("selection failed"));
+      await expect(adapter.setModel("grok-current")).rejects.toThrow("selection failed");
+      expect(adapter.launchModelId).toBe("grok-old");
+      expect(adapter.modelSelectionRequired).toContain("重新选择模型");
+      internal.scheduleLocalQueueDrain = vi.fn();
+      await adapter.setModel("grok-current");
+      expect(adapter.modelSelectionRequired).toBeUndefined();
+      expect(adapter.launchModelId).toBe("grok-current");
+      expect(onRuntimeChanged).toHaveBeenCalledWith(adapter.sessionId, { modelId: "grok-current" });
+      expect(events.filter(event => event.type === "session-ready").at(-1)?.modelSelectionRequired).toBeUndefined();
+      expect(internal.scheduleLocalQueueDrain).toHaveBeenCalledOnce();
+    } finally { await adapter.dispose(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it("preserves Invalid params details and the failed RPC method", async () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     const reject = vi.fn();
@@ -1134,12 +1181,12 @@ describe("Grok internal queue isolation", () => {
     ]);
   });
 
-  it("falls back to the official send-now prompt path when the CLI has no current-turn interjection method", async () => {
+  it("queues unsupported interjections without stopping the current turn", async () => {
     const adapter = Object.create(GrokAcpAdapter.prototype) as any;
     const queuePrompt = vi.fn(async () => ({
       operationId: "fallback-op",
       entryId: "fallback-entry",
-      state: "send-now",
+      state: "queued",
       fallback: true,
       message: "fallback",
     }));
@@ -1156,10 +1203,11 @@ describe("Grok internal queue isolation", () => {
     });
 
     await expect(adapter.interjectPrompt("旧版回退", [], { clientMessageId: "client-fallback" })).resolves.toMatchObject({
-      state: "send-now",
+      state: "queued",
       fallback: true,
+      message: expect.stringContaining("当前任务继续运行"),
     });
-    expect(queuePrompt).toHaveBeenCalledWith("旧版回退", [], true, expect.objectContaining({ clientMessageId: "client-fallback" }));
+    expect(queuePrompt).toHaveBeenCalledWith("旧版回退", [], false, expect.objectContaining({ clientMessageId: "client-fallback" }));
     expect(adapter.pendingInterjections.size).toBe(0);
     expect(adapter.emitEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "interjection" }));
   });

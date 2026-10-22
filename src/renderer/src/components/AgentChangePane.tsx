@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentChangeIndex, AgentFileChange, NavigationIntent } from "../../../shared/types";
 import { UiIcon } from "../ui-icons";
+import { installDiffAnnotationActions, useDiffAnnotations } from "./DiffAnnotations";
+import type { DiffLineRange } from "./feedback-context";
 
 const DiffEditor = lazy(async () => {
   (await import("../monaco")).configureMonaco();
@@ -32,6 +34,7 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
   const [width, setWidth] = useState(() => Math.max(420, Math.min(760, Number(localStorage.getItem("grok:right-width:agent-changes")) || 620)));
   const mountedRef = useRef(true);
   const refreshGenerationRef = useRef(0);
+  const annotations = useDiffAnnotations(onError);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -118,15 +121,28 @@ export function AgentChangePane({ sessionId, onClose, onNavigate, onError }: {
         <span className="agent-change-path">{file.path}</span>
         <span className="agent-change-tag">{file.additions !== undefined || file.deletions !== undefined ? <><i>+{file.additions ?? 0}</i> <b>-{file.deletions ?? 0}</b></> : baselineLabel(file)}</span>
       </button>)}{filteredFiles.length === 0 && <p className="right-tool-empty">没有匹配的写入文件。</p>}</nav>
-      <main className="review-selected-file">{selected ? <AgentChangeDetail file={selected} light={light} onNavigate={onNavigate} cwd={index?.cwd ?? ""} sessionId={sessionId}/> : null}</main>
+      <main className="review-selected-file">{selected ? <AgentChangeDetail file={selected} light={light} onNavigate={onNavigate} cwd={index?.cwd ?? ""} sessionId={sessionId} onComment={range=>{
+        const original=selected;
+        annotations.begin(range,sessionId,index?.cwd??"",async()=>{
+          if(!sessionId)return false;
+          const current=(await window.grokDesktop.getAgentChanges(sessionId,scope)).files.find(file=>file.id===original.id);
+          return Boolean(current&&current.at===original.at&&current.status===original.status&&current.before===original.before&&current.after===original.after&&current.path===original.path);
+        });
+      }}/> : null}</main>
     </div></>}
+    {annotations.panel}
   </aside>;
 }
 
-function AgentChangeDetail({ file, light, cwd, sessionId, onNavigate }: {
-  file: AgentFileChange; light: boolean; cwd: string; sessionId?: string; onNavigate(intent: NavigationIntent): void;
+function AgentChangeDetail({ file, light, cwd, sessionId, onNavigate, onComment }: {
+  file: AgentFileChange; light: boolean; cwd: string; sessionId?: string; onNavigate(intent: NavigationIntent): void; onComment(range:DiffLineRange):void;
 }): React.JSX.Element {
   const [wrap, setWrap] = useState(true);
+  const actionCleanup=useRef<(()=>void)|undefined>(undefined);
+  const commentRef=useRef(onComment);
+  commentRef.current=onComment;
+  const pathRef=useRef(file.path);pathRef.current=file.path;
+  useEffect(()=>()=>actionCleanup.current?.(),[]);
   const noBaseline = file.baseline !== "captured";
   return <>
     <header className="agent-change-header">
@@ -154,6 +170,7 @@ function AgentChangeDetail({ file, light, cwd, sessionId, onNavigate }: {
             original={file.before}
             modified={file.after ?? ""}
             theme={light ? "vs" : "vs-dark"}
+            onMount={editor=>{actionCleanup.current?.();actionCleanup.current=installDiffAnnotationActions(editor,(side,startLine,endLine)=>commentRef.current({path:pathRef.current,side,startLine,endLine}));}}
             options={{
               readOnly: true,
               renderSideBySide: false,

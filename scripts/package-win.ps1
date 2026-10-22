@@ -2,7 +2,8 @@
 param(
     [switch]$SkipVerification,
     [switch]$ReleaseArtifactsOnly,
-    [switch]$AllowUnavailableTaskScheduler
+    [switch]$AllowUnavailableTaskScheduler,
+    [string]$ElectronDist = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,7 +60,14 @@ npm run build
 if ($LASTEXITCODE -ne 0) { throw "生产构建失败 ($LASTEXITCODE)" }
 npm run check:chunks
 if ($LASTEXITCODE -ne 0) { throw "Renderer 分块预算或 Worker 命名门禁失败 ($LASTEXITCODE)" }
-npx electron-builder --win --dir --x64 --publish never
+$DirectoryPackagingArguments = @('electron-builder','--win','--dir','--x64','--publish','never')
+if ($ElectronDist) {
+    $LocalRuntime = (Resolve-Path -LiteralPath $ElectronDist).Path
+    $LockedRuntimeVersion = (Get-Content package.json -Raw | ConvertFrom-Json).devDependencies.electron
+    if (-not (Test-Path -LiteralPath (Join-Path $LocalRuntime 'version') -PathType Leaf) -or (Get-Content (Join-Path $LocalRuntime 'version') -Raw).Trim() -ne $LockedRuntimeVersion) { throw '本地 Electron 分发必须与锁定版本一致。' }
+    $DirectoryPackagingArguments += "--config.electronDist=$LocalRuntime"
+}
+npx @DirectoryPackagingArguments
 if ($LASTEXITCODE -ne 0) { throw "electron-builder 目录打包失败 ($LASTEXITCODE)" }
 $ExpectedExecutable = Join-Path $Root 'release\win-unpacked\Grok Build Desktop.exe'
 $ExpectedSetup = Join-Path $Root "release\Grok-Build-Desktop-Setup-v$Version-x64.exe"
