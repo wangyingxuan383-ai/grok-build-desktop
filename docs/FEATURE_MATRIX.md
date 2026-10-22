@@ -24,4 +24,4 @@
 
 See [CLI compatibility](CLI_COMPATIBILITY.md), [architecture](ARCHITECTURE.md) and [privacy](PRIVACY.md).
 
-Unreleased reliability checks cover local-library read failures before editing, input-method Escape handling, asynchronous attachment ownership and native-browser visibility behind export/alert dialogs. Unit tests and isolated Electron DOM/native-view probes verify those paths; these checks do not represent new installed packages or physical Android input-method acceptance.
+Released reliability checks cover local-library read failures before editing, input-method Escape handling, asynchronous attachment ownership and native-browser visibility behind export/alert dialogs. Unit tests and isolated Electron DOM/native-view probes verify those paths; these checks do not represent local installation or physical Android input-method acceptance.

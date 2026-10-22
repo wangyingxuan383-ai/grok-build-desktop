@@ -8,7 +8,7 @@
 - [x] Patch the Vite build tool to 8.2.4 for the security gate without relaxing audit thresholds or changing runtime dependencies.
 - [x] Separate companion-image metadata from executable sandbox code; verify real sandbox decoding, alpha bounds and decoder cleanup for distinct images.
 - [x] Build, inspect package contents and verify signatures/hashes before staging the exact release files.
-- [ ] Verify downloaded release payloads and provenance before publication; preserve the documented physical-input acceptance limits.
+- [x] Verify downloaded release payloads and provenance before publication; preserve the documented physical-input acceptance limits.
 
 ## Focused desktop audit repairs (0.14.4)
 
