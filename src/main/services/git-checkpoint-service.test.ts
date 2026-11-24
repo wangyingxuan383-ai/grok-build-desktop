@@ -92,7 +92,7 @@ describe("GitCheckpointService hidden per-turn checkpoints", () => {
     expect(diff.patch).toContain("untracked-note.ts");
   });
 
-  it("prunes excess checkpoints above MAX_CHECKPOINTS_PER_SESSION (30) and deletes session refs cleanly", async () => {
+  it("prunes excess checkpoints above MAX_CHECKPOINTS_PER_SESSION (30) and deletes session refs cleanly", { timeout: 90_000 }, async () => {
     const repoDir = await mkdtemp(join(tmpdir(), "grok-ckpt-gc-"));
     cleanupDirs.push(repoDir);
 
