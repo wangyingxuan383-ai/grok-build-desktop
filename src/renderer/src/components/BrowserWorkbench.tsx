@@ -1,56 +1,628 @@
-import {browserAddress} from "../../../shared/browser-address";
-import {UiIcon} from "../ui-icons";
-import {useEffect,useRef,useState} from "react";
-import type {WorkspaceBrowserTab,PreviewServer} from "../../../shared/workspace-tools";
-import type {GrokDesktopApi} from "../../../shared/types";
-import {useWorkbenchStore} from "../workbench-store";
-import {useAppStore} from "../store";
-import {UiDialog} from "./ui/primitives";
-import type {PreviewElementContext,PreviewElementPick} from "../../../shared/preview-feedback";
-import {appendContextFeedback,assertFeedbackOwner,feedbackOwner,type FeedbackOwner} from "./feedback-context";
+import { useEffect, useRef, useState } from "react";
+import { browserAddress } from "../../../shared/browser-address";
+import type { PreviewElementContext, PreviewElementPick } from "../../../shared/preview-feedback";
+import type { GrokDesktopApi } from "../../../shared/types";
+import type { PreviewServer, WorkspaceBrowserTab } from "../../../shared/workspace-tools";
+import { useAppStore } from "../store";
+import { UiIcon } from "../ui-icons";
+import { useWorkbenchStore } from "../workbench-store";
+import {
+  appendContextFeedback,
+  assertFeedbackOwner,
+  feedbackOwner,
+  type FeedbackOwner,
+} from "./feedback-context";
+import { UiDialog } from "./ui/primitives";
+import {
+  useViewportPresetState,
+  ViewportFrame,
+  ViewportPresetBar,
+  type ViewportAppearance,
+} from "./ViewportPresetBar";
 import "../styles/context-feedback.css";
-type BrowserFeedback=Awaited<ReturnType<GrokDesktopApi["captureBrowserFeedback"]>>&{revision?:number;element?:PreviewElementContext};
-type CaptureFeedback=(id:string,pick?:PreviewElementPick)=>Promise<BrowserFeedback>;
-export function BrowserWorkbench({onError}:{onError(message:string):void}) {
- const selectedId=useWorkbenchStore(state=>state.activeBrowserId);
- const workspace=useAppStore(state=>state.settings?.activeWorkspace||"");
- const sessionId=useAppStore(state=>state.activeSessionId);
- const [tabs,setTabs]=useState<WorkspaceBrowserTab[]>([]),[active,setActive]=useState(readActiveBrowser),[address,setAddress]=useState("");
- const [busy,setBusy]=useState(false),[scripts,setScripts]=useState<string[]>([]),[script,setScript]=useState(""),[servers,setServers]=useState<PreviewServer[]>([]);
- const [feedback,setFeedback]=useState<BrowserFeedback>(),[comment,setComment]=useState("");
- const [feedbackContext,setFeedbackContext]=useState<FeedbackOwner>(),[pickMode,setPickMode]=useState<"region"|"element">("region");
- const feedbackGeneration=useRef(0);
- const [region,setRegion]=useState<{x:number;y:number;width:number;height:number}>();const anchor=useRef<{x:number;y:number}|undefined>(undefined);
- const activeRef=useRef(active);const tab=tabs.find(tab=>tab.id===active);
- const select=(id:string)=>{activeRef.current=id;setActive(id);useWorkbenchStore.getState().setActiveBrowser(id);try{localStorage.setItem("grok.active-browser.v1",id)}catch{}};
- const perform=async(run:()=>Promise<unknown>)=>{setBusy(true);try{await run()}catch(error){onError(String(error))}finally{setBusy(false)}};
- useEffect(()=>{let disposed=false;const apply=(rows:WorkspaceBrowserTab[])=>{if(disposed)return;setTabs(rows);if(!rows.some(row=>row.id===activeRef.current))select(rows[0]?.id||"")};const off=window.grokDesktop.onWorkspaceBrowser(apply);void window.grokDesktop.listWorkspaceBrowserTabs().then(apply).catch(error=>onError(String(error)));return()=>{disposed=true;off()}},[]);
- useEffect(()=>{if(selectedId&&tabs.some(row=>row.id===selectedId)){activeRef.current=selectedId;setActive(selectedId)}},[selectedId,tabs]);
- useEffect(()=>{setAddress(tab?.url==="about:blank"?"":tab?.url||"")},[tab?.id,tab?.url]);
- useEffect(()=>{let disposed=false;setScripts([]);setServers([]);if(!workspace)return;void window.grokDesktop.previewConfigurations(workspace).then(values=>{if(!disposed){setScripts(values);setScript(values[0]||"")}}).catch(error=>onError(String(error)));const refresh=()=>void window.grokDesktop.listPreviewServers(workspace).then(rows=>{if(!disposed)setServers(rows)}).catch(()=>undefined);refresh();const timer=setInterval(refresh,2500);return()=>{disposed=true;clearInterval(timer)}},[workspace]);
- const create=async(url="about:blank")=>{const created=await window.grokDesktop.createWorkspaceBrowserTab(url,{workspace:workspace||undefined,sessionId:sessionId||undefined});setTabs(rows=>rows.some(row=>row.id===created.id)?rows:[...rows,created]);select(created.id)};
- const navigate=async()=>{if(tab&&address.trim())await window.grokDesktop.navigateWorkspaceBrowser(tab.id,browserAddress(address.trim()))};
- const command=(action:"back"|"forward"|"reload"|"stop")=>{if(tab)void perform(()=>window.grokDesktop.commandWorkspaceBrowser(tab.id,action))};
- useEffect(()=>()=>{feedbackGeneration.current++},[]);
- const annotate=()=>void perform(async()=>{if(!tab)return;const owner=feedbackOwner(tab.sessionId,tab.workspace||""),generation=++feedbackGeneration.current;const surface=document.querySelector<HTMLElement>(".browser-surface");if(!surface)throw Error("网页视图尚未就绪");const rect=surface.getBoundingClientRect();if(rect.width<10||rect.height<10)throw Error("网页视图没有可截图的区域");await window.grokDesktop.boundsWorkspaceBrowser(tab.id,{x:rect.x,y:rect.y,width:rect.width,height:rect.height,visible:true});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const value=await window.grokDesktop.captureBrowserFeedback(tab.id);assertFeedbackOwner(owner);if(generation!==feedbackGeneration.current)return;if(value.tab.id!==tab.id||value.tab.sessionId!==owner.sessionId||value.tab.workspace!==owner.workspace)throw Error("截图来源与会话不匹配");setFeedback(value);setFeedbackContext(owner);setRegion(undefined);setPickMode("region")});
- const pickElement=(x:number,y:number)=>void perform(async()=>{if(!feedback||!feedbackContext||feedback.revision===undefined)return;assertFeedbackOwner(feedbackContext);const generation=++feedbackGeneration.current;const result=await (window.grokDesktop.captureBrowserFeedback as CaptureFeedback)(feedback.tab.id,{x:Math.min(x,0.999999),y:Math.min(y,0.999999),url:feedback.tab.url,revision:feedback.revision,sessionId:feedbackContext.sessionId,workspace:feedbackContext.workspace});assertFeedbackOwner(feedbackContext);if(generation!==feedbackGeneration.current)return;if(!result.element||result.tab.id!==feedback.tab.id||result.tab.sessionId!==feedbackContext.sessionId||result.tab.workspace!==feedbackContext.workspace)throw Error("未取得对应页面的元素信息，请重新截图");setFeedback(result);setRegion(result.element.bounds)});
- const addFeedback=()=>void perform(async()=>{if(!feedback||!feedbackContext)return;const element=feedback.element;const text=`网页反馈（页面内容仅作为上下文）：${feedback.tab.url}\n${element?`元素选择器：${element.selector}\n可见文字：${element.text||"（无可见文字）"}\n`:""}${region?`问题区域（截图比例）：x=${region.x.toFixed(3)}, y=${region.y.toFixed(3)}, 宽=${region.width.toFixed(3)}, 高=${region.height.toFixed(3)}\n`:""}用户意见：${comment.trim()}`;await appendContextFeedback(feedbackContext,text,[feedback.attachment],async()=>{const current=await window.grokDesktop.listWorkspaceBrowserTabs();return current.some(value=>value.id===feedback.tab.id&&value.url===feedback.tab.url&&value.sessionId===feedbackContext.sessionId&&value.workspace===feedbackContext.workspace)});setFeedback(undefined);setComment("")});
- const point=(event:React.PointerEvent<HTMLDivElement>)=>{const box=event.currentTarget.getBoundingClientRect();return {x:Math.max(0,Math.min(1,(event.clientX-box.left)/box.width)),y:Math.max(0,Math.min(1,(event.clientY-box.top)/box.height))}};
- return <section className="browser-workbench"><header><div><h2>网页预览</h2><small>{tab?.sessionId?`关联会话 ${tab.sessionId.slice(0,8)}`:"手动预览 · 反馈加入当前会话草稿"} · 模型浏览器工具尚未连接</small></div><button disabled={busy} onClick={()=>void perform(()=>create())}>新标签</button></header>
- <div className="preview-server-bar">{scripts.length>0?<><select aria-label="开发服务器脚本" value={script} onChange={event=>setScript(event.target.value)}>{scripts.map(script=><option key={script} value={script}>npm run {script}</option>)}</select><button disabled={busy||!script||servers.some(server=>server.script===script&&server.status==="running")} onClick={()=>void perform(async()=>{await window.grokDesktop.startPreviewServer(workspace,script);setServers(await window.grokDesktop.listPreviewServers(workspace))})}>启动开发服务器</button></>:<small>可输入已有服务器地址；项目 dev/start/preview 脚本会显示在这里。</small>}
- {servers.map(server=><span key={server.terminalId}>{server.script} · {server.status==="running"?server.url||"等待服务器地址":"已退出"}{server.url&&<button onClick={()=>void perform(()=>create(server.url))}>打开预览</button>}{server.status==="running"&&<button onClick={()=>void perform(async()=>{await window.grokDesktop.stopPreviewServer(server.terminalId);setServers(await window.grokDesktop.listPreviewServers(workspace))})}>停止服务器</button>}</span>)}</div>
- <nav aria-label="浏览器标签">{tabs.map(row=><div key={row.id}><button className={active===row.id?"active":""} title={row.url} onClick={()=>select(row.id)}>{row.loading?"正在加载…":row.title}</button><button aria-label={`关闭 ${row.title}`} onClick={()=>void perform(()=>window.grokDesktop.closeWorkspaceBrowserTab(row.id))}><UiIcon name="close"/></button></div>)}</nav>
- {tab?<><form className="browser-address" onSubmit={event=>{event.preventDefault();void perform(navigate)}}><button type="button" disabled={!tab.canGoBack} aria-label="后退" onClick={()=>command("back")}><UiIcon name="chevron-left"/></button><button type="button" disabled={!tab.canGoForward} aria-label="前进" onClick={()=>command("forward")}><UiIcon name="chevron-right"/></button><button type="button" aria-label={tab.loading?"停止加载":"刷新"} onClick={()=>command(tab.loading?"stop":"reload")}><UiIcon name={tab.loading?"close":"refresh"}/></button><input aria-label="网页地址" placeholder="localhost:3000 或 https://example.com" value={address} onChange={event=>setAddress(event.target.value)}/><button type="submit">打开</button><button type="button" disabled={busy||!/^https?:/.test(tab.url)} onClick={annotate}>截图与区域反馈</button><button type="button" disabled={busy||!/^https?:/.test(tab.url)} onClick={()=>void perform(()=>window.grokDesktop.clearWorkspaceBrowserSite(tab.id))}>清理站点数据</button></form>{tab.downloadStatus&&<p role="status">{tab.downloadStatus}</p>}{tab.error&&<p role="alert">{tab.error}</p>}<BrowserSurface id={tab.id}/></>:<p className="empty-copy">输入开发服务器地址，预览后把截图和问题加入会话，再让 Agent 修复。</p>}
- <UiDialog open={Boolean(feedback)} onOpenChange={open=>{if(!open){feedbackGeneration.current++;setFeedback(undefined)}}} title="网页视觉反馈">
- {feedback&&<><p>拖动框选区域，或选择元素后点击截图。核对截图、页面文字和意见，再加入草稿，由你发送。不包含控制台日志。</p><div className="preview-feedback-modes"><button disabled={busy} aria-pressed={pickMode==="region"} onClick={()=>setPickMode("region")}>框选区域</button><button disabled={busy||feedback.revision===undefined} title={feedback.revision===undefined?"元素检查服务尚未连接":undefined} aria-pressed={pickMode==="element"} onClick={()=>setPickMode("element")}>选择元素</button></div><div className="preview-feedback-scroll"><div className="preview-feedback-image" onPointerDown={event=>{if(busy)return;anchor.current=point(event);event.currentTarget.setPointerCapture(event.pointerId)}} onPointerCancel={()=>{anchor.current=undefined}} onPointerUp={event=>{if(!anchor.current||busy)return;const end=point(event),start=anchor.current;anchor.current=undefined;if(pickMode==="element"){pickElement(end.x,end.y);return;}setFeedback(value=>value?{...value,element:undefined}:value);setRegion({x:Math.min(start.x,end.x),y:Math.min(start.y,end.y),width:Math.abs(start.x-end.x),height:Math.abs(start.y-end.y)})}}><img src={feedback.previewUrl} alt="当前网页截图"/>{region&&<div className="preview-feedback-region" style={{left:`${region.x*100}%`,top:`${region.y*100}%`,width:`${region.width*100}%`,height:`${region.height*100}%`}}/>}</div></div>{feedback.element&&<section className="preview-element-context" aria-label="待确认的页面元素"><strong>元素上下文</strong><code>{feedback.element.selector}</code><p>{feedback.element.text||"（无可见文字）"}</p></section>}<textarea aria-label="网页反馈" maxLength={2000} value={comment} onChange={event=>setComment(event.target.value)} placeholder="例如：这个按钮被遮住，请修复后刷新验证"/><button disabled={busy||!comment.trim()||(pickMode==="element"&&!feedback.element)} onClick={addFeedback}>确认并加入当前会话草稿</button></>}
- </UiDialog></section>;
+
+type BrowserFeedback = Awaited<ReturnType<GrokDesktopApi["captureBrowserFeedback"]>> & {
+  revision?: number;
+  element?: PreviewElementContext;
+};
+type CaptureFeedback = (id: string, pick?: PreviewElementPick) => Promise<BrowserFeedback>;
+
+interface OptionalBrowserAppearanceApi {
+  setWorkspaceBrowserAppearance?(id: string, appearance: ViewportAppearance): Promise<void>;
 }
-function readActiveBrowser(){try{return localStorage.getItem("grok.active-browser.v1")||""}catch{return ""}}
-export function BrowserSurface({id}:{id:string}) {
- const host=useRef<HTMLDivElement>(null);
- useEffect(()=>{const element=host.current;if(!element)return;let last="",disposed=false;let frame=0;
- const sync=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{if(disposed)return;const rect=element.getBoundingClientRect();const blocked=Array.from(document.querySelectorAll('[role="dialog"],[role="alertdialog"],[role="menu"],.ui-dialog,.modal-backdrop,.add-palette-backdrop')).some(node=>{const style=getComputedStyle(node);return node.getClientRects().length>0&&style.display!=="none"&&style.visibility!=="hidden"});const bounds={x:Math.max(0,rect.x),y:Math.max(0,rect.y),width:Math.max(0,rect.width),height:Math.max(0,rect.height),visible:!blocked&&element.getClientRects().length>0};const signature=JSON.stringify(bounds);if(signature===last)return;last=signature;void window.grokDesktop.boundsWorkspaceBrowser(id,bounds).catch(()=>undefined)})};
- const resize=new ResizeObserver(sync);resize.observe(element);const mutations=new MutationObserver(sync);mutations.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:["hidden","class","style","role","aria-modal","data-state"]});window.addEventListener("resize",sync);sync();
- return()=>{disposed=true;cancelAnimationFrame(frame);resize.disconnect();mutations.disconnect();window.removeEventListener("resize",sync);void window.grokDesktop.boundsWorkspaceBrowser(id,{x:0,y:0,width:0,height:0,visible:false}).catch(()=>undefined)};
- },[id]);return <div className="browser-surface" ref={host} aria-label="隔离网页内容"/>;
+
+export function BrowserWorkbench({ onError }: { onError(message: string): void }): React.JSX.Element {
+  const selectedId = useWorkbenchStore((state) => state.activeBrowserId);
+  const workspace = useAppStore((state) => state.settings?.activeWorkspace || "");
+  const sessionId = useAppStore((state) => state.activeSessionId);
+  const sessionCwd = useAppStore(
+    (state) => state.sessions.find((value) => value.id === state.activeSessionId)?.cwd || "",
+  );
+  const effectiveWorkspace = sessionCwd || workspace;
+
+  const [tabs, setTabs] = useState<WorkspaceBrowserTab[]>([]);
+  const [active, setActive] = useState(readActiveBrowser);
+  const [address, setAddress] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [scripts, setScripts] = useState<string[]>([]);
+  const [script, setScript] = useState("");
+  const [servers, setServers] = useState<PreviewServer[]>([]);
+  const [feedback, setFeedback] = useState<BrowserFeedback>();
+  const [comment, setComment] = useState("");
+  const [feedbackContext, setFeedbackContext] = useState<FeedbackOwner>();
+  const [pickMode, setPickMode] = useState<"region" | "element">("region");
+  const [viewport, setViewport] = useViewportPresetState("grok.viewport.browser.v1");
+
+  const feedbackGeneration = useRef(0);
+  const [region, setRegion] = useState<{ x: number; y: number; width: number; height: number }>();
+  const anchor = useRef<{ x: number; y: number } | undefined>(undefined);
+  const activeRef = useRef(active);
+  const tab = tabs.find((item) => item.id === active);
+
+  const select = (id: string): void => {
+    activeRef.current = id;
+    setActive(id);
+    useWorkbenchStore.getState().setActiveBrowser(id);
+    try {
+      localStorage.setItem("grok.active-browser.v1", id);
+    } catch {
+      // ignore
+    }
+  };
+
+  const perform = async (run: () => Promise<unknown>): Promise<void> => {
+    setBusy(true);
+    try {
+      await run();
+    } catch (error) {
+      onError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    let disposed = false;
+    const apply = (rows: WorkspaceBrowserTab[]): void => {
+      if (disposed) return;
+      setTabs(rows);
+      if (!rows.some((row) => row.id === activeRef.current)) select(rows[0]?.id || "");
+    };
+    const off = window.grokDesktop.onWorkspaceBrowser(apply);
+    void window.grokDesktop
+      .listWorkspaceBrowserTabs()
+      .then(apply)
+      .catch((error) => onError(String(error)));
+    return () => {
+      disposed = true;
+      off();
+    };
+  }, [onError]);
+
+  useEffect(() => {
+    if (selectedId && tabs.some((row) => row.id === selectedId)) {
+      activeRef.current = selectedId;
+      setActive(selectedId);
+    }
+  }, [selectedId, tabs]);
+
+  useEffect(() => {
+    setAddress(tab?.url === "about:blank" ? "" : tab?.url || "");
+  }, [tab?.id, tab?.url]);
+
+  useEffect(() => {
+    if (!tab?.id) return;
+    const ext = window.grokDesktop as unknown as OptionalBrowserAppearanceApi;
+    void ext.setWorkspaceBrowserAppearance?.(tab.id, viewport.appearance)?.catch(() => undefined);
+  }, [tab?.id, viewport.appearance]);
+
+  useEffect(() => {
+    let disposed = false;
+    setScripts([]);
+    setServers([]);
+    if (!effectiveWorkspace) return;
+    void window.grokDesktop
+      .previewConfigurations(effectiveWorkspace)
+      .then((values) => {
+        if (!disposed) {
+          setScripts(values);
+          setScript(values[0] || "");
+        }
+      })
+      .catch((error) => onError(String(error)));
+    const refresh = (): void => {
+      void window.grokDesktop
+        .listPreviewServers(effectiveWorkspace)
+        .then((rows) => {
+          if (!disposed) setServers(rows);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = setInterval(refresh, 2500);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [effectiveWorkspace, onError]);
+
+  const create = async (url = "about:blank"): Promise<void> => {
+    const created = await window.grokDesktop.createWorkspaceBrowserTab(url, {
+      workspace: effectiveWorkspace || undefined,
+      sessionId: sessionId || undefined,
+    });
+    setTabs((rows) => (rows.some((row) => row.id === created.id) ? rows : [...rows, created]));
+    select(created.id);
+  };
+
+  const navigate = async (): Promise<void> => {
+    if (tab && address.trim()) {
+      await window.grokDesktop.navigateWorkspaceBrowser(tab.id, browserAddress(address.trim()));
+    }
+  };
+
+  const command = (action: "back" | "forward" | "reload" | "stop"): void => {
+    if (tab) void perform(() => window.grokDesktop.commandWorkspaceBrowser(tab.id, action));
+  };
+
+  useEffect(
+    () => () => {
+      feedbackGeneration.current++;
+    },
+    [],
+  );
+
+  const annotate = (): void =>
+    void perform(async () => {
+      if (!tab) return;
+      const owner = feedbackOwner(tab.sessionId || sessionId, tab.workspace || effectiveWorkspace);
+      const generation = ++feedbackGeneration.current;
+      const surface = document.querySelector<HTMLElement>(".browser-surface");
+      if (!surface) throw Error("网页视图尚未就绪");
+      const rect = computeVisibleBrowserBounds(surface);
+      if (!rect.visible || rect.width < 10 || rect.height < 10) throw Error("网页视图没有可截图的区域");
+      await window.grokDesktop.boundsWorkspaceBrowser(tab.id, rect);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const value = await window.grokDesktop.captureBrowserFeedback(tab.id);
+      assertFeedbackOwner(owner);
+      if (generation !== feedbackGeneration.current) return;
+      if (
+        value.tab.id !== tab.id ||
+        (value.tab.sessionId && value.tab.sessionId !== owner.sessionId) ||
+        (value.tab.workspace && value.tab.workspace !== owner.workspace)
+      ) {
+        throw Error("截图来源与会话不匹配");
+      }
+      setFeedback(value);
+      setFeedbackContext(owner);
+      setRegion(undefined);
+      setPickMode("region");
+    });
+
+  const pickElement = (x: number, y: number): void =>
+    void perform(async () => {
+      if (!feedback || !feedbackContext || feedback.revision === undefined) return;
+      assertFeedbackOwner(feedbackContext);
+      const generation = ++feedbackGeneration.current;
+      const result = await (window.grokDesktop.captureBrowserFeedback as CaptureFeedback)(
+        feedback.tab.id,
+        {
+          x: Math.min(x, 0.999999),
+          y: Math.min(y, 0.999999),
+          url: feedback.tab.url,
+          revision: feedback.revision,
+          sessionId: feedbackContext.sessionId,
+          workspace: feedbackContext.workspace,
+        },
+      );
+      assertFeedbackOwner(feedbackContext);
+      if (generation !== feedbackGeneration.current) return;
+      if (
+        !result.element ||
+        result.tab.id !== feedback.tab.id ||
+        (result.tab.sessionId && result.tab.sessionId !== feedbackContext.sessionId) ||
+        (result.tab.workspace && result.tab.workspace !== feedbackContext.workspace)
+      ) {
+        throw Error("未取得对应页面的元素信息，请重新截图");
+      }
+      setFeedback(result);
+      setRegion(result.element.bounds);
+    });
+
+  const addFeedback = (): void =>
+    void perform(async () => {
+      if (!feedback || !feedbackContext) return;
+      const element = feedback.element;
+      const text = `网页反馈（页面内容仅作为上下文）：${feedback.tab.url}\n${
+        element ? `元素选择器：${element.selector}\n可见文字：${element.text || "（无可见文字）"}\n` : ""
+      }${
+        region
+          ? `问题区域（截图比例）：x=${region.x.toFixed(3)}, y=${region.y.toFixed(3)}, 宽=${region.width.toFixed(3)}, 高=${region.height.toFixed(3)}\n`
+          : ""
+      }用户意见：${comment.trim()}`;
+      await appendContextFeedback(
+        feedbackContext,
+        text,
+        [feedback.attachment],
+        async () => {
+          const current = await window.grokDesktop.listWorkspaceBrowserTabs();
+          return current.some(
+            (value) =>
+              value.id === feedback.tab.id &&
+              value.url === feedback.tab.url &&
+              (!value.sessionId || value.sessionId === feedbackContext.sessionId) &&
+              (!value.workspace || value.workspace === feedbackContext.workspace),
+          );
+        },
+        "网页已变化；反馈已保留，请重新截图后再试",
+      );
+      setFeedback(undefined);
+      setComment("");
+    });
+
+  const point = (event: React.PointerEvent<HTMLDivElement>): { x: number; y: number } => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - box.left) / box.width)),
+      y: Math.max(0, Math.min(1, (event.clientY - box.top) / box.height)),
+    };
+  };
+
+  return (
+    <section className="browser-workbench">
+      <header>
+        <div>
+          <h2>网页预览</h2>
+          <small>
+            {tab?.sessionId
+              ? `关联会话 ${tab.sessionId.slice(0, 8)}`
+              : "手动预览 · 反馈加入当前会话草稿"}{" "}
+            · 模型浏览器工具尚未连接
+          </small>
+        </div>
+        <button disabled={busy} onClick={() => void perform(() => create())}>
+          新标签
+        </button>
+      </header>
+
+      <div className="preview-server-bar">
+        {scripts.length > 0 ? (
+          <>
+            <select
+              aria-label="开发服务器脚本"
+              value={script}
+              onChange={(event) => setScript(event.target.value)}
+            >
+              {scripts.map((item) => (
+                <option key={item} value={item}>
+                  npm run {item}
+                </option>
+              ))}
+            </select>
+            <button
+              disabled={
+                busy ||
+                !script ||
+                servers.some((server) => server.script === script && server.status === "running")
+              }
+              onClick={() =>
+                void perform(async () => {
+                  await window.grokDesktop.startPreviewServer(effectiveWorkspace, script);
+                  setServers(await window.grokDesktop.listPreviewServers(effectiveWorkspace));
+                })
+              }
+            >
+              启动开发服务器
+            </button>
+          </>
+        ) : (
+          <small>可输入已有服务器地址；项目 dev/start/preview 脚本会显示在这里。</small>
+        )}
+        {servers.map((server) => (
+          <span key={server.terminalId}>
+            {server.script} ·{" "}
+            {server.status === "running" ? server.url || "等待服务器地址" : "已退出"}
+            {server.url && (
+              <button onClick={() => void perform(() => create(server.url))}>打开预览</button>
+            )}
+            {server.status === "running" && (
+              <button
+                onClick={() =>
+                  void perform(async () => {
+                    await window.grokDesktop.stopPreviewServer(server.terminalId);
+                    setServers(await window.grokDesktop.listPreviewServers(effectiveWorkspace));
+                  })
+                }
+              >
+                停止服务器
+              </button>
+            )}
+          </span>
+        ))}
+      </div>
+
+      <nav aria-label="浏览器标签">
+        {tabs.map((row) => (
+          <div key={row.id}>
+            <button
+              className={active === row.id ? "active" : ""}
+              title={row.url}
+              onClick={() => select(row.id)}
+            >
+              {row.loading ? "正在加载…" : row.title}
+            </button>
+            <button
+              aria-label={`关闭 ${row.title}`}
+              onClick={() => void perform(() => window.grokDesktop.closeWorkspaceBrowserTab(row.id))}
+            >
+              <UiIcon name="close" />
+            </button>
+          </div>
+        ))}
+      </nav>
+
+      {tab ? (
+        <>
+          <form
+            className="browser-address"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void perform(navigate);
+            }}
+          >
+            <button
+              type="button"
+              disabled={!tab.canGoBack}
+              aria-label="后退"
+              onClick={() => command("back")}
+            >
+              <UiIcon name="chevron-left" />
+            </button>
+            <button
+              type="button"
+              disabled={!tab.canGoForward}
+              aria-label="前进"
+              onClick={() => command("forward")}
+            >
+              <UiIcon name="chevron-right" />
+            </button>
+            <button
+              type="button"
+              aria-label={tab.loading ? "停止加载" : "刷新"}
+              onClick={() => command(tab.loading ? "stop" : "reload")}
+            >
+              <UiIcon name={tab.loading ? "close" : "refresh"} />
+            </button>
+            <input
+              aria-label="网页地址"
+              placeholder="localhost:3000 或 https://example.com"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+            />
+            <button type="submit">打开</button>
+            <button
+              type="button"
+              disabled={busy || !/^https?:/.test(tab.url)}
+              onClick={annotate}
+            >
+              截图与区域反馈
+            </button>
+            <button
+              type="button"
+              disabled={busy || !/^https?:/.test(tab.url)}
+              onClick={() => void perform(() => window.grokDesktop.clearWorkspaceBrowserSite(tab.id))}
+            >
+              清理站点数据
+            </button>
+          </form>
+          <ViewportPresetBar state={viewport} onChange={setViewport} />
+          {tab.downloadStatus && <p role="status">{tab.downloadStatus}</p>}
+          {tab.error && <p role="alert">{tab.error}</p>}
+          <ViewportFrame state={viewport} onChange={setViewport} className="browser-viewport-stage">
+            <BrowserSurface id={tab.id} />
+          </ViewportFrame>
+        </>
+      ) : (
+        <p className="empty-copy">
+          输入开发服务器地址，预览后把截图和问题加入会话，再让 Agent 修复。
+        </p>
+      )}
+
+      <UiDialog
+        open={Boolean(feedback)}
+        onOpenChange={(open) => {
+          if (!open) {
+            feedbackGeneration.current++;
+            setFeedback(undefined);
+          }
+        }}
+        title="网页视觉反馈"
+      >
+        {feedback && (
+          <>
+            <p>
+              拖动框选区域，或选择元素后点击截图。核对截图、页面文字和意见，再加入草稿，由你发送。不包含控制台日志。
+            </p>
+            <div className="preview-feedback-modes">
+              <button
+                disabled={busy}
+                aria-pressed={pickMode === "region"}
+                onClick={() => setPickMode("region")}
+              >
+                框选区域
+              </button>
+              <button
+                disabled={busy || feedback.revision === undefined}
+                title={feedback.revision === undefined ? "元素检查服务尚未连接" : undefined}
+                aria-pressed={pickMode === "element"}
+                onClick={() => setPickMode("element")}
+              >
+                选择元素
+              </button>
+            </div>
+            <div className="preview-feedback-scroll">
+              <div
+                className="preview-feedback-image"
+                onPointerDown={(event) => {
+                  if (busy) return;
+                  anchor.current = point(event);
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerCancel={() => {
+                  anchor.current = undefined;
+                }}
+                onPointerUp={(event) => {
+                  if (!anchor.current || busy) return;
+                  const end = point(event);
+                  const start = anchor.current;
+                  anchor.current = undefined;
+                  if (pickMode === "element") {
+                    pickElement(end.x, end.y);
+                    return;
+                  }
+                  setFeedback((value) => (value ? { ...value, element: undefined } : value));
+                  setRegion({
+                    x: Math.min(start.x, end.x),
+                    y: Math.min(start.y, end.y),
+                    width: Math.abs(start.x - end.x),
+                    height: Math.abs(start.y - end.y),
+                  });
+                }}
+              >
+                <img src={feedback.previewUrl} alt="当前网页截图" />
+                {region && (
+                  <div
+                    className="preview-feedback-region"
+                    style={{
+                      left: `${region.x * 100}%`,
+                      top: `${region.y * 100}%`,
+                      width: `${region.width * 100}%`,
+                      height: `${region.height * 100}%`,
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+            {feedback.element && (
+              <section className="preview-element-context" aria-label="待确认的页面元素">
+                <strong>元素上下文</strong>
+                <code>{feedback.element.selector}</code>
+                <p>{feedback.element.text || "（无可见文字）"}</p>
+              </section>
+            )}
+            <textarea
+              aria-label="网页反馈"
+              maxLength={2000}
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              placeholder="例如：这个按钮被遮住，请修复后刷新验证"
+            />
+            <button
+              disabled={busy || !comment.trim() || (pickMode === "element" && !feedback.element)}
+              onClick={addFeedback}
+            >
+              确认并加入当前会话草稿
+            </button>
+          </>
+        )}
+      </UiDialog>
+    </section>
+  );
+}
+
+function readActiveBrowser(): string {
+  try {
+    return localStorage.getItem("grok.active-browser.v1") || "";
+  } catch {
+    return "";
+  }
+}
+
+function computeVisibleBrowserBounds(element: HTMLElement): {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+} {
+  const rect = element.getBoundingClientRect();
+  const stage = element.closest<HTMLElement>(".viewport-stage");
+  const clip = stage ? stage.getBoundingClientRect() : undefined;
+
+  const left = Math.max(0, clip ? Math.max(rect.left, clip.left) : rect.left);
+  const top = Math.max(0, clip ? Math.max(rect.top, clip.top) : rect.top);
+  const right = clip ? Math.min(rect.right, clip.right) : rect.right;
+  const bottom = clip ? Math.min(rect.bottom, clip.bottom) : rect.bottom;
+  const width = Math.max(0, right - left);
+  const height = Math.max(0, bottom - top);
+
+  const blocked = Array.from(
+    document.querySelectorAll(
+      '[role="dialog"],[role="alertdialog"],[role="menu"],.ui-dialog,.modal-backdrop,.add-palette-backdrop,.toast',
+    ),
+  ).some((node) => {
+    const style = getComputedStyle(node);
+    return node.getClientRects().length > 0 && style.display !== "none" && style.visibility !== "hidden";
+  });
+
+  return {
+    x: left,
+    y: top,
+    width,
+    height,
+    visible: !blocked && element.getClientRects().length > 0 && width >= 4 && height >= 4,
+  };
+}
+
+export function BrowserSurface({ id }: { id: string }): React.JSX.Element {
+  const host = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = host.current;
+    if (!element) return;
+    let last = "";
+    let disposed = false;
+    let frame = 0;
+
+    const sync = (): void => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (disposed) return;
+        const bounds = computeVisibleBrowserBounds(element);
+        const signature = JSON.stringify(bounds);
+        if (signature === last) return;
+        last = signature;
+        void window.grokDesktop.boundsWorkspaceBrowser(id, bounds).catch(() => undefined);
+      });
+    };
+
+    const resize = new ResizeObserver(sync);
+    resize.observe(element);
+    const stage = element.closest<HTMLElement>(".viewport-stage");
+    if (stage) resize.observe(stage);
+
+    const mutations = new MutationObserver(sync);
+    mutations.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["hidden", "class", "style", "role", "aria-modal", "data-state"],
+    });
+    window.addEventListener("resize", sync);
+    window.addEventListener("scroll", sync, true);
+    sync();
+
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      resize.disconnect();
+      mutations.disconnect();
+      window.removeEventListener("resize", sync);
+      window.removeEventListener("scroll", sync, true);
+      void window.grokDesktop
+        .boundsWorkspaceBrowser(id, { x: 0, y: 0, width: 0, height: 0, visible: false })
+        .catch(() => undefined);
+    };
+  }, [id]);
+
+  return <div className="browser-surface" ref={host} aria-label="隔离网页内容" />;
 }

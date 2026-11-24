@@ -1,0 +1,60 @@
+/* Lazy-loaded styles for ExtensionsPanel.tsx */
+.extensions-panel { width: min(1080px, 96vw); height: min(780px, 94vh); }
+.extensions-panel > header > div { display: grid; gap: 3px; }
+.extensions-panel > header small { color: var(--muted); }
+.extensions-layout { display: grid; grid-template-columns: 168px minmax(0, 1fr); min-height: 0; }
+.extensions-layout > nav { display: flex; flex-direction: column; gap: 3px; padding: 12px 8px; border-right: 1px solid var(--border); background: var(--panel); }
+.extensions-layout > nav button { border: 0; border-radius: 7px; padding: 9px 11px; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
+.extensions-layout > nav button:hover, .extensions-layout > nav button.active { background: var(--hover); color: var(--text); }
+.extensions-content { min-width: 0; overflow: auto; padding: 18px; }
+.extension-tab > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.extension-tab h3 { margin: 0; }
+.extension-tab > header > div { display: flex; gap: 7px; }
+.extension-tab button, .extension-install button { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; background: var(--button-bg); color: var(--text); cursor: pointer; }
+.extension-tab button.primary { background: var(--accent); border-color: var(--accent); color: #081116; }
+.extension-tab button:disabled { opacity: .45; cursor: default; }
+.extension-install { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 14px; }
+.extension-install input { min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--text); background: var(--input-bg); }
+.extension-list { display: grid; gap: 8px; }
+.extension-list article { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
+.extension-list article > div:first-child { flex: 1; min-width: 0; }
+.extension-list article strong { margin-right: 7px; }
+.extension-list article small { display: block; margin-top: 3px; color: var(--muted); overflow-wrap: anywhere; }
+.extension-list article p { margin: 5px 0 0; color: var(--text-secondary); line-height: 1.45; }
+.extension-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.extension-search { display: grid; gap: 6px; margin-bottom: 12px; color: var(--muted); }
+.extension-search input { min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 9px; color: var(--text); background: var(--input-bg); }
+.skill-groups { display: grid; gap: 10px; }
+.skill-groups > details { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--panel) 88%, transparent); overflow: hidden; }
+.skill-groups > details > summary { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; cursor: pointer; }
+.skill-groups > details > summary span { color: var(--muted); font-size: .8125em; }
+.skill-groups > details > .extension-list { padding: 0 8px 8px; }
+.plugin-details { display: grid; gap: 4px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.extension-status, .official-badge, .compat-badge { display: inline-flex; padding: 3px 7px; border-radius: 999px; font-size: .6875em; white-space: nowrap; }
+.extension-status.enabled, .official-badge, .compat-badge.adaptable { border: 1px solid #315e4d; background: #13251e; color: #91d3b4; }
+.extension-status.disabled, .compat-badge.incompatible { border: 1px solid #5a3e42; background: #261719; color: #eaa8ad; }
+.compat-badge.partial { border: 1px solid #6b5d32; background: #292313; color: #e5ce84; }
+.extension-loading, .extension-empty { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 140px; color: var(--muted); border: 1px dashed var(--border); border-radius: 9px; }
+.market-sources { display: grid; gap: 18px; }
+.market-sources > section > header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.market-sources > section > header small { display: block; color: var(--muted); }
+.mcp-add-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--input-bg); }
+.mcp-add-form label { display: grid; gap: 5px; color: var(--text-secondary); }
+.mcp-add-form .wide { grid-column: 1 / -1; }
+.mcp-add-form input, .mcp-add-form select { min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 8px; color: var(--text); background: var(--input-bg); }
+.capability-card { padding: 13px; border-radius: 9px; margin-bottom: 13px; }
+.capability-card.ok { border: 1px solid #2c5548; background: #12221d; }
+.capability-card.failed { border: 1px solid #684044; background: #2a171a; }
+.capability-card p { margin: 6px 0 0; color: var(--text-secondary); }
+.computer-toggle { display: flex; align-items: flex-start; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.computer-toggle input { margin-top: 3px; }
+.computer-toggle span { display: grid; gap: 4px; }
+.computer-toggle small { color: var(--muted); }
+.computer-facts { display: grid; grid-template-columns: 110px 1fr; gap: 7px 12px; margin: 16px 0; }
+.computer-facts dt { color: var(--muted); }
+.computer-facts dd { margin: 0; }
+@media (max-width: 760px) { .extensions-layout { grid-template-columns: 118px minmax(0, 1fr); } }
+[data-theme-resolved="light"] .capability-card.ok, [data-theme-resolved="light"] .extension-status.enabled, [data-theme-resolved="light"] .official-badge, [data-theme-resolved="light"] .compat-badge.adaptable { background: #eaf8f1; color: #236447; }
+[data-theme-resolved="light"] .capability-card.failed, [data-theme-resolved="light"] .extension-status.disabled, [data-theme-resolved="light"] .compat-badge.incompatible { background: #fff0f1; color: #8b323a; }
+[data-theme-resolved="light"] .compat-badge.partial { background: #fff8df; color: #785d09; }
+.extension-tab button.primary { background: var(--color-primary); border-color: transparent; color: var(--color-primary-fg); font-weight: 600; }

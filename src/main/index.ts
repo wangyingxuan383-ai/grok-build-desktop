@@ -10,7 +10,7 @@ import { registerIpc } from "./ipc";
 import { installApplicationMenu } from "./app-menu";
 import { configureAutomationWorkerStorage } from "./automation-worker-storage";
 import { parseByteRange } from "./media-range";
-import { isAllowedThemeBackgroundUrl } from "./services/theme-service";
+import { buildTitleBarOverlay, isAllowedThemeBackgroundUrl, resolveWindowBackgroundColor } from "./services/theme-service";
 import { createRendererTrustPolicy, isAllowedExternalUrl, isTrustedRendererUrl, trustedDevelopmentUrl } from "./security-policy";
 import { WindowStateService } from "./services/window-state-service";
 import { explicitUserDataDirectory, INSTALLED_APP_NAME, INSTALLED_APP_USER_MODEL_ID, sourcePreviewIdentity } from "./source-preview-identity";
@@ -54,7 +54,7 @@ async function shutdownDesktop(animate=true): Promise<void> {
 
 protocol.registerSchemesAsPrivileged([
   { scheme:"grok-pet",privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
-  { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "grok-theme", privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: "grok-html", privileges: {standard:true,secure:true,supportFetchAPI:true,corsEnabled:true} },
   { scheme: "grok-media", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
@@ -126,7 +126,7 @@ else {
       const background = await controller?.currentThemeBackground();
       if (!background) return new Response("Not found", { status: 404 });
       const { readFile } = await import("node:fs/promises");
-      return new Response(await readFile(background.path), { headers: { "Content-Type": background.mimeType, "Cache-Control": "no-store" } });
+      return new Response(await readFile(background.path), { headers: { "Content-Type": background.mimeType, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
     });
     protocol.handle("grok-media", async (request) => {
       try {
@@ -169,7 +169,9 @@ else {
       minWidth: 820,
       minHeight: 620,
       show: false,
-      backgroundColor: startupTheme.mode === "custom" ? startupTheme.colors.background : startupTheme.mode === "light" || (startupTheme.mode === "system" && !nativeTheme.shouldUseDarkColors) ? "#f6f7f9" : "#0f1115",
+      titleBarStyle: "hidden",
+      titleBarOverlay: buildTitleBarOverlay(startupTheme, nativeTheme.shouldUseDarkColors),
+      backgroundColor: resolveWindowBackgroundColor(startupTheme, nativeTheme.shouldUseDarkColors),
       title: previewIdentity?.name ?? INSTALLED_APP_NAME,
       webPreferences: {
         preload: join(currentDir, "../preload/index.cjs"),
@@ -177,6 +179,15 @@ else {
         contextIsolation: true,
         sandbox: true,
       },
+    });
+    nativeTheme.on("updated", () => {
+      const window = liveMainWindow();
+      if (!window || !controller) return;
+      void controller.getTheme().then((theme) => {
+        if (!window.isDestroyed()) {
+          window.setTitleBarOverlay?.(buildTitleBarOverlay(theme, nativeTheme.shouldUseDarkColors));
+        }
+      }).catch(() => undefined);
     });
     if (restoredWindow.maximized) mainWindow.maximize();
     if (previewIdentity) {

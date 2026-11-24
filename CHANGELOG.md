@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0 — T3/Mirasim workbench V2, companion motion & CLI 1.0.92
+
+- Add integrated `ShellTitleBar`, cross-project `WorkingShelf`, 1Hz zero-idle `TurnCapsule` stall diagnostics and quick safe-permission actions, controlled `WorkspaceScriptService` lifecycle hooks (with `runOnSettle` strictly confined to isolated Git worktrees), and non-polluting per-turn Git checkpoints under `refs/grok-build/checkpoints/*`.
+- Upgrade the multi-pane stage with up to 8 named layout groups, grid presets, single-pane zoom, live secondary session panes, and 2–4 variant side-by-side model/profile comparison (`CompareLaunchPopover` / `CompareScoreBar`).
+- Add session `Snooze`, manual unread toggle, settle-on-turn-end, automatic settle on PR merge, dirty-worktree handoff (`handoffSessionToWorktree`), child-to-parent `Merge Back` context staging, and in-place `/clear` (`clearSessionContextInPlace`).
+- Upgrade Theme Engine V2 (10 curated presets, two-seed WCAG palette derivation, single-layer acrylic aurora, wallpaper palette extraction, 64 KiB sandboxed custom CSS, and `Ctrl+Alt+A` emergency reset), Web Audio `calm-chimes`, Composer V2 (`PromptQueueStack` promote-to-steer, `SecretGuardBar` local secret redaction, `> 32 KiB` paste-to-attachment, `@terminal` context), architecture-ordered `ReviewTourBar`, PR templates/stack/GitHub Issues picker, and zero-network `InlineHtmlCanvas` with responsive viewport presets.
+- Expand both Desktop Companion characters (`A` and `B`) to 15 action slots (`walk`, `poke`, `stretch`, `perch`, pixel alpha hit-testing, ballistic throw physics, autonomous bottom walk, and 2×2 sprite-sheet import).
+- Align ACP and CLI integration through Grok CLI `1.0.92+` (`x.ai/folder_trust/request`, subagent permission attribution, parameterized `rewind`, `hunk-tracker`, topic `.md` memory, and `x.ai/session/search`), harden workspace symlink/preview/remote-pairing security boundaries, and ship paired fixes in `Grok Remote 0.5.0`.
+
+Includes Android companion 0.5.0 (versionCode 17), signed with rotated certificate `7a18ebbaae01423d83824a37580a9d6ba02e791b380016de7f2fe8b86af1215b` (devices upgrading from 0.4.4 or earlier require a one-time uninstall before installing 0.5.0).
+
 ## 0.14.4 — Desktop reliability
 
 - Patch the Vite build tool to 8.2.4 without changing application runtime dependencies.

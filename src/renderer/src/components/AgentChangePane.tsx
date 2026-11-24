@@ -3,6 +3,7 @@ import type { AgentChangeIndex, AgentFileChange, NavigationIntent } from "../../
 import { UiIcon } from "../ui-icons";
 import { installDiffAnnotationActions, useDiffAnnotations } from "./DiffAnnotations";
 import type { DiffLineRange } from "./feedback-context";
+import "../styles/review-pane.css";
 
 const DiffEditor = lazy(async () => {
   (await import("../monaco")).configureMonaco();

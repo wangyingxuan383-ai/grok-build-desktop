@@ -1,0 +1,116 @@
+/* Lazy-loaded styles for ReviewPane.tsx and AgentChangePane.tsx */
+.review-pane { position: relative; flex: 0 0 auto; width: clamp(420px, 42vw, 760px); min-width: 420px; max-width: 760px; min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: -12px 0 30px #0002; container-type: inline-size; container-name: right-dock; }
+.review-header { flex: 0 0 var(--header-height, 44px); height: var(--header-height, 44px); display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; border-bottom: 1px solid var(--border); }
+.review-header > div { min-width: 0; display: grid; gap: 1px; }
+.review-header strong { color: var(--text-strong); font-size: .86em; }
+.review-header span { color: var(--muted); font-size: .64em; }
+.review-scopes { flex: 0 0 auto; display: flex; gap: 2px; padding: 7px 8px 4px; overflow-x: auto; }
+.review-scopes button { flex: 0 0 auto; min-width: max-content; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: .65em; }
+.review-scopes button:hover, .review-scopes button.active { background: var(--hover); color: var(--text); }
+.review-scopes button.active { box-shadow: inset 0 -1px var(--accent); }
+.review-reference { margin: 4px 9px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--input-bg); color: var(--text); font-size: .7em; }
+.review-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; padding: 5px 9px 7px; border-bottom: 1px solid var(--border); }
+.review-toolbar button, .review-file-actions button, .review-hunk header button, .review-comment-editor button { padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: .66em; }
+.review-toolbar button { display: flex; align-items: center; gap: 5px; }
+.review-toolbar button:hover, .review-file-actions button:hover, .review-hunk header button:hover { background: var(--hover); color: var(--text); }
+.review-body { min-width: 0; min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 34%); overflow: hidden; }
+.review-selected-file { min-width: 0; min-height: 0; overflow: auto; border-right: 1px solid var(--border); }
+.review-file-detail { min-width: 0; width: 100%; }
+.review-file-detail > header { position: sticky; z-index: 2; top: 0; min-width: 0; display: grid; gap: 7px; padding: 9px 10px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 96%, transparent); }
+.review-file-detail > header > div:first-child { min-width: 0; display: grid; gap: 2px; }
+.review-file-detail > header strong { max-width: 100%; overflow: hidden; font: .7em "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.review-file-detail > header span { color: var(--muted); font-size: .63em; }
+.review-file-detail .review-file-actions { padding: 0; }
+.review-file-navigator { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: color-mix(in srgb, var(--main) 45%, transparent); }
+.review-file-search { display: flex; align-items: center; gap: 6px; margin: 8px; padding: 0 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--input-bg); color: var(--muted); }
+.review-file-search input { min-width: 0; width: 100%; padding: 7px 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: .68em; }
+.review-file-list { min-height: 0; overflow: auto; padding: 0 6px; }
+.review-file-summary { width: 100%; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 7px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; text-align: left; }
+.review-file-summary:hover, .review-file-summary.active { background: var(--hover); color: var(--text); }
+.review-file-summary.active { box-shadow: inset 2px 0 var(--accent); }
+.review-file-summary > span:nth-child(2) { min-width: 0; display: grid; gap: 1px; }
+.review-file-summary strong, .review-file-summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-file-summary strong { font: .67em "Cascadia Code", Consolas, monospace; }
+.review-file-summary small { color: var(--muted); font: .57em "Cascadia Code", Consolas, monospace; }
+.review-file-navigator > footer { padding: 7px 9px; border-top: 1px solid var(--border); color: var(--muted); font-size: .61em; }
+.review-files { min-height: 0; flex: 1; overflow: auto; padding-bottom: 32px; }
+.review-file { border-bottom: 1px solid var(--border); }
+.review-file > summary { display: grid; grid-template-columns: 19px minmax(0, 1fr) auto; align-items: center; gap: 7px; min-height: 37px; padding: 5px 10px; cursor: pointer; list-style: none; }
+.review-file > summary::-webkit-details-marker { display: none; }
+.review-file > summary:hover { background: var(--hover); }
+.review-file-status { font-size: .68em; font-weight: 750; text-align: center; }
+.review-file-status.kind-added, .review-file-status.kind-untracked { color: var(--success); }
+.review-file-status.kind-deleted, .review-file-status.kind-conflicted { color: var(--danger); }
+.review-file-status.kind-renamed { color: var(--warning); }
+.review-file-name { overflow: hidden; color: var(--text-secondary); font-family: "Cascadia Code", Consolas, monospace; font-size: .68em; text-overflow: ellipsis; white-space: nowrap; }
+.diff-stat { display: flex; gap: 5px; font-size: .62em; font-style: normal; }
+.diff-stat b { color: var(--success); }.diff-stat i { color: var(--danger); font-style: normal; }
+.review-file-actions { display: flex; flex-wrap: wrap; gap: 5px; padding: 5px 10px 8px 36px; }
+.review-hunk { margin: 0 7px 9px; overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: color-mix(in srgb, var(--main) 78%, transparent); }
+.review-hunk > header { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 5px 7px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel-2) 88%, transparent); }
+.review-hunk > header code { overflow: hidden; color: var(--muted); font-size: .61em; text-overflow: ellipsis; white-space: nowrap; }
+.review-hunk > header span { display: flex; gap: 4px; }
+.review-lines { min-width: 0; max-width: 100%; overflow-x: auto; }
+.review-line { position: relative; display: grid; grid-template-columns: 20px 32px 32px minmax(300px, 1fr); min-height: 21px; font: .67em/21px "Cascadia Code", Consolas, monospace; }
+.review-line.addition { background: color-mix(in srgb, var(--success) 11%, transparent); }.review-line.deletion { background: color-mix(in srgb, var(--danger) 11%, transparent); }
+.review-line > code { padding: 0 8px; color: var(--text-secondary); white-space: pre; }
+.review-line .line-number { padding: 0 4px; border: 0; border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent); background: transparent; color: var(--muted); cursor: pointer; font: inherit; text-align: right; }
+.review-comment-button { visibility: hidden; padding: 0; border: 0; background: var(--accent); color: #fff; cursor: pointer; font-weight: 700; }
+.review-line:hover .review-comment-button, .review-comment-button:focus-visible { visibility: visible; }
+.review-empty { min-height: 160px; display: grid; place-content: center; justify-items: center; gap: 7px; padding: 18px; color: var(--muted); font-size: .72em; text-align: center; }
+.review-empty.compact { min-height: auto; padding: 10px; }
+.review-empty svg { color: var(--success); }
+.review-comment-editor { position: absolute; z-index: 7; right: 9px; bottom: 9px; left: 9px; display: grid; gap: 7px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--elevated); box-shadow: 0 16px 44px var(--shadow); }
+.review-comment-editor strong { overflow: hidden; font: .68em "Cascadia Code", Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.review-comment-editor textarea { min-height: 70px; resize: vertical; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); }
+.review-comment-editor > div { display: flex; justify-content: flex-end; gap: 5px; }
+
+.agent-change-pane { container-type: inline-size; }
+.agent-change-pane .review-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 13px; border-bottom: 1px solid var(--border); }
+.agent-change-pane .review-header > div { display: grid; gap: 2px; }
+.agent-change-pane .review-header span { color: var(--muted); font-size: .7em; }
+.review-file-search { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in srgb, var(--surface) 78%, transparent); color: var(--muted); }
+.review-file-search input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); }
+.agent-change-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 2px; padding: 6px; border-right: 1px solid var(--border); }
+.agent-change-list > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); cursor: pointer; text-align: left; }
+.agent-change-list > button:hover, .agent-change-list > button.active { background: var(--hover); color: var(--text); }
+.agent-change-list > button.failed .agent-change-path { color: var(--danger); }
+.agent-change-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; font-size: .78em; }
+.agent-change-tag { flex: none; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 18%, transparent); font-size: .66em; }
+.agent-change-tag i, .agent-change-stats i { color: var(--success); font-style: normal; }
+.agent-change-tag b, .agent-change-stats b { color: var(--danger); font-weight: 600; }
+.agent-change-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.agent-change-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .82em; }
+.agent-change-header > span { flex: none; display: flex; align-items: center; gap: 6px; }
+.agent-change-actions button { padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: .66em; white-space: nowrap; }
+.agent-change-actions button:hover, .agent-change-actions button[aria-pressed="true"] { background: var(--hover); color: var(--text); }
+.agent-change-stats { display: inline-flex; gap: 5px; font-size: .72em; font-style: normal; }
+.agent-change-note { margin: 9px 12px; padding: 8px 10px; border-radius: 7px; background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--text-secondary); font-size: .76em; }
+.agent-change-note.failed { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.agent-change-after { margin: 0 12px 12px; max-height: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .76em; }
+.agent-change-pane .review-body { display: grid; grid-template-columns: minmax(170px, 30%) minmax(0, 1fr); min-height: 0; }
+.agent-change-pane .review-selected-file { display: flex; flex-direction: column; overflow: hidden; }
+.agent-change-pane .review-selected-file > div { flex: 1 1 auto; min-width: 0; min-height: 0; }
+@container (max-width: 620px) {
+  .agent-change-pane .review-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 30%) minmax(0, 1fr); }
+  .agent-change-pane .agent-change-list { border-right: 0; border-bottom: 1px solid var(--border); }
+  .agent-change-pane .agent-change-header { align-items: flex-start; }
+  .agent-change-pane .agent-change-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
+.review-pane, .agent-change-pane {
+  background: var(--color-frame); border: 1px solid var(--color-border); border-radius: var(--radius-xl); overflow: hidden; box-shadow: none;
+}
+.window-frame-root.background-window :is(.review-pane, .agent-change-pane),
+.window-frame-root.has-aurora :is(.review-pane, .agent-change-pane) {
+  background: var(--surface-glass-pane); border-color: var(--border-glass-hairline);
+}
+.review-pane, .agent-change-pane { border-left-width: 1px; }
+@media (max-width: 999px) {
+  .review-pane { position: absolute; z-index: 24; top: var(--frame-gap); right: var(--frame-gap); bottom: var(--frame-gap); box-shadow: var(--shadow-overlay); }
+}
+@media (max-width: 620px) { .review-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(150px, 34%); }.review-file-navigator { border-top: 1px solid var(--border); }.review-selected-file { border-right: 0; } }
+@container right-dock (max-width: 620px) {
+  .review-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(132px, 32%); }
+  .review-selected-file { border-right: 0; }
+  .review-file-navigator { min-height: 0; border-top: 1px solid var(--border); overflow: auto; }
+}

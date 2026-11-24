@@ -12,7 +12,7 @@ export interface RemoteGatewayState {
   pairing?: { uri: string; code: string; expiresAt: string }; pending: RemotePairRequest[]; devices: RemoteDevice[]; error?: string;
 }
 export interface RemoteSession {
-  id: string; cwd: string; title: string; projectName: string; updatedAt: string; archived?: boolean;
+  id: string; cwd: string; workspaceId?: string; title: string; projectName: string; updatedAt: string; archived?: boolean;
   status: LiveStatus | "cold"; modelId?: string; mode?: string; canSend: boolean;
   parentSessionId?:string;
   preview?:string;
@@ -35,7 +35,7 @@ export interface RemoteSnapshot {
   /** Goals/workflows of this session, latest window only; absent from Desktops without native runs. */
   nativeRuns?: import("./native-runs").NativeRunSnapshot[];
 }
-export interface RemoteRuntime { revision:string; modelId?:string; providerId?:string;effort:ReasoningEffort;mode:SessionMode;models:ModelInfo[];mutable:boolean;reason?:string;interjectSupported?:boolean;commands:Array<{name:string;description?:string}> }
+export interface RemoteRuntime { revision:string; modelId?:string; providerId?:string;effort:ReasoningEffort;mode:SessionMode;models:ModelInfo[];mutable:boolean;reason?:string;modelSelectionRequired?:string;interjectSupported?:boolean;commands:Array<{name:string;description?:string}> }
 export const REMOTE_MUTATIONS=["image.create","image.rename","image.submit","code.image.submit","image.cancel","image.delete","image.record.delete","automation.create","automation.update","automation.pause","automation.delete","automation.run","automation.cancel","automation.confirm","inbox.read","computer.permission","computer.risk","task.cancel","account.switch","notification.register","notification.unregister","session.compaction","native-run.control","native-run.dismiss"] as const;
 export type RemoteMutationKind=typeof REMOTE_MUTATIONS[number];
 export interface RemoteMutation {kind:RemoteMutationKind;target?:string;data?:Record<string,unknown>}

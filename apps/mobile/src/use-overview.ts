@@ -24,21 +24,25 @@ export function useOverview(client: ReturnType<typeof useRemote>) {
     const identity = host ? JSON.stringify([host.fingerprint, host.id, host.host, host.token]) : "";
     const owner = useRef(identity), mounted = useRef(false);
     owner.current = identity;
-    const flight = useRef<{ identity: string; promise: Promise<void> } | undefined>(undefined);
+    const valueRef = useRef(value);
+    valueRef.current = value;
+    const flight = useRef<{ identity: string; promise: Promise<Overview | undefined> } | undefined>(undefined);
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-    const refresh = useCallback((): Promise<void> => {
-        if (!host || !mounted.current || owner.current !== identity) return Promise.resolve();
+    const refresh = useCallback((): Promise<Overview | undefined> => {
+        if (!host || !mounted.current || owner.current !== identity) return Promise.resolve(valueRef.current);
         if (flight.current?.identity === identity) return flight.current.promise;
         const current = () => mounted.current && owner.current === identity;
         const promise = (async () => {
             try {
                 const result = await client.query<Overview>("overview");
-                if (!current()) return;
+                if (!current()) return valueRef.current;
                 setValue(result);
                 setError("");
                 void cacheWrite(host.fingerprint + ":overview", result).catch(() => undefined);
+                return result;
             } catch (e) {
                 if (current()) setError(e instanceof Error ? e.message : String(e));
+                return valueRef.current;
             } finally {
                 if (current()) setLoading(false);
             }

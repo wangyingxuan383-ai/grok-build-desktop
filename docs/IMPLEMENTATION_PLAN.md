@@ -1,5 +1,11 @@
 # Development roadmap
 
+## 0.15.0 release
+
+- [x] Bump Desktop to 0.15.0 and Android to 0.5.0/code 17; rotate the private companion signing certificate and align verification gates.
+- [x] Ship T3/Mirasim workbench V2, Theme Engine V2, Composer V2, multi-pane stage & Compare Mode, controlled workspace scripts, hidden Git checkpoints, 15-action Desktop Companion packs, Grok CLI 1.0.92+ capabilities, and full-stack security/audit fixes.
+- [x] Pass Desktop typecheck, 217 test suites (1,506 tests), renderer chunk budgets, packaged/live Electron UI & pet gates, and Android companion checks.
+
 ## 0.14.4 release
 
 - [x] Bump Desktop to 0.14.4 and Android to 0.4.4/code 16; retain the existing signing identity.

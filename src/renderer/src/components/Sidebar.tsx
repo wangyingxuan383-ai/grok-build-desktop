@@ -9,6 +9,7 @@ import { ActionMenu, type UiAction } from "./ui/ActionMenu";
 import { IconButton } from "./ui/Button";
 import { ModeSwitch, type AppMode } from "./ModeSwitch";
 import { UpdateIndicator } from "./UpdateIndicator";
+import { WorkingShelf } from "./WorkingShelf";
 import { shortcutFor } from "../../../shared/shortcuts";
 
 const LazyFileExplorer = lazy(() => import("./FileWorkbench").then((module) => ({ default: module.FileExplorer })));
@@ -35,6 +36,7 @@ export function Sidebar(props: {
   activeSessionId: string;
   activeCodexId: string;
   activeClaudeId: string;
+  splitSessionIds?: string[];
   search: string;
   busy: boolean;
   activeView: WorkbenchView;
@@ -45,6 +47,8 @@ export function Sidebar(props: {
   onNew(): void;
   onOpen(session: SessionSummary): void;
   onOpenConversationTarget(target: { cwd: string; sessionId: string }): void;
+  onOpenInSplit?(session: SessionSummary): void;
+  onSettleSession?(session: SessionSummary): void | Promise<void>;
   onOpenCodex(session: CodexSessionSummary): void;
   onOpenClaude(session: ClaudeSessionSummary): void;
   onChooseWorkspace(): void;
@@ -77,6 +81,7 @@ export function Sidebar(props: {
   const [archivesOpen, setArchivesOpen] = useState<Record<string, boolean>>({});
   const [refreshTick, setRefreshTick] = useState(0);
   const remote = useProjectSessions(props.workspaces, activeCwd, expanded, props.search, refreshTick);
+  const crossProjectSessions = useMemo(() => Object.values(remote).flat(), [remote]);
   // Row actions in a non-active project must refresh that project's fetched list too.
   const afterAction = (action: () => unknown) => () => { void Promise.resolve(action()).finally(() => setRefreshTick((value) => value + 1)); };
 
@@ -93,7 +98,7 @@ export function Sidebar(props: {
     const known = props.workspaces.some((workspace) => samePath(workspace.cwd, activeCwd));
     const withActive = !known && activeCwd ? [{ projectId: `active:${activeCwd}`, cwd: activeCwd, displayPath: activeCwd, canonicalPath: activeCwd, name: shortName(activeCwd), exists: true, hidden: false, pinned: false, sources: ["recent" as const], grokSessions: props.sessions.length, codexSessions: 0, claudeSessions: 0, draftCount: 0, activeSessions: 0 }, ...props.workspaces] : props.workspaces;
     const rows = withActive.filter((workspace) => !workspace.hidden && (workspace.exists || workspace.grokSessions > 0 || workspace.sources.some((source) => source === "pinned" || source === "recent")));
-    return rows.sort((left, right) => Number(samePath(right.cwd, activeCwd)) - Number(samePath(left.cwd, activeCwd)) || Number(right.pinned) - Number(left.pinned) || (right.lastUsedAt ?? "").localeCompare(left.lastUsedAt ?? ""));
+    return rows.sort((left, right) => Number(right.pinned) - Number(left.pinned) || (right.lastUsedAt ?? "").localeCompare(left.lastUsedAt ?? "") || left.name.localeCompare(right.name));
   }, [props.workspaces, props.sessions.length, activeCwd]);
   const visibleProjects = showAllProjects ? projects : projects.filter((workspace, index) => index < VISIBLE_PROJECTS || samePath(workspace.cwd, activeCwd));
   const hiddenCount = projects.length - visibleProjects.length;
@@ -118,6 +123,17 @@ export function Sidebar(props: {
   const explorer = props.activeView === "files" || props.activeView === "source-control" || props.activeView === "worktrees";
   const onError = props.dialogs.setError;
 
+  const handleOpenInSplit = useCallback((session: SessionSummary) => {
+    if (props.onOpenInSplit) props.onOpenInSplit(session);
+    else window.dispatchEvent(new CustomEvent("grok:open-in-split", { detail: { kind: "session", workspace: session.cwd, id: session.id, title: session.title } }));
+  }, [props.onOpenInSplit]);
+
+  const handleSettle = useCallback(async (session: SessionSummary) => {
+    if (props.onSettleSession) await props.onSettleSession(session);
+    else await window.grokDesktop.settleSession?.(session.id, true);
+    setRefreshTick((value) => value + 1);
+  }, [props.onSettleSession]);
+
   const sessionRow = (session: SessionSummary, child = false): React.JSX.Element => (
     <SessionListRow
       key={session.id}
@@ -126,6 +142,8 @@ export function Sidebar(props: {
       active={props.activeSessionId === session.id}
       menuOpen={openSessionMenu === session.id}
       onOpen={() => (samePath(session.cwd, activeCwd) ? props.onOpen(session) : props.onOpenConversationTarget({ cwd: session.cwd, sessionId: session.id }))}
+      onOpenInSplit={() => handleOpenInSplit(session)}
+      onSettle={() => void handleSettle(session)}
       onMenu={(open) => setOpenSessionMenu((current) => (open ? session.id : current === session.id ? "" : current))}
       onPin={afterAction(() => props.onPin(session))}
       onArchive={afterAction(() => props.onArchive(session))}
@@ -211,6 +229,16 @@ export function Sidebar(props: {
           </div>
         ) : (
           <>
+            <WorkingShelf
+              sessions={props.sessions}
+              workspaces={props.workspaces}
+              activeSessionId={props.activeSessionId}
+              splitSessionIds={props.splitSessionIds}
+              crossProjectSessions={crossProjectSessions}
+              onSelectSession={(session) => (samePath(session.cwd, activeCwd) ? props.onOpen(session) : props.onOpenConversationTarget({ cwd: session.cwd, sessionId: session.id }))}
+              onOpenInSplit={handleOpenInSplit}
+              onSettleSession={handleSettle}
+            />
             <div className="sb-section-head">
               <span>项目</span>
               <IconButton icon="plus" size="sm" label="添加项目文件夹" onClick={props.onChooseWorkspace} />
@@ -334,7 +362,7 @@ function readExpanded(): Record<string, boolean> {
   } catch { return {}; }
 }
 
-function shortName(value: string): string { return value.split(/[\/]/).filter(Boolean).at(-1) || value; }
+function shortName(value: string): string { return value.split(/[\\/]/).filter(Boolean).at(-1) || value; }
 
 function samePath(left: string, right: string): boolean {
   return left.replace(/[\\/]+$/, "").toLocaleLowerCase() === right.replace(/[\\/]+$/, "").toLocaleLowerCase();

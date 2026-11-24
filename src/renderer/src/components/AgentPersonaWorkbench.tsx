@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentDefinition, DefinitionMutationResult, DefinitionReloadResult, DefinitionSaveConflict, DefinitionSource, PersonaDefinition, ReasoningEffort } from "../../../shared/types";
+import "../styles/agent-persona-workbench.css";
 
 const MonacoEditor = lazy(async () => {
   (await import("../monaco")).configureMonaco();

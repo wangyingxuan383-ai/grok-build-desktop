@@ -78,7 +78,7 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
             {sheet === "context" ? <ContextPanel client={client} theme={theme} close={close} forked={onForked} /> : null}
             {sheet === "usage" ? <UsagePanel client={client} theme={theme} /> : null}
             {sheet === "review" ? <QueryPanel client={client} theme={theme} kind="review" onFile={openFile} /> : null}
-            {sheet === "files" ? <>{directory ? <Button compact title="‹ 项目根目录" theme={theme} onPress={() => setDirectory("")} /> : null}<QueryPanel client={client} theme={theme} kind="files" params={{ path: directory }} onFile={(path, kind) => kind === "directory" ? setDirectory(path) : openFile(path)} onReference={(path, kind) => { const workspace = client.options?.workspaces.find(w => w.path === selected?.cwd); if (!workspace) { client.setError("引用项目尚未同步，请刷新项目列表"); return; } client.setComposer({ ...client.composer, references: [...(client.composer.references || []), { workspaceId: workspace.id, path, kind }] }); client.setNotice("已加入本条消息的文件 / 文件夹引用"); }} /></> : null}
+            {sheet === "files" ? <>{directory ? <Button compact title="‹ 项目根目录" theme={theme} onPress={() => setDirectory("")} /> : null}<QueryPanel client={client} theme={theme} kind="files" params={{ path: directory }} onFile={(path, kind) => kind === "directory" ? setDirectory(path) : openFile(path)} onReference={(path, kind) => { if ((client.composer.references?.length ?? 0) >= 12) { client.setError("每条消息最多添加 12 项文件或目录引用"); return; } const norm = (v?: string) => (v || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(); const workspace = (selected?.workspaceId ? client.options?.workspaces.find(w => w.id === selected.workspaceId) : undefined) ?? client.options?.workspaces.find(w => w.path && norm(w.path) === norm(selected?.cwd)); if (!workspace) { client.setError("引用项目尚未同步，请刷新项目列表"); return; } client.setComposer({ ...client.composer, references: [...(client.composer.references || []), { workspaceId: workspace.id, path, kind }] }); client.setNotice("已加入本条消息的文件 / 文件夹引用"); }} /></> : null}
             {sheet === "manage" ? <ManageSheet theme={theme} client={client} selected={selected} rows={rows} actionsDisabled={actionsDisabled} preferences={preferences} setPreferences={setPreferences} open={go} close={close} density={density} setDensity={setDensity} /> : null}
             {sheet === "details" ? (<Card theme={theme}>
                 <Text style={[ui.hint, { color: theme.muted }]}>电脑项目目录</Text>
@@ -90,11 +90,15 @@ export function SheetHost({ sheet, setSheet, openSheet, theme, client, selected,
               </Card>) : null}
             {sheet === "find" ? <SearchPanel client={client} theme={theme} close={close} /> : null}
             {sheet === "pending" ? (client.snapshot?.pending.length ? client.snapshot.pending.map((event) => <Interaction key={event.type === "permission" ? String(event.request.requestId) : "requestId" in event ? String(event.requestId) : event.type} event={event} theme={theme} disabled={actionsDisabled || selected?.canSend === false} submit={(action, extra) => void client.perform(action, extra)} />) : <Text style={{ color: theme.muted }}>目前没有待处理请求。</Text>) : null}
-            {sheet === "queue" ? <>
-                <Button compact danger title="清空未执行队列" theme={theme} disabled={actionsDisabled || !queue.length} onPress={() => confirm("清空队列？", "当前回合继续执行，仅移除未执行消息。", () => void client.perform("queue-clear"))} />
-                {queue.map((entry) => <QueueEditor key={entry.id} entry={entry} theme={theme} client={client} count={queue.length} />)}
-                {!queue.length ? <Text style={{ color: theme.muted }}>队列为空。</Text> : null}
-              </> : null}
+            {sheet === "queue" ? (() => {
+                const firstQueued = queue.find((e) => e.state === "queued")?.position ?? 0;
+                const maxPos = queue.reduce((m, e) => Math.max(m, e.position + 1), queue.length);
+                return <>
+                  <Button compact danger title="清空未执行队列" theme={theme} disabled={actionsDisabled || !queue.some((e) => e.state === "queued")} onPress={() => confirm("清空队列？", "当前回合继续执行，仅移除未执行消息。", () => void client.perform("queue-clear"))} />
+                  {queue.map((entry) => <QueueEditor key={entry.id} entry={entry} theme={theme} client={client} count={maxPos} minQueuedPosition={firstQueued} />)}
+                  {!queue.length ? <Text style={{ color: theme.muted }}>队列为空。</Text> : null}
+                </>;
+              })() : null}
             {sheet === "children" ? (children.length ? children.map((child) => <SessionRow key={child.id} session={child} theme={theme} onOpen={() => openSession(child.id, true)} />) : <Text style={{ color: theme.muted }}>此会话还没有子会话。</Text>) : null}
           </ScrollView>
         </SafeAreaView>
@@ -118,6 +122,7 @@ function ManageSheet({ theme, client, selected, rows, actionsDisabled, preferenc
     theme: Theme; client: Client; selected?: RemoteSession; rows: ConversationRow[]; actionsDisabled: boolean; preferences: Preferences; setPreferences: React.Dispatch<React.SetStateAction<Preferences>>; open: (sheet: Sheet) => void; close: () => void; density: Density; setDensity: (value: Density) => void;
 }) {
     const [title, setTitle] = useState(selected?.title || "");
+    useEffect(() => { setTitle(selected?.title || ""); }, [selected?.id, selected?.title]);
     const id = client.sessionId, favorite = preferences.favorites.includes(id), muted = preferences.mutedSessions.includes(id);
     const canRename = !actionsDisabled && !!title.trim() && title.trim() !== selected?.title && !!client.options?.capabilities.includes("session.rename");
     return <>

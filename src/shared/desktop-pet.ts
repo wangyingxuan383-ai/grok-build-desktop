@@ -1,11 +1,15 @@
 /** Local desktop companion contracts. No command, path or credential capability is exposed. */
-export type PetClipId = "idle" | "waiting" | "pickup" | "working" | "success" | "error" | "pat" | "wave" | "sleepy" | "enter" | "exit";
+export type PetClipId = "idle" | "waiting" | "pickup" | "working" | "success" | "error" | "pat" | "wave" | "sleepy" | "enter" | "exit" | "walk" | "poke" | "stretch" | "perch";
+export type PetPhysicsMode = "nearby" | "gravity" | "off";
 export interface DesktopPetSettings {
     enabled: boolean;
     skinId: string;
     size: 128 | 192 | 256;
     mode: "companion" | "status";
     idleActions: boolean;
+    roaming?: boolean;
+    perchOnWindow?: boolean;
+    physics?: PetPhysicsMode;
     reduceMotion: boolean;
     locked: boolean;
     compatibility: boolean;
@@ -18,9 +22,31 @@ export interface DesktopPetSettings {
         y: number;
     };
 }
-export const DEFAULT_DESKTOP_PET: DesktopPetSettings = { enabled: true, skinId: "b", size: 192, mode: "companion", idleActions: true, reduceMotion: false, locked: false, compatibility: false, shortcut: "", customScale: 1, footAnchor: 1 };
+export const DEFAULT_DESKTOP_PET: DesktopPetSettings = {
+    enabled: true,
+    skinId: "b",
+    size: 192,
+    mode: "companion",
+    idleActions: true,
+    roaming: true,
+    perchOnWindow: false,
+    physics: "nearby",
+    reduceMotion: false,
+    locked: false,
+    compatibility: false,
+    shortcut: "",
+    customScale: 1,
+    footAnchor: 1,
+};
 export function desktopPetSettings(value?: Partial<DesktopPetSettings>): DesktopPetSettings {
-    return { ...DEFAULT_DESKTOP_PET, ...value, enabled: value?.enabled !== false };
+    return {
+        ...DEFAULT_DESKTOP_PET,
+        ...value,
+        enabled: value?.enabled !== false,
+        roaming: value?.roaming ?? DEFAULT_DESKTOP_PET.roaming,
+        perchOnWindow: value?.perchOnWindow ?? DEFAULT_DESKTOP_PET.perchOnWindow,
+        physics: value?.physics ?? DEFAULT_DESKTOP_PET.physics,
+    };
 }
 export interface PetFrame {
     x: number;
@@ -38,6 +64,8 @@ export interface PetClip {
     referenceHeight: number;
     frames: PetFrame[];
     loop: boolean;
+    /** Optional frame index where looping restarts after an intro sequence (e.g. drowsy -> yawn -> loop sleep). */
+    loopFrom?: number;
 }
 export interface PetSkin {
     id: string;
@@ -45,6 +73,17 @@ export interface PetSkin {
     author: string;
     license: string;
     clips: Partial<Record<PetClipId, PetClip>>;
+}
+export interface PetSpriteSheetImportInput {
+    path?: string;
+    rows: number;
+    cols: number;
+    clip?: PetClipId;
+    targetSkinId?: string;
+    name?: string;
+    frameDurationMs?: number;
+    loop?: boolean;
+    loopFrom?: number;
 }
 export interface PetTarget {
     kind: "session" | "image" | "automation";
@@ -69,7 +108,11 @@ export interface PetSnapshot {
     theme: "light" | "dark";
     warning?: string;
     doubleClickTime?: number;
+    pointerInteractive?: boolean;
     gesture?: "dragging" | "falling" | "landing" | "settling";
+    tilt?: number;
+    facing?: "left" | "right";
+    speech?: string;
     visibleTop?: number;
     visibleLeft?: number;
     visibleRight?: number;
@@ -99,6 +142,7 @@ export type PetAction = {
 } | {
     type: "interact";
     part: "head" | "body";
+    gesture?: "click" | "stroke" | "poke";
 } | {
     type: "navigate";
     target?: {
@@ -113,7 +157,7 @@ export interface PetApi {
     action(action: PetAction): Promise<void>;
     subscribe(listener: (snapshot: PetSnapshot) => void): () => void;
 }
-export const PET_CLIPS: PetClipId[] = ["idle", "waiting", "pickup", "working", "success", "error", "pat", "wave", "sleepy", "enter", "exit"];
+export const PET_CLIPS: PetClipId[] = ["idle", "waiting", "pickup", "working", "success", "error", "pat", "wave", "sleepy", "enter", "exit", "walk", "poke", "stretch", "perch"];
 export function validateDesktopPetSettings(value: unknown): asserts value is DesktopPetSettings {
     if (!value || typeof value !== "object" || Array.isArray(value))
         throw Error("桌宠设置无效");
@@ -124,6 +168,11 @@ export function validateDesktopPetSettings(value: unknown): asserts value is Des
     for (const key of ["enabled", "idleActions", "reduceMotion", "locked", "compatibility"])
         if (typeof row[key] !== "boolean")
             throw Error("桌宠开关无效");
+    for (const key of ["roaming", "perchOnWindow"])
+        if (row[key] !== undefined && typeof row[key] !== "boolean")
+            throw Error("桌宠开关无效");
+    if (row.physics !== undefined && !["nearby", "gravity", "off"].includes(String(row.physics)))
+        throw Error("桌宠物理设置无效");
     if (typeof row.skinId !== "string" || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(row.skinId))
         throw Error("形象身份无效");
     if (![128, 192, 256].includes(row.size as number) || !["companion", "status"].includes(String(row.mode)))

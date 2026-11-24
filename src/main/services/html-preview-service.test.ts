@@ -16,3 +16,29 @@ it("bounds preview storage by size, count and age",()=>{
  const latest=service.register("latest");now=11*60_000;expect(service.response(latest).status).toBe(404);
  expect(()=>service.register("x".repeat(20*1024*1024+1))).toThrow("上限");
 });
+it("blocks sibling and parent asset requests when root is undefined for standalone external HTML",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),"grok-html-standalone-"));
+ try{
+  const htmlPath=join(dir,"standalone.html");
+  await writeFile(join(dir,"secret.json"),'{"token":"private"}');
+  const service=new HtmlPreviewService();
+  for(const url of [
+   service.register('<!doctype html><head></head><script>fetch("./secret.json")</script>',htmlPath,{root:undefined}),
+   service.register('<!doctype html><head></head><script>fetch("./secret.json")</script>',{path:htmlPath,root:undefined}),
+  ]){
+   expect((await service.request(`${url}/assets/secret.json`)).status).toBe(404);
+   expect((await service.request(`${url}/assets/%2e%2e%2ffoo.json`)).status).toBe(404);
+  }
+ }finally{await rm(dir,{recursive:true,force:true})}
+});
+it("injects <base> into the real document head without matching <head> inside inline scripts or comments",async()=>{
+ const root=await mkdtemp(join(tmpdir(),"grok-html-head-inject-"));
+ try{
+  const service=new HtmlPreviewService();
+  const html='<!doctype html><!-- <head>comment</head> --><html><script>const tpl = "<head><base href=\'https://evil.invalid/\'></head>";</script><head data-x=">"><title>Demo</title></head><body>ok</body></html>';
+  const url=service.register(html,join(root,"index.html"));
+  const rendered=await service.response(url).text();
+  expect(rendered).toContain(`const tpl = "<head><base href='https://evil.invalid/'></head>";`);
+  expect(rendered).toContain(`<head data-x=">"><base href="${url}/assets/"><title>Demo</title>`);
+ }finally{await rm(root,{recursive:true,force:true})}
+});

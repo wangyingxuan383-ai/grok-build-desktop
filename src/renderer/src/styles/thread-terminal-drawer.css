@@ -1,0 +1,246 @@
+/* Bottom workspace terminal drawer (lazy-loaded via ThreadTerminalDrawer.tsx). */
+.thread-terminal-drawer {
+  position: relative;
+  flex: 0 0 var(--drawer-height, 240px);
+  height: var(--drawer-height, 240px);
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--color-border);
+  background: var(--terminal-bg, var(--color-window));
+  color: var(--color-fg);
+}
+
+.thread-terminal-resizer {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  z-index: 12;
+  cursor: ns-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.thread-terminal-resizer::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: width 0.12s ease, background-color 0.12s ease;
+}
+
+.thread-terminal-resizer::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: transparent;
+  transition: background-color 0.12s ease;
+}
+
+.thread-terminal-resizer:hover::before,
+.thread-terminal-resizer:focus-visible::before,
+.thread-terminal-resizer.is-dragging::before {
+  width: 52px;
+  background: var(--color-accent);
+}
+
+.thread-terminal-resizer:hover::after,
+.thread-terminal-resizer:focus-visible::after,
+.thread-terminal-resizer.is-dragging::after {
+  background: color-mix(in srgb, var(--color-accent) 65%, transparent);
+}
+
+.thread-terminal-header {
+  flex: 0 0 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-frame);
+}
+
+.thread-terminal-lead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.thread-terminal-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-right: 4px;
+  color: var(--color-fg-subtle);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  flex: none;
+  user-select: none;
+}
+
+.thread-terminal-tablist {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.thread-terminal-tablist::-webkit-scrollbar {
+  display: none;
+}
+
+.thread-terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 3px 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-subtle);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  flex: none;
+  cursor: pointer;
+}
+
+.thread-terminal-tab:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+
+.thread-terminal-tab.is-shown {
+  background: var(--color-selected);
+  color: var(--color-fg);
+}
+
+.thread-terminal-tab.is-focused {
+  border-color: var(--color-border-strong);
+}
+
+.thread-terminal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-success);
+  flex: none;
+}
+
+.thread-terminal-dot.is-exited {
+  background: var(--color-fg-subtlest);
+}
+
+.thread-terminal-tab-title {
+  line-height: 1;
+}
+
+.thread-terminal-tab-close {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  color: var(--color-fg-subtlest);
+}
+
+.thread-terminal-tab-close:hover {
+  background: var(--color-hover);
+  color: var(--color-fg);
+}
+
+.thread-terminal-new-btn {
+  width: 22px;
+  height: 22px;
+  flex: none;
+}
+
+.thread-terminal-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.thread-terminal-action-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.thread-terminal-quote-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-subtle);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.thread-terminal-quote-btn:hover:not(:disabled) {
+  background: var(--color-hover);
+  color: var(--color-fg);
+  border-color: var(--color-border-strong);
+}
+
+.ui-empty.thread-terminal-empty {
+  padding: 20px;
+}
+
+.thread-terminal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.thread-terminal-body.is-split {
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+}
+
+.thread-terminal-slot {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.thread-terminal-split-divider {
+  background: var(--color-border);
+}
+
+.thread-terminal-surface {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 8px;
+  background: var(--terminal-bg, var(--color-window));
+  overflow: hidden;
+}

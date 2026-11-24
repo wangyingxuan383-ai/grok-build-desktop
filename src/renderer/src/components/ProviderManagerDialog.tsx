@@ -1,4 +1,5 @@
 import { PanelSurface } from "./ui/PanelSurface";
+import "../styles/provider-manager.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CapabilityApplicationDraft, CapabilityApplicationSelection, CustomProviderInput, CustomProviderProfile, ProviderCapabilityVerification, ProviderCompatibilityFlavor, ProviderConnectionDraft, ProviderDraftProbeResult, ProviderImageTransport, ProviderModelCandidate, ProviderModelDefinition, ProviderProtocol, ProviderProxyMode, ProviderReasoningMode, ProviderScanJob, ProviderScanProgress, ProviderSchemaProfile, ProviderUpstreamProtocol, ReasoningEffort } from "../../../shared/types";
 import { DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS, PROVIDER_REASONING_EFFORTS, providerReasoningEfforts } from "../../../shared/provider-model-capabilities";
@@ -39,6 +40,12 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
   const [application, setApplication] = useState<CapabilityApplicationDraft>();
   const [applicationSelection, setApplicationSelection] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState("");
+  const [actionError, setActionError] = useState("");
+  const reportError = useCallback((error: unknown): void => {
+    const text = message(error);
+    setActionError(text);
+    onError(text);
+  }, [onError]);
   const scanListRequests = useRef(new Map<string, number>());
   const selected = providers.find((provider) => provider.id === selectedId);
   const providerProbe = selected ? providerProbes[selected.id] : undefined;
@@ -108,28 +115,47 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
   };
   const save = async (): Promise<void> => {
     if (!draft) return;
+    setActionError("");
     const current = providers.find((provider) => provider.id === draft.id);
-    if (current && !await confirmDefaultLoss(current, draft.enabled !== false, draft.models ?? [])) return;
+    try {
+      if (current && !await confirmDefaultLoss(current, draft.enabled !== false, draft.models ?? [])) return;
+    } catch (error) {
+      reportError(error);
+      return;
+    }
     setBusy("save");
     try {
       const { headers, models = [], ...connection } = draft;
       const input: CustomProviderInput = { ...connection, extraHeaders: Object.fromEntries(headers.map((header) => [header.name.trim(), header.value.trim()])), models };
       const values = await window.grokDesktop.upsertProvider(input);
       setProviders(values); setSelectedId(input.id); setDraft(undefined); setCandidates([]); setDraftProbe(undefined); onSettingsChanged();
-    } catch (error) { onError(message(error)); }
+    } catch (error) { reportError(error); }
     finally { setBusy(""); }
   };
   const remove = async (profile: CustomProviderProfile): Promise<void> => {
     if (!profile.owned) return;
-    const settings = await window.grokDesktop.getSettings();
-    const clearsDefault = profile.models.some((model) => model.id === settings.defaultModel);
-    if (!await confirmAction(`移除提供商“${profile.name}”及其应用管理的模型？${clearsDefault ? "\n\n当前桌面默认模型属于此 Provider；移除成功后会明确清除默认值，不会自动切换到官方 Grok 4.5。" : ""}`, { title: "移除提供商", confirmLabel: clearsDefault ? "移除并清除默认" : "移除", danger: true })) return;
-    setBusy("remove"); try { setProviders(await window.grokDesktop.removeProvider(profile.id)); setSelectedId(""); onSettingsChanged(); } catch (error) { onError(message(error)); } finally { setBusy(""); }
+    setActionError("");
+    try {
+      const settings = await window.grokDesktop.getSettings();
+      const clearsDefault = profile.models.some((model) => model.id === settings.defaultModel);
+      if (!await confirmAction(`移除提供商“${profile.name}”及其应用管理的模型？${clearsDefault ? "\n\n当前桌面默认模型属于此 Provider；移除成功后会明确清除默认值，不会自动切换到官方 Grok 4.5。" : ""}`, { title: "移除提供商", confirmLabel: clearsDefault ? "移除并清除默认" : "移除", danger: true })) return;
+      setBusy("remove");
+      setProviders(await window.grokDesktop.removeProvider(profile.id));
+      setSelectedId("");
+      onSettingsChanged();
+    } catch (error) { reportError(error); }
+    finally { setBusy(""); }
   };
   const persistProfile = async (profile: CustomProviderProfile, patch: Partial<Pick<CustomProviderProfile, "enabled" | "models">>): Promise<void> => {
     if (!profile.owned) return;
+    setActionError("");
     const edit = profileDraft({ ...profile, ...patch });
-    if (!await confirmDefaultLoss(profile, edit.enabled !== false, edit.models ?? [])) return;
+    try {
+      if (!await confirmDefaultLoss(profile, edit.enabled !== false, edit.models ?? [])) return;
+    } catch (error) {
+      reportError(error);
+      return;
+    }
     const { headers, models = [], ...connection } = edit;
     setBusy("lifecycle");
     try {
@@ -139,7 +165,7 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
         models,
       }));
       onSettingsChanged();
-    } catch (error) { onError(message(error)); }
+    } catch (error) { reportError(error); }
     finally { setBusy(""); }
   };
   const confirmDefaultLoss = async (profile: CustomProviderProfile, enabled: boolean, models: ProviderModelDefinition[]): Promise<boolean> => {
@@ -231,6 +257,7 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
 
   return <PanelSurface className="modal-backdrop provider-manager-backdrop" onMouseDown={onClose}><section className="provider-manager" role="dialog" aria-modal="true" aria-label="自定义提供商管理" onMouseDown={(event) => event.stopPropagation()}>
     <header><div><h2>自定义提供商</h2><span>连接、模型发现与 CLI 配置</span></div><button data-panel-close className="icon-button" aria-label="关闭提供商管理" onClick={onClose}><UiIcon name="close"/></button></header>
+    {actionError ? <p className="provider-result error" role="alert">{actionError}</p> : null}
     <div className="provider-manager-layout">
       <aside className="provider-manager-list"><label><UiIcon name="search"/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索提供商"/></label><div className="provider-preset-menu"><strong>添加提供商</strong><div><button onClick={() => startCreate("openai-chat")}>OpenAI 兼容</button><button onClick={() => startCreate("responses")}>Responses</button><button onClick={() => startCreate("anthropic")}>Anthropic</button><button onClick={() => startCreate("gemini-compatible")}>Gemini 兼容</button><button onClick={() => startCreate("ollama")}>Ollama</button><button onClick={() => startCreate("gateway")}>普通网关</button></div></div><nav>{visibleProviders.map((provider) => <button className={provider.id === selectedId && !draft ? "active" : ""} key={provider.id} onClick={() => { setSelectedId(provider.id); setDraft(undefined); }}><span className={`provider-health ${provider.hasCredential ? "ready" : "missing"}`}/><span><strong>{provider.name}</strong><small>{protocolLabel(provider.protocol)} · {provider.models.length} 个模型</small></span>{!provider.owned && <em>外部</em>}</button>)}</nav></aside>
       <main className="provider-manager-detail">{draft ? <ProviderDraftEditor draft={draft} setDraft={setDraft} candidates={candidates} setCandidates={setCandidates} visibleCandidates={visibleCandidates} selectedCandidates={selectedCandidates} setSelectedCandidates={setSelectedCandidates} modelSearch={modelSearch} setModelSearch={setModelSearch} probe={draftProbe} busy={busy} onProbe={() => void runProbe(false)} onDiscover={() => void runProbe(true)} onImport={importSelected} onSave={() => void save()} onCancel={() => setDraft(undefined)}/> : selected ? <ProviderDetails
@@ -264,8 +291,16 @@ export function ProviderManagerDialog({ onClose, onError, onSettingsChanged, con
         onToggleProvider={(enabled) => persistProfile(selected, { enabled })}
         onToggleModel={(modelId, enabled) => persistProfile(selected, { models: selected.models.map((model) => model.id === modelId ? { ...model, enabled } : model) })}
         onRemove={() => void remove(selected)}
-        onDesktopDefault={async (id) => { await window.grokDesktop.setProviderDesktopDefault(id); onSettingsChanged(); }}
-        onCliDefault={async (id) => { setProviders(await window.grokDesktop.setProviderCliDefault(id)); }}
+        onDesktopDefault={async (id) => {
+          setActionError("");
+          try { await window.grokDesktop.setProviderDesktopDefault(id); onSettingsChanged(); }
+          catch (error) { reportError(error); }
+        }}
+        onCliDefault={async (id) => {
+          setActionError("");
+          try { setProviders(await window.grokDesktop.setProviderCliDefault(id)); }
+          catch (error) { reportError(error); }
+        }}
       /> : <div className="provider-manager-empty"><UiIcon name="profiles" size={30}/><strong>选择或添加提供商</strong><span>可以在保存前测试连接并获取模型列表。</span></div>}</main>
     </div>
     {application && <div className="provider-application-backdrop" onMouseDown={() => setApplication(undefined)}><section className="provider-application-dialog" onMouseDown={(event) => event.stopPropagation()}>
@@ -418,7 +453,7 @@ function ProviderDetails({ provider, busy, testing, probe, scanJob, scanReasonin
       <dt>来源</dt><dd>{provider.owned ? "Grok Build Desktop 管理" : "外部 config.toml（只读）"}</dd>
     </dl>}
     {tab === "models" && <section className="provider-model-section"><h3>模型 <span>{provider.models.length}</span></h3>{!provider.models.length && <div className="provider-manager-empty"><strong>尚未配置模型</strong><span>Provider 已保存为停用状态，可稍后编辑并获取模型。</span></div>}{provider.models.map((model) => <article className={model.enabled === false ? "disabled" : ""} key={model.id}>
-      <div><strong>{provider.name} · {model.name}{model.enabled === false ? "（已停用）" : ""}</strong><small>{model.id} → {model.model}</small><span>{protocolLabel(model.protocol ?? provider.protocol)} → {upstreamProtocolLabel(model.upstreamProtocol ?? (model.protocol ? protocolUpstream(model.protocol) : provider.upstreamProtocol) ?? protocolUpstream(model.protocol ?? provider.protocol))} · 空闲 {model.inferenceIdleTimeoutSeconds ?? DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS} 秒 · {model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : "上下文未知"} · {model.reasoningEfforts?.length ? `可选：${model.reasoningEfforts.join(" / ")}` : "未配置思考档位"} · 媒体 ${model.media?.image?.transport ?? "未配置图片"} / ${model.media?.video ? "显式视频" : "未配置视频"}</span></div>
+      <div><strong>{provider.name} · {model.name}{model.enabled === false ? "（已停用）" : ""}</strong><small>{model.id} → {model.model}</small><span>{protocolLabel(model.protocol ?? provider.protocol)} → {upstreamProtocolLabel(model.upstreamProtocol ?? (model.protocol ? protocolUpstream(model.protocol) : provider.upstreamProtocol) ?? protocolUpstream(model.protocol ?? provider.protocol))} · 空闲 {model.inferenceIdleTimeoutSeconds ?? DEFAULT_PROVIDER_INFERENCE_IDLE_TIMEOUT_SECONDS} 秒 · {model.contextWindow ? `${Math.round(model.contextWindow / 1000)}K` : "上下文未知"} · {model.reasoningEfforts?.length ? `可选：${model.reasoningEfforts.join(" / ")}` : "未配置思考档位"} · 媒体 {model.media?.image?.transport ?? "未配置图片"} / {model.media?.video ? "显式视频" : "未配置视频"}</span></div>
       <div className="provider-model-actions"><button disabled={Boolean(scanJob && !isScanTerminal(scanJob.status))} onClick={() => void onScan(model.id)}>完整扫描</button><button disabled={Boolean(scanJob && !isScanTerminal(scanJob.status))} onClick={() => void onMediaScan(model.id)}>仅检测媒体</button><button onClick={() => void onToggleModel(model.id, model.enabled === false)}>{model.enabled === false ? "启用" : "停用"}</button><button disabled={provider.enabled === false || model.enabled === false} onClick={() => onDesktopDefault(model.id)}>桌面默认</button><button disabled={provider.enabled === false || model.enabled === false} onClick={() => onCliDefault(model.id)}>CLI 默认</button></div>
     </article>)}</section>}
     {tab === "capabilities" && <section className="provider-capability-section"><h3>逐模型协议矩阵 <span>真实探测优先于模型名推断</span></h3>{provider.models.map((model) => {

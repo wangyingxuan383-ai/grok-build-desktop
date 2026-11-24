@@ -44,10 +44,17 @@ export function RightUtilityPane({ tool, turn, cwd, sessionId, paths, queue, run
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
   };
+  const [gitAvailable, setGitAvailable] = useState<boolean>(true);
+  useEffect(() => {
+    let cancelled = false;
+    if (!cwd) { setGitAvailable(false); return; }
+    void window.grokDesktop.getGitWorkspaceCapability(cwd).then((cap) => { if (!cancelled) setGitAvailable(cap.available); }).catch(() => { if (!cancelled) setGitAvailable(false); });
+    return () => { cancelled = true; };
+  }, [cwd]);
   return <aside className="right-utility-pane" style={{ width }} aria-label={toolTitle(tool)}>
     <div className="review-resizer" role="separator" aria-orientation="vertical" aria-label="调整侧栏宽度" onPointerDown={beginResize}/>
     <header><div><strong>{toolTitle(tool)}</strong><span>{toolSubtitle(tool)}</span></div><button className="icon-button" aria-label="关闭侧栏" onClick={onClose}><UiIcon name="close"/></button></header>
-    {tool === "launcher" ? <ToolLauncher cwd={cwd} onTool={onTool}/> : <nav className="right-utility-tabs"><button onClick={() => onTool("launcher")}>‹ 工具</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
+    {tool === "launcher" ? <ToolLauncher cwd={cwd} onTool={onTool}/> : <nav className="right-utility-tabs" aria-label="右侧检查器标签"><button onClick={() => onTool("launcher")}>工具</button><button onClick={() => onTool(gitAvailable ? "review" : "agent-changes")}>{gitAvailable ? "审阅 Diff" : "改动"}</button><button className={tool === "files" ? "active" : ""} onClick={() => onTool("files")}>文件</button><button className={tool === "document" ? "active" : ""} onClick={() => onTool("document")}>计划/结果</button><button className={tool === "tasks" ? "active" : ""} onClick={() => onTool("tasks")}>任务</button><button className={tool === "session" ? "active" : ""} onClick={() => onTool("session")}>会话</button></nav>}
     {tool === "document" && <DocumentTool turn={turn} onExpand={onExpandResult}/>}
     {tool === "files" && <FilesTool cwd={cwd} sessionId={sessionId} paths={paths} onNavigate={onNavigate} onError={onError}/>}
     {tool === "tasks" && <TasksTool cwd={cwd} sessionId={sessionId} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onError={onError} confirm={confirmAction}/>}

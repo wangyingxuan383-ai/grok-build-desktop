@@ -1,0 +1,61 @@
+/* Lazy-loaded styles for MediaStudioPanel.tsx */
+.media-studio { width: min(640px, 100%); }
+.media-studio > header > div { display: grid; gap: 3px; }
+.media-studio > header small { color: var(--muted); font-size: .6875em; }
+.media-studio-body { display: grid; gap: 14px; }
+.media-kind-tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--input-bg); }
+.media-kind-tabs button { border: 0; border-radius: 7px; padding: 9px; background: transparent; color: var(--muted); cursor: pointer; }
+.media-kind-tabs button.active { background: var(--accent-soft); color: var(--text); }
+.media-capability { padding: 8px 10px; border-radius: 7px; font-size: .75em; }
+.media-capability.supported { border: 1px solid #2c5548; background: #12221d; color: #8fd5b8; }
+.media-capability.unsupported { border: 1px solid #684044; background: #2a171a; color: #ffb2b7; }
+.media-studio-body label { display: grid; gap: 7px; color: var(--text-secondary); }
+.media-studio-body textarea, .media-studio-body select { width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: var(--text); background: var(--input-bg); }
+.media-studio-body textarea { min-height: 130px; resize: vertical; line-height: 1.55; }
+.media-video-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.media-workflow { margin: 0; color: var(--muted); font-size: .75em; line-height: 1.55; }
+.media-actions { justify-content: flex-end; }
+.media-actions button { border: 1px solid var(--border); background: var(--button-bg); padding: 8px 12px; border-radius: 7px; cursor: pointer; }
+.media-actions button:disabled { opacity: .45; cursor: default; }
+
+.media-job-state {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 84%, transparent);
+}
+.media-job-state progress { width: 100%; accent-color: var(--accent); }
+.media-job-state.completed { border-color: color-mix(in srgb, var(--success) 48%, var(--border)); }
+.media-job-state.failed { border-color: color-mix(in srgb, var(--danger) 48%, var(--border)); }
+.media-job-state button { justify-self: start; }
+
+.media-reference-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+.media-reference-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 240px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 86%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.media-reference-row > span > button {
+  min-width: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+[data-theme-resolved="light"] .media-capability.supported { background: #eaf8f1; color: #236447; }
+[data-theme-resolved="light"] .media-capability.unsupported { background: #fff0f1; color: #8b323a; }

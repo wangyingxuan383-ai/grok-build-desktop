@@ -1,5 +1,6 @@
 import {explainMediaFailure} from "../../../shared/media-failure";
 import { PanelSurface } from "./ui/PanelSurface";
+import "../styles/media-studio.css";
 import { useEffect, useRef, useState } from "react";
 import type { Attachment, CustomProviderProfile, MediaAspectRatio, MediaCreationKind, MediaCreationRequest, MediaGenerationJob, MediaVideoDuration, MediaVideoResolution } from "../../../shared/types";
 

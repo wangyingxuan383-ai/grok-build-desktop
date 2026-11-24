@@ -29,7 +29,7 @@ describe("desktop companion policy", () => {
     for (const size of [128, 192, 256]) {
       const bounds = petWindowBounds(area, size, { x: 4, y: -3 });
       expect(bounds.x + bounds.width).toBe((360 - size) / 2 - 8);
-      expect(bounds.y + bounds.height - 14 - size).toBe(area.y + 8);
+      expect(bounds.y + bounds.height - 14 - Math.round(size * 1.21)).toBe(area.y + 8);
       const position = petPosition(bounds, area, 2, size);
       expect(position).toEqual({ displayId: 2, x: 2, y: -1 });
       expect(petWindowBounds(area, size, position)).toEqual(bounds);

@@ -1,0 +1,58 @@
+/* Lazy-loaded styles for DiagnosticsPanel, OnboardingPanel, and FailureDiagnosisPanel */
+.diagnostics-panel, .onboarding-panel { width: min(900px, 95vw); height: min(800px, 94vh); }
+.diagnostics-panel { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.diagnostic-overall { padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; font-weight: 650; }
+.diagnostic-overall.ready { border-color: #315e4d; background: #13251e; color: #91d3b4; }
+.diagnostic-overall.limited, .diagnostic-overall.checking { border-color: #6b5d32; background: #292313; color: #e5ce84; }
+.diagnostic-overall.blocked { border-color: #6c3c42; background: #2a171a; color: #efabb0; }
+.diagnostic-item { display: flex; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--border); }
+.diagnostic-dot { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--muted); }
+.diagnostic-item.ok .diagnostic-dot { background: var(--success); }
+.diagnostic-item.warning .diagnostic-dot { background: var(--warning); }
+.diagnostic-item.error .diagnostic-dot { background: var(--danger); }
+.diagnostic-item p { margin: 3px 0; color: var(--text-secondary); }
+.diagnostic-item code { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.support-preview { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--input-bg); }
+.support-preview p { color: var(--text-secondary); line-height: 1.5; }
+.doctor-fix-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.doctor-fix-row > div { min-width: 0; }.doctor-fix-row p { margin: 4px 0; overflow-wrap: anywhere; }.doctor-fix-row small { color: var(--muted); }
+.panel-message { color: var(--accent); overflow-wrap: anywhere; }
+.diagnostics-panel > footer, .onboarding-panel > footer { padding: 12px 20px; border-top: 1px solid var(--border); }
+
+.onboarding-panel { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.onboarding-steps { display: grid; grid-template-columns: repeat(8, 1fr); border-bottom: 1px solid var(--border); background: var(--panel); }
+.onboarding-steps button { display: grid; justify-items: center; gap: 4px; border: 0; padding: 9px 3px; background: transparent; color: var(--muted); cursor: pointer; font-size: .75em; }
+.onboarding-steps button span { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #46505a; border-radius: 50%; }
+.onboarding-steps button.active { color: var(--text); background: var(--accent-soft); }
+.onboarding-steps button.done span { border-color: var(--success); color: var(--success); }
+.onboarding-content { line-height: 1.6; }
+.command-box { display: block; margin: 12px 0; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); user-select: all; }
+.onboarding-summary { display: grid; gap: 6px; margin: 14px 0; }
+.onboarding-summary > div { display: grid; grid-template-columns: 24px 130px 1fr; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; }
+.onboarding-summary small { color: var(--muted); }
+.onboarding-summary .ok > span { color: var(--success); }
+.onboarding-summary .warning > span { color: var(--warning); }
+.onboarding-summary .error > span { color: var(--danger); }
+.onboarding-steps button.todo span { border-color: var(--warning); color: var(--warning); }
+.onboarding-steps button small { font-size: .85em; opacity: .7; }
+.onboarding-callout { display: grid; gap: 8px; margin-top: 16px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: 10px; background: var(--accent-soft); }
+.onboarding-content details { margin-top: 12px; }
+.onboarding-content details > summary { cursor: pointer; color: var(--muted); }
+.onboarding-mobile { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 18px; align-items: center; margin: 12px 0; }
+.onboarding-qr img, .onboarding-qr-placeholder { display: block; width: 180px; height: 180px; border-radius: 10px; background: #fff; }
+.onboarding-qr-placeholder { display: grid; place-items: center; background: var(--input-bg); color: var(--muted); font-size: .85em; }
+.onboarding-mobile ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+.onboarding-mobile small { color: var(--muted); }
+.onboarding-tips { display: grid; gap: 8px; padding-left: 1.2em; }
+
+@media (max-width: 960px) {
+  .onboarding-steps button { font-size: 0; }
+  .onboarding-steps button span { font-size: 12px; }
+}
+@media (max-width: 720px) {
+  .onboarding-summary > div { grid-template-columns: 22px 1fr; }
+  .onboarding-summary small { grid-column: 2; }
+}
+[data-theme-resolved="light"] .diagnostic-overall.ready { background: #eaf8f1; color: #236447; }
+[data-theme-resolved="light"] .diagnostic-overall.blocked { background: #fff0f1; color: #8b323a; }
+[data-theme-resolved="light"] .diagnostic-overall.limited, [data-theme-resolved="light"] .diagnostic-overall.checking { background: #fff8df; color: #785d09; }

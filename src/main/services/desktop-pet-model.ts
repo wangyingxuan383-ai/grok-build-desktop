@@ -60,7 +60,7 @@ export function petWindowBounds(area: PetArea, size: number, position?: {
     const y = area.y + relativeY * (relativeY < 0 ? petTopInset(height, size) : Math.max(0, area.height - height));
     return clampPetBounds({ x, y, width, height }, area, size, characterWidth);
 }
-export function petTopInset(height: number, size: number): number { return Math.max(0, height - 14 - size - 8); }
+export function petTopInset(height: number, size: number): number { return Math.max(0, height - 14 - Math.round(size * 1.21) - 8); }
 export function petSideInset(width: number, size: number): number { return Math.max(0, (width - size) / 2 - 8); }
 export function clampPetBounds(bounds: PetArea, area: PetArea, size: number, characterWidth = size): PetArea {
     return { ...bounds,

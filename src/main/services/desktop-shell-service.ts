@@ -31,15 +31,48 @@ export class DesktopShellService {
     onSettings(settings: AppSettings): void;
     petBuiltins:string;petUserRoot:string;
   }) {
+    const window = () => { const value = options.getWindow(); return value && !value.isDestroyed() ? value : undefined; };
     this.quickEntry = new DesktopQuickEntryWindow(controller, { rendererEntry: options.rendererEntry, preloadEntry: options.preloadEntry,
       developmentUrl: options.developmentUrl, showSession: target => this.navigate(target),screenshotVisibility:visible=>this.pet?.setSuppressed("screenshot",visible) });
-    this.pet=new DesktopPetController(controller,{rendererEntry:join(dirname(options.rendererEntry),"../pet/index.html"),preloadEntry:join(dirname(options.preloadEntry),"pet.cjs"),developmentUrl:options.developmentUrl,builtins:options.petBuiltins,userRoot:options.petUserRoot,showMain:options.showWindow,command:command=>this.command(command),quickEntry:intent=>this.quickEntry.open(intent),changed:()=>this.refresh()});
-    controller.setDesktopPetDelegate({list:()=>this.pet.assets.list(),command:(command,clip)=>this.pet.command(command,clip),import:async()=>{
-      const result=await dialog.showOpenDialog({title:"导入桌宠形象",properties:["openFile"],filters:[{name:"透明图片或形象包",extensions:["png","webp","zip"]}]});
-      return result.canceled||!result.filePaths[0]?null:this.pet.assets.import(result.filePaths[0]);
-    }});
+    this.pet=new DesktopPetController(controller,{rendererEntry:join(dirname(options.rendererEntry),"../pet/index.html"),preloadEntry:join(dirname(options.preloadEntry),"pet.cjs"),developmentUrl:options.developmentUrl,builtins:options.petBuiltins,userRoot:options.petUserRoot,ownProcessIds:()=>window()?[process.pid]:[],showMain:options.showWindow,command:command=>this.command(command),quickEntry:intent=>this.quickEntry.open(intent),changed:()=>this.refresh()});
+    controller.setDesktopPetDelegate({
+      list: () => this.pet.listSkins(),
+      command: (command, clip) => this.pet.command(command, clip),
+      remove: (id) => this.pet.removeSkin(id),
+      import: async () => {
+        const result = await dialog.showOpenDialog({ title: "导入桌宠形象", properties: ["openFile"], filters: [{ name: "透明图片或形象包", extensions: ["png", "webp", "zip"] }] });
+        if (result.canceled || !result.filePaths[0]) return null;
+        const skin = await this.pet.assets.import(result.filePaths[0]);
+        await this.pet.listSkins().catch(() => undefined);
+        return skin;
+      },
+      importSpriteSheet: async (input) => {
+        let sourcePath = input.path?.trim();
+        if (!sourcePath) {
+          const picked = await dialog.showOpenDialog({
+            title: "选择精灵表图片（2×2 等网格）",
+            properties: ["openFile"],
+            filters: [{ name: "精灵表图片", extensions: ["png", "webp", "jpg", "jpeg"] }],
+          });
+          if (picked.canceled || !picked.filePaths[0]) return null;
+          sourcePath = picked.filePaths[0];
+        }
+        const skin = await this.pet.assets.importSpriteSheet({ ...input, path: sourcePath });
+        await this.pet.listSkins().catch(() => undefined);
+        return skin;
+      },
+      exportSkin: async (id, format) => {
+        const result = await dialog.showSaveDialog({
+          title: format === "codex" ? "导出 Codex / Shimeji 兼容 ZIP 包" : "导出 Grok 桌宠形象包",
+          defaultPath: `${id}-${format}.zip`,
+          filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }],
+        });
+        if (result.canceled || !result.filePath) return null;
+        await this.pet.assets.exportSkin(id, format, result.filePath);
+        return result.filePath;
+      },
+    });
     this.shortcuts = new DesktopShellShortcuts(globalShortcut, intent => this.quickEntry.open(intent));
-    const window = () => { const value = options.getWindow(); return value && !value.isDestroyed() ? value : undefined; };
     this.taskbar = new DesktopTaskbarService({
       progress: value => window()?.setProgressBar(value, value > 1 ? { mode: "indeterminate" } : { mode: "none" }),
       badge: count => window()?.setOverlayIcon(count ? taskbarCountIcon(count) : null, count ? `${count} 项等待处理` : ""),

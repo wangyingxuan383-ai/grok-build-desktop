@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { open,stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { AppController } from "../app-controller";
 import type { RemoteMutation } from "../../shared/remote";
@@ -9,14 +10,14 @@ import type { AutomationTaskInput, MediaCreationRequest } from "../../shared/typ
 import { RemoteFiles } from "./remote-files";
 
 interface Asset {owner:string;path?:string;html?:string;mimeType:string;name:string;expires:number;sessionId:string}
-const text=z.string().min(1).max(65536),id=z.string().min(1).max(256),flag=z.boolean();
+const text=z.string().min(1).max(65536),id=z.string().min(1).max(256),optionalId=z.preprocess(v=>v===""?undefined:v,id.optional()),flag=z.boolean();
 const dataSchemas:Record<RemoteMutation["kind"],z.ZodType>={
  "native-run.control":z.object({sessionId:id,kind:z.enum(["goal","workflow"]),revision:z.string().regex(/^[a-f0-9]{64}$/),action:z.enum(["pause","resume","stop"])}).strict(),
  "native-run.dismiss":z.object({sessionId:id,kind:z.enum(["goal","workflow"])}).strict(),
  "image.create":z.object({}).strict(),"image.rename":z.object({title:z.string().min(1).max(80)}).strict(),
- "image.submit":z.object({request:z.object({kind:z.enum(["image","video"]),prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),route:z.enum(["cli","provider"]).optional(),modelId:id.optional(),providerId:id.optional(),duration:z.number().optional(),resolution:z.enum(["480p","720p"]).optional()}).strict(),attachmentIds:z.array(id).max(12).optional(),referenceSources:z.array(z.string().max(4096)).max(12).optional()}).strict(),
- "code.image.submit":z.object({prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),modelId:id.optional(),attachmentIds:z.array(id).max(12).optional()}).strict(),"image.cancel":z.object({}).strict(),"image.delete":z.object({deleteFiles:flag.optional()}).strict(),"image.record.delete":z.object({jobId:id,deleteFiles:flag.optional()}).strict(),
- "automation.create":z.object({workspaceId:id,input:z.record(z.string(),z.unknown()),configuration:z.object({modelId:id.optional(),providerId:id.optional(),effort:z.enum(REASONING_EFFORTS).optional(),mode:z.enum(["auto","agent","plan"]).optional()}).strict().optional()}).strict(),"automation.update":z.object({revision:z.number().int(),workspaceId:id.optional(),patch:z.record(z.string(),z.unknown())}).strict(),
+ "image.submit":z.object({request:z.object({kind:z.enum(["image","video"]),prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),route:z.enum(["cli","provider"]).optional(),modelId:optionalId,providerId:optionalId,duration:z.number().optional(),resolution:z.enum(["480p","720p"]).optional()}).strict(),attachmentIds:z.array(id).max(12).optional(),referenceSources:z.array(z.string().max(4096)).max(12).optional()}).strict(),
+ "code.image.submit":z.object({prompt:text,aspectRatio:z.enum(["auto","1:1","16:9","9:16","4:3","3:4"]),modelId:optionalId,attachmentIds:z.array(id).max(12).optional()}).strict(),"image.cancel":z.object({}).strict(),"image.delete":z.object({deleteFiles:flag.optional()}).strict(),"image.record.delete":z.object({jobId:id,deleteFiles:flag.optional()}).strict(),
+ "automation.create":z.object({workspaceId:id,input:z.record(z.string(),z.unknown()),configuration:z.object({modelId:optionalId,providerId:optionalId,effort:z.enum(REASONING_EFFORTS).optional(),mode:z.enum(["auto","agent","plan"]).optional()}).strict().optional()}).strict(),"automation.update":z.object({revision:z.number().int(),workspaceId:optionalId,patch:z.record(z.string(),z.unknown())}).strict(),
  "automation.pause":z.object({paused:flag}).strict(),"automation.delete":z.object({}).strict(),"automation.run":z.object({}).strict(),"automation.cancel":z.object({}).strict(),"automation.confirm":z.object({approved:flag}).strict(),
  "inbox.read":z.object({read:flag}).strict(),"computer.permission":z.object({decision:z.enum(["once","always","deny"])}).strict(),"computer.risk":z.object({approved:flag}).strict(),"task.cancel":z.object({}).strict(),"account.switch":z.object({}).strict(),
  "notification.register":z.object({token:z.string().min(1).max(4096),deliveryVersion:z.literal(2).optional()}).strict(),"notification.unregister":z.object({}).strict(),
@@ -61,7 +62,15 @@ export class RemoteWorkbenchService {
   if(kind==="context")return {...await this.controller.getCliSessionInfo(sessionId),compaction:(await this.controller.getSessionRuntimePreferences(sessionId))?.compaction};
   if(kind==="files")return this.controller.listWorkspaceTree(session.cwd,params.get("path")??"",{showHidden:false});
   if(kind==="artifact"){
-   const artifact=await this.controller.readWorkspaceArtifact(session.cwd,params.get("path")??"");
+   let rawPath=(params.get("path")??"").trim();
+   if(/^file:\/\//i.test(rawPath)){try{rawPath=fileURLToPath(new URL(rawPath.split("#")[0]!))}catch{rawPath=rawPath.replace(/^file:\/\/\/?/i,"").split("#")[0]!}}
+   else rawPath=rawPath.replace(/#L\d+(?:-L?\d+)?$/i,"");
+   let resolved=isAbsolute(rawPath)?rawPath:resolve(session.cwd,rawPath);
+   if(!isAbsolute(rawPath)&&!await stat(resolved).then(()=>true,()=>false)){
+    const gitStatus=await this.controller.getGitStatus(session.cwd).catch(()=>undefined);
+    if(gitStatus?.repositoryRoot)resolved=resolve(gitStatus.repositoryRoot,rawPath);
+   }
+   const artifact=await this.controller.readWorkspaceArtifact(session.cwd,resolved);
    return {...this.ticket({owner,path:artifact.path,html:artifact.kind==="html"?artifact.previewUrl:undefined,mimeType:artifact.mimeType??"text/plain",name:basename(artifact.path),sessionId}),kind:artifact.kind,size:(await stat(artifact.path)).size,content:["text","office"].includes(artifact.kind)?artifact.data.slice(0,512*1024):undefined};
   }
   if(kind==="review")return {status:await this.controller.getGitStatus(session.cwd),diff:await this.controller.getGitDiff(session.cwd,params.get("staged")==="1",params.get("path")??undefined)};

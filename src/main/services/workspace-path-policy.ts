@@ -43,6 +43,42 @@ export async function rejectSymbolicLink(path: string): Promise<void> {
   if ((await lstat(path)).isSymbolicLink()) throw new Error("不允许通过符号链接执行此操作");
 }
 
+/**
+ * Rejects any symlink or Windows junction along the lexical path chain inside
+ * the workspace BEFORE `realpath()` dereferences it to its target.
+ */
+export async function rejectWorkspaceSymbolicLinkChain(
+  workspacePath: string,
+  requestedPath: string,
+  allowMissingLeaf = false,
+): Promise<void> {
+  const root = await resolveWorkspaceRoot(workspacePath);
+  if (requestedPath.includes("\0")) throw new Error("路径包含无效字符");
+  const rawRoot = resolve(workspacePath);
+  const lexicalTarget = isAbsolute(requestedPath)
+    ? (isPathInside(normalizeCase(rawRoot), normalizeCase(resolve(requestedPath)), true)
+      ? resolve(root, relative(rawRoot, resolve(requestedPath)))
+      : resolve(requestedPath))
+    : resolve(root, requestedPath || ".");
+  assertInside(root, lexicalTarget, true);
+  const rel = relative(root, lexicalTarget);
+  if (!rel) return;
+  const segments = rel.split(/[\\/]+/).filter(Boolean);
+  let current = root;
+  for (let index = 0; index < segments.length; index += 1) {
+    current = resolve(current, segments[index]!);
+    const info = await lstat(current).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!info) {
+      if (allowMissingLeaf && index === segments.length - 1) return;
+      return;
+    }
+    if (info.isSymbolicLink()) throw new Error("不允许通过符号链接执行此操作");
+  }
+}
+
 export function isPathInside(root: string, path: string, allowRoot = true): boolean {
   const value = relative(root, path);
   if (!value) return allowRoot;

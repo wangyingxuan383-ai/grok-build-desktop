@@ -1,4 +1,5 @@
 import { PanelSurface } from "./ui/PanelSurface";
+import "../styles/diagnostics-onboarding.css";
 import { useEffect, useState } from "react";
 import type { CliCompatibilitySnapshot, GrokDoctorFixPreview, SupportBundlePreview, SystemCompatibilityReport } from "../../../shared/types";
 

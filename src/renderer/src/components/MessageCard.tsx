@@ -221,11 +221,13 @@ function ToolCard({ message, open, sessionId, navigationRoot, allowFileNavigatio
 
 function PermissionCard({ message, sessionId, onResolved }: { message: Extract<UiMessage, { kind: "permission" }>; sessionId: string; onResolved?: (id: string) => void }): React.JSX.Element {
   const [state, setState] = useState<{ value: "idle" | "submitting" | "failed"; message?: string; optionId?: string }>({ value: "idle" });
-  const respond = async (id: string): Promise<void> => {
+  const [feedback, setFeedback] = useState("");
+  const [showFeedback, setShowFeedback] = useState(false);
+  const respond = async (id: string, isDeny = false): Promise<void> => {
     if (state.value === "submitting") return;
     setState({ value: "submitting", message: "正在提交决定…", optionId: id });
     try {
-      await window.grokDesktop.respondPermission(sessionId, message.request.requestId, id);
+      await window.grokDesktop.respondPermission(sessionId, message.request.requestId, id, isDeny ? feedback.trim() || undefined : undefined);
       onResolved?.(message.id);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -235,23 +237,24 @@ function PermissionCard({ message, sessionId, onResolved }: { message: Extract<U
   };
   const detail = protectedActionSummary(message.request.toolCall);
   const script = protectedActionScript(message.request.toolCall);
+  const subagentLabel = message.request.subagentTitle || (message.request.requestingSessionId ? `子会话 ${message.request.requestingSessionId.slice(0, 8)}` : "");
   const denyOptions = message.request.options.filter((option) => isDenyPermission(option.name, option.kind));
   const allowOptions = message.request.options.filter((option) => !isDenyPermission(option.name, option.kind));
   const primaryOption = allowOptions.find((option) => option.kind === "allow_once") ?? allowOptions.at(-1);
   const scopedOptions = allowOptions.filter((option) => option.optionId !== primaryOption?.optionId);
-  const optionButton = (option: typeof message.request.options[number], className = "") => <button
+  const optionButton = (option: typeof message.request.options[number], className = "", isDeny = false) => <button
     key={option.optionId}
     type="button"
     className={className}
     disabled={state.value === "submitting"}
-    onClick={() => void respond(option.optionId)}
+    onClick={() => void respond(option.optionId, isDeny)}
   >{state.value === "submitting" && state.optionId === option.optionId ? "提交中…" : localizedPermissionName(option.name, option.kind)}</button>;
   return <section className="action-card decision-card codex-request-card" aria-label="权限确认">
-    <div className="request-card-body"><span className="request-card-eyebrow">需要批准</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝不会创建新的用户消息。</p>{script && <details className="permission-script"><summary>查看完整命令</summary><pre>{script}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(script)}>复制命令</button></details>}</div>
+    <div className="request-card-body"><span className="request-card-eyebrow">需要批准{subagentLabel ? ` · 来自 ${subagentLabel}` : ""}</span><strong>{detail || "Grok 准备执行一项受保护操作"}</strong><p>允许后将继续当前回合；拒绝时可附带修改建议引导 Agent 调整方案。</p>{script && <details className="permission-script"><summary>查看完整命令</summary><pre>{script}</pre><button type="button" onClick={() => void navigator.clipboard.writeText(script)}>复制命令</button></details>}{showFeedback && <textarea className="ui-textarea" style={{ marginTop: 8, minHeight: 58, fontSize: "var(--text-xs)" }} placeholder="拒绝说明或替代指令（可选，随拒绝结果发送给 CLI）…" value={feedback} disabled={state.value === "submitting"} onChange={(event) => setFeedback(event.target.value)} />}</div>
     {state.message && <div className={`decision-status ${state.value}`}>{state.message}</div>}
     <footer className="request-card-actions">
-      <div className="request-leading-actions">{scopedOptions.map((option) => optionButton(option))}</div>
-      <div className="request-primary-actions">{denyOptions.map((option) => optionButton(option))}{primaryOption ? optionButton(primaryOption, "primary") : null}</div>
+      <div className="request-leading-actions">{scopedOptions.map((option) => optionButton(option))}{denyOptions.length > 0 && <button type="button" disabled={state.value === "submitting"} aria-expanded={showFeedback} onClick={() => setShowFeedback((prev) => !prev)}>{showFeedback ? "收起拒绝说明" : "附带说明"}</button>}</div>
+      <div className="request-primary-actions">{denyOptions.map((option) => optionButton(option, "", true))}{primaryOption ? optionButton(primaryOption, "primary") : null}</div>
     </footer>
   </section>;
 }

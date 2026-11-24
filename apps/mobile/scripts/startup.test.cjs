@@ -42,6 +42,12 @@ test("SDK guard rejects transitive future assets and constants", () => {
   assert.deepEqual(mismatches([{ name: "expo-asset", version: "12.0.13" }], matrix), []);
 });
 
+test("MATCHING_DESKTOP_VERSION stays synchronized with desktop package.json version", () => {
+  const desktopVersion = JSON.parse(readFileSync(join(__dirname, "../../../package.json"), "utf8")).version;
+  const { MATCHING_DESKTOP_VERSION } = load("version.ts", {});
+  assert.equal(MATCHING_DESKTOP_VERSION, desktopVersion);
+});
+
 test("application import failures show recovery; explicit retry can load successfully without diagnostics leaking raw errors", async () => {
   let calls = 0;
   let fail = true;

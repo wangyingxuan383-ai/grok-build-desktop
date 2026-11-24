@@ -227,10 +227,21 @@ export function reduceEvent(state: AppState, event: ChatEvent): Partial<AppState
       if (projected?.messages.length) {
         // JSON-RPC request ids are process-local. A permission/plan/question
         // restored from disk cannot be answered after the ACP transport was
-        // rebuilt, so never resurrect it as a clickable stale card.
-        next.messages = projected.messages.map((message) => isActionMessage(message) && !message.resolved
-          ? { ...message, resolved: true, resolution: "请求已随上次连接结束" }
-          : message);
+        // rebuilt, so never resurrect it as a clickable stale card unless the
+        // existing session process is still live.
+        next.messages = event.live
+          ? projected.messages
+          : projected.messages.map((message) => isActionMessage(message) && !message.resolved
+            ? { ...message, resolved: true, resolution: "请求已随上次连接结束" }
+            : message);
+      }
+      if (event.live) {
+        const projectedIds = new Set(next.messages.map((message) => message.id));
+        for (const message of view.messages) {
+          if (isActionMessage(message) && !message.resolved && !projectedIds.has(message.id)) {
+            next.messages.push(message);
+          }
+        }
       }
       if (projected) next.turnPresentations = mergeTurnPresentations(next.turnPresentations, projected.turnPresentations);
       if (event.projection.queue) next.queue = event.projection.queue.entries;

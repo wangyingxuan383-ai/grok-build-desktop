@@ -1,6 +1,7 @@
-import type { DesktopProductivitySettings } from "../../../shared/productivity";
+import type { CalmChimeMode, DesktopProductivitySettings } from "../../../shared/productivity";
 import { DEFAULT_PRODUCTIVITY, productivitySettings } from "../../../shared/productivity";
 import { APP_SHORTCUTS, shortcutFor, validateShortcutBindings } from "../../../shared/shortcuts";
+import { synthesizeCalmChime } from "../services/calm-chimes";
 import "../styles/productivity-settings.css";
 
 export function ProductivitySettings({ value, onChange }: { value?: DesktopProductivitySettings; onChange(value: DesktopProductivitySettings): void }): React.JSX.Element {
@@ -15,6 +16,8 @@ export function ProductivitySettings({ value, onChange }: { value?: DesktopProdu
       <small>不会保持屏幕常亮，也不会唤醒已经休眠的电脑。</small>
       <label>收件箱额度提醒<select value={current.quotaWarningPercent} onChange={e => update({ quotaWarningPercent: Number(e.target.value) })}><option value={0}>关闭</option><option value={80}>本期已用 80%</option><option value={90}>本期已用 90%</option><option value={95}>本期已用 95%</option></select><small>仅使用 CLI 已明确返回的当前周期数据；不会为提醒增加后台查询。</small></label>
       <label>暂时勿扰<select value={current.quietUntil && Date.parse(current.quietUntil) > Date.now() ? "on" : "off"} onChange={e => update({ quietUntil: e.target.value === "on" ? new Date(Date.now() + 60 * 60_000).toISOString() : undefined })}><option value="off">正常提醒</option><option value="on">暂停系统提醒 1 小时</option></select><small>收件箱继续记录，需要确认的请求仍保留。</small></label>
+      <label>轻音提示<select aria-label="轻音提示模式" value={current.calmChimeMode ?? "background-only"} onChange={e => update({ calmChimeMode: e.target.value as CalmChimeMode })}><option value="background-only">仅后台或离开底部时（默认）</option><option value="always">每次回合完成或待确认时</option><option value="off">关闭轻音提示</option></select><small>Web Audio 实时合成柔和泛音；勿扰期间自动静音，4 秒内并发事件自动合并。</small></label>
+      <div className="button-row"><button type="button" onClick={() => synthesizeCalmChime("complete")}>试听完成轻音</button><button type="button" onClick={() => synthesizeCalmChime("needs-user")}>试听待确认轻音</button></div>
     </fieldset>
     <fieldset className="conversation-reading-settings"><legend>随手提问</legend>
       <p className="settings-note">托盘中随时可打开提问窗口。全局快捷键默认留空，不抢占其他应用的按键。</p>

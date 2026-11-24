@@ -4,11 +4,11 @@
 .app-shell {
   --z-background: 0;
   --z-content: 1;
-  --z-popover: 30;
-  --z-modal: 100;
-  --z-computer-confirmation: 140;
-  --z-action-dialog: 150;
-  --z-toast: 200;
+  --z-popover: 1100;
+  --z-modal: 1250;
+  --z-computer-confirmation: 1300;
+  --z-action-dialog: 1350;
+  --z-toast: 1400;
   --sidebar-width: 264px;
   --topbar-height: 52px;
   --session-row-height: 46px;
@@ -188,7 +188,7 @@
 .token-meter { gap: 5px; color: var(--muted); font-size: .625em; }
 .token-meter > span { width: 14px; height: 14px; }
 .send-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--text-strong); color: var(--bg); }
-.send-button:hover:not(:disabled) { transform: none; background: #fff; }
+.send-button:hover:not(:disabled) { transform: none; background: color-mix(in srgb, var(--text-strong) 86%, var(--bg)); }
 .send-button:disabled { background: color-mix(in srgb, var(--text) 22%, transparent); color: var(--muted); }
 .send-button.stop { background: var(--text-strong); color: var(--bg); }
 .busy-send-actions { position: relative; display: flex; align-items: center; gap: 5px; }

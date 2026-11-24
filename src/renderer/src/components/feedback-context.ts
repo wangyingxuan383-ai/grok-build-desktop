@@ -17,12 +17,12 @@ export function assertFeedbackOwner(owner: FeedbackOwner): void {
   if (state.activeSessionId !== owner.sessionId || !samePath(state.settings?.activeWorkspace ?? "", owner.activeWorkspace) || !samePath(session?.cwd ?? "", owner.sessionCwd)) throw Error("会话或工作区已切换；反馈已保留，请回到原会话后重试");
 }
 
-export async function appendContextFeedback(owner: FeedbackOwner, text: string, attachments?: Attachment[], validate?: () => Promise<boolean>): Promise<void> {
+export async function appendContextFeedback(owner: FeedbackOwner, text: string, attachments?: Attachment[], validate?: () => Promise<boolean>, staleMessage = "Diff 已变化；批注已保留，请刷新并重新选择行"): Promise<void> {
   assertFeedbackOwner(owner);
   const assignment = await window.grokDesktop.getSessionExecutionAssignment(owner.sessionId);
   assertFeedbackOwner(owner);
   if (!samePath(assignment?.cwd || owner.sessionCwd, owner.workspace)) throw Error("反馈不属于当前会话的执行工作区");
-  if (validate && !await validate()) throw Error("Diff 已变化；批注已保留，请刷新并重新选择行");
+  if (validate && !await validate()) throw Error(staleMessage);
   assertFeedbackOwner(owner);
   // Synchronous, current-composer append. No conversation navigation, submission,
   // prompt RPC or draft replacement; the app's existing handler appends the text.

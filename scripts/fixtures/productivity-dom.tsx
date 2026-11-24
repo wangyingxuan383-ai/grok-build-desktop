@@ -18,6 +18,7 @@ let assignmentReads = 0, appended = 0, inserted = "", error = "";
 const snippet = { id: "fixture", title: "核对变更与验证", body: "核对 {{文件}}，重点检查 {{关注点}}。", updatedAt: "2026-10-19T00:00:00Z" };
 const api = {
   listPetSkins:async()=>(window as any).petFixtureSkins??[],
+  deletePetSkin:async(id:string)=>{(window as any).petFixtureSkins=((window as any).petFixtureSkins??[]).filter((s:any)=>s.id!==id);return (window as any).petFixtureSkins;},
   updateSettings:async(patch:any)=>{(window as any).petFixtureWrites=((window as any).petFixtureWrites??0)+1;return patch;},
   petCommand:async(command:string)=>{(window as any).petFixtureCommand=command;},
   createImageConversation:async()=>({id:"image-fixture"}),saveImageComposerDraft:async(_id:string,draft:any)=>{(window as any).petFixtureDraft=draft;},

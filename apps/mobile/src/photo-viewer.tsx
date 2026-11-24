@@ -58,7 +58,10 @@ export function PhotoViewer({ client, photos, index, onClose, favorites, onFavor
     const backdrop = useAnimatedStyle(() => ({ opacity: interpolate(drag.value, [0, height / 2], [1, 0.15], "clamp") }));
     const chromeFade = useAnimatedStyle(() => ({ opacity: interpolate(drag.value, [0, 40], [1, 0], "clamp") }));
     const photo = photos[current];
-    useEffect(() => { if (!photos.length) onClose(); }, [photos.length]);
+    useEffect(() => {
+        if (!photos.length) onClose();
+        else if (current >= photos.length) setCurrent(photos.length - 1);
+    }, [photos.length, current, onClose]);
     const run = async (label: string, action: (file: { uri: string; asset?: { name?: string; mimeType?: string } }) => Promise<unknown>) => {
         if (!photo || busy) return; setBusy(label);
         try { await action(await cachedFile(client, photo.source, "original")); haptic("success"); } catch (e) { haptic("error"); onNotice(e instanceof Error ? e.message : String(e)); } finally { setBusy(""); }
@@ -76,7 +79,7 @@ export function PhotoViewer({ client, photos, index, onClose, favorites, onFavor
         <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: "#000" }, backdrop]} />
         <FlatList key={`${width}:${height}`} data={photos} horizontal pagingEnabled scrollEnabled={!zoomed} initialScrollIndex={current} keyExtractor={(item, i) => item.source + ":" + i}
           getItemLayout={(_d, i) => ({ length: width, offset: width * i, index: i })} windowSize={3} initialNumToRender={1} maxToRenderPerBatch={2} showsHorizontalScrollIndicator={false}
-          onMomentumScrollEnd={e => { const next = Math.max(0, Math.min(photos.length - 1, Math.round(e.nativeEvent.contentOffset.x / width))); if (next !== current) { setCurrent(next); setExpanded(false); haptic("selection"); } }}
+          onMomentumScrollEnd={e => { if (width <= 0 || !photos.length) return; const next = Math.max(0, Math.min(photos.length - 1, Math.round(e.nativeEvent.contentOffset.x / width))); if (next !== current) { setCurrent(next); setExpanded(false); haptic("selection"); } }}
           renderItem={({ item, index: i }) => <PhotoPage client={client} photo={item} width={width} height={height} active={Math.abs(i - current) <= 1} focused={i === current} drag={drag}
             onTap={() => setChrome(v => !v)} onZoom={setZoomed} onDismiss={onClose} />} />
         {chrome && !zoomed ? <Animated.View pointerEvents="box-none" style={[{ position: "absolute", left: 0, right: 0, top: 0, paddingTop: 36, paddingHorizontal: space.sm, flexDirection: "row", alignItems: "center", backgroundColor: "#00000066" }, chromeFade]}>
@@ -137,6 +140,7 @@ function PhotoPage({ client, photo, width, height, active, focused, drag, onTap,
         return Math.min(limit, Math.max(-limit, value));
     };
     const gesture = useMemo(() => {
+        const dismissing = { value: false };
         const pinch = Gesture.Pinch()
             .onStart(() => { runOnJS(setZoom)(true); start.value = { scale: scale.value, x: tx.value, y: ty.value }; })
             .onUpdate(e => {
@@ -145,7 +149,7 @@ function PhotoPage({ client, photo, width, height, active, focused, drag, onTap,
                 tx.value = clamp(tx.value, next, shownW, width);
                 ty.value = clamp(ty.value, next, shownH, height);
             })
-            .onEnd(() => {
+            .onFinalize(() => {
                 if (scale.value <= 1.02) { reset(true); runOnJS(setZoom)(false); }
                 else runOnJS(setZoom)(true);
             });
@@ -157,12 +161,20 @@ function PhotoPage({ client, photo, width, height, active, focused, drag, onTap,
             });
         // Only a downward drag starts this; any clear sideways movement hands over to paging.
         const dismiss = Gesture.Pan().maxPointers(1).enabled(!isZoomed).activeOffsetY(14).failOffsetX([-14, 14])
+            .onStart(() => { dismissing.value = false; })
             .onUpdate(e => { const y = Math.max(0, e.translationY); ty.value = y; drag.value = y; })
             .onEnd(e => {
                 if (e.translationY > 140 || e.velocityY > 900) {
+                    dismissing.value = true;
                     ty.value = withTiming(height, { duration: 160 }, () => runOnJS(onDismiss)());
                     drag.value = withTiming(height, { duration: 160 });
-                } else { ty.value = withSpring(0, { damping: 20 }); drag.value = withTiming(0, { duration: 160 }); }
+                }
+            })
+            .onFinalize(() => {
+                if (!dismissing.value) {
+                    ty.value = withSpring(0, { damping: 20 });
+                    drag.value = withTiming(0, { duration: 160 });
+                }
             });
         const doubleTap = Gesture.Tap().numberOfTaps(2).maxDelay(260)
             .onEnd(e => {

@@ -203,6 +203,35 @@ describe("GitService", () => {
     const history = await service.history(repo, 1);
     expect((await service.review(repo, { kind: "commit", revision: history[0]!.hash })).readOnly).toBe(true);
   }, 30_000);
+
+  it("expands untracked directories in status/review and supports scoped/unborn-HEAD discard", async () => {
+    const { repo, service } = await createRepository("untracked-dirs");
+    await mkdir(join(repo, "nested", "deep"), { recursive: true });
+    await writeFile(join(repo, "nested", "deep", "new.ts"), "export const x = 1;\n", "utf8");
+    const status = await service.status(repo);
+    expect(status.changes).toContainEqual(expect.objectContaining({ path: "nested/deep/new.ts", kind: "untracked" }));
+    const review = await service.review(repo, { kind: "unstaged" });
+    expect(review.files.map((f) => f.path)).toContain("nested/deep/new.ts");
+
+    // Scoped worktree discard preserves staged index changes
+    await writeFile(join(repo, "tracked.txt"), "staged line\n", "utf8");
+    await service.stage(repo, ["tracked.txt"]);
+    await writeFile(join(repo, "tracked.txt"), "staged line\nworktree edit\n", "utf8");
+    await service.discard(repo, { trackedPaths: ["tracked.txt"], untrackedPaths: [], confirmedPaths: ["tracked.txt"], scope: "worktree" });
+    expect((await readFile(join(repo, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe("staged line\n");
+    expect((await service.diff(repo, true, "tracked.txt")).patch).toContain("+staged line");
+
+    // Unborn HEAD discard removes newly staged files cleanly
+    const unbornRoot = await mkdtemp(join(tmpdir(), "grok git unborn "));
+    const unbornRepo = join(unbornRoot, "repo");
+    await git(unbornRoot, ["init", "-b", "main", unbornRepo]);
+    await configureIdentity(unbornRepo);
+    await writeFile(join(unbornRepo, "init.txt"), "hello\n", "utf8");
+    const unbornService = new GitService(join(unbornRoot, "user-data"));
+    await unbornService.stage(unbornRepo, ["init.txt"]);
+    await unbornService.discard(unbornRepo, { trackedPaths: ["init.txt"], untrackedPaths: [], confirmedPaths: ["init.txt"], scope: "all" });
+    expect((await unbornService.status(unbornRepo)).clean).toBe(true);
+  }, 30_000);
 });
 
 async function createRepository(name: string): Promise<{ root: string; repo: string; service: GitService }> {

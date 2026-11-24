@@ -120,6 +120,33 @@ describe("MemoryService", () => {
     const metadata = await readFile(join(fixture.userData, "memory-settings.json"), "utf8");
     expect(metadata).not.toContain("fixed git argument arrays");
   });
+
+  it("supports 1.0.63+ workspace topic memory files and memtrace diagnostics", async () => {
+    const fixture = await createFixture("topics");
+    const layout = await fixture.service.resolveLayout(fixture.repo);
+    const saved = await fixture.service.save({
+      workspacePath: fixture.repo,
+      scope: "topic",
+      topicFile: "architecture",
+      content: "# Architecture Topic\n\nUse IPC schema validation.\n",
+      expectedHash: "",
+      expectedModifiedAt: "",
+    });
+    expect(saved.saved).toBe(true);
+    expect(saved.entry).toMatchObject({
+      id: "topic:architecture.md",
+      scope: "topic",
+      topicFile: "architecture.md",
+      title: "Architecture Topic",
+    });
+    await mkdir(join(layout.workspaceDirectory, "memtrace"), { recursive: true });
+    await writeFile(join(layout.workspaceDirectory, "memtrace", "trace-1.jsonl"), "{\"event\":\"dream\"}\n", "utf8");
+    const settings = await fixture.service.getSettingsForWorkspace(fixture.repo);
+    expect(settings.memtraceCount).toBe(1);
+    expect(settings.memtraceBytes).toBeGreaterThan(10);
+    const entries = await fixture.service.list(fixture.repo);
+    expect(entries.some((entry) => entry.id === "topic:architecture.md")).toBe(true);
+  });
 });
 
 async function createFixture(name: string, runCli?: NonNullable<ConstructorParameters<typeof MemoryService>[2]>["runCli"]): Promise<{ root: string; repo: string; userData: string; grokHome: string; service: MemoryService }> {

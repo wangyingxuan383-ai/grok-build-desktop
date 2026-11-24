@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import type { MemoryEntry, MemorySaveResult, MemorySettings, MemoryStructuredEntry } from "../../../shared/types";
+import "../styles/memory-workbench.css";
 
 const MonacoEditor = lazy(async () => {
   (await import("../monaco")).configureMonaco();

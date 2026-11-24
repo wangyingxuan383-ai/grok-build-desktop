@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { OnMount } from "@monaco-editor/react";
 import type { EditorDocument, EditorSaveConflict, WorkspaceTreeNode } from "../../../shared/types";
+import { useAppStore } from "../store";
+import { syncMonacoTheme, type MonacoEditorNamespaceLike } from "../theme";
 import { useWorkbenchStore, type EditorTabState } from "../workbench-store";
 import { UiIcon } from "../ui-icons";
 
@@ -79,11 +81,14 @@ export function FileExplorer({ workspace, dialogs, onPreviewArtifact }: { worksp
       } else if (action === "rename" && selectedNode) {
         const name = await dialogs.askText("输入新的文件或目录名称。", selectedNode.name, { title: "重命名", confirmLabel: "保存" });
         if (!name?.trim() || name.trim() === selectedNode.name) return;
-        await window.grokDesktop.renameEditorPath(workspace, selectedNode.path, joinRelative(parentPath(selectedNode.relativePath), name.trim()));
+        const nextRelative = joinRelative(parentPath(selectedNode.relativePath), name.trim());
+        await window.grokDesktop.renameEditorPath(workspace, selectedNode.path, nextRelative);
+        useWorkbenchStore.getState().renamePath(workspace, selectedNode.path, nextRelative);
       } else if (action === "delete" && selectedNode) {
         const confirmed = await dialogs.askConfirm(`永久删除“${selectedNode.relativePath}”？`, { title: "删除文件或目录", confirmLabel: "永久删除", danger: true });
         if (!confirmed) return;
         await window.grokDesktop.deleteEditorPath(workspace, selectedNode.path, true);
+        useWorkbenchStore.getState().closeDeletedPath(workspace, selectedNode.path);
       }
       store.resetTree();
       await load();
@@ -129,12 +134,21 @@ export function FileWorkbench({ workspace, dialogs, onChatReference, boundTabKey
   const root = useRef<HTMLElement>(null);
   const selectedKey = useRef(tab?.key); selectedKey.current = tab?.key;
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = useRef<MonacoEditorNamespaceLike | null>(null);
   const editorInstance = useId();
   const [selection, setSelection] = useState<{ start: number; end: number }>({ start: 1, end: 1 });
   const [saving, setSaving] = useState(false);
   const [showConflictDiff, setShowConflictDiff] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [customMonacoReady, setCustomMonacoReady] = useState(false);
+  const themeSettings = useAppStore((state) => state.settings?.theme);
   const light = document.documentElement.dataset.themeResolved === "light";
+  useEffect(() => {
+    if (monacoRef.current && themeSettings) {
+      syncMonacoTheme(monacoRef.current, themeSettings);
+      setCustomMonacoReady(true);
+    }
+  }, [themeSettings]);
   useEffect(() => { setEditing(false); setShowConflictDiff(false); }, [tab?.key]);
   useEffect(() => {
     if (!tab || !editorRef.current) return;
@@ -198,8 +212,14 @@ export function FileWorkbench({ workspace, dialogs, onChatReference, boundTabKey
     return () => window.removeEventListener("focus", onFocus);
   }, [tab?.key]);
 
-  const mount: OnMount = (editor) => {
+  const mount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco as unknown as MonacoEditorNamespaceLike;
+    const activeTheme = useAppStore.getState().settings?.theme;
+    if (activeTheme) {
+      syncMonacoTheme(monacoRef.current, activeTheme);
+      setCustomMonacoReady(true);
+    }
     const current = useWorkbenchStore.getState().tabs.find((value) => value.key === selectedKey.current);
     if (current) editor.setPosition(current.cursor);
     editor.onDidChangeCursorPosition((event) => {
@@ -237,13 +257,14 @@ export function FileWorkbench({ workspace, dialogs, onChatReference, boundTabKey
     {!tab ? <div className="editor-empty"><strong>轻量编辑器</strong><p>从左侧文件树打开文件。支持多标签、编码/换行保持、冲突检测和原子保存。</p></div> : <>
       <div className="editor-toolbar"><div className="editor-breadcrumbs" title={tab.document.path}>{tab.document.relativePath.split(/[\\/]/).map((part, index, parts) => <span key={`${part}-${index}`}>{part}{index < parts.length - 1 && <i>›</i>}</span>)}</div><small>{editing ? "编辑" : "只读查看"} · {tab.document.encoding.toUpperCase()} · {tab.document.lineEnding.toUpperCase()} · {formatBytes(tab.document.byteLength)}{!tab.document.editable ? ` · ${tab.document.readOnlyReason}` : ""}</small>{editing ? <><button disabled={!tab.dirty || !tab.document.editable || saving} onClick={() => void save(tab)}>{saving ? "保存中…" : "保存"}</button><button onClick={() => setEditing(false)}>结束编辑</button></> : <button className="primary" disabled={!tab.document.editable} onClick={() => setEditing(true)}>编辑文件</button>}<button onClick={() => void window.grokDesktop.revealEditorPath(tab.document.workspacePath, tab.document.path)}>在资源管理器中显示</button>{onChatReference && <details className="editor-more-actions"><summary>引用…</summary><div><button onClick={() => reference("file")}>添加文件到对话</button><button onClick={() => reference("selection")}>添加选中代码</button><button onClick={() => reference("explain")}>让 Grok 解释</button><button onClick={() => reference("modify")}>让 Grok 修改</button></div></details>}</div>
       {tab.conflict && <ConflictBar conflict={tab.conflict} onViewDiff={() => setShowConflictDiff((value) => !value)} onReload={() => void reload(tab)} onOverwrite={() => void save(tab, true)} onSaveCopy={() => void saveCopy(tab)} onDismiss={() => { setShowConflictDiff(false); store.setConflict(tab.key); }} />}
-      <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}>{showConflictDiff && tab.conflict?.diskContent !== undefined ? <MonacoDiffEditor original={tab.conflict.diskContent} modified={tab.buffer} language={tab.document.languageId} theme={light ? "light" : "vs-dark"} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, renderSideBySide: true }} /> : <MonacoEditor path={`${tab.document.path}?grok_view=${encodeURIComponent(editorInstance)}`} language={tab.document.languageId} value={tab.buffer} theme={light ? "light" : "vs-dark"} options={{ readOnly: !editing || !tab.document.editable, automaticLayout: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "off", renderWhitespace: "selection", scrollBeyondLastLine: false }} onChange={(value) => { if (editing) store.updateBuffer(tab.key, value ?? ""); }} onMount={mount} />}</Suspense></div>
+      <div className="monaco-host"><Suspense fallback={<div className="editor-loading">正在加载 Monaco 编辑器…</div>}>{showConflictDiff && tab.conflict?.diskContent !== undefined ? <MonacoDiffEditor original={tab.conflict.diskContent} modified={tab.buffer} language={tab.document.languageId} theme={customMonacoReady ? "grok-custom" : (light ? "light" : "vs-dark")} options={{ readOnly: true, automaticLayout: true, minimap: { enabled: false }, renderSideBySide: true }} /> : <MonacoEditor path={`${tab.document.path}?grok_view=${encodeURIComponent(editorInstance)}`} language={tab.document.languageId} value={tab.buffer} theme={customMonacoReady ? "grok-custom" : (light ? "light" : "vs-dark")} options={{ readOnly: !editing || !tab.document.editable, automaticLayout: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "off", renderWhitespace: "selection", scrollBeyondLastLine: false }} onChange={(value) => { if (editing) store.updateBuffer(tab.key, value ?? ""); }} onMount={mount} />}</Suspense></div>
     </>}
   </section>;
 }
 
 function ConflictBar({ conflict, onViewDiff, onReload, onOverwrite, onSaveCopy, onDismiss }: { conflict: EditorSaveConflict; onViewDiff(): void; onReload(): void; onOverwrite(): void; onSaveCopy(): void; onDismiss(): void }): React.JSX.Element {
-  return <div className="editor-conflict"><strong>{conflict.kind === "deleted" ? "磁盘文件已被删除" : conflict.kind === "type-changed" ? "磁盘路径类型已变化" : "磁盘文件已在外部修改"}</strong><span>未保存缓冲区不会被静默覆盖。</span>{conflict.diskContent !== undefined && <button onClick={onViewDiff}>查看磁盘 Diff</button>}<button onClick={onReload}>重新加载磁盘</button><button onClick={onOverwrite}>覆盖磁盘</button><button onClick={onSaveCopy}>另存副本</button><button onClick={onDismiss}>稍后处理</button></div>;
+  const canReload = conflict.kind !== "deleted" && conflict.kind !== "type-changed";
+  return <div className="editor-conflict"><strong>{conflict.kind === "deleted" ? "磁盘文件已被删除" : conflict.kind === "type-changed" ? "磁盘路径类型已变化" : "磁盘文件已在外部修改"}</strong><span>未保存缓冲区不会被静默覆盖。</span>{conflict.diskContent !== undefined && <button onClick={onViewDiff}>查看磁盘 Diff</button>}<button disabled={!canReload} title={!canReload ? "磁盘文件已不存在，可覆盖重建或另存副本" : undefined} onClick={onReload}>重新加载磁盘</button><button onClick={onOverwrite}>覆盖磁盘</button><button onClick={onSaveCopy}>另存副本</button><button onClick={onDismiss}>稍后处理</button></div>;
 }
 
 function conflictFromExternal(tab: EditorTabState, disk: EditorDocument): EditorSaveConflict {

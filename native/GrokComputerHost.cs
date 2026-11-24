@@ -177,8 +177,7 @@ internal static class GrokComputerHost
             bool presentation = state == NotificationState.PresentationMode;
             object foregroundRect = null; bool fullScreen = false;
             IntPtr foreground = locked ? IntPtr.Zero : GetForegroundWindow();
-            if (!locked && foreground == IntPtr.Zero) locked = true;
-            if (!locked && !ExcludedWindow(foreground, ownProcesses)) {
+            if (!locked && foreground != IntPtr.Zero && !ExcludedWindow(foreground, ownProcesses)) {
                 RECT frame;
                 IntPtr monitor = MonitorFromWindow(foreground, 2); // MONITOR_DEFAULTTONEAREST
                 MONITORINFO info = new MONITORINFO(); info.Size = Marshal.SizeOf(typeof(MONITORINFO));
@@ -190,7 +189,7 @@ internal static class GrokComputerHost
             bool leftButtonDown = !locked && (GetAsyncKeyState(0x01) & 0x8000) != 0;
             // Discard geometry during a foreground change and fail closed if the desktop changed.
             if (!locked && !DefaultInputDesktop()) locked = true;
-            if (locked || foreground != GetForegroundWindow()) { foregroundRect = null; fullScreen = false; }
+            if (locked || foreground == IntPtr.Zero || foreground != GetForegroundWindow()) { foregroundRect = null; fullScreen = false; }
             return new Dictionary<string, object> {
                 { "locked", locked }, { "presentation", presentation }, { "fullScreen", fullScreen }, { "foregroundRect", foregroundRect },
                 { "doubleClickTime", GetDoubleClickTime() }, { "leftButtonDown", !locked && leftButtonDown }

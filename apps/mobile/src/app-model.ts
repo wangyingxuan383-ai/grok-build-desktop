@@ -129,10 +129,10 @@ export function orderWorkspaces<T extends WorkspaceChoice>(workspaces: T[], sess
  * the input is empty and the computer is working.
  */
 export type PrimaryAction = "send" | "queue" | "stop" | "none";
-export function primaryAction(input: { draft: string; working: boolean; readOnly: boolean; pending: number; busy: boolean; disabled: boolean }): { action: PrimaryAction; enabled: boolean } {
+export function primaryAction(input: { draft: string; materials?: number; working: boolean; readOnly: boolean; pending: number; busy: boolean; disabled: boolean }): { action: PrimaryAction; enabled: boolean } {
   if (input.readOnly) return { action: "none", enabled: false };
-  const text = input.draft.trim().length > 0;
-  if (text) return { action: input.working ? "queue" : "send", enabled: !input.disabled && !input.busy && input.pending === 0 };
+  const hasContent = input.draft.trim().length > 0 || (input.materials ?? 0) > 0;
+  if (hasContent) return { action: input.working ? "queue" : "send", enabled: !input.disabled && !input.busy && input.pending === 0 };
   if (input.working) return { action: "stop", enabled: !input.disabled };
   return { action: "send", enabled: false };
 }

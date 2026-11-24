@@ -1,0 +1,34 @@
+/* Lazy-loaded styles for AgentDashboardWorkbench.tsx */
+.agent-dashboard-workbench { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 18px 22px 36px; background: var(--main); }
+.workbench-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.workbench-header h2 { margin: 0 0 4px; }
+.workbench-header p { margin: 0; color: var(--text-muted); font-size: .82em; }
+.dashboard-filters { margin: 16px 0 10px; padding: 10px; display: flex; align-items: end; flex-wrap: wrap; gap: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.dashboard-filters label { display: grid; gap: 4px; min-width: 140px; color: var(--text-muted); font-size: .72em; }
+.dashboard-mode { margin-left: auto; padding: 5px 9px; align-self: center; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted); font-size: .72em; }
+.dashboard-mode.live { border-color: color-mix(in srgb, var(--success) 55%, var(--border)); color: var(--success); }
+.dashboard-mode.mixed { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); color: var(--warning); }
+.dashboard-tree { display: grid; gap: 7px; }
+.dashboard-branch { display: grid; gap: 6px; }
+.dashboard-branch.depth-1 { margin-left: 30px; position: relative; }
+.dashboard-branch.depth-1::before { content: ""; position: absolute; left: -15px; top: -7px; bottom: 50%; width: 12px; border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.dashboard-node { min-width: 0; display: flex; align-items: center; gap: 9px; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.dashboard-node.running, .dashboard-node.waiting { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.dashboard-node.failed { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+.dashboard-expand { width: 25px; padding: 3px; flex: none; border: 0; background: transparent; }
+.dashboard-status { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--text-muted); }
+.dashboard-status.running { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent); }
+.dashboard-status.waiting, .dashboard-status.queued { background: var(--warning); }
+.dashboard-status.completed { background: var(--success); }
+.dashboard-status.failed { background: var(--danger); }
+.dashboard-node-copy { min-width: 180px; flex: 1; display: grid; gap: 3px; }
+.dashboard-node-copy strong, .dashboard-node-copy span, .dashboard-node-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-node-copy span, .dashboard-node-copy small { color: var(--text-muted); font-size: .74em; }
+.dashboard-footer { margin-top: 12px; color: var(--text-muted); font-size: .72em; text-align: right; }
+@media (max-width: 850px) { .dashboard-node { align-items: flex-start; flex-wrap: wrap; } .dashboard-node .provider-actions { width: 100%; padding-left: 43px; } }
+.workbench-header { min-height: var(--header-height, 44px); padding: 10px 14px; background: var(--main); }
+.agent-dashboard-workbench { background: var(--main); }
+.window-frame-root.background-window .agent-dashboard-workbench, .window-frame-root.has-aurora .agent-dashboard-workbench { background: transparent; }
+.workbench-header h2 { letter-spacing: -.02em; }
+.workbench-header button { border-color: color-mix(in srgb, var(--border) 75%, transparent); border-radius: 7px; background: transparent; }
+.workbench-header button:hover { background: var(--hover); }

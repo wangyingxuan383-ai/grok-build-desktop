@@ -35,7 +35,8 @@ export async function readWorkspaceArtifact(workspace:string,requested:string,op
  let data=binary?buffer.toString("base64"):decodeText(buffer);
  if(office){let total=0,count=0;const files=unzipSync(buffer,{filter:entry=>{if(++count>10000)throw Error("Office 文档条目过多");if(!/^(word\/document|xl\/sharedStrings|xl\/worksheets\/sheet\d+|ppt\/slides\/slide\d+)\.xml$/.test(entry.name))return false;total+=entry.originalSize;if(total>8*1024*1024)throw Error("Office 文档展开内容过大");return true}});
  data=Object.entries(files).sort(([a],[b])=>a.localeCompare(b,undefined,{numeric:true})).map(([name,bytes])=>`[${name}]\n${strFromU8(bytes).replace(/<\/(?:w:p|a:p|row)>/g,"\n").replace(/<[^>]*>/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,"&")}`).join("\n\n");}
- return {path,name:basename(path),kind:binary?.[0]||(office?"office":html?"html":"text"),mimeType:binary?.[1]||"text/plain",data};
+ const mime=binary?.[1]||(html?"text/html":office?(extension===".docx"?"application/vnd.openxmlformats-officedocument.wordprocessingml.document":extension===".xlsx"?"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":"application/vnd.openxmlformats-officedocument.presentationml.presentation"):"text/plain");
+ return {path,name:basename(path),kind:binary?.[0]||(office?"office":html?"html":"text"),mimeType:mime,data};
 }
 function isPreviewableText(path:string):boolean{const name=basename(path).toLowerCase();const extension=extname(name);if(extension)return textExtensions.has(extension);return textBasenames.has(name)||!name.includes(".")}
 function looksBinary(buffer:Buffer):boolean{if((buffer[0]===0xff&&buffer[1]===0xfe)||(buffer[0]===0xfe&&buffer[1]===0xff))return false;return buffer.subarray(0,8192).includes(0)}

@@ -418,6 +418,63 @@ describe("transactional provider model switching", () => {
       expect(manager.get("session")).toBe(rollback);
     } finally { await manager.dispose(); }
   });
+
+  it("forces process respawn when provider launch environment changes and rolls back if target model is unavailable", async () => {
+    const runtime = {
+      get: vi.fn().mockResolvedValue({ sessionId: "session", cwd: "C:\\repo", modelId: "provider-a-local", providerId: "provider-a", effort: "high", mode: "agent", updatedAt: "2026-11-24T00:00:00.000Z" }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const getProviderEnvironment = vi.fn(async (ctx: { providerId?: string }) => (
+      ctx.providerId === "provider-b" ? { OPENAI_BASE_URL: "http://127.0.0.1:4102/v1" } : { OPENAI_BASE_URL: "http://127.0.0.1:4101/v1" }
+    ));
+    const manager = new GrokProcessManager(
+      async () => settings,
+      async () => undefined,
+      { log: vi.fn() } as any,
+      vi.fn(),
+      undefined,
+      undefined,
+      undefined,
+      async () => ({}),
+      async () => ({}),
+      getProviderEnvironment,
+      undefined,
+      runtime as any,
+    );
+    const current = {
+      sessionId: "session", cwd: "C:\\repo", effort: "high", mode: "agent", currentModelId: "provider-a-local",
+      working: false, needsUser: false, processOptions: undefined,
+      setModel: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+    };
+    const unavailableReplacement = {
+      sessionId: "session", cwd: "C:\\repo", effort: "high", mode: "agent", currentModelId: "grok-4.5",
+      modelSelectionRequired: "原模型不可用，请重新选择模型",
+      start: vi.fn().mockResolvedValue({ sessionId: "session" }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+      extensionLeaseId: undefined,
+    };
+    const rollback = {
+      sessionId: "session", cwd: "C:\\repo", effort: "high", mode: "agent", currentModelId: "provider-a-local",
+      start: vi.fn().mockResolvedValue({ sessionId: "session" }),
+      dispose: vi.fn().mockResolvedValue(undefined),
+      extensionLeaseId: undefined,
+    };
+    (manager as any).sessions.set("session", current);
+    const spawn = vi.spyOn(manager as any, "spawn")
+      .mockResolvedValueOnce(unavailableReplacement)
+      .mockResolvedValueOnce(rollback);
+    try {
+      await expect(manager.setModel("session", "provider-b-local", {
+        target: { providerId: "provider-b", localModelId: "provider-b-local" },
+        previous: { providerId: "provider-a", localModelId: "provider-a-local" },
+      })).rejects.toThrow("已尝试恢复原模型");
+      expect(current.setModel).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(unavailableReplacement.dispose).toHaveBeenCalledTimes(1);
+      expect(manager.get("session")).toBe(rollback);
+    } finally { await manager.dispose(); }
+  });
 });
 
 describe("session cancellation recovery", () => {

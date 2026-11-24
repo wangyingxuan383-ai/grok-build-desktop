@@ -1,4 +1,5 @@
 import { PanelSurface } from "./ui/PanelSurface";
+import "../styles/extensions-panel.css";
 import { useEffect, useMemo, useState } from "react";
 import type { CodexPluginCompatibility, ComputerCapability, ComputerUseSettings, HookSummary, MarketplaceSource, McpDiagnostic, McpServerSummary, PluginDetails, PluginSummary, SkillSummary } from "../../../shared/types";
 

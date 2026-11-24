@@ -47,3 +47,20 @@ test("resolved approvals stay visible in history with what was decided", async (
   assert.equal(decisionLabel("permission", "reject_once"), "已拒绝");
   assert.equal(decisionLabel("permission", "allow_always"), "已始终允许");
 });
+
+test("completed tool calls and approvals split pre-action and post-action assistant segments cleanly", () => {
+  const rows = messagesFromEvents([
+    { type: "user-message", id: "u1", text: "Fix bug" },
+    { type: "message-chunk", text: "先读取文件。", remoteIndex: 1 },
+    { type: "tool-call", remoteIndex: 2, tool: { toolCallId: "t1", title: "Read file", status: "completed", output: "ok" } },
+    { type: "message-chunk", text: "已定位问题，请确认修改。", remoteIndex: 3 },
+    { type: "permission", sessionId: "s", request: { requestId: 9, toolCall: { title: "Edit file" } }, remoteIndex: 4 } as never,
+    { type: "interaction-resolved", sessionId: "s", interaction: "permission", requestId: 9, outcome: "allow_once", remoteIndex: 5 } as never,
+    { type: "message-chunk", text: "修改已完成。", remoteIndex: 6 },
+  ]);
+  assert.deepEqual(rows.filter(r => r.role === "assistant").map(r => r.text), [
+    "先读取文件。",
+    "已定位问题，请确认修改。",
+    "修改已完成。",
+  ]);
+});

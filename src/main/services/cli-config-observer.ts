@@ -159,6 +159,7 @@ export class CliConfigObserver {
       // Only the selected model's literal URL is evidence. No environment lookup,
       // manager-directory inference, DNS lookup, probe or ownership assertion.
       const endpoint = typeof configured === "string" ? record(record(table.model)[configured]).base_url : undefined;
+      if (this.watchFailed && !this.watcher && this.listeners.size > 0) this.watchParent();
       this.publish({
         revision: this.state.revision,
         changedAt: this.state.changedAt,

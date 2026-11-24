@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentDashboardNode, AgentDashboardSnapshot, AgentDashboardStatus } from "../../../shared/types";
 import { statusText } from "../agent-status";
+import "../styles/agent-dashboard-workbench.css";
 
 export function AgentDashboardWorkbench({ workspace, onOpenSession, onOpenSubagent, onOpenWorktree, onOpenDefinition, setError }: {
   workspace: string;

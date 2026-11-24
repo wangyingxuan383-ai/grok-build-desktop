@@ -17,7 +17,7 @@ export interface PromptSnippetInput {
 export interface PromptSnippetApi {
   listPromptSnippets(): Promise<PromptSnippet[]>;
   savePromptSnippet(input: PromptSnippetInput): Promise<PromptSnippet[]>;
-  deletePromptSnippet(id: string, updatedAt?: string): Promise<PromptSnippet[]>;
+  deletePromptSnippet(id: string, updatedAt: string): Promise<PromptSnippet[]>;
 }
 
 const variablePattern = /\{\{([^{}\r\n]+)\}\}/gu;

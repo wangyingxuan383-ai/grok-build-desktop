@@ -19,7 +19,31 @@ type Rule = (args: unknown[]) => void;
 const RULES: Record<string, Rule> = {
   "desktop-pet:skins": noArgs,
   "desktop-pet:import": noArgs,
+  "desktop-pet:import-sheet": args => {
+    const value = strictRecordArg(args, 0, ["path", "rows", "cols", "clip", "targetSkinId", "name", "frameDurationMs", "loop", "loopFrom"]);
+    if (value.path !== undefined) absoluteFilesystemPathArg([value.path], 0, "精灵表图片");
+    requiredRecordInteger(value, "rows", 1, 8);
+    requiredRecordInteger(value, "cols", 1, 8);
+    if (value.clip !== undefined && !PET_CLIPS.includes(value.clip as never)) throw Error("桌宠动作槽位无效");
+    optionalRecordString(value, "targetSkinId", 128);
+    optionalRecordString(value, "name", 128);
+    optionalRecordInteger(value, "frameDurationMs", 30, 5_000);
+    optionalRecordBoolean(value, "loop");
+    optionalRecordInteger(value, "loopFrom", 0, 63);
+  },
+  "desktop-pet:export": args => { idArg(args, 0); enumArg(args, 1, ["grok", "codex"]); },
+  "desktop-pet:delete": args => { const id = idArg(args, 0); if (!/^custom-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw Error("只能删除自定义桌宠形象"); },
   "desktop-pet:command": args => { if (!["show", "hide", "reset", "preview"].includes(String(args[0])) || (args[1] !== undefined && !PET_CLIPS.includes(args[1] as never))) throw Error("桌宠操作无效"); },
+  "app:popup-menu": args => {
+    if (args[0] !== undefined) {
+      const pos = strictRecordArg(args, 0, ["x", "y"]);
+      for (const key of ["x", "y"]) {
+        if (typeof pos[key] !== "number" || !Number.isFinite(pos[key]) || (pos[key] as number) < -10_000 || (pos[key] as number) > 20_000) {
+          throw Error("菜单弹出坐标无效");
+        }
+      }
+    }
+  },
   "desktop:activity": noArgs,
   "cli:config-state": noArgs,
   "inbox:mark-all-read": noArgs,
@@ -78,7 +102,7 @@ const RULES: Record<string, Rule> = {
   "workspace-terminal:list":args=>absoluteFilesystemPathArg(args,0,"终端工作区"),
   "workspace-terminal:create":args=>absoluteFilesystemPathArg(args,0,"终端工作区"),
   "workspace-terminal:write":args=>{idArg(args,0);stringArg(args,1,65536)},
-  "workspace-terminal:resize":args=>{idArg(args,0);for(const value of args.slice(1))if(!Number.isInteger(value)||(value as number)<2||(value as number)>500)throw Error("终端尺寸无效")},
+  "workspace-terminal:resize":args=>{if(args.length!==3)throw Error("终端尺寸参数数量无效");idArg(args,0);integerArg(args,1,2,500);integerArg(args,2,2,300)},
   "workspace-terminal:close":args=>idArg(args,0),
   "app:bootstrap": noArgs,
   "app:build-info": noArgs,
@@ -248,6 +272,14 @@ const RULES: Record<string, Rule> = {
     if (args[0] !== undefined && args[0] !== null && args[0] !== "") pathArg(args, 0);
     if (args[1] !== undefined && args[1] !== null) stringArg(args, 1, 4_096);
   },
+  "session:search": (args) => {
+    stringArgAllowEmpty(args, 0, 16_384);
+    if (args[1] !== undefined && args[1] !== null && args[1] !== "") pathArg(args, 1);
+    optionalIntegerArg(args, 2, 1, 200);
+  },
+  "workflows:list": (args) => {
+    if (args[0] !== undefined && args[0] !== null && args[0] !== "") pathArg(args, 0);
+  },
   "session:create": (args) => sessionLaunchArg(args, 0),
   "session:preview": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:inspect": (args) => { pathArg(args, 0); idArg(args, 1); },
@@ -259,13 +291,14 @@ const RULES: Record<string, Rule> = {
   "session:compact": (args) => idArg(args, 0),
   "feedback:capability": (args) => idArg(args, 0),
   "feedback:preview": (args) => stringArg(args, 0, 64 * 1024),
-  "feedback:submit": (args) => { idArg(args, 0); stringArg(args, 1, 64 * 1024); },
+  "feedback:submit": (args) => { idArg(args, 0); stringArg(args, 1, 64 * 1024); if (args[2] !== undefined) attachmentPathArrayArg(args, 2, 8); },
   "session:btw": (args) => { idArg(args, 0); stringArg(args, 1, 64 * 1024); },
   "session:rename": (args) => { idArg(args, 0); stringArg(args, 1, 4_096); },
   "session:delete": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:delete-desktop-data": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:clear": (args) => { pathArg(args, 0); optionalIdArg(args, 1); },
   "session:pin": (args) => { idArg(args, 0); booleanArg(args, 1); },
+  "session:settle": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "session:export-markdown": (args) => { pathArg(args, 0); idArg(args, 1); },
   "session:media-capabilities": (args) => idArg(args, 0),
   "session:mode": (args) => { idArg(args, 0); enumArg(args, 1, ["agent", "plan", "auto"]); },
@@ -282,9 +315,9 @@ const RULES: Record<string, Rule> = {
   "session:queue:reorder": (args) => { idArg(args, 0); idArg(args, 1); integerArg(args, 2, 0, 10_000); },
   "session:queue:clear": (args) => idArg(args, 0),
   "session:queue:interject": (args) => { idArg(args, 0); idArg(args, 1); if (args[2] !== undefined) stringArg(args, 2, 2 * 1024 * 1024); },
-  "session:fork": (args) => { idArg(args, 0); optionalIdArg(args, 1); optionalObjectArg(args, 2); },
+  "session:fork": (args) => { idArg(args, 0); optionalIdArg(args, 1); if (args[2] !== undefined) sessionLaunchArg(args, 2); },
   "session:rewind-points": (args) => idArg(args, 0),
-  "session:rewind": (args) => { idArg(args, 0); idArg(args, 1); },
+  "session:rewind": (args) => { idArg(args, 0); idArg(args, 1); optionalEnumArg(args, 2, ["all", "conversation_only", "files_only"]); },
   "session:archive": (args) => { idArg(args, 0); booleanArg(args, 1); },
   "tasks:list": noArgs,
   "tasks:kill": (args) => idArg(args, 0),
@@ -311,7 +344,7 @@ const RULES: Record<string, Rule> = {
   "media:get": (args) => idArg(args, 0),
   "media:cancel": (args) => idArg(args, 0),
   "plan:respond": (args) => { idArg(args, 0); requestIdArg(args, 1, true); enumArg(args, 2, ["approved", "rejected", "cancelled"]); if (args[3] !== undefined) stringArgAllowEmpty(args, 3, 64 * 1024); if (args[4] !== undefined) enumArg(args, 4, ["agent", "auto"]); },
-  "permission:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); idArg(args, 2); },
+  "permission:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); idArg(args, 2); if (args[3] !== undefined) stringArgAllowEmpty(args, 3, 16_384); },
   "question:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); objectArg(args, 2); },
   "mcp-elicitation:respond": (args) => { idArg(args, 0); requestIdArg(args, 1); enumArg(args, 2, ["accept", "decline", "cancel"]); optionalObjectArg(args, 3); },
   "attachments:pick": noArgs,
@@ -323,12 +356,20 @@ const RULES: Record<string, Rule> = {
   "auth:remove": (args) => idArg(args, 0),
   "settings:get": noArgs,
   "git:pull-request":args=>pathArg(args,0),
-  "git:watch-pull-request":args=>{pathArg(args,0);idArg(args,1);booleanArg(args,2)},
+  "git:create-pull-request": args => {
+    const value = strictRecordArg(args, 0, ["workspace", "title", "body", "base", "draft"]);
+    absoluteFilesystemPathArg([value.workspace], 0, "PR 工作区");
+    requiredRecordString(value, "title", 1024);
+    requiredRecordString(value, "body", 256 * 1024, true);
+    optionalRecordString(value, "base", 512);
+    optionalRecordBoolean(value, "draft");
+  },
+  "git:watch-pull-request":args=>{pathArg(args,0);idArg(args,1);booleanArg(args,2);optionalBooleanArg(args,3)},
   "settings:update": (args) => settingsPatchArg(args, 0),
   "models:catalog": args => { if (args[0] !== undefined && typeof args[0] !== "boolean") throw Error("模型目录刷新参数无效"); },
   "updates:auto-check": noArgs,
   "theme:get": noArgs,
-  "theme:update": (args) => objectArg(args, 0),
+  "theme:update": (args) => themePatchArg(args, 0),
   "theme:pick-background": noArgs,
   "theme:remove-background": noArgs,
   "auth:list": noArgs,
@@ -392,6 +433,65 @@ const RULES: Record<string, Rule> = {
   "cli:compatibility": noArgs,
   "cli:update-history": noArgs,
   "logs:export": noArgs,
+  "workspace-scripts:list": (args) => {
+    absoluteFilesystemPathArg(args, 0, "项目脚本工作区");
+    if (args[1] !== undefined) absoluteFilesystemPathArg(args, 1, "脚本执行目录");
+  },
+  "workspace-scripts:save": (args) => workspaceScriptSaveArg(args, 0),
+  "workspace-scripts:delete": (args) => { absoluteFilesystemPathArg(args, 0, "项目脚本工作区"); idArg(args, 1); },
+  "workspace-scripts:approve": (args) => {
+    absoluteFilesystemPathArg(args, 0, "项目脚本工作区");
+    idArg(args, 1);
+    const hash = stringArg(args, 2, 128);
+    if (!/^[0-9a-f]{64}$/i.test(hash)) throw new Error("IPC 脚本命令 SHA-256 摘要格式无效");
+    booleanArg(args, 3);
+    if (args[4] !== undefined) absoluteFilesystemPathArg(args, 4, "脚本执行目录");
+  },
+  "workspace-scripts:run": (args) => workspaceScriptRunArg(args, 0),
+  "workspace-scripts:stop": (args) => idArg(args, 0),
+  "workspace-scripts:running": (args) => absoluteFilesystemPathArg(args, 0, "项目脚本工作区"),
+  "git:checkpoints:list": (args) => { absoluteFilesystemPathArg(args, 0, "检查点工作区"); idArg(args, 1); },
+  "git:checkpoints:turn-diff": (args) => { absoluteFilesystemPathArg(args, 0, "检查点工作区"); idArg(args, 1); integerArg(args, 2, 0, 100_000); },
+  "session:handoff-worktree": (args) => sessionHandoffWorktreeArg(args, 0),
+  "session:snooze": (args) => {
+    idArg(args, 0);
+    if (args[1] !== null) {
+      const until = stringArg(args, 1, 64);
+      if (!Number.isFinite(Date.parse(until))) throw new Error("IPC 暂缓时间格式无效");
+    }
+  },
+  "session:unread": (args) => { idArg(args, 0); booleanArg(args, 1); },
+  "session:settle-on-turn-end": (args) => { idArg(args, 0); booleanArg(args, 1); },
+  "session:merge-back:preview": (args) => { idArg(args, 0); optionalIdArg(args, 1); },
+  "session:merge-back": (args) => sessionMergeBackArg(args, 0),
+  "session:merge-back:dismiss": (args) => { idArg(args, 0); idArg(args, 1); },
+  "session:queue:steer": (args) => { idArg(args, 0); idArg(args, 1); if (args[2] !== undefined) stringArgAllowEmpty(args, 2, 2 * 1024 * 1024); },
+  "session:clear-context": (args) => sessionClearContextArg(args, 0),
+  "git:pull-request:templates": (args) => absoluteFilesystemPathArg(args, 0, "PR 模板工作区"),
+  "git:pull-request:stack": (args) => absoluteFilesystemPathArg(args, 0, "PR Stack 工作区"),
+  "github:issues:list": (args) => {
+    absoluteFilesystemPathArg(args, 0, "GitHub Issues 工作区");
+    if (args[1] !== undefined) {
+      const query = strictRecordArg(args, 1, ["state", "search", "limit"]);
+      optionalRecordEnum(query, "state", ["open", "closed", "all"]);
+      optionalRecordStringAllowEmpty(query, "search", 512);
+      optionalRecordInteger(query, "limit", 1, 100);
+    }
+  },
+  "github:issues:get": (args) => { absoluteFilesystemPathArg(args, 0, "GitHub Issue 工作区"); integerArg(args, 1, 1, 10_000_000); },
+  "session:link-issue": (args) => {
+    idArg(args, 0);
+    if (args[1] !== null) {
+      const issue = strictRecordArg(args, 1, ["number", "title", "url", "state", "repository", "linkedAt"]);
+      requiredRecordInteger(issue, "number", 1, 10_000_000);
+      requiredRecordString(issue, "title", 512);
+      const url = requiredRecordString(issue, "url", 2048);
+      if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+$/.test(url)) throw new Error("IPC Issue URL 必须是有效的 GitHub Issue 链接");
+      optionalRecordString(issue, "state", 64);
+      optionalRecordString(issue, "repository", 256);
+      requiredRecordString(issue, "linkedAt", 64);
+    }
+  },
 };
 
 /**
@@ -535,7 +635,7 @@ function sessionLaunchArg(args: unknown[], index: number): void {
   if (typeof args[index] === "string") { absoluteFilesystemPathArg(args, index, "工作区"); return; }
   const value = strictRecordArg(args, index, ["workspacePath", "profileId", "worktreeName", "worktreeRef", "modelId", "providerId", "effort", "mode"]);
   const workspacePath = requiredRecordString(value, "workspacePath", 32_767);
-  if (!isAbsoluteWindowsPath(workspacePath)) throw new Error("IPC 字段 workspacePath 必须是绝对路径");
+  absoluteFilesystemPathArg([workspacePath], 0, "工作区");
   optionalRecordString(value, "profileId", 512);
   optionalRecordString(value, "worktreeName", 512);
   optionalRecordString(value, "worktreeRef", 4_096);
@@ -549,7 +649,7 @@ function newTaskDraftArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["projectId", "workspacePath", "profileId", "worktreeName", "worktreeRef", "modelId", "providerId", "effort", "mode"]);
   requiredRecordString(value, "projectId", 512);
   const workspacePath = requiredRecordString(value, "workspacePath", 32_767);
-  if (!isAbsoluteWindowsPath(workspacePath)) throw new Error("IPC 字段 workspacePath 必须是绝对路径");
+  absoluteFilesystemPathArg([workspacePath], 0, "工作区");
   optionalRecordString(value, "profileId", 512);
   optionalRecordString(value, "worktreeName", 512);
   optionalRecordString(value, "worktreeRef", 4_096);
@@ -684,13 +784,14 @@ function settingsPatchArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, APP_SETTINGS_PATCH_KEYS);
   if (value.desktopPet !== undefined) validateDesktopPetSettings(value.desktopPet);
   if (value.productivity !== undefined) {
-    const desktop = strictRecordArg([value.productivity], 0, ["closeAction", "quickAskShortcut", "screenshotShortcut", "preventSleepWhileWorking", "quotaWarningPercent", "quietUntil", "shortcuts"]);
+    const desktop = strictRecordArg([value.productivity], 0, ["closeAction", "quickAskShortcut", "screenshotShortcut", "preventSleepWhileWorking", "quotaWarningPercent", "quietUntil", "shortcuts", "calmChimeMode"]);
     requiredRecordEnum(desktop, "closeAction", ["ask", "tray", "quit"]);
     for (const key of ["quickAskShortcut", "screenshotShortcut"]) if (typeof desktop[key] !== "string" || String(desktop[key]).length > 100) throw new Error("快捷键设置无效");
     requiredRecordBoolean(desktop, "preventSleepWhileWorking");
     optionalRecordInteger(desktop, "quotaWarningPercent", 0, 100);
     const until = optionalRecordString(desktop, "quietUntil", 64);
     if (until && !Number.isFinite(Date.parse(until))) throw new Error("勿扰结束时间无效");
+    optionalRecordEnum(desktop, "calmChimeMode", ["off", "background-only", "always"]);
     if (desktop.shortcuts !== undefined && (!desktop.shortcuts || typeof desktop.shortcuts !== "object" || Array.isArray(desktop.shortcuts))) throw new Error("快捷键设置无效");
     validateShortcutBindings(desktop as unknown as DesktopProductivitySettings);
   }
@@ -744,7 +845,11 @@ function cliPathSetting(input: unknown): void {
 }
 
 function themeSettingsArg(input: unknown): void {
-  const value = strictRecordArg([input], 0, ["mode", "customBase", "colors", "background"]);
+  const value = strictRecordArg([input], 0, [
+    "mode", "customBase", "colors", "background",
+    "presetId", "darkPresetId", "lightPresetId", "autoExtractWallpaperPalette",
+    "aurora", "customCss", "seedCanvas", "seedAccent",
+  ]);
   requiredRecordEnum(value, "mode", ["dark", "light", "system", "custom"]);
   requiredRecordEnum(value, "customBase", ["dark", "light"]);
   const colors = strictRecordArg([value.colors], 0, ["background", "surface", "text", "muted", "accent", "border"]);
@@ -752,7 +857,15 @@ function themeSettingsArg(input: unknown): void {
     const color = requiredRecordString(colors, key, 64);
     if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error(`IPC 主题颜色 ${key} 无效`);
   }
-  const background = strictRecordArg([value.background], 0, ["enabled", "scope", "fit", "position", "opacity", "blur", "dim"]);
+  for (const key of ["presetId", "darkPresetId", "lightPresetId"]) optionalRecordStringAllowEmpty(value, key, 128);
+  optionalRecordBoolean(value, "autoExtractWallpaperPalette");
+  optionalRecordEnum(value, "aurora", ["none", "nebula", "cedar", "jade"]);
+  optionalRecordStringAllowEmpty(value, "customCss", 65_536);
+  for (const key of ["seedCanvas", "seedAccent"]) {
+    const seed = optionalRecordStringAllowEmpty(value, key, 64);
+    if (seed && !/^#[0-9a-f]{6}$/i.test(seed)) throw new Error(`IPC 主题种子色 ${key} 无效`);
+  }
+  const background = strictRecordArg([value.background], 0, ["enabled", "scope", "fit", "position", "opacity", "blur", "dim", "updatedAt"]);
   requiredRecordBoolean(background, "enabled");
   requiredRecordEnum(background, "scope", ["conversation", "window"]);
   requiredRecordEnum(background, "fit", ["cover", "contain"]);
@@ -760,6 +873,45 @@ function themeSettingsArg(input: unknown): void {
   requiredRecordNumber(background, "opacity", 0, 1);
   requiredRecordNumber(background, "blur", 0, 24);
   requiredRecordNumber(background, "dim", 0, 0.9);
+  if (background.updatedAt !== undefined) requiredRecordNumber(background, "updatedAt", 0, Number.MAX_SAFE_INTEGER);
+}
+
+function themePatchArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, [
+    "mode", "customBase", "colors", "background",
+    "presetId", "darkPresetId", "lightPresetId", "autoExtractWallpaperPalette",
+    "aurora", "customCss", "seedCanvas", "seedAccent",
+  ]);
+  optionalRecordEnum(value, "mode", ["dark", "light", "system", "custom"]);
+  optionalRecordEnum(value, "customBase", ["dark", "light"]);
+  if (value.colors !== undefined) {
+    const colors = strictRecordArg([value.colors], 0, ["background", "surface", "text", "muted", "accent", "border"]);
+    for (const key of ["background", "surface", "text", "muted", "accent", "border"]) {
+      if (colors[key] !== undefined) {
+        const color = requiredRecordString(colors, key, 64);
+        if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error(`IPC 主题颜色 ${key} 无效`);
+      }
+    }
+  }
+  for (const key of ["presetId", "darkPresetId", "lightPresetId"]) optionalRecordStringAllowEmpty(value, key, 128);
+  optionalRecordBoolean(value, "autoExtractWallpaperPalette");
+  optionalRecordEnum(value, "aurora", ["none", "nebula", "cedar", "jade"]);
+  optionalRecordStringAllowEmpty(value, "customCss", 65_536);
+  for (const key of ["seedCanvas", "seedAccent"]) {
+    const seed = optionalRecordStringAllowEmpty(value, key, 64);
+    if (seed && !/^#[0-9a-f]{6}$/i.test(seed)) throw new Error(`IPC 主题种子色 ${key} 无效`);
+  }
+  if (value.background !== undefined) {
+    const background = strictRecordArg([value.background], 0, ["enabled", "scope", "fit", "position", "opacity", "blur", "dim", "updatedAt"]);
+    optionalRecordBoolean(background, "enabled");
+    optionalRecordEnum(background, "scope", ["conversation", "window"]);
+    optionalRecordEnum(background, "fit", ["cover", "contain"]);
+    optionalRecordEnum(background, "position", ["center", "top", "bottom", "left", "right"]);
+    if (background.opacity !== undefined) requiredRecordNumber(background, "opacity", 0, 1);
+    if (background.blur !== undefined) requiredRecordNumber(background, "blur", 0, 24);
+    if (background.dim !== undefined) requiredRecordNumber(background, "dim", 0, 0.9);
+    if (background.updatedAt !== undefined) requiredRecordNumber(background, "updatedAt", 0, Number.MAX_SAFE_INTEGER);
+  }
 }
 
 function editorSaveArg(args: unknown[], index: number): void {
@@ -803,10 +955,11 @@ function gitHunkActionArg(args: unknown[], index: number): void {
   optionalRecordBoolean(value, "confirmed");
 }
 function gitDiscardArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["trackedPaths", "untrackedPaths", "confirmedPaths"]);
+  const value = strictRecordArg(args, index, ["trackedPaths", "untrackedPaths", "confirmedPaths", "scope"]);
   recordStringArray(value, "trackedPaths", 10_000, 32_767);
   recordStringArray(value, "untrackedPaths", 10_000, 32_767);
   recordStringArray(value, "confirmedPaths", 10_000, 32_767);
+  optionalRecordEnum(value, "scope", ["worktree", "staged", "all"]);
 }
 function worktreeCreateArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["workspacePath", "name", "baseRef", "sourceSessionId", "agentId"]);
@@ -817,9 +970,10 @@ function worktreeCreateArg(args: unknown[], index: number): void {
   optionalRecordString(value, "agentId", 512);
 }
 function memorySaveArg(args: unknown[], index: number): void {
-  const value = strictRecordArg(args, index, ["workspacePath", "scope", "content", "expectedHash", "expectedModifiedAt", "overwrite"]);
+  const value = strictRecordArg(args, index, ["workspacePath", "scope", "topicFile", "content", "expectedHash", "expectedModifiedAt", "overwrite"]);
   requiredRecordString(value, "workspacePath", 32_767);
-  requiredRecordEnum(value, "scope", ["global", "workspace"]);
+  requiredRecordEnum(value, "scope", ["global", "workspace", "topic"]);
+  optionalRecordString(value, "topicFile", 256);
   requiredRecordString(value, "content", 2 * 1024 * 1024, true);
   requiredRecordString(value, "expectedHash", 512, true);
   requiredRecordString(value, "expectedModifiedAt", 512, true);
@@ -848,7 +1002,8 @@ function automationTaskInputArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["id", "name", "workspace", "schedule", "profile", "executionProfileId", "enabled", "wakeToRun", "notify", "missedRunPolicy", "skillCommand", "contextPolicy", "prompt", "timeZone", "destination", "targetSessionId"]);
   optionalRecordString(value, "id", 512);
   requiredRecordString(value, "name", 512);
-  requiredRecordString(value, "workspace", 32_767);
+  const workspace = requiredRecordString(value, "workspace", 32_767);
+  absoluteFilesystemPathArg([workspace], 0, "自动化工作区");
   optionalRecordString(value, "executionProfileId", 512);
   requiredRecordBoolean(value, "enabled");
   requiredRecordBoolean(value, "wakeToRun");
@@ -886,7 +1041,8 @@ function automationTaskPatchArg(args: unknown[], index: number): void {
   const value = strictRecordArg(args, index, ["id", "name", "workspace", "schedule", "profile", "executionProfileId", "enabled", "wakeToRun", "notify", "missedRunPolicy", "skillCommand", "contextPolicy", "prompt", "timeZone", "destination", "targetSessionId"]);
   optionalRecordString(value, "id", 512);
   optionalRecordString(value, "name", 512);
-  optionalRecordString(value, "workspace", 32_767);
+  const workspace = optionalRecordString(value, "workspace", 32_767);
+  if (workspace !== undefined) absoluteFilesystemPathArg([workspace], 0, "自动化工作区");
   optionalRecordString(value, "executionProfileId", 512);
   optionalRecordBoolean(value, "enabled");
   optionalRecordBoolean(value, "wakeToRun");
@@ -901,7 +1057,7 @@ function automationTaskPatchArg(args: unknown[], index: number): void {
   if (value.schedule !== undefined) {
     automationTaskInputArg([{
       name: "patch",
-      workspace: "patch",
+      workspace: "C:\\patch",
       schedule: value.schedule,
       profile: { modelId: "", effort: "", mode: "agent", permissionPolicy: "agent", computerEnabled: false },
       enabled: true,
@@ -928,7 +1084,7 @@ function automationPolicyArg(args: unknown[], index: number): void {
   if (value.defaultProfile !== undefined) {
     const profile = value.defaultProfile;
     if (!profile || typeof profile !== "object" || Array.isArray(profile)) throw new Error("IPC 自动化默认 profile 无效");
-    automationTaskInputArg([{ name: "policy", workspace: "policy", schedule: { kind: "interval", minutes: 1 }, profile, enabled: true, wakeToRun: false, notify: false, missedRunPolicy: "skip", contextPolicy: "fresh" }], 0);
+    automationTaskInputArg([{ name: "policy", workspace: "C:\\policy", schedule: { kind: "interval", minutes: 1 }, profile, enabled: true, wakeToRun: false, notify: false, missedRunPolicy: "skip", contextPolicy: "fresh" }], 0);
   }
   optionalRecordInteger(value, "maxConcurrentRuns", 1, 64);
   optionalRecordInteger(value, "confirmationTimeoutMinutes", 1, 10_080);
@@ -1005,4 +1161,73 @@ function imageComposerArg(args: unknown[], index: number): void {
  attachmentArrayArg([value.references],0);
  if(!Array.isArray(value.sources)||value.sources.length>8)throw Error("图像参考来源无效");
  for(const source of value.sources){if(!source||typeof source!=="object")throw Error("图像参考来源无效");mediaSourceArg([(source as Record<string,unknown>).source],0,false);requiredRecordString(source as Record<string,unknown>,"label",512);}
+}
+
+function workspaceScriptSaveArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, [
+    "workspacePath", "id", "name", "command", "icon",
+    "async", "autoOpenPreview", "previewUrl", "runOnWorktreeCreate", "stopOnSettle", "runOnSettle",
+  ]);
+  absoluteFilesystemPathArg([value.workspacePath], 0, "项目脚本工作区");
+  optionalRecordString(value, "id", 256);
+  requiredRecordString(value, "name", 240);
+  requiredRecordString(value, "command", 16_384);
+  requiredRecordEnum(value, "icon", ["play", "test", "lint", "configure", "build", "debug"]);
+  optionalRecordBoolean(value, "async");
+  optionalRecordBoolean(value, "autoOpenPreview");
+  const previewUrl = optionalRecordStringAllowEmpty(value, "previewUrl", 2048);
+  if (previewUrl) {
+    let parsed: URL;
+    try { parsed = new URL(previewUrl); } catch { throw new Error("IPC 字段 previewUrl 无效"); }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("IPC 字段 previewUrl 仅允许 HTTP/HTTPS");
+  }
+  optionalRecordBoolean(value, "runOnWorktreeCreate");
+  optionalRecordBoolean(value, "stopOnSettle");
+  optionalRecordBoolean(value, "runOnSettle");
+}
+
+function workspaceScriptRunArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, ["workspacePath", "scriptId", "executionCwd", "sessionId", "worktreeId"]);
+  absoluteFilesystemPathArg([value.workspacePath], 0, "项目脚本工作区");
+  requiredRecordString(value, "scriptId", 256);
+  if (value.executionCwd !== undefined) absoluteFilesystemPathArg([value.executionCwd], 0, "脚本执行目录");
+  optionalRecordString(value, "sessionId", 512);
+  optionalRecordString(value, "worktreeId", 512);
+}
+
+function sessionHandoffWorktreeArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, [
+    "sessionId", "workspacePath", "worktreeName", "baseRef", "worktreeId",
+    "cleanSource", "startFromOrigin", "carryDirtyChanges",
+  ]);
+  requiredRecordString(value, "sessionId", 512);
+  absoluteFilesystemPathArg([value.workspacePath], 0, "移交工作区");
+  optionalRecordString(value, "worktreeName", 240);
+  optionalRecordString(value, "baseRef", 512);
+  optionalRecordString(value, "worktreeId", 512);
+  optionalRecordBoolean(value, "cleanSource");
+  optionalRecordBoolean(value, "startFromOrigin");
+  optionalRecordEnum(value, "carryDirtyChanges", ["move", "copy", "none"]);
+}
+
+function sessionMergeBackArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, [
+    "sessionId", "targetSessionId", "summary", "applyWorktree", "cleanupWorktree", "settleChild", "confirmationToken", "confirmed",
+  ]);
+  requiredRecordString(value, "sessionId", 512);
+  optionalRecordString(value, "targetSessionId", 512);
+  optionalRecordStringAllowEmpty(value, "summary", 64 * 1024);
+  optionalRecordBoolean(value, "applyWorktree");
+  optionalRecordBoolean(value, "cleanupWorktree");
+  optionalRecordBoolean(value, "settleChild");
+  requiredRecordString(value, "confirmationToken", 256);
+  requiredRecordBoolean(value, "confirmed");
+}
+
+function sessionClearContextArg(args: unknown[], index: number): void {
+  const value = strictRecordArg(args, index, ["sessionId", "cwd", "carryoverPrompt", "keepHistoryArchive"]);
+  requiredRecordString(value, "sessionId", 512);
+  if (value.cwd !== undefined && value.cwd !== "") absoluteFilesystemPathArg([value.cwd], 0, "会话工作区");
+  optionalRecordStringAllowEmpty(value, "carryoverPrompt", 256 * 1024);
+  optionalRecordBoolean(value, "keepHistoryArchive");
 }

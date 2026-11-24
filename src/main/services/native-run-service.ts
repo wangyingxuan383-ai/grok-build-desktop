@@ -155,11 +155,12 @@ export class NativeRunService {
     const deadline = Date.now() + (this.options.timeoutMs ?? 15000);
     const sameOwner = () => this.options.connection(input.sessionId)?.owner === c.owner;
     const receipt = (state: NativeRunControlReceipt["state"], message: string): NativeRunControlReceipt => ({operationId:input.operationId,state,message});
+    const activeWaitCleanups: Array<() => void> = [];
     try {
       const wait = (predicate: () => boolean) => this.waitFor(() => {
         if (!sameOwner()) throw Error("连接已变化，操作结果待确认");
         return predicate();
-      }, deadline);
+      }, deadline, activeWaitCleanups);
       const current = () => this.entries.get(key)?.value;
       if (input.kind === "goal" && input.action !== "resume" && c.working) {
         const paused = wait(() => current()?.status === "paused" && !this.options.connection(input.sessionId)?.working);
@@ -175,7 +176,9 @@ export class NativeRunService {
       }
       const confirmed = wait(() => Boolean(current() && this.confirmed(current()!, input.action)));
       const command = input.kind === "goal" ? `/goal ${input.action === "stop" ? "clear" : input.action}` : `/workflow ${input.action} ${input.runId}`;
-      const request = c.prompt(command, input.kind === "goal" && input.action === "resume");
+      const request = Promise.resolve().then(() => c.prompt(command, input.kind === "goal" && input.action === "resume"));
+      // Suppress late rejections when `confirmed` wins the race first.
+      void request.catch(() => undefined);
       const failed = request.then(() => new Promise<never>(() => {}));
       await Promise.race([confirmed, failed]);
       if (!(input.kind === "goal" && input.action === "resume")) await wait(() => !this.options.connection(input.sessionId)?.working);
@@ -184,16 +187,32 @@ export class NativeRunService {
       const message = error instanceof Error ? error.message : String(error);
       if (/待确认/.test(message)) { this.uncertain.set(key,input.action); return receipt("unknown",message); }
       return receipt("failed",message);
-    } finally { this.locks.delete(input.sessionId); release(); }
+    } finally {
+      for (const cleanup of activeWaitCleanups.splice(0)) cleanup();
+      this.locks.delete(input.sessionId);
+      release();
+    }
   }
   private confirmed(row: NativeRunSnapshot, action: NativeRunAction): boolean {
     return action === "pause" ? row.status === "paused" : action === "resume" ? row.status === "running" : row.status === "stopped";
   }
-  private waitFor(predicate: () => boolean, deadline: number): Promise<void> {
+  private waitFor(predicate: () => boolean, deadline: number, cleanups?: Array<() => void>): Promise<void> {
     return new Promise((resolve,reject) => {
-      const done = (error?: unknown) => { clearTimeout(timer); this.listeners.delete(check); error ? reject(error) : resolve(); };
+      let settled = false;
+      const cleanup = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.listeners.delete(check);
+      };
+      const done = (error?: unknown) => {
+        if (settled) return;
+        cleanup();
+        error ? reject(error) : resolve();
+      };
       const check = () => { try { if (predicate()) done(); } catch (error) { done(error); } };
       const timer = setTimeout(() => done(Error("未收到 CLI 确认，结果待确认")), Math.max(1,deadline-Date.now()));
+      cleanups?.push(cleanup);
       this.listeners.add(check); check();
     });
   }

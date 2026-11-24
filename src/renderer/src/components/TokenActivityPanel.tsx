@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { TokenActivityReport, TokenActivityWindow, TokenDayBucket } from "../../../shared/types";
+import "../styles/token-activity.css";
 
 type View = "daily" | "weekly" | "total";
 

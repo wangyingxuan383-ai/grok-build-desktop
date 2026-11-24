@@ -72,8 +72,15 @@ export class DesktopQuickEntryWindow {
 
   open(intent: QuickEntryIntent = "ask"): void {
     if (this.disposed) return;
-    if(intent==="screenshot")this.options.screenshotVisibility?.(true);
-    if (this.window && !this.window.isDestroyed()) { this.window.show(); this.window.focus(); return; }
+    if (intent === "screenshot") this.options.screenshotVisibility?.(true);
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.show();
+      this.window.focus();
+      if (intent === "screenshot" && process.platform === "win32") {
+        void shell.openExternal("ms-screenclip:").catch(() => undefined);
+      }
+      return;
+    }
     const workArea = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     const width = Math.min(560, workArea.width), height = Math.min(500, workArea.height);
     const window = new BrowserWindow({ width, height, x: Math.round(workArea.x + (workArea.width - width) / 2), y: Math.round(workArea.y + (workArea.height - height) / 3),

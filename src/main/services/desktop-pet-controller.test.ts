@@ -12,9 +12,11 @@ const desktop = vi.hoisted(() => ({
 vi.mock("electron", () => ({
     screen: {
         getCursorScreenPoint: () => desktop.cursor,
-        getDisplayNearestPoint: () => ({ id: 2, workArea: desktop.area }),
-        getDisplayMatching: () => ({ id: 2, workArea: desktop.area }),
+        getDisplayNearestPoint: () => ({ id: 2, workArea: desktop.area, bounds: desktop.area }),
+        getDisplayMatching: () => ({ id: 2, workArea: desktop.area, bounds: desktop.area }),
+        screenToDipRect: (_window: unknown, rect: unknown) => rect,
     },
+    powerMonitor: { getSystemIdleTime: () => 0 },
     systemPreferences: { getAnimationSettings: () => ({ prefersReducedMotion: desktop.reduced }) },
 }));
 import { DesktopPetController } from "./desktop-pet-controller";
@@ -87,7 +89,7 @@ describe("companion free placement and explicit falling", () => {
         pet.endDrag(); vi.advanceTimersByTime(1000);
         expect(pet.clip).toBe("idle"); expect(vi.getTimerCount()).toBe(0);
     });
-    it.each([{ cursor: { x: 500, y: 420 }, y: 331 }, { cursor: { x: -900, y: -700 }, y: -177 }, { cursor: { x: 3000, y: 3000 }, y: 578 }])("stops near the clamped release point %j and saves its resting position", ({ cursor, y }) => {
+    it.each([{ cursor: { x: 500, y: 420 }, y: 331 }, { cursor: { x: -900, y: -700 }, y: -137 }, { cursor: { x: 3000, y: 3000 }, y: 578 }])("stops near the clamped release point %j and saves its resting position", ({ cursor, y }) => {
         const { pet, window } = fixture();
         pet.startDrag(); desktop.cursor = cursor; pet.moveDrag();
         const released = window.getBounds();
@@ -175,5 +177,39 @@ describe("companion free placement and explicit falling", () => {
         expect(window.getBounds()).toEqual(current);
         expect(pet.settings.position).toEqual(petPosition(current, desktop.area, 2));
         expect(vi.getTimerCount()).toBe(0);
+    });
+    it("keeps environment polling alive across transient secure-desktop locks and stops only on helper failure", () => {
+        const { pet } = fixture();
+        const reconcile = vi.fn(async () => undefined);
+        const destroy = vi.fn();
+        const environment = { healthy: true, stop: vi.fn() };
+        Object.assign(pet, { reconcile, destroy, environment });
+        const runContext = (value: { locked: boolean }) => (pet as unknown as { context(v: unknown): void }).context({
+            locked: value.locked, presentation: false, fullScreen: false, foregroundRect: null, doubleClickTime: 500, leftButtonDown: false,
+        });
+        runContext({ locked: true });
+        expect(pet.intent.blockers.has("context")).toBe(true);
+        expect(environment.stop).not.toHaveBeenCalled();
+        expect((pet as unknown as { statusWarning?: string }).statusWarning).toBeUndefined();
+        runContext({ locked: false });
+        expect(pet.intent.blockers.has("context")).toBe(false);
+        expect(reconcile).toHaveBeenCalledWith(false);
+        environment.healthy = false;
+        runContext({ locked: true });
+        expect(environment.stop).toHaveBeenCalledOnce();
+        expect((pet as unknown as { statusWarning?: string }).statusWarning).toContain("桌面环境暂不可用");
+    });
+    it("lists custom skins alongside built-ins in the context menu", () => {
+        const { pet } = fixture();
+        Object.assign(pet, {
+            skins: [
+                { id: "a", name: "诺瓦", author: "a", license: "MIT", clips: {} },
+                { id: "b", name: "小魔女", author: "b", license: "MIT", clips: {} },
+                { id: "custom-2f0c2e69-5f7b-455a-8f04-e8eaa60acfae", name: "星际喵", author: "user", license: "Custom", clips: {} },
+            ],
+        });
+        const switchMenu = pet.menu().find(row => row.label === "切换形象");
+        const labels = (switchMenu?.submenu as Array<{ label?: string }>).map(item => item.label);
+        expect(labels).toContain("星际喵");
     });
 });

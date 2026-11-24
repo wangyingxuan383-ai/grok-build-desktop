@@ -146,7 +146,15 @@ try {
         Start-Sleep -Milliseconds 500
         $Process.Refresh()
         if ($Process.HasExited) { throw "Application exited before opening a window (code $($Process.ExitCode))." }
-        if ($Process.MainWindowHandle -ne 0 -and $Process.MainWindowTitle -eq $ExpectedWindowTitle) { $Ready = $true; break }
+        if ($Process.MainWindowHandle -ne 0) {
+            if ($Process.MainWindowTitle -eq $ExpectedWindowTitle) { $Ready = $true; break }
+            if ([string]::IsNullOrEmpty($Process.MainWindowTitle)) {
+                try {
+                    $Targets = Invoke-RestMethod -Uri "http://127.0.0.1:$DebugPort/json/list" -TimeoutSec 1 -ErrorAction Stop
+                    if (@($Targets) | Where-Object { $_.type -eq 'page' -and $_.title -like 'Grok Build Desktop*' }) { $Ready = $true; break }
+                } catch {}
+            }
+        }
     }
     if (-not $Ready) { throw 'Application did not expose a visible Grok Build Desktop window within 15 seconds.' }
     # Legacy probes may compare against the current package dynamically. The

@@ -1,15 +1,47 @@
 import { memo } from "react";
 import type { TurnPresentation } from "../../../shared/types";
 import { useGitStore } from "../git-store";
+import { formatTelemetryElapsed, useSessionLiveTelemetry } from "../hooks/use-live-telemetry";
 import "../styles/session-status-strip.css";
 
-/** The existing composer owns model selection and the context ring. No reads or timers here. */
-export const SessionStatusStrip = memo(function SessionStatusStrip({ turn, workspace }: { turn?: TurnPresentation; workspace: string }): React.JSX.Element | null {
-  const git = useGitStore(state => sameWorkspace(state.workspace, workspace) ? state.status : undefined);
-  const parts = reportedTurnStatus(turn);
-  if (git?.branch?.name) parts.push({ label: git.branch.name, title: `Git 分支 · ${git.clean ? "工作区干净" : `${git.changes.length} 个变更`}` });
+/** The existing composer owns model selection and the context ring. No reads or local timers here. */
+export const SessionStatusStrip = memo(function SessionStatusStrip({
+  sessionId,
+  turn,
+  workspace,
+}: {
+  sessionId?: string;
+  turn?: TurnPresentation;
+  workspace: string;
+}): React.JSX.Element | null {
+  const git = useGitStore((state) => (sameWorkspace(state.workspace, workspace) ? state.status : undefined));
+  const telemetry = useSessionLiveTelemetry(sessionId);
+  const parts: Array<{ label: string; title: string; className?: string }> = [];
+
+  if (telemetry?.isWorking) {
+    if (telemetry.isStalled && telemetry.stalledReason) {
+      parts.push({ label: telemetry.stalledReason, title: "当前回合静默诊断", className: "telemetry-stalled" });
+    } else if (telemetry.summary) {
+      const elapsed = telemetry.elapsedMs > 0 ? ` · ${formatTelemetryElapsed(telemetry.elapsedMs)}` : "";
+      parts.push({ label: `${telemetry.summary}${elapsed}`, title: "当前回合实时活动", className: "telemetry-live" });
+    }
+  } else {
+    parts.push(...reportedTurnStatus(turn));
+  }
+
+  if (git?.branch?.name) {
+    parts.push({ label: git.branch.name, title: `Git 分支 · ${git.clean ? "工作区干净" : `${git.changes.length} 个变更`}` });
+  }
   if (!parts.length) return null;
-  return <div className="session-status-strip" aria-label="会话状态">{parts.map((part, index) => <span key={index} title={part.title}>{part.label}</span>)}</div>;
+  return (
+    <div className="session-status-strip" aria-label="会话状态">
+      {parts.map((part, index) => (
+        <span key={index} className={part.className} title={part.title}>
+          {part.label}
+        </span>
+      ))}
+    </div>
+  );
 });
 
 export function reportedTurnStatus(turn?: TurnPresentation): Array<{ label: string; title: string }> {

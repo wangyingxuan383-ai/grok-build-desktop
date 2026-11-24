@@ -51,12 +51,12 @@ export function requestCached(client: Client, source: string, variant: "thumbnai
     if (!host || !FS.cacheDirectory) return { promise: Promise.reject(Error("本机缓存或电脑连接不可用")) as Promise<CachedFile>, cancel: () => undefined };
     const key = host.fingerprint + "|" + variant + "|" + source;
     const label = (variant === "original" ? "原图" : "缩略图") + (sourceName(source) ? " · " + sourceName(source) : "");
-    const run = async (): Promise<CachedFile> => {
+    const run = async (currentPriority: () => Priority): Promise<CachedFile> => {
         const { href, path } = await cachePath(host.fingerprint, source, variant);
         if (retry) await invalidateCached(path);
         const cached = await complete(path);
         if (cached !== undefined) return { uri: path, asset: cached ?? undefined };
-        if (variant === "original" && priority === PRIORITY.prefetch && prefetchWifiOnly && Platform.OS === "android" && !(await wifiAvailable())) throw new CancelledError();
+        if (variant === "original" && currentPriority() === PRIORITY.prefetch && prefetchWifiOnly && Platform.OS === "android" && !(await wifiAvailable()) && currentPriority() === PRIORITY.prefetch) throw new CancelledError();
         if (variant === "original") trackTransfer(path, variant, label, "running");
         try {
             // Bind both metadata and bytes to the same captured computer, even if the UI switches.

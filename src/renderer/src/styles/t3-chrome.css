@@ -1,0 +1,179 @@
+/* Command palette & omni-search chrome (CommandSearch.tsx). */
+.command-search-header {
+  display: grid;
+  gap: 8px;
+}
+
+.command-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.command-search-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.command-search-modes {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.command-search-modes .ui-btn.ui-btn-secondary {
+  background: var(--color-selected);
+  border-color: var(--color-border-strong);
+  color: var(--color-fg);
+}
+
+.command-search-status {
+  font-size: var(--text-xs);
+  color: var(--color-fg-subtlest);
+}
+
+.command-result-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.command-results .command-result-row > .command-result-option {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.command-results .command-result-row > .command-result-insert {
+  flex: none;
+  height: var(--control-sm);
+  padding: 0 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-card);
+  color: var(--color-fg);
+  font-size: var(--text-caption);
+  justify-content: center;
+}
+
+.command-results .command-result-row > .command-result-insert:hover:not(:disabled) {
+  background: var(--color-hover);
+}
+
+.command-result-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.command-result-main.is-top {
+  align-items: flex-start;
+}
+
+.command-result-icon {
+  flex: none;
+  color: var(--color-fg-subtle);
+}
+
+.command-result-icon.is-session {
+  margin-top: 3px;
+}
+
+.command-result-icon.is-accent {
+  color: var(--color-accent);
+}
+
+.command-result-icon.is-preset {
+  color: var(--preset-accent, var(--color-accent));
+}
+
+.command-result-body {
+  min-width: 0;
+}
+
+.command-result-body.is-fill {
+  flex: 1 1 auto;
+}
+
+.command-result-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.command-result-session-title {
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-result-pin {
+  color: var(--color-warning);
+  flex: none;
+}
+
+.ui-badge.command-badge-xs {
+  height: 17px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+.command-result-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-result-snippet.is-mono {
+  font-family: var(--font-mono);
+}
+
+.command-result-tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.command-result-preset-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.command-theme-swatches {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--preset-bg, var(--color-window));
+}
+
+.command-theme-swatches > i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.command-theme-swatches > i.is-surface {
+  background: var(--preset-surface, var(--color-card));
+  border: 1px solid var(--preset-border, var(--color-border));
+}
+
+.command-theme-swatches > i.is-accent {
+  background: var(--preset-accent, var(--color-accent));
+}
+
+.command-theme-swatches > i.is-text {
+  background: var(--preset-text, var(--color-fg));
+}

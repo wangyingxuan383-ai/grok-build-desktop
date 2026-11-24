@@ -247,6 +247,7 @@ export function Composer({ client, session, theme, disabled, onStop, onAttach, o
     const receipt = client.receipt?.sessionId === client.sessionId ? client.receipt : undefined;
     const materials = client.composer.attachments.length + (client.composer.references?.length ?? 0);
     const chips: React.ReactNode[] = [];
+    if (runtime?.modelSelectionRequired && !readOnly) chips.push(<Chip key="model-required" tone="warning" label="需重选模型" theme={theme} onPress={onConfig} />);
     if (pending) chips.push(<Chip key="pending" tone="warning" label={`${pending} 项待确认`} theme={theme} onPress={onPending} />);
     const native = nativeRunChip(client.snapshot?.nativeRuns);
     if (native) chips.push(<Chip key="native" tone={native.tone} label={native.label} theme={theme} onPress={onNativeRuns} />);
@@ -255,7 +256,7 @@ export function Composer({ client, session, theme, disabled, onStop, onAttach, o
     if (client.composer.attachments.length) chips.push(<Chip key="files" selected label={`附件 ${client.composer.attachments.length}`} theme={theme} onPress={onAttach} />);
     if (client.composer.references?.length) chips.push(<Chip key="refs" selected label={`引用 ${client.composer.references.length}`} theme={theme} onPress={onAttach} />);
     if (client.composer.toolSelection) chips.push(<Chip key="tool" selected label={client.composer.toolSelection.toolName} theme={theme} onPress={onTools} />);
-    if (client.snapshot?.runtime?.interjectSupported && working) chips.push(<Chip key="interject" label="立即补充" theme={theme} disabled={disabled || !client.draft.trim()} onPress={() => void client.perform("interject")} />);
+    if (client.snapshot?.runtime?.interjectSupported && working) chips.push(<Chip key="interject" label="立即补充" theme={theme} disabled={disabled || (!client.draft.trim() && materials === 0)} onPress={() => void client.perform("interject")} />);
     if (receipt && receipt.state !== "completed") chips.push(<Text key="receipt" style={{ alignSelf: "center", fontSize: 11, color: receipt.state === "failed" ? theme.danger : theme.muted }}>{operationStateLabel(receipt.state)}</Text>);
     return (<View style={[styles.composer, { backgroundColor: theme.surface, borderTopColor: theme.border }]}>
       {chips.length ? <View style={[ui.row, { flexWrap: "wrap", gap: 6 }]}>{chips}</View> : null}
@@ -263,14 +264,14 @@ export function Composer({ client, session, theme, disabled, onStop, onAttach, o
       <View style={[ui.row, { gap: 4 }]}>
         <IconButton label="＋ 材料" icon="＋" theme={theme} disabled={readOnly} badge={materials || undefined} onPress={onAttach} />
         <Pressable accessibilityRole="button" accessibilityLabel="模型与执行配置" onPress={onConfig} hitSlop={4} style={({ pressed }) => [styles.config, { backgroundColor: theme.raised, opacity: pressed ? .7 : 1 }]}>
-          <Text numberOfLines={1} style={{ color: theme.text, fontSize: font.small, fontWeight: "600", flexShrink: 1 }}>{summary.model}</Text>
+          <Text numberOfLines={1} style={{ color: runtime?.modelSelectionRequired ? theme.warning : theme.text, fontSize: font.small, fontWeight: "600", flexShrink: 1 }}>{runtime?.modelSelectionRequired ? "选择可用模型" : summary.model}</Text>
           {summary.detail ? <Text numberOfLines={1} style={{ color: theme.muted, fontSize: font.caption, flexShrink: 2 }}>{summary.detail}</Text> : null}
           <Text style={{ color: theme.muted, fontSize: 11 }}>▾</Text>
         </Pressable>
         <IconButton label="更多工具" icon="⋯" theme={theme} onPress={onTools} />
         <View style={{ flex: 1 }} />
         {(() => {
-            const main = primaryAction({ draft: client.draft, working, readOnly, pending, busy: client.busy, disabled });
+            const main = primaryAction({ draft: client.draft, materials, working, readOnly, pending, busy: client.busy, disabled: disabled || Boolean(runtime?.modelSelectionRequired) });
             if (main.action === "none") return null;
             if (main.action === "stop") return <Button compact danger title="停止" theme={theme} disabled={!main.enabled} onPress={() => { hapticIntent("longPress"); onStop(); }} />;
             return <Button compact title={client.busy ? "提交中" : main.action === "queue" ? "加入队列" : "发送"} theme={theme} primary disabled={!main.enabled} onPress={() => { hapticIntent("tap"); void client.perform("send"); }} />;

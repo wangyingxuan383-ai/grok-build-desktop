@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { SESSION_MODE_OPTIONS } from "../session-mode-labels";
 import type { ExecutionProfileLaunchInput, ExecutionProfileValidation, SessionExecutionProfile } from "../../../shared/types";
+import "../styles/execution-profile-workbench.css";
 
 interface Dialogs {
   askConfirm(message: string, options?: { title?: string; confirmLabel?: string; danger?: boolean }): Promise<boolean>;

@@ -92,7 +92,7 @@ class RemoteMonitor : Service() {
        if(phase!="paused"){phase="paused";ongoing(name,pin,if(mode=="wifi")"已暂停：当前不是 Wi-Fi，连上后自动继续" else "已暂停：屏幕关闭时不跟进")}
        Thread.sleep(5000);continue
       }
-      val request=Request.Builder().url(host.trimEnd('/')+"/v1/events?cursor=$cursor&epoch=$epoch").header("Authorization","Bearer $token").build()
+      val request=Request.Builder().url(host.trimEnd('/')+"/v1/events?cursor=$cursor&epoch="+Uri.encode(epoch)).header("Authorization","Bearer $token").build()
       val stream=client.newCall(request);call=stream
       stream.execute().use { response ->
        if(!active())return@use
@@ -106,11 +106,22 @@ class RemoteMonitor : Service() {
         if(!RemoteHealth.allowed(this,preferences.getString("mode","always")?:"always")){stream.cancel();break}
         val line=source.readUtf8Line()?:break
         lastSync=System.currentTimeMillis()
-        if(line.startsWith("data: ")){val event=JSONObject(line.substring(6));cursor=event.optLong("cursor",cursor);epoch=event.optString("epoch",epoch)}
-        if(System.currentTimeMillis()-lastInbox>14000)readInbox()
+        if(line.startsWith("data: ")){
+         val event=JSONObject(line.substring(6))
+         cursor=event.optLong("cursor",cursor)
+         epoch=event.optString("epoch",epoch)
+         val type=event.optString("type")
+         if(type!="heartbeat"&&type!="connected"&&System.currentTimeMillis()-lastInbox>=500)readInbox()
+        }
        }
       }
      } catch(_:InterruptedException) { break }
+     catch(_:javax.net.ssl.SSLPeerUnverifiedException) {
+      RemoteNotices.show(this,"电脑身份已变化","打开应用重新验证电脑连接。","",pin);stopReason="电脑安全证书已变更，请重新配对";running=false;break
+     }
+     catch(_:java.security.cert.CertificateException) {
+      RemoteNotices.show(this,"电脑身份已变化","打开应用重新验证电脑连接。","",pin);stopReason="电脑安全证书已变更，请重新配对";running=false;break
+     }
      catch(_:Exception) {
       if(active()) {
        attempts++;phase="retrying";ongoing(name,pin,"连接中断，正在重连（第 $attempts 次）")

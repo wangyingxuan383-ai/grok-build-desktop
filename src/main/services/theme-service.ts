@@ -33,10 +33,63 @@ export const DEFAULT_THEME: ThemeSettings = {
   },
 };
 
+export const TITLE_BAR_HEIGHT = 38;
+
+const PRESET_BACKGROUNDS: Record<string, { bg: string; fg: string; light: boolean }> = {
+  "t3-dark": { bg: "#09090b", fg: "#f4f4f5", light: false },
+  "t3-light": { bg: "#f8f8f7", fg: "#18181b", light: true },
+  "tokyo-night": { bg: "#16161e", fg: "#c0caf5", light: false },
+  "catppuccin-mocha": { bg: "#181825", fg: "#cdd6f4", light: false },
+  "catppuccin-latte": { bg: "#e6e9ef", fg: "#4c4f69", light: true },
+  "github-dark": { bg: "#0d1117", fg: "#e6edf3", light: false },
+  "github-light": { bg: "#f6f8fa", fg: "#1f2328", light: true },
+  "rose-pine": { bg: "#191724", fg: "#e0def4", light: false },
+  "nord": { bg: "#242933", fg: "#eceff4", light: false },
+  "mirasim-dusk": { bg: "#11131a", fg: "#edf0f7", light: false },
+  "t3-obsidian": { bg: "#09090b", fg: "#f4f4f5", light: false },
+  "t3-paper": { bg: "#f8f8f7", fg: "#18181b", light: true },
+  "midnight-violet": { bg: "#110f1a", fg: "#ebe7f8", light: false },
+  "nordic-pine": { bg: "#0e1514", fg: "#e4efec", light: false },
+  "ember-carbon": { bg: "#141110", fg: "#efe8e4", light: false },
+  "oled-pure": { bg: "#050506", fg: "#f0f2f5", light: false },
+  "dawn-linen": { bg: "#fbf8f3", fg: "#241f1a", light: true },
+  "arctic-slate": { bg: "#f4f7fa", fg: "#16202a", light: true },
+  "sakura-mist": { bg: "#fcf6f8", fg: "#2b1d24", light: true },
+  "solar-sand": { bg: "#fdf6e3", fg: "#2c2619", light: true },
+};
+
+export function resolveWindowBackgroundColor(theme: ThemeSettings, shouldUseDarkColors: boolean): string {
+  if (theme.mode === "custom") return theme.colors.background;
+  const isLight = theme.mode === "light" || (theme.mode === "system" && !shouldUseDarkColors);
+  const presetKey = isLight ? (theme.lightPresetId ?? theme.presetId) : (theme.darkPresetId ?? theme.presetId);
+  const preset = presetKey ? PRESET_BACKGROUNDS[presetKey] : undefined;
+  if (preset && preset.light === isLight) return preset.bg;
+  return isLight ? "#f6f7f9" : "#0f1115";
+}
+
+export function buildTitleBarOverlay(theme: ThemeSettings, shouldUseDarkColors: boolean): { color: string; symbolColor: string; height: number } {
+  if (theme.mode === "custom") {
+    return {
+      color: "#00000000",
+      symbolColor: theme.colors.text || (theme.customBase === "light" ? "#1f2328" : "#e7e9ec"),
+      height: TITLE_BAR_HEIGHT,
+    };
+  }
+  const isLight = theme.mode === "light" || (theme.mode === "system" && !shouldUseDarkColors);
+  const presetKey = isLight ? (theme.lightPresetId ?? theme.presetId) : (theme.darkPresetId ?? theme.presetId);
+  const preset = presetKey ? PRESET_BACKGROUNDS[presetKey] : undefined;
+  return {
+    color: "#00000000",
+    symbolColor: preset && preset.light === isLight ? preset.fg : (isLight ? "#1f2328" : "#e7e9ec"),
+    height: TITLE_BAR_HEIGHT,
+  };
+}
+
 export function isAllowedThemeBackgroundUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === "grok-theme:" && url.hostname === "background" && url.pathname === "/current" && !url.search && !url.hash && !url.username && !url.password;
+    const allowedSearch = !url.search || /^\?t=\d{1,20}$/.test(url.search);
+    return url.protocol === "grok-theme:" && url.hostname === "background" && url.pathname === "/current" && allowedSearch && !url.hash && !url.username && !url.password;
   } catch { return false; }
 }
 
@@ -53,10 +106,41 @@ export function normalizeThemeSettings(value: ThemeSettings): ThemeSettings {
   const mode = ["dark", "light", "system", "custom"].includes(value.mode) ? value.mode : "dark";
   const customBase = value.customBase === "light" ? "light" : "dark";
   const colors = Object.fromEntries(Object.entries({ ...DEFAULT_THEME.colors, ...value.colors }).map(([key, color]) => [key, normalizeColor(color, DEFAULT_THEME.colors[key as keyof typeof DEFAULT_THEME.colors])])) as unknown as ThemeSettings["colors"];
+  const presetId = normalizePresetId(value.presetId);
+  const darkPresetId = normalizePresetId(value.darkPresetId);
+  const lightPresetId = normalizePresetId(value.lightPresetId);
+  const autoExtractWallpaperPalette = typeof value.autoExtractWallpaperPalette === "boolean"
+    ? value.autoExtractWallpaperPalette
+    : undefined;
+  const aurora = value.aurora && ["none", "nebula", "cedar", "jade"].includes(value.aurora) ? value.aurora : undefined;
+  let customCss: string | undefined;
+  if (typeof value.customCss === "string" && !value.customCss.includes("\0")) {
+    const buf = Buffer.from(value.customCss, "utf8");
+    if (buf.byteLength <= 64 * 1024) {
+      customCss = value.customCss;
+    } else {
+      let end = 64 * 1024;
+      while (end > 0 && (buf[end]! & 0xc0) === 0x80) end -= 1;
+      customCss = buf.subarray(0, end).toString("utf8");
+    }
+  }
+  const seedCanvas = typeof value.seedCanvas === "string" && /^#[0-9a-f]{6}$/i.test(value.seedCanvas.trim()) ? value.seedCanvas.trim().toLowerCase() : undefined;
+  const seedAccent = typeof value.seedAccent === "string" && /^#[0-9a-f]{6}$/i.test(value.seedAccent.trim()) ? value.seedAccent.trim().toLowerCase() : undefined;
+  const bgUpdatedAt = typeof value.background?.updatedAt === "number" && Number.isFinite(value.background.updatedAt) && value.background.updatedAt >= 0
+    ? Math.trunc(value.background.updatedAt)
+    : undefined;
   return {
     mode,
     customBase,
     colors,
+    ...(presetId ? { presetId } : {}),
+    ...(darkPresetId ? { darkPresetId } : {}),
+    ...(lightPresetId ? { lightPresetId } : {}),
+    ...(autoExtractWallpaperPalette !== undefined ? { autoExtractWallpaperPalette } : {}),
+    ...(aurora ? { aurora } : {}),
+    ...(customCss !== undefined ? { customCss } : {}),
+    ...(seedCanvas ? { seedCanvas } : {}),
+    ...(seedAccent ? { seedAccent } : {}),
     background: {
       enabled: Boolean(value.background?.enabled),
       scope: value.background?.scope === "window" ? "window" : "conversation",
@@ -65,6 +149,7 @@ export function normalizeThemeSettings(value: ThemeSettings): ThemeSettings {
       opacity: clamp(value.background?.opacity, 0, 1, DEFAULT_THEME.background.opacity),
       blur: clamp(value.background?.blur, 0, 24, DEFAULT_THEME.background.blur),
       dim: clamp(value.background?.dim, 0, 0.9, DEFAULT_THEME.background.dim),
+      ...(bgUpdatedAt !== undefined ? { updatedAt: bgUpdatedAt } : {}),
     },
   };
 }
@@ -127,6 +212,12 @@ export class ThemeService {
 function normalizeColor(value: unknown, fallback: string): string {
   const color = String(value ?? "").trim();
   return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : fallback;
+}
+
+function normalizePresetId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const compact = value.trim().toLowerCase().replace(/\s+/g, "");
+  return /^[a-z0-9][a-z0-9-]{0,63}$/.test(compact) ? compact : undefined;
 }
 
 function clamp(value: unknown, minimum: number, maximum: number, fallback: number): number {

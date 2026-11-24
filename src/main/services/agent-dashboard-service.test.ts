@@ -72,6 +72,21 @@ describe("AgentDashboardService", () => {
     expect(snapshot.roots[0]!.children[0]).toMatchObject({ status: "stopped", latestAction: "子 Agent 已停止" });
     expect(snapshot.roots[0]!.children[0]!.failureReason).toBeUndefined();
   });
+
+  it("honors turn-completed outcomes, caps toolIds storage, and ignores late subagent progress after completion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "grok-dashboard-")); roots.push(root);
+    const service = new AgentDashboardService(root);
+    await service.record({ type: "status", sessionId: "s1", status: "working", text: "运行中" });
+    for (let i = 0; i < 520; i += 1) {
+      await service.record({ type: "tool-call", sessionId: "s1", tool: { toolCallId: `tool-${i}`, title: "工具", status: "completed" } });
+    }
+    await service.record({ type: "turn-completed", sessionId: "s1", presentation: { turnId: "t1", ordinal: 1, startedAt: new Date().toISOString(), outcome: "failed" } });
+    await service.record({ type: "subagent", sessionId: "s1", update: { subagent_id: "sub-1", sessionUpdate: "subagent_finished", status: "completed", output: "done" } });
+    await service.record({ type: "subagent", sessionId: "s1", update: { subagent_id: "sub-1", sessionUpdate: "subagent_progress", latest_action: "late event" } });
+    const snapshot = await service.snapshot({ query: { workspacePath: "C:\\repo" }, sessions: [historySession()], liveSessions: [{ sessionId: "s1", cwd: "C:\\repo" }], tasks: [], assignments: [], liveCapability: "supported" });
+    expect(snapshot.roots[0]).toMatchObject({ status: "failed", toolCount: 520 });
+    expect(snapshot.roots[0]!.children[0]).toMatchObject({ status: "completed", summary: "done" });
+  });
 });
 
 function historySession(): SessionSummary {

@@ -24,7 +24,12 @@ function QuickEntry() {
       const next = await window.quickEntry.context(cwd);
       if (version !== generation.current) return;
       setContext(next); setSessionId(""); setError("");
-      if (!context && next.recovery) { setText(next.recovery.text); setSessionId(next.recovery.sessionId); setNotice(next.recovery.message); }
+      if (!context && next.recovery) {
+        const exists = !next.recovery.sessionId || next.sessions.some(row => row.id === next.recovery!.sessionId);
+        setText(next.recovery.text);
+        setSessionId(exists ? next.recovery.sessionId : "");
+        setNotice(exists ? next.recovery.message : `${next.recovery.message}（原目标会话已删除，已切换为新建会话）`);
+      }
       applyThemeToDocument(next.theme, matchMedia("(prefers-color-scheme: dark)").matches);
       textarea.current?.focus();
     } catch (error) { if (version === generation.current) setError(message(error)); }
@@ -49,6 +54,12 @@ function QuickEntry() {
     if (!context?.workspace || (!text.trim() && !context.attachments.length)) return;
     await window.quickEntry.send({ draftId: context.draftId, cwd: context.workspace, sessionId, text, attachmentIds: context.attachments.map(row => row.id) });
   });
+  useEffect(() => {
+    if (sessionId && context && !context.sessions.some(row => row.id === sessionId)) {
+      setSessionId("");
+      setNotice("所选会话已不存在，已自动切换为新建会话。");
+    }
+  }, [context, sessionId]);
   const session = context?.sessions.find(row => row.id === sessionId);
   const canSend = context?.workspace && (!sessionId || session && !["working", "needs-user", "queued"].includes(session.status)) && (text.trim() || context?.attachments.length);
 

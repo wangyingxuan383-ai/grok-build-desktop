@@ -134,9 +134,9 @@ describe("CliUpdateService", () => {
     expect(result.snapshot).toMatchObject({ closeOutcomeSupported: true, gitStatusUsesExplicitOptions: true });
   });
 
-  it("keeps sanitized fixtures through the source-audited stable 1.0.13 target and records the live 1.0.3 baseline", async () => {
+  it("keeps sanitized fixtures through the audited 1.0.92 target and records the live 1.0.92 baseline", async () => {
     expect(CLI_V1_COMPATIBILITY_PROFILE).toMatchObject({
-      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.13", stableTargetVersion: "1.0.13", liveVerifiedVersion: "1.0.3",
+      minSupportedVersion: "1.0.0", maxVerifiedVersion: "1.0.92", stableTargetVersion: "1.0.92", liveVerifiedVersion: "1.0.92",
       fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12", "1.0.13"],
     });
     for (const version of CLI_V1_COMPATIBILITY_PROFILE.fixtureVersions) {
@@ -147,35 +147,35 @@ describe("CliUpdateService", () => {
     }
   });
 
-  it("allows an explicit future 1.0 patch only through the live rollback gate", () => {
-    expect(offlineCompatibilityGate("1.0.14")).toMatchObject({
+  it("allows future 1.0.x patches and 1.x minors through the live rollback gate", () => {
+    expect(offlineCompatibilityGate("1.0.93")).toMatchObject({
       status: "pending", major: 1, liveVerified: false, checks: [expect.objectContaining({ id: "future-patch-live-gate", status: "pending" })],
     });
     expect(offlineCompatibilityGate("1.1.0")).toMatchObject({
-      status: "failed", major: 1, checks: [expect.objectContaining({ id: "unverified-release-line" })],
+      status: "pending", major: 1, liveVerified: false, checks: [expect.objectContaining({ id: "future-patch-live-gate", status: "pending" })],
     });
   });
 
-  it("does not trust an externally installed future patch until this app persisted a passing live gate", async () => {
+  it("does not trust an externally installed future patch or minor until this app persisted a passing live gate", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-update-service-"));
     roots.push(root);
     const service = createService(root);
-    await expect(service.isRuntimeVersionAllowed("1.0.13")).resolves.toBe(true);
-    await expect(service.isRuntimeVersionAllowed("1.0.14")).resolves.toBe(false);
+    await expect(service.isRuntimeVersionAllowed("1.0.92")).resolves.toBe(true);
+    await expect(service.isRuntimeVersionAllowed("1.0.93")).resolves.toBe(false);
     await expect(service.isRuntimeVersionAllowed("1.1.0")).resolves.toBe(false);
 
     const handshake = normalizeRuntimeHandshake({
       protocolVersion: 1,
       agentCapabilities: { sessionCapabilities: { close: {}, list: {}, resume: {} } },
-      _meta: { agentVersion: "1.0.14", availableCommands: [{ name: "context" }] },
+      _meta: { agentVersion: "1.0.93", availableCommands: [{ name: "context" }] },
     });
     const persisted: CliCompatibilitySnapshot = {
-      cliVersion: "1.0.14",
+      cliVersion: "1.0.93",
       checkedAt: new Date().toISOString(),
       handshake,
       capabilities: [],
       v1: {
-        version: "1.0.14",
+        version: "1.0.93",
         observedAt: new Date().toISOString(),
         attachPolicy: { nonInteractive: false, deliveryTools: [] },
         closeOutcomeSupported: true,
@@ -183,11 +183,11 @@ describe("CliUpdateService", () => {
         gitStatusUsesExplicitOptions: true,
         dataViews: ["context"],
       },
-      gate: { targetVersion: "1.0.14", major: 1, status: "passed", checkedAt: new Date().toISOString(), liveVerified: true, checks: [] },
+      gate: { targetVersion: "1.0.93", major: 1, status: "passed", checkedAt: new Date().toISOString(), liveVerified: true, checks: [] },
     };
     await writeFile(join(root, "cli-compatibility-snapshot.json"), JSON.stringify(persisted), "utf8");
-    await expect(service.isRuntimeVersionAllowed("1.0.14")).resolves.toBe(false); // legacy snapshots are not binary-bound authorization
-    await expect(service.isRuntimeVersionAllowed("1.0.15")).resolves.toBe(false);
+    await expect(service.isRuntimeVersionAllowed("1.0.93")).resolves.toBe(false);
+    await expect(service.isRuntimeVersionAllowed("1.0.94")).resolves.toBe(false);
   });
 
   it("accepts the stable 1.0.0 core contract when only context and session-info commands are present", async () => {
@@ -252,9 +252,9 @@ describe("CliUpdateService", () => {
     });
   });
 
-  it("does not let a runtime handshake bypass the blocked 1.1 release line", () => {
+  it("validates a 1.1+ runtime handshake when session close is supported", () => {
     const handshake = normalizeRuntimeHandshake({ protocolVersion: 1, agentCapabilities: { sessionCapabilities: { close: {}, list: {}, resume: {} } }, _meta: { agentVersion: "1.1.0" } });
-    expect(runtimeV1Compatibility("1.1.0", handshake, true).gate).toMatchObject({ status: "failed", checks: [expect.objectContaining({ id: "unverified-release-line" })] });
+    expect(runtimeV1Compatibility("1.1.0", handshake, true).gate).toMatchObject({ status: "passed", liveVerified: true });
   });
 
   it("coalesces concurrent apply requests into one update operation", async () => {

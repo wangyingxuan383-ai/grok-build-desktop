@@ -8,13 +8,34 @@ export const APP_SHORTCUTS = [
   { command: "search-conversation", label: "搜索当前会话", accelerator: "Control+Shift+F" },
   { command: "focus-composer", label: "聚焦输入框", accelerator: "Control+L" },
   { command: "command-search", label: "命令面板", accelerator: "Control+K" },
-  { command: "toggle-sidebar", label: "显示或隐藏侧栏", accelerator: "" },
+  { command: "toggle-sidebar", label: "显示或隐藏侧栏", accelerator: "Control+B" },
+  { command: "toggle-terminal", label: "显示或隐藏底部终端", accelerator: "Control+J" },
+  { command: "toggle-inspector", label: "显示或隐藏右侧检查器", accelerator: "Control+Shift+B" },
+  { command: "toggle-diff", label: "打开代码变更审查", accelerator: "Control+Shift+D" },
+  { command: "split-pane", label: "并排分屏会话", accelerator: "Control+\\" },
+  { command: "stash-draft", label: "暂存当前草稿", accelerator: "" },
   { command: "open-task-center", label: "任务中心", accelerator: "" },
-  { command: "open-settings", label: "设置", accelerator: "" },
+  { command: "open-settings", label: "设置", accelerator: "Control+," },
 ] as const satisfies ReadonlyArray<{ command: AppMenuCommand; label: string; accelerator: string }>;
 
 const aliases: Record<string, string> = { ctrl: "Control", control: "Control", cmdorctrl: "Control", commandorcontrol: "Control", shift: "Shift", alt: "Alt", option: "Alt", meta: "Super", super: "Super", win: "Super" };
 const modifiers = ["Control", "Alt", "Shift", "Super"];
+const punctuationKeys: Record<string, string> = {
+  "\\": "\\",
+  "backslash": "\\",
+  "/": "/",
+  "slash": "/",
+  "`": "`",
+  "backquote": "`",
+  ",": ",",
+  "comma": ",",
+  ".": ".",
+  "period": ".",
+  "[": "[",
+  "]": "]",
+  "-": "-",
+  "=": "=",
+};
 export function normalizeAccelerator(value: string): string {
   if (!value.trim()) return "";
   if (value.length > 100) throw new Error("快捷键过长");
@@ -22,7 +43,8 @@ export function normalizeAccelerator(value: string): string {
   const key = parts.pop()!;
   const mods = parts.map(part => aliases[part.toLowerCase()]);
   if (mods.some(mod => !mod) || new Set(mods).size !== mods.length) throw new Error("快捷键修饰键无效");
-  let normalizedKey = key.length === 1 && /^[a-z0-9]$/i.test(key) ? key.toUpperCase() : /^(Space|Enter|Tab|Backspace|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1\d|2[0-4]))$/i.test(key) ? key.toLowerCase() === "space" ? "Space" : key[0]!.toUpperCase() + key.slice(1) : "";
+  const punct = punctuationKeys[key.toLowerCase()];
+  let normalizedKey = punct ?? (key.length === 1 && /^[a-z0-9]$/i.test(key) ? key.toUpperCase() : /^(Space|Enter|Tab|Backspace|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1\d|2[0-4]))$/i.test(key) ? key.toLowerCase() === "space" ? "Space" : key[0]!.toUpperCase() + key.slice(1) : "");
   if (/^f\d+$/i.test(normalizedKey)) normalizedKey = normalizedKey.toUpperCase();
   if (!normalizedKey || (!mods.length && !/^F\d+$/.test(normalizedKey))) throw new Error("请使用 Ctrl / Alt 等修饰键，或功能键，例如 Control+Shift+Space");
   return [...modifiers.filter(mod => mods.includes(mod)), normalizedKey].join("+");
@@ -36,7 +58,7 @@ export function shortcutFor(command: AppMenuCommand, settings?: Partial<DesktopP
 export function validateShortcutBindings(settings: Partial<DesktopProductivitySettings>, additional: Array<{label:string;value:string}> = []): void {
   const used = new Map<string, string>();
   // Standard editing, application-window and the Computer Use emergency keys stay available.
-  for (const key of ["Control+C", "Control+V", "Control+X", "Control+A", "Control+Z", "Control+Shift+Z", "Control+Y", "Control+Alt+Escape", "Alt+F4", "F5", "F11", "F12", "Control+R", "Control+Shift+I", "Super+L", "Super+D"]) used.set(key.toLowerCase(), "系统或编辑操作");
+  for (const key of ["Control+C", "Control+V", "Control+X", "Control+A", "Control+Z", "Control+Shift+Z", "Control+Y", "Control+Alt+Escape", "Control+Alt+A", "Alt+F4", "F5", "F11", "F12", "Control+R", "Control+Shift+I", "Super+L", "Super+D"]) used.set(key.toLowerCase(), "系统或编辑操作");
   for (const key of Object.keys(settings.shortcuts ?? {})) if (!APP_SHORTCUTS.some(item => item.command === key)) throw new Error("不支持的自定义快捷键");
   const entries = [
     ...APP_SHORTCUTS.map(item => ({ label: item.label, value: shortcutFor(item.command, settings) })),

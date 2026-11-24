@@ -29,7 +29,7 @@ The application uses the Agent Client Protocol TypeScript SDK, Electron, React, 
 - **Electron Fuses** (`@electron/fuses` 2.1.3): deterministic Windows executable hardening during packaging.
 - **fflate** (0.8.3): local support-bundle ZIP creation; support bundles are never uploaded automatically.
 - **electron-builder** and NSIS: unsigned per-user Windows installer and ZIP packaging under their respective licenses.
-- **CycloneDX npm SBOM** and `license-checker-rseidelsohn`: release inventory generation. Exact production dependency licenses are emitted as `THIRD_PARTY_LICENSES.json` with each Release.
+- **CycloneDX npm SBOM** and `license-checker-rseidelsohn`: release inventory generation (`npm run licenses` emits `release/THIRD_PARTY_LICENSES.json` for local/audit builds; public GitHub Releases attach the CycloneDX SBOM `grok-build-desktop-sbom.cdx.json` alongside this `THIRD_PARTY_NOTICES.md`).
 - GitHub Actions, CodeQL, Gitleaks and artifact-attestation workflows provide public CI/release scanning and provenance; no third-party service receives application telemetry.
 
 ## v0.4.2 / v0.5.0 implementation references
@@ -44,3 +44,7 @@ The application uses the Agent Client Protocol TypeScript SDK, Electron, React, 
 The adapted Paseo pairing helper and Android dependency attribution are documented in apps/mobile/THIRD_PARTY_NOTICES.md, with the complete Apache-2.0 license alongside it. No HAPI AGPL implementation is incorporated. The Desktop gateway additionally uses selfsigned and qrcode under their distributed licenses.
 
 LAN discovery uses bonjour-service 1.4.2 under its MIT license and multicast-dns under its MIT license. Their dependency notices are included in the installed packages.
+
+## Desktop companion artwork (v0.14.0+)
+
+Built-in desktop companion artwork notices and license attributions (`resources/pets/a` original vector/raster artwork and `resources/pets/b` adapted MIT-licensed character sheets) are documented in `resources/pets/NOTICES.md` and packaged with the application resources.

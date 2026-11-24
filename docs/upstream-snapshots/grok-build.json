@@ -1,10 +1,10 @@
 {
   "schemaVersion": 2,
-  "checkedAt": "2026-09-04T00:00:00.000Z",
-  "declaredCliVersion": "1.0.13",
-  "stableVersion": "1.0.13",
-  "verifiedDesktopCliVersion": "1.0.3",
-  "repositoryCommit": "72a61251fcffb464bcc687aeb5a998e5a98ec0c9",
+  "checkedAt": "2026-11-24T00:00:00.000Z",
+  "declaredCliVersion": "1.0.92",
+  "stableVersion": "1.0.92",
+  "verifiedDesktopCliVersion": "1.0.92",
+  "repositoryCommit": "b06756fd6256",
   "sourceRevision": "a549186d9d39311f2d3ee4208db62af8c65aa476",
   "compatibilityFixture": "src/main/services/fixtures/cli-wire/initialize-1.0.13.json",
   "forwardCompatibilityFixture": "src/main/services/fixtures/cli-wire/session-rename-upstream-main.json"

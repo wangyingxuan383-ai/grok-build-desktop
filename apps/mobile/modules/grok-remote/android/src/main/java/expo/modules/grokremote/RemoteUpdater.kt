@@ -130,7 +130,8 @@ object RemoteUpdater {
       check(completed) { "下载跳转次数过多" }
     } catch (error: Exception) {
       partial.delete()
-      update(mapOf("phase" to "error", "received" to 0, "error" to (error.message ?: "更新下载失败")), emit)
+      if (cancelled) update(mapOf("phase" to "idle", "received" to 0), emit)
+      else update(mapOf("phase" to "error", "received" to 0, "error" to (error.message ?: "更新下载失败")), emit)
     } finally { call = null }
     return status()
   }

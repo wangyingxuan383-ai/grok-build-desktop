@@ -97,6 +97,8 @@ describe("Grok ACP process arguments", () => {
     expect(buildAcpClientCapabilities("grok 1.0.13 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.14 (fixture)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 1.0.40 (installed)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.0.92 (installed)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
+    expect(buildAcpClientCapabilities("grok 1.1.0 (minor)")).toEqual({ fs: { writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities("grok 2.0.0 (unknown)")).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
     expect(buildAcpClientCapabilities()).toEqual({ fs: { readTextFile: true, writeTextFile: true }, terminal: true });
   });
@@ -327,6 +329,67 @@ describe("Grok ACP process arguments", () => {
     expect(adapter.feedbackCapability()).toEqual({ available: true, sessionId: "s1", source: "available-command" });
     await expect(adapter.submitOfficialFeedback("  CLI 反馈  ")).resolves.toMatchObject({ submitted: true, sessionId: "s1" });
     expect(adapter.extension).toHaveBeenCalledWith("x.ai/feedback", { session_id: "s1", feedback_text: "CLI 反馈" });
+    await expect(adapter.submitOfficialFeedback("带图反馈", ["C:\\shot.png"])).resolves.toMatchObject({ submitted: true, sessionId: "s1" });
+    expect(adapter.extension).toHaveBeenLastCalledWith("x.ai/feedback", { session_id: "s1", feedback_text: "带图反馈", image_paths: ["C:\\shot.png"] });
+  });
+
+  it("handles 1.0.80+ folder trust requests, subagent permission attribution, feedback and parameterized rewind", async () => {
+    const adapter = Object.create(GrokAcpAdapter.prototype) as any;
+    const events: any[] = [];
+    const writes: any[] = [];
+    Object.assign(adapter, {
+      sessionId: "parent-s1",
+      mode: "agent",
+      planActive: false,
+      autoApprove: false,
+      working: true,
+      needsUser: false,
+      subagentTitles: new Map([["child-s2", "Research Worker"]]),
+      pendingPermissionRequests: new Set<string>(),
+      pendingQuestionRequests: new Set<string>(),
+      pendingInteractionRequestIds: new Map<string, string | number>(),
+      options: {
+        cwd: "D:\\repo",
+        onFolderTrustRequest: vi.fn().mockResolvedValue(true),
+        log: { log: vi.fn() },
+      },
+      observeRuntimeExtension: vi.fn(),
+      emitEvent: vi.fn((ev: any) => events.push(ev)),
+      emitStatus: vi.fn(),
+      emitRuntimeUpdate: vi.fn(),
+      respondOk: vi.fn((id: any, result: any) => writes.push({ id, result })),
+      write: vi.fn((payload: any) => { writes.push(payload); return true; }),
+      extension: vi.fn().mockResolvedValue({ result: {} }),
+      sessionInfo: vi.fn().mockResolvedValue({ supported: true, sessionId: "parent-s1", contextUsedTokens: 420, turnCount: 2, source: "acp" }),
+    });
+
+    await adapter.handleServerRequest("x.ai/folder_trust/request", "ft-1", { folderPath: "D:\\repo", source: "mcp" });
+    expect(adapter.options.onFolderTrustRequest).toHaveBeenCalledWith({ folderPath: "D:\\repo", source: "mcp" });
+    expect(writes).toContainEqual({ id: "ft-1", result: { approved: true, trusted: true, outcome: "approved" } });
+
+    await adapter.handleServerRequest("session/request_permission", "perm-sub", {
+      toolCall: { kind: "execute", title: "npm test" },
+      options: [{ optionId: "deny", kind: "reject_once" }],
+      _meta: { "x.ai/requestingSessionId": "child-s2" },
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "permission",
+      request: expect.objectContaining({
+        requestId: "perm-sub",
+        requestingSessionId: "child-s2",
+        subagentTitle: "Research Worker",
+      }),
+    }));
+    adapter.respondPermission("perm-sub", "deny", "请改用 vitest run");
+    expect(writes).toContainEqual({
+      jsonrpc: "2.0",
+      id: "perm-sub",
+      result: { outcome: { outcome: "selected", optionId: "deny", feedback: "请改用 vitest run" } },
+    });
+
+    const refreshed = await adapter.rewind("3", "files_only");
+    expect(adapter.extension).toHaveBeenCalledWith("x.ai/rewind/execute", { targetPromptIndex: 3, force: false, mode: "files_only" });
+    expect(refreshed).toMatchObject({ supported: true, contextUsedTokens: 420 });
   });
 
   it("uses standard ACP session/fork only when the runtime advertises it", async () => {

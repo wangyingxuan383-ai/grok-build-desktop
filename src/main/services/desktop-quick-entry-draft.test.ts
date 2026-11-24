@@ -198,4 +198,24 @@ describe("quick-entry draft ownership and explicit dispatch", () => {
     expect(context.attachments).toHaveLength(1); expect(controller.sendPrompt).toHaveBeenCalledOnce();
     restored.discard(); expect(restored.attachments.size).toBe(0);
   });
+  it("keeps draft text and attachments intact when the session requires reselecting a retired model", async () => {
+    const { draft, controller, input, dispatched } = fixture(); await draft.context();
+    controller.getSessionSendBlockReason = vi.fn(() => "模型已停用，请先在主窗口重新选择模型");
+    draft.add(draft.id, [{ id: "image", name: "Screenshot.png", kind: "image", data: "aGVsbG8=", mimeType: "image/png" }]);
+    await expect(draft.send({ ...input, attachmentIds: ["image"] })).rejects.toThrow("模型已停用");
+    expect(controller.sendPrompt).not.toHaveBeenCalled();
+    expect(dispatched).not.toHaveBeenCalled();
+    expect((await draft.context()).attachments).toHaveLength(1);
+  });
+  it("excludes missing or hidden discovered workspaces even when still listed in settings", async () => {
+    const { draft, controller } = fixture();
+    controller.discoverWorkspaces = vi.fn(async () => [
+      { cwd: "D:/project", name: "Project", exists: true, hidden: false },
+      { cwd: "D:/missing", name: "Missing", exists: false, hidden: false },
+      { cwd: "D:/hidden", name: "Hidden", exists: true, hidden: true },
+    ]);
+    controller.getSettings = vi.fn(async () => ({ activeWorkspace: "D:/project", recentWorkspaces: ["D:/missing", "D:/hidden/", "D:/extra"], theme: { mode: "dark" } } as unknown as AppSettings));
+    const context = await draft.context();
+    expect(context.workspaces.map(row => row.cwd)).toEqual(["D:/project", "D:/extra"]);
+  });
 });

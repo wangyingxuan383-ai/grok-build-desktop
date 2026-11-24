@@ -256,6 +256,7 @@ export interface GitDiscardInput {
   trackedPaths: string[];
   untrackedPaths: string[];
   confirmedPaths: string[];
+  scope?: "worktree" | "staged" | "all";
 }
 
 export type GrokWorktreeState = "ready" | "applying" | "conflicted" | "orphaned" | "stale" | "missing" | "unknown";
@@ -314,7 +315,7 @@ export interface WorktreeGcPreview {
   confirmationToken: string;
 }
 
-export type MemoryScope = "global" | "workspace" | "session";
+export type MemoryScope = "global" | "workspace" | "topic" | "session";
 
 export interface MemoryEntry {
   id: string;
@@ -323,6 +324,7 @@ export interface MemoryEntry {
   content: string;
   workspaceIdentity?: string;
   sessionId?: string;
+  topicFile?: string;
   path?: string;
   hash?: string;
   modifiedAt?: string;
@@ -338,6 +340,8 @@ export interface MemorySettings {
   lastDreamAt?: string;
   dreamStatus?: "idle" | "running" | "completed" | "failed";
   indexStatus?: "disabled" | "ready" | "building" | "failed" | "unknown";
+  memtraceCount?: number;
+  memtraceBytes?: number;
 }
 
 export interface MemoryLayout {
@@ -353,7 +357,8 @@ export interface MemoryLayout {
 
 export interface MemorySaveInput {
   workspacePath: string;
-  scope: "global" | "workspace";
+  scope: "global" | "workspace" | "topic";
+  topicFile?: string;
   content: string;
   expectedHash: string;
   expectedModifiedAt: string;
@@ -705,4 +710,105 @@ export interface AutomationHealthReport {
     repaired: boolean;
     summary: string;
   }>;
+}
+
+export interface GitTurnCheckpoint {
+  sessionId: string;
+  turnOrdinal: number;
+  turnId?: string;
+  refName: string;
+  beforeCommit?: string;
+  afterCommit: string;
+  repositoryRoot: string;
+  createdAt: string;
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitDiffSnapshot {
+  id: string;
+  repositoryRoot: string;
+  sessionId: string;
+  turnOrdinal: number;
+  beforeCommit?: string;
+  afterCommit: string;
+  patch: string;
+  binary: boolean;
+  readOnly: true;
+  files: GitReviewFile[];
+  additions: number;
+  deletions: number;
+  createdAt: string;
+}
+
+export interface SessionWorktreeHandoffInput {
+  sessionId: string;
+  workspacePath: string;
+  worktreeName?: string;
+  baseRef?: string;
+  worktreeId?: string;
+  cleanSource?: boolean;
+  startFromOrigin?: boolean;
+  carryDirtyChanges?: "move" | "copy" | "none";
+}
+
+export interface SessionWorktreeHandoffResult {
+  sessionId: string;
+  parentSessionId: string;
+  cwd: string;
+  worktreeId: string;
+  sourceCwd: string;
+  targetCwd: string;
+  sourceWorkspacePath: string;
+  worktree: GrokWorktreeSummary;
+  transferredTrackedFiles: number;
+  transferredUntrackedFiles: number;
+}
+
+export interface StagedMergeBackRecord {
+  childSessionId: string;
+  parentSessionId: string;
+  childTitle: string;
+  summary: string;
+  keyChanges: string[];
+  worktreeId?: string;
+  worktreeApplied?: boolean;
+  headCommit?: string;
+  stagedAt: string;
+}
+
+export interface MergeBackPreview {
+  childSessionId: string;
+  childTitle: string;
+  parentSessionId?: string;
+  parentTitle?: string;
+  summary: string;
+  keyChanges: string[];
+  replacingExisting: boolean;
+  worktreePreview?: WorktreeApplyPreview;
+  canMergeBack: boolean;
+  reason?: string;
+  confirmationToken: string;
+}
+
+export interface MergeBackSessionInput {
+  sessionId: string;
+  targetSessionId?: string;
+  summary?: string;
+  applyWorktree?: boolean;
+  cleanupWorktree?: boolean;
+  settleChild?: boolean;
+  confirmationToken: string;
+  confirmed: boolean;
+}
+
+export interface MergeBackResult {
+  merged: boolean;
+  conflicted: boolean;
+  childSessionId: string;
+  parentSessionId?: string;
+  stagedRecord?: StagedMergeBackRecord;
+  worktreeResult?: WorktreeApplyResult;
+  message: string;
 }

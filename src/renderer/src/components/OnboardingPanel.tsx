@@ -1,5 +1,6 @@
 import { MobileDownloadCard } from "./MobileDownloadCard";
 import { PanelSurface } from "./ui/PanelSurface";
+import "../styles/diagnostics-onboarding.css";
 import { useEffect, useState } from "react";
 import type { OnboardingState, SystemCompatibilityReport } from "../../../shared/types";
 import { useAppStore } from "../store";

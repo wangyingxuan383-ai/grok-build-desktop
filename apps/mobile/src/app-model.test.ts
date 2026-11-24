@@ -70,6 +70,8 @@ test("the composer button never turns typed text into a stop", async () => {
   assert.deepEqual(primaryAction(base), { action: "send", enabled: false });
   assert.deepEqual(primaryAction({ ...base, working: true }), { action: "stop", enabled: true });
   assert.deepEqual(primaryAction({ ...base, working: true, draft: "补充" }), { action: "queue", enabled: true });
+  assert.deepEqual(primaryAction({ ...base, materials: 1 }), { action: "send", enabled: true });
+  assert.deepEqual(primaryAction({ ...base, working: true, materials: 2 }), { action: "queue", enabled: true });
   assert.deepEqual(primaryAction({ ...base, draft: "问题", pending: 1 }), { action: "send", enabled: false });
   assert.deepEqual(primaryAction({ ...base, readOnly: true, draft: "x" }), { action: "none", enabled: false });
 });

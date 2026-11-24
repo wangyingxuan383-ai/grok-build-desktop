@@ -97,9 +97,13 @@ export async function probeCliCapabilities(input: CliCapabilityProbeInput): Prom
 
   if (root) {
     setHelpCapability(capabilities, "worktree.create", hasOption(root, "worktree"), "CLI 未公布 --worktree");
-    capabilities["memory.enable"] = hasOption(root, "experimental-memory") && hasOption(root, "no-memory")
+    // CLI 1.0.92+ enables memory by default and exposes --no-memory / --memory-flush without legacy --experimental-memory.
+    capabilities["memory.enable"] = hasOption(root, "no-memory") || hasOption(root, "memory-flush") || hasOption(root, "experimental-memory")
       ? { state: "supported", source: "cli-help" }
       : { state: "unknown", source: "cli-help", reason: "CLI 未公布可检测的 Memory 会话开关；工作区设置仍沿用现有流程" };
+    if (hasOption(root, "memory-flush")) {
+      capabilities["memory.sessionCommands"] = { state: "supported", source: "cli-help" };
+    }
     setHelpCapability(capabilities, "dashboard", hasCommand(root, "dashboard"), "CLI 未公布 dashboard 命令");
     setHelpCapability(capabilities, "plugins", hasCommand(root, "plugin"), "CLI 未公布 plugin 命令");
     setHelpCapability(capabilities, "mcp", hasCommand(root, "mcp"), "CLI 未公布 mcp 命令");
@@ -212,6 +216,21 @@ async function optionalCommand(run: CliCapabilityCommandRunner, args: readonly s
 }
 
 async function runCliCommand(cliPath: string, args: readonly string[], env: NodeJS.ProcessEnv, cwd: string): Promise<CliCapabilityCommandResult> {
+  const batch = process.platform === "win32" && /\.(?:cmd|bat)$/i.test(cliPath);
+  if (batch) {
+    const values = [cliPath, ...args];
+    if (values.some((v) => /[\r\n"&|<>^%!]/.test(v))) throw new Error("CLI 路径或参数包含不安全的批处理字符");
+    const command = env.ComSpec || process.env.ComSpec || "cmd.exe";
+    const { stdout, stderr } = await execFileAsync(command, ["/d", "/s", "/c", `call ${values.map((v) => `"${v}"`).join(" ")}`], {
+      cwd,
+      env,
+      timeout: 20_000,
+      windowsHide: true,
+      windowsVerbatimArguments: true,
+      maxBuffer: MAX_OUTPUT,
+    });
+    return { stdout, stderr };
+  }
   const { stdout, stderr } = await execFileAsync(cliPath, [...args], {
     cwd,
     env,

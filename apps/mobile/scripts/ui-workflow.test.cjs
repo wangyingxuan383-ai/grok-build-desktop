@@ -681,3 +681,103 @@ test("a recycled photo cell never displays the previous source while its replace
     await renderer.act(async()=>{b.resolve("file://b");await settle();});assert.equal(state.uri,"file://b");
   }finally{if(tree)await renderer.act(()=>tree.unmount());}
 });
+
+test("ShareInbox defer button passes false instead of a press event and gates adding on materialsReady", async () => {
+  const outcomes = [];
+  const { ShareInbox } = load("src/share-inbox.tsx", {
+    "react-native": { ...native, Modal: "Modal" },
+    "./ui": { Button: "Button", ui: { modal: {}, sheet: {}, title: {}, hint: {} } },
+    "./workbench": { uploadPicked: async () => ({ id: "up-1", name: "a.txt", size: 10, kind: "file" }) },
+  });
+  const baseClient = {
+    host: host(), sessionId: "session-1", draft: "", setDraft() {},
+    composer: { attachmentIds: [], attachments: [] }, setComposer() {},
+    sessions: [{ id: "session-1", title: "Main", projectName: "Repo", canSend: true, archived: false }],
+    materialsReady: false, connection: { phase: "online" }, selectSession() {},
+  };
+  let tree;
+  try {
+    await renderer.act(() => {
+      tree = renderer.create(React.createElement(ShareInbox, {
+        client: baseClient, theme: {}, value: { text: "shared note", files: [] }, close: consumed => outcomes.push(consumed),
+      }));
+    });
+    const addButton = () => tree.root.findAllByType("Button").find(b => b.props.title === "加入所选会话草稿");
+    const deferButton = () => tree.root.findAllByType("Button").find(b => b.props.title === "稍后处理");
+    assert.equal(addButton().props.disabled, true, "must wait until local draft materials finish hydrating");
+    await renderer.act(() => deferButton().props.onPress({ nativeEvent: { pageX: 10 } }));
+    assert.deepEqual(outcomes, [false]);
+    await renderer.act(() => {
+      tree.update(React.createElement(ShareInbox, {
+        client: { ...baseClient, materialsReady: true }, theme: {}, value: { text: "shared note", files: [] }, close: consumed => outcomes.push(consumed),
+      }));
+    });
+    assert.equal(addButton().props.disabled, false);
+  } finally { if (tree) await renderer.act(() => tree.unmount()); }
+});
+
+test("Composer surfaces modelSelectionRequired chip and disables sending until a replacement model is picked", async () => {
+  const { Composer } = conversationModule({});
+  let openedConfig = 0;
+  const client = {
+    sessionId: "s-1", draft: "hello", setDraft() {}, busy: false, perform() {},
+    composer: { attachments: [], references: [] },
+    snapshot: { pending: [], runtime: { modelId: "retired-model", mode: "agent", effort: "", models: [], mutable: true, modelSelectionRequired: "原模型已停用，请重新选择模型", revision: "r1", interjectSupported: false, commands: [] } },
+    options: { models: [] },
+  };
+  let tree;
+  try {
+    await renderer.act(() => {
+      tree = renderer.create(React.createElement(Composer, {
+        client, session: { id: "s-1", title: "Session", canSend: true, status: "idle" }, theme: { warning: "orange" }, disabled: false,
+        onStop() {}, onAttach() {}, onTools() {}, onConfig: () => { openedConfig++; }, onPending() {}, onQueue() {}, onChildren() {}, onNativeRuns() {}, queueCount: 0, childrenCount: 0,
+      }));
+    });
+    const chip = tree.root.findAllByType("Chip").find(c => c.props.label === "需重选模型");
+    assert.ok(chip, "retired model chip should be rendered");
+    await renderer.act(() => chip.props.onPress());
+    assert.equal(openedConfig, 1);
+    const sendButton = tree.root.findAllByType("Button").find(b => b.props.title === "发送");
+    assert.equal(sendButton.props.disabled, true, "send button must be disabled while modelSelectionRequired is set");
+  } finally { if (tree) await renderer.act(() => tree.unmount()); }
+});
+
+test("Composer enables attachment-only sending and Markdown preserves parent list numbering and table inline formatting", async () => {
+  const { Composer } = conversationModule({});
+  let sent = 0;
+  const client = {
+    sessionId: "s-1", draft: "", setDraft() {}, busy: false, perform: (action) => { if (action === "send") sent++; },
+    composer: { attachments: [{ id: "att-1", name: "shot.png", size: 100 }], references: [] },
+    snapshot: { pending: [], runtime: { modelId: "grok-4", mode: "agent", effort: "", models: [], mutable: true, revision: "r1", interjectSupported: true, commands: [] } },
+    options: { models: [] },
+  };
+  let tree;
+  try {
+    await renderer.act(() => {
+      tree = renderer.create(React.createElement(Composer, {
+        client, session: { id: "s-1", title: "Session", canSend: true, status: "idle" }, theme: {}, disabled: false,
+        onStop() {}, onAttach() {}, onTools() {}, onConfig() {}, onPending() {}, onQueue() {}, onChildren() {}, onNativeRuns() {}, queueCount: 0, childrenCount: 0,
+      }));
+    });
+    const sendButton = tree.root.findAllByType("Button").find(b => b.props.title === "发送");
+    assert.equal(sendButton.props.disabled, false, "attachment-only draft must enable Send");
+    await renderer.act(() => sendButton.props.onPress());
+    assert.equal(sent, 1);
+  } finally { if (tree) await renderer.act(() => tree.unmount()); }
+
+  const { Markdown } = load("src/markdown.tsx", {
+    "react-native": { ...native, Linking: { openURL: async () => {} } },
+    "expo-clipboard": { setStringAsync: async () => {} },
+    "./ui": { Button: "Button", ui: { row: {} } },
+  });
+  let mdTree;
+  try {
+    const sample = "1. 第一步\n   - 子项 A\n   - 子项 B\n2. 第二步\n\n| 列 | 说明 |\n| --- | --- |\n| **加粗** | `code` |";
+    await renderer.act(() => {
+      mdTree = renderer.create(React.createElement(Markdown, { value: sample, theme: { text: "#111", muted: "#666", accent: "#06c", raised: "#eee", border: "#ccc" } }));
+    });
+    const rendered = text(mdTree);
+    assert.ok(rendered.includes("1.") && rendered.includes("2."), "parent ordered list must continue at 2. after nested bullet list");
+    assert.ok(rendered.includes("加粗") && !rendered.includes("**加粗**"), "table cells must parse inline strong/code tokens");
+  } finally { if (mdTree) await renderer.act(() => mdTree.unmount()); }
+});

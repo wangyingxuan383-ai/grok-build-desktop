@@ -65,7 +65,7 @@ function RemoteApp() {
     const creationOrigin = navigationRevision.current;
     const viewIdentity = useRef({ fingerprint: host?.fingerprint, sessionId: "" });
     const appLock = useAppLock(preferences.lock, ready);
-    const client = useRemote(host, async (next) => { await SecureStore.setItemAsync(STORAGE, JSON.stringify(next)); const known = [next, ...computers.filter(c => c.fingerprint !== next.fingerprint)]; await SecureStore.setItemAsync("grok.remote.computers.v1", JSON.stringify(known)); setComputers(known); setHost(next); }, ready && !appLock.locked && !pairing && !sheet && !asset && !overlay && !(incoming && showShare));
+    const client = useRemote(host, async (next) => { await SecureStore.setItemAsync(STORAGE, JSON.stringify(next)); const known = [next, ...computers.filter(c => c.fingerprint !== next.fingerprint)]; await SecureStore.setItemAsync("grok.remote.computers.v1", JSON.stringify(known)); setComputers(known); setHost(next); if (Platform.OS === "android" && await savedRead<boolean>(next.fingerprint + ":monitor").catch(() => false)) void setMonitoring(next, true).catch(() => undefined); }, ready && !appLock.locked && !pairing && !sheet && !asset && !overlay && !(incoming && showShare));
     viewIdentity.current = { fingerprint: host?.fingerprint, sessionId: client.sessionId };
     // The latest client for stable callbacks: lets the message list skip re-rendering while the draft changes.
     const latestClient = useRef(client); latestClient.current = client;
@@ -105,7 +105,7 @@ function RemoteApp() {
     const rows = useMemo(() => conversationRows(messagesFromEvents(mergeEventWindows(client.older, (client.snapshot?.events ?? []) as Parameters<typeof messagesFromEvents>[0]))), [client.older, client.snapshot?.events]);
     const queue = useMemo(() => {
         const last = [...(client.snapshot?.events ?? [])].reverse().find((e) => e.type === "prompt-queue");
-        return last?.type === "prompt-queue" ? last.entries.filter((e) => !["completed", "failed", "cancelled"].includes(e.state)) : [];
+        return last?.type === "prompt-queue" ? last.entries.filter((e) => !["completed", "failed", "cancelled"].includes(e.state)).sort((a, b) => a.position - b.position) : [];
     }, [client.snapshot?.events]);
     const children = useMemo(() => client.sessions.filter((s) => s.parentSessionId === client.sessionId), [client.sessions, client.sessionId]);
     const attention = useMemo(() => client.sessions.filter(s => s.status === "needs-user" && !s.archived).length, [client.sessions]);
@@ -251,12 +251,14 @@ function RemoteApp() {
         hostChangeLock.current = true;
         try {
         await current.preserveDrafts();
+        const resumeMonitor = Platform.OS === "android" && await savedRead<boolean>(next.fingerprint + ":monitor").catch(() => false);
         if (host) await setMonitoring(host, false).catch(() => undefined);
         const known = [next, ...computers.filter(c => c.fingerprint !== next.fingerprint)].slice(0, 8);
         await SecureStore.setItemAsync("grok.remote.computers.v1", JSON.stringify(known));
         setComputers(known);
         await SecureStore.setItemAsync(STORAGE, JSON.stringify(next));
         setHost(next);
+        if (resumeMonitor) await setMonitoring(next, true).catch(() => undefined);
         setImageFocus(undefined);
         setAsset(undefined);
         setTab("sessions");
@@ -268,9 +270,10 @@ function RemoteApp() {
     const forget = () => {
         if (client.busy || client.unknown || client.creationPending) { client.setError("先核对待确认的提交或等待当前请求结束，再忘记电脑。"); return; }
         confirm("忘记这台电脑？", "手机草稿仍保留。电脑会话和任务不会删除；重新连接需要扫码配对。", () => {
+            let nextHost: HostConnection | undefined;
             void client.preserveDrafts()
-                .then(async () => { if (host) await setMonitoring(host, false).catch(() => undefined); const known = computers.filter(c => c.fingerprint !== host?.fingerprint); await SecureStore.setItemAsync("grok.remote.computers.v1", JSON.stringify(known)); setComputers(known); await SecureStore.deleteItemAsync(STORAGE); })
-                .then(() => { setHost(undefined); setTab("sessions"); setHistoryStack([]); })
+                .then(async () => { if (host) await setMonitoring(host, false).catch(() => undefined); const known = computers.filter(c => c.fingerprint !== host?.fingerprint); nextHost = known[0]; await SecureStore.setItemAsync("grok.remote.computers.v1", JSON.stringify(known)); setComputers(known); if (nextHost) await SecureStore.setItemAsync(STORAGE, JSON.stringify(nextHost)); else await SecureStore.deleteItemAsync(STORAGE); })
+                .then(() => { setHost(nextHost); setTab("sessions"); setHistoryStack([]); })
                 .catch((e) => client.setError(String(e)));
         });
     };
@@ -373,7 +376,7 @@ function RemoteApp() {
           { icon: "settings" as const, label: "连接与诊断", onPress: () => { client.selectSession(""); setTab("settings"); } },
       ]} />
       {appLock.locked ? <LockScreen theme={theme} onUnlock={appLock.unlock} /> : null}
-      {incoming && showShare && !appLock.locked ? <ShareInbox client={client} theme={theme} value={incoming} close={consumed => { setShowShare(false); if (consumed) { setIncoming(undefined); void savedWrite("incoming-share", { text: "", files: [] }); } }} /> : null}
+      {incoming && showShare && !appLock.locked ? <ShareInbox client={client} theme={theme} value={incoming} close={consumed => { setShowShare(false); if (consumed === true) { setIncoming(undefined); void savedWrite("incoming-share", { text: "", files: [] }); } }} /> : null}
     </SafeAreaView>);
 }
 const styles = StyleSheet.create({ root: { flex: 1 } });

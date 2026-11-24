@@ -135,4 +135,14 @@ describe("native run controls",()=>{
     f.record("workflow","wf-fresh","failed");f.record("goal","goal-done","active");f.record("goal","goal-done","complete",2);
     expect(f.finished.mock.calls.map(([row])=>row.id)).toEqual(["wf-done","wf-limit"]);
   });
+  it("cleans up wait listeners and suppresses late prompt rejections when confirmation arrives first",async()=>{
+    const f=setup([],5000);f.record("workflow","wf-race","active");
+    let rejectPrompt!:(err:Error)=>void;
+    f.prompt.mockImplementation(()=>new Promise<void>((_,reject)=>{rejectPrompt=reject;f.record("workflow","wf-race","user_paused",2);}));
+    const receipt=await f.service.control(f.input(await f.row("wf-race"),"pause","op-race"));
+    expect(receipt).toMatchObject({state:"completed"});
+    expect((f.service as any).listeners.size).toBe(0);
+    rejectPrompt(new Error("late transport error"));
+    await Promise.resolve();
+  });
 });

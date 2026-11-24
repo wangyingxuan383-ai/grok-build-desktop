@@ -451,3 +451,12 @@ it("keeps foreground control distinct from an application operation",()=>{
  state=apply(state,{type:"computer-state",sessionId:"session",state:{sessionId:"session",status:"running",stepCount:2,controlCount:1,operationCount:1,lastAction:"click",updatedAt:"later"}});
  expect(state.views.session.messages.at(-1).tool.computerEvidence).toBe("operated");
 });
+it("preserves unresolved action cards and mcp-elicitations on live projection restore while expiring cold restores",()=>{
+ const permissionEvent:ChatEvent={type:"permission",sessionId:"session",request:{requestId:"perm-1",sessionId:"session",options:[{optionId:"allow",name:"Allow",kind:"allow_once"}],toolCall:{toolCallId:"t1",title:"Write file",status:"pending"}}};
+ let state=apply(baseState(),{type:"mcp-elicitation",sessionId:"session",request:{requestId:"mcp-1",sessionId:"session",toolCallId:"mcp-tool-1",serverName:"srv",message:"Enter token",mode:"form",schemaSupported:true}});
+ state=apply(state,{type:"conversation-projection-restore",sessionId:"session",live:true,projection:{version:2,sessionId:"session",updatedAt:"now",events:[permissionEvent]}});
+ expect((state.views.session.messages.find((m:UiMessage)=>m.kind==="permission") as {resolved?:boolean}|undefined)?.resolved).toBeUndefined();
+ expect((state.views.session.messages.find((m:UiMessage)=>m.kind==="mcp-elicitation") as {resolved?:boolean}|undefined)?.resolved).toBeUndefined();
+ state=apply(baseState(),{type:"conversation-projection-restore",sessionId:"session",live:false,projection:{version:2,sessionId:"session",updatedAt:"now",events:[permissionEvent]}});
+ expect(state.views.session.messages.find((m:UiMessage)=>m.kind==="permission")).toMatchObject({resolved:true});
+});

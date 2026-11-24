@@ -13,6 +13,7 @@ export interface DesktopPetEnvironmentValue {
 interface EnvironmentDependencies {
   spawn: (path: string, args: string[], options: { shell: false; windowsHide: true; stdio: "pipe" }) => ChildProcessWithoutNullStreams;
   now: () => number;
+  ownProcessIds: () => readonly number[];
 }
 interface Worker {
   child: ChildProcessWithoutNullStreams;
@@ -70,11 +71,12 @@ export class DesktopPetEnvironment {
     private readonly onChange: (value: DesktopPetEnvironmentValue) => void,
     dependencies: Partial<EnvironmentDependencies> = {},
   ) {
-    this.dependencies = { spawn: (path, args, options) => spawn(path, args, options), now: () => performance.now(), ...dependencies };
+    this.dependencies = { spawn: (path, args, options) => spawn(path, args, options), now: () => performance.now(), ownProcessIds: () => [], ...dependencies };
   }
 
   get snapshot(): DesktopPetEnvironmentValue | undefined { return this.value; }
   get doubleClickTime(): number | undefined { return this.value?.doubleClickTime; }
+  get healthy(): boolean { return this.active && !this.disposed && this.worker !== undefined; }
 
   start(): void {
     if (this.disposed || this.active) return;
@@ -126,8 +128,9 @@ export class DesktopPetEnvironment {
     worker.pendingId = id;
     this.lastSentAt = this.dependencies.now();
     this.requestTimer = setTimeout(() => { if (this.current(worker) && worker.pendingId === id) this.fail(); }, TIMEOUT_MS);
+    const ownProcessIds = [...new Set(this.dependencies.ownProcessIds().filter(pid => integer(pid) && pid > 0 && pid <= MAX_ID))].slice(0, 32);
     try {
-      worker.child.stdin.write(`${JSON.stringify({ id, method: "context", ownProcessIds: [] })}\n`, error => {
+      worker.child.stdin.write(`${JSON.stringify({ id, method: "context", ownProcessIds })}\n`, error => {
         if (error && this.current(worker)) this.fail();
       });
     } catch { if (this.current(worker)) this.fail(); }

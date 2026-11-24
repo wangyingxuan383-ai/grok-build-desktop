@@ -18,7 +18,7 @@ object RemoteDiscovery {
   lateinit var listener:NsdManager.DiscoveryListener
   lateinit var next:()->Unit
   fun finish(){if(!finished.compareAndSet(false,true))return;try{manager.stopServiceDiscovery(listener)}catch(_:Exception){};synchronized(results){promise.resolve(results.toList())}}
-  next={if(!finished.get()&&resolving.compareAndSet(false,true)){val info=synchronized(queue){queue.poll()};if(info==null){resolving.set(false)}else try{manager.resolveService(info,object:NsdManager.ResolveListener{
+  next={if(!finished.get()&&resolving.compareAndSet(false,true)){val info=synchronized(queue){queue.poll()};if(info==null){resolving.set(false);if(!finished.get()&&synchronized(queue){queue.isNotEmpty()})next()}else try{manager.resolveService(info,object:NsdManager.ResolveListener{
    override fun onResolveFailed(info:NsdServiceInfo,error:Int){resolving.set(false);next()}
    override fun onServiceResolved(info:NsdServiceInfo){
     if(!finished.get()){

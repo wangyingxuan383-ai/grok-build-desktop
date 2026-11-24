@@ -27,12 +27,12 @@ export interface CliUpdateServiceRuntime {
 
 export const CLI_V1_COMPATIBILITY_PROFILE: CliMajorCompatibilityProfile = {
   major: 1,
-  targetVersion: "1.0.13",
+  targetVersion: "1.0.92",
   minSupportedVersion: "1.0.0",
-  maxVerifiedVersion: "1.0.13",
-  stableTargetVersion: "1.0.13",
+  maxVerifiedVersion: "1.0.92",
+  stableTargetVersion: "1.0.92",
   fixtureVersions: ["1.0.0", "1.0.1", "1.0.2", "1.0.3", "1.0.4", "1.0.5", "1.0.6", "1.0.7", "1.0.8", "1.0.9", "1.0.10", "1.0.11", "1.0.12", "1.0.13"],
-  liveVerifiedVersion: "1.0.3",
+  liveVerifiedVersion: "1.0.92",
   label: "Grok Build CLI 1.x",
   requiredChecks: [
     "v1-wire-fixture",
@@ -63,9 +63,7 @@ export function offlineCompatibilityGate(targetVersion: string): CliCompatibilit
     liveVerified: false,
     checks: [{ id: "unknown-major", label: `CLI ${major}.x 兼容契约`, status: "failed", source: "fixture", message: "Desktop 尚未记录该主版本的 Wire Fixture" }],
   };
-  const parsed = parseVersion(targetVersion);
-  if (compareVersions(targetVersion, CLI_V1_COMPATIBILITY_PROFILE.minSupportedVersion) < 0
-    || parsed?.[1] !== 0) {
+  if (compareVersions(targetVersion, CLI_V1_COMPATIBILITY_PROFILE.minSupportedVersion) < 0) {
     return {
       targetVersion,
       major,
@@ -77,7 +75,7 @@ export function offlineCompatibilityGate(targetVersion: string): CliCompatibilit
         label: `CLI ${targetVersion} 兼容契约`,
         status: "failed",
         source: "fixture",
-        message: `Desktop 当前只允许 ${CLI_V1_COMPATIBILITY_PROFILE.minSupportedVersion}–${CLI_V1_COMPATIBILITY_PROFILE.maxVerifiedVersion} 及经实机门禁验证的后续 1.0.x 补丁；1.1+ 保持失败关闭`,
+        message: `Desktop 当前最低要求 ${CLI_V1_COMPATIBILITY_PROFILE.minSupportedVersion}`,
       }],
     };
   }
@@ -90,10 +88,10 @@ export function offlineCompatibilityGate(targetVersion: string): CliCompatibilit
       liveVerified: false,
       checks: [{
         id: "future-patch-live-gate",
-        label: `CLI ${targetVersion} 同发行线实机门禁`,
+        label: `CLI ${targetVersion} 1.x 实机门禁`,
         status: "pending",
         source: "runtime",
-        message: `这是尚未随 Desktop 发布审计的 1.0.x 补丁。仅在用户明确点击后固定目标安装，并须通过 initialize/session/new/close/delete 运行时门禁；失败自动回滚。`,
+        message: `这是尚未随 Desktop 发布审计的 1.x 版本。仅在用户明确点击后固定目标安装，并须通过 initialize/session/new/close/delete 运行时门禁；失败自动回滚。`,
       }],
     };
   }

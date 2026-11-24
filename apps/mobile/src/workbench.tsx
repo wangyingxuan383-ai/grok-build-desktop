@@ -39,7 +39,7 @@ export function ConfigurationPicker({ client, theme, value, onChange, base, mode
         setFavorites(v.favorites);
         setRecent(v.recent);
     } }); }, [prefix]);
-    const runtime = client.snapshot?.runtime, selected = onChange ? { ...client.options?.defaults, ...base, ...value } : runtime ?? {}, models = (runtime?.models.length && !onChange ? runtime.models : client.options?.models ?? []).filter(model => !filter || filter(model));
+    const runtime = client.snapshot?.runtime, selected = onChange ? { ...client.options?.defaults, ...base, ...value } : { ...(runtime ?? {}), ...(runtime?.modelSelectionRequired ? { modelId: "" } : {}) }, models = (runtime?.models.length && !onChange ? runtime.models : client.options?.models ?? []).filter(model => !filter || filter(model));
     const current = models.find(m => m.modelId === selected.modelId && (m.providerId || "") === (selected.providerId || "")), disabled = !onChange && (client.busy || client.connection.phase !== "online" || !runtime?.mutable || client.snapshot?.session.canSend === false);
     const choose = (patch: Configuration) => { if (onChange)
         onChange({ ...value, ...patch });
@@ -48,7 +48,7 @@ export function ConfigurationPicker({ client, theme, value, onChange, base, mode
     return <View style={{ gap: 12 }}><Text style={[ui.title, { color: theme.text }]}>模型与执行配置</Text>
   {onChange && !modelOnly ? <RecipeBar storageKey={prefix ? prefix + ":recipes" : undefined} theme={theme} current={selected} available={(modelId, providerId) => !modelId || models.some(m => m.modelId === modelId && (m.providerId || "") === (providerId || ""))}
     apply={recipe => onChange({ ...value, modelId: recipe.modelId, providerId: recipe.providerId, effort: (recipe.effort ?? "") as ReasoningEffort, mode: recipe.mode as Configuration["mode"] })} /> : null}
-  <Text style={[ui.hint, { color: theme.muted }]}>{onChange ? "用于当前表单的任务 / 消息，不修改电脑全局默认。" : runtime?.reason || "空闲时切换，实际生效结果从电脑同步。"}</Text>
+  <Text style={[ui.hint, { color: !onChange && runtime?.modelSelectionRequired ? theme.danger : theme.muted }]}>{onChange ? "用于当前表单的任务 / 消息，不修改电脑全局默认。" : runtime?.reason || "空闲时切换，实际生效结果从电脑同步。"}</Text>
   {client.options?.notices?.map(notice=><Text key={notice} style={[ui.hint,{color:theme.danger}]}>{notice}</Text>)}<Text style={[ui.hint, { color: theme.accent }]}>{current?.name || selected.modelId || "电脑默认模型"}{modelOnly ? "" : ` · ${selected.mode || "agent"} · 推理 ${selected.effort || "默认"}`}</Text>
   {client.optionsLoading || client.options?.modelCatalog?.refreshing ? <Text style={[ui.hint, { color: theme.muted }]}>正在刷新实际模型目录…已有选择与草稿保留。</Text> : null}
   {client.options?.modelCatalog?.reason?<Text style={[ui.hint,{color:theme.danger}]}>{client.options.modelCatalog.reason}</Text>:null}
@@ -69,7 +69,7 @@ export function ConfigBar({ client, theme, onPress }: {
     client: Client;
     theme: Theme;
     onPress: () => void;
-}) { const runtime = client.snapshot?.runtime; const model = (runtime?.models.length ? runtime.models : client.options?.models)?.find(m => m.modelId === runtime?.modelId); return <Pressable accessibilityRole="button" accessibilityLabel="模型与执行配置" onPress={onPress} style={[ui.row, { paddingHorizontal: 16, paddingVertical: 9, borderTopWidth: 1, borderColor: theme.border }]}><Text numberOfLines={1} style={{ color: theme.accent, flex: 1, fontSize: 13 }}>{model?.name || runtime?.modelId || "模型待同步"} ▾</Text><Text style={{ color: theme.muted, fontSize: 12 }}>{({ agent: "询问", auto: "自动", plan: "计划" } as Record<string, string>)[runtime?.mode || ""] || "—"} · 推理 {({ low: "低", medium: "中", high: "高", xhigh: "更高", max: "最高", minimal: "最少", none: "关闭", auto: "自动" } as Record<string, string>)[runtime?.effort || ""] || runtime?.effort || "默认"}</Text></Pressable>; }
+}) { const runtime = client.snapshot?.runtime; const model = (runtime?.models.length ? runtime.models : client.options?.models)?.find(m => m.modelId === runtime?.modelId); return <Pressable accessibilityRole="button" accessibilityLabel="模型与执行配置" onPress={onPress} style={[ui.row, { paddingHorizontal: 16, paddingVertical: 9, borderTopWidth: 1, borderColor: theme.border }]}><Text numberOfLines={1} style={{ color: runtime?.modelSelectionRequired ? theme.warning : theme.accent, flex: 1, fontSize: 13 }}>{runtime?.modelSelectionRequired ? "需重选模型" : model?.name || runtime?.modelId || "模型待同步"} ▾</Text><Text style={{ color: theme.muted, fontSize: 12 }}>{({ agent: "询问", auto: "自动", plan: "计划" } as Record<string, string>)[runtime?.mode || ""] || "—"} · 推理 {({ low: "低", medium: "中", high: "高", xhigh: "更高", max: "最高", minimal: "最少", none: "关闭", auto: "自动" } as Record<string, string>)[runtime?.effort || ""] || runtime?.effort || "默认"}</Text></Pressable>; }
 interface Picked {
     name: string;
     uri: string;
@@ -95,25 +95,32 @@ export async function uploadPicked(client: Client, picked: Picked, sessionId: st
     let upload = await savedRead<{
         id: string;
     }>(localKey);
+    let state: { id: string; offset: number } | undefined;
+    if (upload) {
+        try {
+            state = await api<{ id: string; offset: number }>(client.host, "/v1/uploads", { id: upload.id });
+        } catch {
+            await savedDelete(localKey);
+            upload = undefined;
+        }
+    }
     if (!upload) {
         upload = await api(client.host, "/v1/uploads", { name: picked.name, size, sessionId, mimeType: picked.mimeType });
         await savedWrite(localKey, upload);
+        state = await api<{ id: string; offset: number }>(client.host, "/v1/uploads", { id: upload!.id });
     }
-    let state = await api<{
-        id: string;
-        offset: number;
-    }>(client.host, "/v1/uploads", { id: upload!.id });
-    while (state.offset < size) {
+    while (state!.offset < size) {
         if ((cancelled() || stopped)) {
             await api(client.host, "/v1/uploads", { id: upload!.id, cancel: true });
             await savedDelete(localKey);
             throw Error("上传已取消，草稿保持");
         }
-        trackTransfer(localKey, "upload", label, "running", undefined, undefined, {received:state.offset,total:size}, () => {stopped=true;});
-        onProgress(`${picked.name} · ${Math.round(state.offset / size * 100)}%`);
-        const base64 = await FS.readAsStringAsync(picked.uri, { encoding: FS.EncodingType.Base64, position: state.offset, length: Math.min(256 * 1024, size - state.offset) });
-        state = await api(client.host, "/v1/uploads", { id: upload!.id, offset: state.offset, data: base64 });
+        trackTransfer(localKey, "upload", label, "running", undefined, undefined, {received:state!.offset,total:size}, () => {stopped=true;});
+        onProgress(`${picked.name} · ${Math.round(state!.offset / size * 100)}%`);
+        const base64 = await FS.readAsStringAsync(picked.uri, { encoding: FS.EncodingType.Base64, position: state!.offset, length: Math.min(256 * 1024, size - state!.offset) });
+        state = await api(client.host, "/v1/uploads", { id: upload!.id, offset: state!.offset, data: base64 });
     }
+    await savedDelete(localKey);
     trackTransfer(localKey, "upload", label, "done", undefined, undefined, {received:size,total:size});
     return { id: upload!.id, name: picked.name, size };
     } catch(error) {
@@ -243,7 +250,7 @@ export function AssetViewer({ client, theme, asset, close }: {
         void download().catch(e => setError(String(e))); if (asset.mimeType === "application/pdf")
         void morePdf(); }, [asset.ticket]);
     return <Modal animationType="slide" onRequestClose={close}><View style={{ flex: 1, backgroundColor: theme.bg, padding: 18, paddingTop: 42, gap: 12 }}><View style={ui.row}><Text numberOfLines={2} style={[ui.title, { color: theme.text, flex: 1 }]}>{asset.name}</Text><Button compact title="返回" theme={theme} onPress={close}/></View>{progress ? <Text style={{ color: theme.accent }}>{progress}</Text> : null}{error ? <Text selectable style={{ color: theme.danger }}>{error}</Text> : null}
- {asset.kind === "html" && client.host ? <NativeHtmlPreview source={{ ...client.host, ticket: asset.ticket }} style={{ flex: 1 }}/> : uri && asset.mimeType.startsWith("image/") ? <ZoomImage uri={uri} theme={theme}/> : asset.mimeType === "application/pdf" ? <ScrollView style={{ flex: 1 }}>{pages.map(page => <View key={page.index} style={{ marginBottom: 15 }}><Text style={[ui.hint, { color: theme.muted }]}>第 {page.index + 1}/{total} 页</Text><Image source={{ uri: page.uri }} resizeMode="contain" style={{ width: "100%", aspectRatio: page.width / page.height, backgroundColor: "white" }}/></View>)}{pages.length < total ? <Button title={pageBusy ? "读取页面…" : "更多页面"} theme={theme} disabled={pageBusy} onPress={() => void morePdf()}/> : null}</ScrollView> : (asset.mimeType.startsWith("video/") || asset.mimeType.startsWith("audio/")) && uri ? <MediaPlayer uri={uri} mimeType={asset.mimeType} theme={theme}/> : <ScrollView style={{ flex: 1 }}>{asset.kind === "office" ? <Text style={[ui.hint, { color: theme.muted }]}>Office 文本提取；下载后可查看原排版。</Text> : null}<Text selectable style={{ color: theme.text, lineHeight: 23 }}>{asset.content || "下载后可用系统应用查看。"}</Text></ScrollView>}
+ {asset.kind === "html" && client.host ? <NativeHtmlPreview source={{ ...client.host, ticket: asset.ticket }} style={{ flex: 1 }}/> : uri && asset.mimeType.startsWith("image/") ? <ZoomImage uri={uri} theme={theme}/> : asset.mimeType === "application/pdf" ? <ScrollView style={{ flex: 1 }}>{pages.map(page => <View key={page.index} style={{ marginBottom: 15 }}><Text style={[ui.hint, { color: theme.muted }]}>第 {page.index + 1}/{total} 页</Text><Image source={{ uri: page.uri }} resizeMode="contain" style={{ width: "100%", aspectRatio: page.width > 0 && page.height > 0 ? page.width / page.height : 1 / 1.414, backgroundColor: "white" }}/></View>)}{pages.length < total ? <Button title={pageBusy ? "读取页面…" : "更多页面"} theme={theme} disabled={pageBusy} onPress={() => void morePdf()}/> : null}</ScrollView> : (asset.mimeType.startsWith("video/") || asset.mimeType.startsWith("audio/")) && uri ? <MediaPlayer uri={uri} mimeType={asset.mimeType} theme={theme}/> : <ScrollView style={{ flex: 1 }}>{asset.kind === "office" ? <Text style={[ui.hint, { color: theme.muted }]}>Office 文本提取；下载后可查看原排版。</Text> : null}<Text selectable style={{ color: theme.text, lineHeight: 23 }}>{asset.content || "下载后可用系统应用查看。"}</Text></ScrollView>}
  <View style={[ui.row, { flexWrap: "wrap" }]}><Button compact title={saving ? "正在保存…" : saved ? "已保存到手机" : "保存到手机"} theme={theme} disabled={saving || saved || asset.size > 50 * 1024 * 1024} onPress={() => void save()}/><Button compact title="分享 / 其他应用打开" theme={theme} disabled={asset.size > 50 * 1024 * 1024} onPress={() => void download().then(async (path) => { if (await Sharing.isAvailableAsync())
         await Sharing.shareAsync(path, { mimeType: asset.mimeType });
     else

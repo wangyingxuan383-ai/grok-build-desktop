@@ -41,6 +41,7 @@ export function installApplicationMenu(window: BrowserWindow, development = !app
       { label: "搜索会话", accelerator: shortcutFor("search-sessions", settings) || undefined, registerAccelerator: false, click: command("search-sessions") },
       { label: "搜索当前会话", accelerator: shortcutFor("search-conversation", settings) || undefined, registerAccelerator: false, click: command("search-conversation") },
       { label: "聚焦输入框", accelerator: shortcutFor("focus-composer", settings) || undefined, registerAccelerator: false, click: command("focus-composer") },
+      { label: "暂存当前草稿", accelerator: shortcutFor("stash-draft", settings) || undefined, registerAccelerator: false, click: command("stash-draft") },
       { label: "命令面板", accelerator: shortcutFor("command-search", settings) || undefined, registerAccelerator: false, click: command("command-search") },
       { type: "separator" },
       { label: "停止生成", click: command("stop-generation") },
@@ -48,6 +49,10 @@ export function installApplicationMenu(window: BrowserWindow, development = !app
     ] },
     { label: "视图", submenu: [
       { label: "显示或隐藏侧栏", accelerator: shortcutFor("toggle-sidebar", settings) || undefined, registerAccelerator: false, click: command("toggle-sidebar") },
+      { label: "切换底部终端", accelerator: shortcutFor("toggle-terminal", settings) || undefined, registerAccelerator: false, click: command("toggle-terminal") },
+      { label: "切换右侧检查器", accelerator: shortcutFor("toggle-inspector", settings) || undefined, registerAccelerator: false, click: command("toggle-inspector") },
+      { label: "切换变更审阅", accelerator: shortcutFor("toggle-diff", settings) || undefined, registerAccelerator: false, click: command("toggle-diff") },
+      { label: "分屏并排会话", accelerator: shortcutFor("split-pane", settings) || undefined, registerAccelerator: false, click: command("split-pane") },
       { type: "separator" },
       { label: "放大", role: "zoomIn" }, { label: "缩小", role: "zoomOut" }, { label: "恢复缩放", role: "resetZoom" },
       { label: "全屏", role: "togglefullscreen" }, { label: "重新加载", role: "reload" },
@@ -75,6 +80,18 @@ export function installApplicationMenu(window: BrowserWindow, development = !app
     ] },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  window.setAutoHideMenuBar?.(true);
+  window.setMenuBarVisibility?.(false);
+}
+
+export function popupApplicationMenu(window: BrowserWindow, position?: { x: number; y: number }): void {
+  if (window.isDestroyed()) return;
+  const menu = Menu.getApplicationMenu();
+  if (!menu) return;
+  menu.popup({
+    window,
+    ...(position ? { x: Math.max(0, Math.round(position.x)), y: Math.max(0, Math.round(position.y)) } : {}),
+  });
 }
 
 /** The item is hidden by default: a version number is not evidence that the

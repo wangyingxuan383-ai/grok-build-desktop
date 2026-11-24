@@ -1,5 +1,6 @@
 import {useState} from "react";
 import {mediaPreviewUrl,type MediaPreview} from "../artifact-preview";
+import "../styles/artifact-preview.css";
 export function PinnedMedia({target,workspace,onError}:{target:MediaPreview;workspace:string;onError(message:string):void}){
  const [failed,setFailed]=useState(false),source=mediaPreviewUrl(target);
  const action=(promise:Promise<unknown>)=>void promise.catch(error=>onError(String(error)));

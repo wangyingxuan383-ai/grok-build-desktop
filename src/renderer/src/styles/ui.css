@@ -79,7 +79,7 @@ body { font-family: var(--font-sans); font-size: var(--text-base); line-height: 
   padding: 4px; border-radius: var(--radius-lg); background: var(--color-popover); color: var(--color-fg);
   box-shadow: var(--shadow-overlay);
 }
-.ui-popover { padding: 12px; border-radius: var(--radius-xl); }
+.ui-popover { max-height: var(--radix-popover-content-available-height, calc(100vh - 24px)); padding: 12px; border-radius: var(--radius-xl); }
 .ui-menu-item {
   display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 5px 8px; margin-bottom: 2px;
   border-radius: var(--radius-md); outline: none; cursor: default; font-size: var(--text-caption); user-select: none;

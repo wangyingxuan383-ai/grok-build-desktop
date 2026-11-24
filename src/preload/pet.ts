@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { PetAction, PetApi, PetSnapshot } from "../shared/desktop-pet";
+import { PET_CLIPS, type PetAction, type PetApi, type PetSnapshot } from "../shared/desktop-pet";
 
 // This preload deliberately exposes no IPC transport, filesystem or main-window API.
 // Rebuild each message so extra properties cannot turn a pet action into a capability.
@@ -18,11 +18,14 @@ function narrowAction(input: PetAction): PetAction {
       if (["start", "move", "end"].includes(input.phase)) return { type: "drag", phase: input.phase };
       break;
     case "interact":
-      if (input.part === "head" || input.part === "body") return { type: "interact", part: input.part };
+      if (input.part === "head" || input.part === "body") {
+        const gesture = input.gesture && ["click", "stroke", "poke"].includes(input.gesture) ? input.gesture : undefined;
+        return gesture ? { type: "interact", part: input.part, gesture } : { type: "interact", part: input.part };
+      }
       break;
     case "animation-end":
       if (Number.isSafeInteger(input.transition) && input.transition >= 0 &&
-        ["idle", "waiting", "pickup", "working", "success", "error", "pat", "wave", "sleepy", "enter", "exit"].includes(input.clip)) {
+        PET_CLIPS.includes(input.clip)) {
         return { type: "animation-end", transition: input.transition, clip: input.clip };
       }
       break;

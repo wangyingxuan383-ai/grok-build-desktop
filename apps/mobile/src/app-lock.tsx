@@ -56,9 +56,16 @@ export function useAppLock(lock: LockPreferences, ready: boolean) {
 
 export function LockScreen({ theme, onUnlock }: { theme: Theme; onUnlock: () => void }) {
     const [error, setError] = useState(""), [busy, setBusy] = useState(false);
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
     const attempt = async () => {
-        if (busy) return; setBusy(true); setError("");
+        if (busy || !mounted.current) return;
+        setBusy(true); setError("");
         const result = await authenticate("解锁 Grok Remote");
+        if (!mounted.current) return;
         setBusy(false);
         if (result.ok) onUnlock(); else if (result.error) setError(result.error);
     };

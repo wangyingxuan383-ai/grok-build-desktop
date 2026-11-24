@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 function readCssGraph(url: URL, visited = new Set<string>()): string {
@@ -10,7 +10,15 @@ function readCssGraph(url: URL, visited = new Set<string>()): string {
   return `${source}\n${imports.join("\n")}`;
 }
 
-const css = readCssGraph(new URL("./styles.css", import.meta.url));
+const visitedCss = new Set<string>();
+const eagerCss = readCssGraph(new URL("./styles.css", import.meta.url), visitedCss);
+const stylesDir = new URL("./styles/", import.meta.url);
+const lazyCss = readdirSync(stylesDir)
+  .filter((name) => name.endsWith(".css"))
+  .sort()
+  .map((name) => readCssGraph(new URL(name, stylesDir), visitedCss))
+  .join("\n");
+const css = `${eagerCss}\n${lazyCss}`;
 const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 const auxiliaryPanels = readFileSync(new URL("./components/AppAuxiliaryPanels.tsx", import.meta.url), "utf8");
@@ -54,8 +62,9 @@ describe("renderer layout regression guards", () => {
 
   it("keeps conversation-only and whole-window background layers isolated", () => {
     expect(css).toMatch(/\.app-shell\.background-conversation \.conversation-wrap::before/);
-    expect(css).toMatch(/\.app-shell\.background-window \.sidebar, \.app-shell\.background-window \.main-pane/);
-    expect(css).not.toMatch(/\.app-shell\.background-window\s*>\s*\*/);
+    expect(css).toMatch(/\.window-frame-root\.background-window \.sidebar/);
+    expect(css).toMatch(/\.window-frame-root\.background-window :is\(\.main-pane/);
+    expect(css).not.toMatch(/\.(?:app-shell|window-frame-root)\.background-window\s*>\s*\*/);
   });
 
   it("mounts all root dialogs in a fixed overlay portal outside the application grid", () => {

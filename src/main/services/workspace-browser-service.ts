@@ -28,7 +28,8 @@ export class WorkspaceBrowserService {
   }
   await this.browserSession.clearStorageData({origin:url.origin});return true;
  }
- constructor(private readonly window:BrowserWindow,private readonly emit:(tabs:WorkspaceBrowserTab[])=>void){window.webContents.on("did-start-navigation",()=>this.hideAll());const browserSession=session.fromPartition("persist:grok-workspace-browser");browserSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));browserSession.setPermissionCheckHandler(()=>false);this.browserSession.on("will-download",this.download)}
+ private readonly onMainNavigate=()=>this.hideAll();
+ constructor(private readonly window:BrowserWindow,private readonly emit:(tabs:WorkspaceBrowserTab[])=>void){window.webContents.on("did-start-navigation",this.onMainNavigate);const browserSession=session.fromPartition("persist:grok-workspace-browser");browserSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));browserSession.setPermissionCheckHandler(()=>false);this.browserSession.on("will-download",this.download)}
  list(){return [...this.entries.values()].map(entry=>({...entry.state}))}
  async create(url="about:blank",context?:{sessionId?:string;workspace?:string}){if(this.entries.size>=12)throw Error("最多打开 12 个浏览器标签");url=browserNavigationUrl(url);const id=randomUUID();const view=new WebContentsView({webPreferences:{partition:"persist:grok-workspace-browser",nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});const state:WorkspaceBrowserTab={id,url,title:"新标签",loading:false,canGoBack:false,canGoForward:false,...context};const entry={view,state,revision:0};this.entries.set(id,entry);this.window.contentView.addChildView(view);view.setVisible(false);
  view.webContents.on("did-start-navigation",()=>{entry.revision++});
@@ -45,7 +46,7 @@ export class WorkspaceBrowserService {
   const entry=this.require(id),contents=entry.view.webContents,revision=entry.revision,url=contents.getURL();
   const check=()=>{
    if(this.entries.get(id)!==entry||contents.isDestroyed()||entry.revision!==revision||contents.getURL()!==url||contents.isLoading())throw Error("网页已变化，请重新截图并选择元素");
-   if(pick&&(!entry.state.sessionId||!entry.state.workspace||pick.sessionId!==entry.state.sessionId||pick.workspace!==entry.state.workspace||pick.url!==url||pick.revision!==revision))throw Error("网页反馈的会话、工作区或截图已失效");
+   if(pick&&((entry.state.sessionId&&pick.sessionId!==entry.state.sessionId)||(entry.state.workspace&&pick.workspace!==entry.state.workspace)||pick.url!==url||pick.revision!==revision))throw Error("网页反馈的会话、工作区或截图已失效");
   };
   check();
   // The only DOM inspection entry point accepts a point, never script or a selector.
@@ -56,6 +57,6 @@ export class WorkspaceBrowserService {
  }
  hideAll(){for(const entry of this.entries.values())entry.view.setVisible(false)}
  close(id:string){const entry=this.require(id);this.entries.delete(id);this.window.contentView.removeChildView(entry.view);entry.view.webContents.close();this.emit(this.list())}
- dispose(){this.browserSession.removeListener("will-download",this.download);for(const id of [...this.entries.keys()]){try{this.close(id)}catch{}}}
+ dispose(){if(!this.window.isDestroyed?.()&&!this.window.webContents?.isDestroyed?.())this.window.webContents?.removeListener?.("did-start-navigation",this.onMainNavigate);this.browserSession.removeListener("will-download",this.download);for(const id of [...this.entries.keys()]){try{this.close(id)}catch{}}}
  private require(id:string){const entry=this.entries.get(id);if(!entry)throw Error("浏览器标签已关闭");return entry}
 }

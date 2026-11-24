@@ -3,11 +3,16 @@ import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from 
 import { dirname, extname, isAbsolute, resolve } from "node:path";
 import iconv from "iconv-lite";
 import type { EditorDocument, EditorEncoding, EditorLineEnding, EditorOpenResult, EditorSaveConflict, EditorSaveInput, EditorSaveResult } from "../../shared/types";
-import { isPathInside, rejectSymbolicLink, resolveExistingWorkspacePath, resolveNewWorkspacePath, resolveWorkspaceRoot } from "./workspace-path-policy";
+import { isPathInside, rejectSymbolicLink, rejectWorkspaceSymbolicLinkChain, resolveExistingWorkspacePath, resolveNewWorkspacePath, resolveWorkspaceRoot } from "./workspace-path-policy";
 
 const DEFAULT_EDITABLE_LIMIT = 5 * 1024 * 1024;
 const DEFAULT_READABLE_LIMIT = 20 * 1024 * 1024;
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
+
+export interface EditorOpenOptions {
+  allowedExternalRoots?: string[];
+  allowedExternalFiles?: string[];
+}
 
 export class EditorService {
   private readonly editableLimit: number;
@@ -19,20 +24,29 @@ export class EditorService {
     if (this.editableLimit <= 0 || this.readableLimit < this.editableLimit) throw new Error("编辑器文件大小门槛无效");
   }
 
-  async open(workspacePath: string, requestedPath: string): Promise<EditorOpenResult> {
+  async open(workspacePath: string, requestedPath: string, options?: EditorOpenOptions): Promise<EditorOpenResult> {
     const root = await resolveWorkspaceRoot(workspacePath);
     if (requestedPath.includes("\0")) throw new Error("路径包含无效字符");
-    // Explicit absolute file links may be viewed without changing the project.
-    // Relative traversal and in-project junction escapes retain the old policy.
+    // Explicit absolute file links outside the workspace may only be viewed when
+    // allowlisted. Relative traversal and in-project junction escapes retain the old policy.
     const requested = isAbsolute(requestedPath) ? resolve(requestedPath) : resolve(root, requestedPath);
     const canonical = await realpath(requested).catch(() => undefined);
     // The original workspace spelling can be a Windows 8.3 alias. A request syntactically
     // inside that spelling must still go through the junction boundary check.
-    const insideSpelling = isPathInside(resolve(workspacePath), requested) || isPathInside(root, requested);
-    const outside = isAbsolute(requestedPath) && !insideSpelling && Boolean(canonical && !isPathInside(root, canonical));
+    const insideSpelling = isComparablePathInside(resolve(workspacePath), requested) || isComparablePathInside(root, requested);
+    const outside = isAbsolute(requestedPath) && !insideSpelling && (!canonical || !isComparablePathInside(root, canonical));
+    if (outside) {
+      if (!(await isAuthorizedExternalTarget(canonical ?? requested, Boolean(canonical), options))) {
+        throw new Error("不允许打开工作区外的未授权文件");
+      }
+      if (!canonical) throw new Error("文件或目录不存在");
+    }
     const resolved = outside
-      ? { root, path: await realpath(requestedPath), relativePath: requestedPath }
+      ? { root, path: canonical!, relativePath: requestedPath }
       : await resolveExistingWorkspacePath(root, requestedPath, false);
+    if (!outside) {
+      await rejectWorkspaceSymbolicLinkChain(workspacePath, requestedPath, false);
+    }
     await rejectSymbolicLink(resolved.path);
     const info = await stat(resolved.path);
     if (!info.isFile()) throw new Error("请求的路径不是文件");
@@ -63,6 +77,7 @@ export class EditorService {
   }
 
   async save(input: EditorSaveInput): Promise<EditorSaveResult> {
+    await rejectWorkspaceSymbolicLinkChain(input.workspacePath, input.path, true);
     const resolved = await resolveExistingOrDeletedPath(input.workspacePath, input.path);
     const current = await currentFileState(resolved.path, this.readableLimit);
     const conflict = buildConflict(input, current);
@@ -77,6 +92,7 @@ export class EditorService {
   }
 
   async createFile(workspacePath: string, requestedPath: string, content = ""): Promise<EditorDocument> {
+    await rejectWorkspaceSymbolicLinkChain(workspacePath, requestedPath, true);
     const resolved = await resolveNewWorkspacePath(workspacePath, requestedPath);
     const handle = await open(resolved.path, "wx");
     try {
@@ -89,11 +105,14 @@ export class EditorService {
   }
 
   async createDirectory(workspacePath: string, requestedPath: string): Promise<void> {
+    await rejectWorkspaceSymbolicLinkChain(workspacePath, requestedPath, true);
     const resolved = await resolveNewWorkspacePath(workspacePath, requestedPath);
     await mkdir(resolved.path, { recursive: false });
   }
 
   async rename(workspacePath: string, requestedPath: string, targetPath: string): Promise<string> {
+    await rejectWorkspaceSymbolicLinkChain(workspacePath, requestedPath, false);
+    await rejectWorkspaceSymbolicLinkChain(workspacePath, targetPath, true);
     const source = await resolveExistingWorkspacePath(workspacePath, requestedPath, false);
     await rejectSymbolicLink(source.path);
     const target = await resolveNewWorkspacePath(source.root, targetPath);
@@ -104,6 +123,7 @@ export class EditorService {
 
   async delete(workspacePath: string, requestedPath: string, confirmed: boolean): Promise<void> {
     if (!confirmed) throw new Error("删除操作需要明确确认");
+    await rejectWorkspaceSymbolicLinkChain(workspacePath, requestedPath, false);
     const resolved = await resolveExistingWorkspacePath(workspacePath, requestedPath, false);
     await rejectSymbolicLink(resolved.path);
     const info = await lstat(resolved.path);
@@ -134,8 +154,16 @@ async function currentFileState(path: string, readableLimit: number): Promise<Cu
   const info = await lstat(path).catch(() => undefined);
   if (!info) return { kind: "deleted" };
   if (!info.isFile() || info.isSymbolicLink()) return { kind: "type-changed", modifiedAt: info.mtime.toISOString(), mode: info.mode };
+  if (info.size > readableLimit) {
+    return {
+      kind: "file",
+      hash: await hashFileStream(path),
+      modifiedAt: info.mtime.toISOString(),
+      mode: info.mode,
+    };
+  }
   const bytes = await readFile(path);
-  const decoded = bytes.length <= readableLimit ? decode(bytes) : undefined;
+  const decoded = !bytes.includes(0) ? decode(bytes) : undefined;
   return {
     kind: "file",
     hash: hash(bytes),
@@ -145,6 +173,22 @@ async function currentFileState(path: string, readableLimit: number): Promise<Cu
     lineEnding: decoded ? detectLineEnding(decoded.content) : undefined,
     mode: info.mode,
   };
+}
+
+async function hashFileStream(path: string): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) break;
+      digest.update(buffer.subarray(0, bytesRead));
+    }
+    return digest.digest("hex");
+  } finally {
+    await handle.close();
+  }
 }
 
 function buildConflict(input: EditorSaveInput, current: CurrentFileState): EditorSaveConflict | undefined {
@@ -268,6 +312,34 @@ async function atomicReplace(path: string, bytes: Buffer, mode?: number): Promis
 
 function hash(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function comparablePath(path: string): string {
+  const normalized = resolve(path);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function isComparablePathInside(root: string, path: string, allowRoot = true): boolean {
+  return isPathInside(comparablePath(root), comparablePath(path), allowRoot);
+}
+
+async function isAuthorizedExternalTarget(targetPath: string, targetExists: boolean, options?: EditorOpenOptions): Promise<boolean> {
+  if (!options) return false;
+  const targetComparable = comparablePath(targetPath);
+  for (const allowedFile of options.allowedExternalFiles ?? []) {
+    if (!allowedFile || allowedFile.includes("\0")) continue;
+    const resolvedFile = resolve(allowedFile);
+    const canonicalFile = await realpath(resolvedFile).catch(() => (targetExists ? undefined : resolvedFile));
+    if (canonicalFile && comparablePath(canonicalFile) === targetComparable) return true;
+  }
+  for (const allowedRoot of options.allowedExternalRoots ?? []) {
+    if (!allowedRoot || allowedRoot.includes("\0")) continue;
+    const canonicalRoot = await realpath(resolve(allowedRoot)).catch(() => undefined);
+    if (!canonicalRoot) continue;
+    const info = await stat(canonicalRoot).catch(() => undefined);
+    if (info?.isDirectory() && isPathInside(comparablePath(canonicalRoot), targetComparable, false)) return true;
+  }
+  return false;
 }
 
 function languageForPath(path: string): string {

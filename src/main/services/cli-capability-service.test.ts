@@ -79,6 +79,15 @@ describe("CLI capability snapshot", () => {
     expect(snapshot.capabilities["memory.manage"].state).toBe("supported");
   });
 
+  it("recognizes 1.0.92+ --no-memory and --memory-flush flags without --experimental-memory", async () => {
+    const snapshot = await probeCliCapabilities({ cacheKey: "1.0.92", run: async args => {
+      const result = await fixtureRunner()(args);
+      return { ...result, stdout: args.join(" ") === "--help" ? result.stdout.replace("  --experimental-memory\n", "  --memory-flush\n") : result.stdout };
+    } });
+    expect(snapshot.capabilities["memory.enable"].state).toBe("supported");
+    expect(snapshot.capabilities["memory.sessionCommands"].state).toBe("supported");
+  });
+
   it("invalidates static and runtime evidence on replacement and rejects late old-owner evidence", async () => {
     let key = "path-a:version:hash-a";
     const run = vi.fn(async (_: string, args: readonly string[]) => fixtureRunner()(args.slice(1)));

@@ -51,6 +51,19 @@
   --color-diff-added: var(--color-success);
   --color-diff-removed: var(--color-danger);
 
+  --chart-1: #6ea8fe;
+  --chart-2: #22d3ee;
+  --chart-3: #4cc38a;
+  --chart-4: #e5b454;
+  --chart-5: #c084fc;
+  --chart-6: #f06a6a;
+
+  --surface-glass-sidebar: color-mix(in srgb, var(--color-window) 64%, transparent);
+  --surface-glass-pane: color-mix(in srgb, var(--color-frame) 76%, transparent);
+  --surface-glass-card: color-mix(in srgb, var(--color-card) 86%, transparent);
+  --surface-glass-elevated: color-mix(in srgb, var(--color-popover) 88%, transparent);
+  --border-glass-hairline: color-mix(in srgb, var(--color-fg) 10%, var(--color-border) 55%);
+
   --agent-1: #8b7cf6;
   --agent-2: #36b8c9;
   --agent-3: #e08a3c;
@@ -90,6 +103,15 @@
   --frame-gap: 6px;
   --header-height: 44px;
   --reading-width: 760px;
+  --content-width: var(--conversation-content-width, 760px);
+
+  --z-background: 0;
+  --z-content: 1;
+  --z-popover: 1100;
+  --z-modal: 1250;
+  --z-computer-confirmation: 1300;
+  --z-action-dialog: 1350;
+  --z-toast: 1400;
 
   /* Legacy names, resolved from the ladder above (see note at the top). */
   --bg: var(--color-window);
@@ -132,4 +154,5 @@
   --background-fit: cover;
   --background-position: center;
   --theme-background-image: none;
+  --theme-aurora-gradient: none;
 }

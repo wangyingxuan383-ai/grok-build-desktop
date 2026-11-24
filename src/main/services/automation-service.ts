@@ -448,15 +448,23 @@ export class AutomationService {
 
   private async recoverAbandonedRuns(): Promise<void> {
     for (const run of await this.readRuns()) {
-      if (!["running", "awaiting-confirmation"].includes(run.status)) continue;
+      if (!["queued", "running", "awaiting-confirmation"].includes(run.status)) continue;
+      if (this.activeRunControllers.has(run.id)) continue;
       const modified = await stat(this.runPath(run.id)).catch(() => undefined);
-      if (!modified || Date.now() - modified.mtimeMs < 5000) continue;
+      const graceMs = run.status === "queued" ? 30_000 : 5_000;
+      if (!modified || Date.now() - modified.mtimeMs < graceMs) continue;
+      let recovered = false;
       await withCrossProcessFileLock(join(this.root, "lease-allocation.lock"), async () => {
         const lease = await readJson<AutomationLeaseRecord>(this.lockPath(run.taskId)).catch(() => undefined);
         if (lease?.runId === run.id && isProcessAlive(lease.pid)) return;
         run.status = "failed"; run.error = "执行进程已退出，本次运行不会自动重放；可检查结果后重新运行"; run.finishedAt = this.now().toISOString();
         await this.writeRun(run); await this.rejectPendingForRun(run.id);
+        recovered = true;
       });
+      if (recovered) {
+        this.options.onChanged?.({ taskId: run.taskId, run });
+        await this.publishRunResult(run);
+      }
     }
   }
 

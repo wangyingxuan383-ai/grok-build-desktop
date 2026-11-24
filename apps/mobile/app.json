@@ -2,14 +2,14 @@
   "expo": {
     "name": "Grok Remote",
     "slug": "grok-desktop-companion",
-    "version": "0.4.4",
+    "version": "0.5.0",
     "orientation": "default",
     "userInterfaceStyle": "automatic",
     "scheme": "grokremote",
     "newArchEnabled": true,
     "android": {
       "package": "io.github.grokbuilddesktop.companion",
-      "versionCode": 16,
+      "versionCode": 17,
       "permissions": [
         "INTERNET",
         "CAMERA"

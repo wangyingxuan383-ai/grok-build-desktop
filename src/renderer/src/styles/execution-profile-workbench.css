@@ -1,0 +1,41 @@
+/* Lazy-loaded styles for ExecutionProfileWorkbench.tsx */
+.profile-workbench { flex: 1 1 auto; min-width: 0; min-height: 0; display: grid; grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; background: var(--main); }
+.profile-sidebar { min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
+.profile-sidebar > header { padding: 14px; display: grid; gap: 10px; border-bottom: 1px solid var(--border); }
+.profile-sidebar > header > div { display: flex; gap: 6px; }
+.profile-list { min-height: 0; overflow: auto; padding: 10px; }
+.profile-list h3 { margin: 10px 6px 6px; color: var(--text-muted); font-size: .7em; text-transform: uppercase; letter-spacing: .05em; }
+.profile-list section > button { width: 100%; margin-bottom: 5px; padding: 9px 10px; display: grid; gap: 3px; text-align: left; border: 1px solid transparent; background: transparent; }
+.profile-list section > button strong, .profile-list section > button span, .profile-list section > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-list section > button span, .profile-list section > button small { color: var(--text-muted); font-size: .76em; }
+.profile-list section > button:hover, .profile-list section > button.active { border-color: var(--border); background: var(--hover); }
+.profile-list section > button.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.profile-list section > button.shadowed { opacity: .58; }
+.profile-editor { min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 40px; }
+.profile-editor > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+.profile-editor h2 { margin: 0 0 3px; }
+.profile-editor header span { color: var(--text-muted); font-size: .8em; }
+.profile-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.profile-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; max-width: 980px; }
+.profile-form label, .session-launch-dialog .panel-body > label { display: grid; gap: 5px; color: var(--text-secondary); font-size: .77em; }
+.profile-form .wide { grid-column: 1 / -1; }
+.profile-form textarea { min-height: 100px; resize: vertical; }
+.profile-form label.check { display: flex; align-items: center; gap: 8px; min-height: 38px; }
+.profile-compat { max-width: 980px; margin-top: 18px; padding: 13px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.profile-compat > strong { grid-column: 1 / -1; }
+.profile-compat span { padding: 7px 8px; display: grid; gap: 2px; border-left: 3px solid var(--border); background: var(--panel-2); color: var(--text-muted); font-size: .71em; }
+.profile-compat span.supported { border-left-color: var(--success); }
+.profile-compat span.degraded { border-left-color: var(--warning); }
+.profile-compat span.unsupported { border-left-color: var(--danger); }
+.session-launch-dialog { width: min(520px, calc(100vw - 32px)); }
+.session-launch-dialog .panel-body { display: grid; gap: 12px; }
+.launch-profile-summary { padding: 11px; display: grid; gap: 4px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel-2); }
+.launch-profile-summary span, .launch-profile-summary small { color: var(--text-muted); font-size: .78em; }
+@media (max-width: 850px) { .profile-workbench { grid-template-columns: 210px minmax(0, 1fr); } .profile-form, .profile-compat { grid-template-columns: 1fr; } .profile-form .wide, .profile-compat > strong { grid-column: 1; } }
+.profile-editor > header { min-height: var(--header-height, 44px); padding: 10px 14px; background: var(--main); }
+.profile-workbench { background: var(--main); }
+.window-frame-root.background-window .profile-workbench, .window-frame-root.has-aurora .profile-workbench { background: transparent; }
+.profile-sidebar { background: color-mix(in srgb, var(--panel) 82%, var(--main)); }
+.profile-editor h2 { letter-spacing: -.02em; }
+.profile-actions button { border-color: color-mix(in srgb, var(--border) 75%, transparent); border-radius: 7px; background: transparent; }
+.profile-actions button:hover { background: var(--hover); }

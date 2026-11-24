@@ -97,7 +97,7 @@ export class GitService {
 
   async status(workspacePath: string): Promise<GitRepositoryStatus> {
     const context = await this.repositoryContext(workspacePath);
-    const result = await this.run(["-c", "core.quotepath=false", "status", "--porcelain=v2", "--branch", "-z"], context.repositoryRoot);
+    const result = await this.run(["-c", "core.quotepath=false", "status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], context.repositoryRoot);
     const parsed = parsePorcelainV2(result.stdout);
     const remoteName = parsed.branch.upstream?.split("/")[0] || (await this.firstRemote(context.repositoryRoot));
     const remoteUrl = remoteName
@@ -121,9 +121,9 @@ export class GitService {
     let result: GitCommandResult;
     if (relativePath && !staged) {
       const status = await this.status(workspacePath);
-      const change = status.changes.find((value) => value.path === relativePath);
-      if (change?.kind === "untracked") {
-        result = await this.run(["-c", "core.quotepath=false", "diff", "--no-index", "--no-color", "--", "/dev/null", relativePath], context.repositoryRoot, [1]);
+      const change = status.changes.find((value) => value.path.replace(/\/+$/, "") === relativePath);
+      if (change?.kind === "untracked" && !change.path.endsWith("/")) {
+        result = await this.run(["-c", "core.quotepath=false", "diff", "--default-prefix", "--no-index", "--no-color", "--", "/dev/null", relativePath], context.repositoryRoot, [1]);
       } else {
         result = await this.run(diffArgs(false, relativePath), context.repositoryRoot);
       }
@@ -145,28 +145,28 @@ export class GitService {
     let patch = "";
     if (scope.kind === "unstaged") {
       patch = (await this.run(diffArgs(false), context.repositoryRoot)).stdout;
-      const untracked = status.changes.filter((change) => change.kind === "untracked");
+      const untracked = status.changes.filter((change) => change.kind === "untracked" && !change.path.endsWith("/"));
       for (const change of untracked) {
-        const result = await this.run(["-c", "core.quotepath=false", "diff", "--no-index", "--no-color", "--", "/dev/null", change.path.replace(/\\/g, "/")], context.repositoryRoot, [1]);
+        const result = await this.run(["-c", "core.quotepath=false", "diff", "--default-prefix", "--no-index", "--no-color", "--", "/dev/null", change.path.replace(/\\/g, "/")], context.repositoryRoot, [1]);
         patch += `${patch && !patch.endsWith("\n") ? "\n" : ""}${result.stdout}`;
       }
     } else if (scope.kind === "staged") {
       patch = (await this.run(diffArgs(true), context.repositoryRoot)).stdout;
     } else if (scope.kind === "commit") {
       const commit = await this.resolveCommit(context.repositoryRoot, scope.revision);
-      patch = (await this.run(["-c", "core.quotepath=false", "show", "--format=", "--no-ext-diff", "--no-color", commit], context.repositoryRoot)).stdout;
+      patch = (await this.run(["-c", "core.quotepath=false", "show", "--format=", "--default-prefix", "--no-ext-diff", "--no-color", commit], context.repositoryRoot)).stdout;
     } else if (scope.kind === "branch") {
       const base = await this.resolveCommit(context.repositoryRoot, scope.base);
       const head = await this.resolveCommit(context.repositoryRoot, "HEAD");
       const mergeBase = (await this.run(["merge-base", base, head], context.repositoryRoot)).stdout.trim();
-      patch = (await this.run(["-c", "core.quotepath=false", "diff", "--no-ext-diff", "--no-color", `${mergeBase}..${head}`], context.repositoryRoot)).stdout;
+      patch = (await this.run(["-c", "core.quotepath=false", "diff", "--default-prefix", "--no-ext-diff", "--no-color", `${mergeBase}..${head}`], context.repositoryRoot)).stdout;
     } else {
       const paths = normalizePathList(context.repositoryRoot, scope.paths);
       if (paths.length) {
         const hasHead = (await this.run(["rev-parse", "--verify", "HEAD"], context.repositoryRoot, [128])).exitCode === 0;
-        patch = (await this.run(["-c", "core.quotepath=false", "diff", "--no-ext-diff", "--no-color", ...(hasHead ? ["HEAD"] : []), "--", ...paths.map(literalPathspec)], context.repositoryRoot)).stdout;
+        patch = (await this.run(["-c", "core.quotepath=false", "diff", "--default-prefix", "--no-ext-diff", "--no-color", ...(hasHead ? ["HEAD"] : []), "--", ...paths.map(literalPathspec)], context.repositoryRoot)).stdout;
         for (const change of status.changes.filter((value) => value.kind === "untracked" && paths.includes(value.path))) {
-          const result = await this.run(["-c", "core.quotepath=false", "diff", "--no-index", "--no-color", "--", "/dev/null", change.path.replace(/\\/g, "/")], context.repositoryRoot, [1]);
+          const result = await this.run(["-c", "core.quotepath=false", "diff", "--default-prefix", "--no-index", "--no-color", "--", "/dev/null", change.path.replace(/\\/g, "/")], context.repositoryRoot, [1]);
           patch += `${patch && !patch.endsWith("\n") ? "\n" : ""}${result.stdout}`;
         }
       }
@@ -293,17 +293,66 @@ export class GitService {
 
   async discard(workspacePath: string, input: GitDiscardInput): Promise<GitRepositoryStatus> {
     const context = await this.assertMutationTrusted(workspacePath);
+    const scope = input.scope ?? "all";
     const tracked = normalizePathList(context.repositoryRoot, input.trackedPaths);
     const untracked = normalizePathList(context.repositoryRoot, input.untrackedPaths);
     const confirmed = normalizePathList(context.repositoryRoot, input.confirmedPaths);
-    const requested = [...tracked, ...untracked].sort();
+    const requested = [...new Set([...tracked, ...untracked])].sort();
     if (!requested.length || !sameStringList(requested, confirmed.sort())) throw new Error("丢弃文件清单未被完整确认");
     const current = await this.status(workspacePath);
-    const byPath = new Map(current.changes.map((change) => [change.path, change]));
+    const byPath = new Map(current.changes.map((change) => [change.path.replace(/\/+$/, ""), change]));
     if (tracked.some((path) => !byPath.has(path) || byPath.get(path)?.kind === "untracked")) throw new Error("已跟踪文件状态已变化，请刷新后重试");
     if (untracked.some((path) => byPath.get(path)?.kind !== "untracked")) throw new Error("未跟踪文件状态已变化，请刷新后重试");
-    if (tracked.length) await this.run(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...tracked.map(literalPathspec)], context.repositoryRoot);
-    if (untracked.length) await this.run(["clean", "-fd", "--", ...untracked.map(literalPathspec)], context.repositoryRoot);
+
+    const hasHead = (await this.run(["rev-parse", "--verify", "HEAD"], context.repositoryRoot, [128])).exitCode === 0;
+    if (tracked.length) {
+      if (scope === "worktree") {
+        await this.run(["restore", "--worktree", "--", ...tracked.map(literalPathspec)], context.repositoryRoot);
+      } else if (scope === "staged") {
+        if (hasHead) {
+          const inHead: string[] = [];
+          const addedOnly: string[] = [];
+          for (const path of tracked) {
+            const change = byPath.get(path);
+            if (change?.kind === "added") {
+              addedOnly.push(path);
+            } else if (change?.kind === "renamed" && change.oldPath) {
+              addedOnly.push(path);
+              inHead.push(normalizeRepoPath(context.repositoryRoot, change.oldPath));
+            } else {
+              inHead.push(path);
+            }
+          }
+          if (addedOnly.length) await this.run(["rm", "--cached", "--ignore-unmatch", "--", ...addedOnly.map(literalPathspec)], context.repositoryRoot);
+          if (inHead.length) await this.run(["restore", "--source=HEAD", "--staged", "--", ...[...new Set(inHead)].map(literalPathspec)], context.repositoryRoot);
+        } else {
+          await this.run(["rm", "--cached", "--ignore-unmatch", "--", ...tracked.map(literalPathspec)], context.repositoryRoot);
+        }
+      } else {
+        if (hasHead) {
+          const inHead: string[] = [];
+          const addedOnly: string[] = [];
+          for (const path of tracked) {
+            const change = byPath.get(path);
+            if (change?.kind === "added") {
+              addedOnly.push(path);
+            } else if (change?.kind === "renamed" && change.oldPath) {
+              addedOnly.push(path);
+              inHead.push(normalizeRepoPath(context.repositoryRoot, change.oldPath));
+            } else {
+              inHead.push(path);
+            }
+          }
+          if (addedOnly.length) await this.run(["rm", "-f", "--ignore-unmatch", "--", ...addedOnly.map(literalPathspec)], context.repositoryRoot);
+          if (inHead.length) await this.run(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...[...new Set(inHead)].map(literalPathspec)], context.repositoryRoot);
+        } else {
+          await this.run(["rm", "-f", "--ignore-unmatch", "--", ...tracked.map(literalPathspec)], context.repositoryRoot);
+        }
+      }
+    }
+    if (untracked.length && scope !== "staged") {
+      await this.run(["clean", "-fd", "--", ...untracked.map(literalPathspec)], context.repositoryRoot);
+    }
     return this.status(workspacePath);
   }
 
@@ -403,6 +452,7 @@ export class GitService {
     let stderr = "";
     child.stdout.resume();
     child.stderr.on("data", (chunk: Buffer) => { if (stderr.length < 16_384) stderr += chunk.toString("utf8"); });
+    child.stdin.on("error", () => undefined);
     child.stdin.end(input, "utf8");
     const code = await new Promise<number | null>((resolvePromise, reject) => {
       child.once("error", reject);
@@ -488,7 +538,7 @@ function conflictKind(xy: string): GitFileChange["conflict"] {
 }
 
 function diffArgs(staged: boolean, path?: string): string[] {
-  const args = ["-c", "core.quotepath=false", "diff", "--no-ext-diff", "--no-color"];
+  const args = ["-c", "core.quotepath=false", "diff", "--default-prefix", "--no-ext-diff", "--no-color"];
   if (staged) args.push("--cached");
   if (path) args.push("--", literalPathspec(path));
   return args;

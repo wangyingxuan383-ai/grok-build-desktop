@@ -260,6 +260,8 @@ interface AdapterOptions extends SessionProcessOptions {
   onPromptQueueChanged?: (sessionId: string, entries: PromptQueueEntry[]) => void | Promise<void>;
   onPromptQueueTerminal?: (sessionId: string, entry: PromptQueueEntry) => void | Promise<void>;
   onRuntimeChanged?: (sessionId: string, patch: { modelId?: string; effort?: ReasoningEffort; mode?: SessionMode }) => void | Promise<void>;
+  onFolderTrustRequest?: (input: { folderPath: string; source?: string }) => Promise<boolean>;
+  transformQueuedPrompt?: (sessionId: string, text: string) => Promise<{ wireText: string; displayText: string; rollback?: () => Promise<void> }>;
   sessionAttachPolicy?: SessionAttachPolicy;
 }
 
@@ -268,6 +270,7 @@ export interface UserPromptPresentation {
   suppressCompletion?: boolean;
   toolSelection?: import("../../shared/types").McpToolSelection;
   clientMessageId?: string;
+  displayText?: string;
   attachments?: UserMessageAttachmentPreview[];
   /** Stable identity for a Desktop-owned queue row once it is submitted. */
   promptId?: string;
@@ -314,8 +317,7 @@ export interface AcpClientCapabilities {
 export function buildAcpClientCapabilities(cliVersion?: string): AcpClientCapabilities {
   const parsed = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(cliVersion ?? "");
   const imageAware = parsed?.[1] === "1"
-    && Number(parsed[2]) === 0
-    && Number(parsed[3]) >= 4;
+    && (Number(parsed[2]) > 0 || Number(parsed[3]) >= 4);
   return {
     fs: imageAware ? { writeTextFile: true } : { readTextFile: true, writeTextFile: true },
     terminal: true,
@@ -469,6 +471,7 @@ export class GrokAcpAdapter extends EventEmitter {
   private nativeControlPending = false;
   private nativeControlEnabled = false;
   private lastNativeGoalId?: string;
+  private readonly subagentTitles = new Map<string, string>();
   private toolIdentities = new Map<string, Pick<ToolCallState, "toolName" | "serverName" | "source" | "rawInput" | "status" | "title" | "kind">>();
   lastCloseReceipt?: SessionCloseReceipt;
 
@@ -995,18 +998,146 @@ export class GrokAcpAdapter extends EventEmitter {
       : { available: false, sessionId: this.sessionId, source: "unavailable", reason: "当前 CLI 会话未发布 /feedback；可能是版本不支持或官方反馈功能未启用。" };
   }
 
-  async submitOfficialFeedback(text: string): Promise<import("../../shared/types").OfficialFeedbackReceipt> {
+  async submitOfficialFeedback(text: string, imagePaths?: string[]): Promise<import("../../shared/types").OfficialFeedbackReceipt> {
     const normalized = text.trim();
     if (!normalized) throw new Error("反馈内容不能为空");
     if (Buffer.byteLength(normalized, "utf8") > 64 * 1024) throw new Error("反馈内容超过 64 KiB 限制");
     const capability = this.feedbackCapability();
     if (!capability.available) throw new Error(capability.reason || "当前 CLI 不支持官方反馈");
+    const cleanImages = (imagePaths ?? []).map((value) => value.trim()).filter(Boolean).slice(0, 8);
     const result = unwrapExtResult(await this.extension("x.ai/feedback", {
       session_id: this.sessionId,
       feedback_text: normalized,
+      ...(cleanImages.length ? { image_paths: cleanImages } : {}),
     }));
     if (result.success === false) throw new Error(firstNonEmptyString(result.message, result.error) || "官方反馈提交失败");
     return { sessionId: this.sessionId, submitted: true, message: "反馈已通过当前 Grok Build CLI 提交。" };
+  }
+
+  async searchSessions(query: string, cwd?: string, limit = 24): Promise<import("../../shared/types").OfficialSessionSearchResult> {
+    const trimmed = query.trim();
+    if (!trimmed) return { supported: true, hits: [], totalEstimate: 0, source: "acp" };
+    try {
+      const payload = unwrapExtResult(await this.extension("x.ai/session/search", {
+        query: trimmed,
+        ...(cwd ? { cwd } : {}),
+        limit: Math.max(1, Math.min(100, Math.floor(limit))),
+      }, 15_000));
+      const rawHits = arrayValue(payload.hits) ?? arrayValue(payload.results) ?? arrayValue(payload.sessions) ?? [];
+      const hits: import("../../shared/types").OfficialSessionSearchHit[] = rawHits.flatMap((entry) => {
+        const row = recordValue(entry);
+        const sessionId = firstNonEmptyString(row?.sessionId, row?.session_id, row?.id);
+        if (!row || !sessionId) return [];
+        const matchedFields = (arrayValue(row.matchedFields) ?? arrayValue(row.matched_fields) ?? [])
+          .filter((item): item is string => typeof item === "string" && Boolean(item.trim()));
+        return [{
+          sessionId,
+          cwd: firstNonEmptyString(row.cwd, row.workspace, row.directory),
+          title: firstNonEmptyString(row.title, row.name, row.generated_title),
+          snippet: firstNonEmptyString(row.snippet, row.excerpt, row.preview, row.summary),
+          score: typeof row.score === "number" && Number.isFinite(row.score) ? row.score : undefined,
+          ...(matchedFields.length ? { matchedFields } : {}),
+          updatedAt: firstNonEmptyString(row.updatedAt, row.updated_at, row.last_active_at),
+        }];
+      });
+      return {
+        supported: true,
+        hits,
+        totalEstimate: optionalNonNegativeInteger(payload.total ?? payload.totalEstimate ?? payload.total_estimate) ?? hits.length,
+        source: "acp",
+      };
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) {
+        return { supported: false, hits: [], source: "local-fallback" };
+      }
+      throw error;
+    }
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    try {
+      const payload = unwrapExtResult(await this.extension("x.ai/models/list", {}, 15_000));
+      this.applyModelStateUpdate(payload);
+      return this.models;
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) return this.models;
+      throw error;
+    }
+  }
+
+  async listWorkflows(): Promise<import("../../shared/types").WorkflowCatalogItem[]> {
+    try {
+      const payload = unwrapExtResult(await this.extension("x.ai/workflows/list", { cwd: this.options.cwd }, 15_000));
+      const rows = arrayValue(payload.workflows) ?? arrayValue(payload.items) ?? [];
+      return rows.flatMap((entry): import("../../shared/types").WorkflowCatalogItem[] => {
+        const row = recordValue(entry);
+        const name = firstNonEmptyString(row?.name, row?.title, row?.id);
+        if (!row || !name) return [];
+        const id = firstNonEmptyString(row.id, row.slug) ?? name;
+        return [{
+          id,
+          name,
+          description: firstNonEmptyString(row.description, row.summary),
+          source: firstNonEmptyString(row.source, row.scope),
+          command: firstNonEmptyString(row.command) ?? `/workflow ${name}`,
+        }];
+      });
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) {
+        return (this.commands || [])
+          .filter((cmd) => /workflow/i.test(cmd.name))
+          .map((cmd) => ({
+            id: cmd.name.replace(/^\//, ""),
+            name: cmd.name.replace(/^\//, ""),
+            description: cmd.description,
+            source: "slash-command",
+            command: `/${cmd.name.replace(/^\//, "")}`,
+          }));
+      }
+      throw error;
+    }
+  }
+
+  async hunkTrackerSummary(): Promise<Record<string, unknown> | undefined> {
+    try {
+      return unwrapExtResult(await this.extension("x.ai/hunk-tracker/summary", { sessionId: this.sessionId }, 10_000));
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async memoryFlush(): Promise<boolean> {
+    try {
+      await this.extension("x.ai/memory/flush", { sessionId: this.sessionId, cwd: this.options.cwd }, 60_000);
+      this.emitRuntimeUpdate("memory", "memory/flush", "已通过 ACP 触发会话记忆归档");
+      return true;
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) return false;
+      throw error;
+    }
+  }
+
+  async memoryDream(): Promise<boolean> {
+    try {
+      await this.extension("x.ai/memory/dream", { sessionId: this.sessionId, cwd: this.options.cwd }, 120_000);
+      this.emitRuntimeUpdate("memory", "memory/dream", "已通过 ACP 触发记忆整理（Dream）");
+      return true;
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) return false;
+      throw error;
+    }
+  }
+
+  async memoryToggle(enabled: boolean): Promise<boolean> {
+    try {
+      await this.extension("x.ai/memory/toggle", { sessionId: this.sessionId, cwd: this.options.cwd, enabled }, 15_000);
+      this.emitRuntimeUpdate("memory", "memory/toggle", enabled ? "已启用当前会话自动记忆" : "已停用当前会话自动记忆", { enabled });
+      return true;
+    } catch (error) {
+      if (isAcpCapabilityError(error) || isMethodNotFound(error)) return false;
+      throw error;
+    }
   }
 
   /** Temporarily route a scheduled turn's ACP confirmations into the persistent inbox. */
@@ -1016,15 +1147,20 @@ export class GrokAcpAdapter extends EventEmitter {
     return () => { if (this.options.permissionDecider === decider) this.options.permissionDecider = previous; };
   }
 
+  settledTurnOutcome(turnId: string): TurnOutcome | undefined {
+    return this.settledTurns.get(turnId)?.outcome;
+  }
+
   async prompt(text: string, attachments: Attachment[] = [], timeoutMs: number | null = INTERACTIVE_PROMPT_TIMEOUT_MS, presentation: UserPromptPresentation = {}): Promise<void> {
     if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
     if (this.nativeControlPending && !presentation.nativeControl) throw new Error("原生控制正在进行；草稿已保留，请稍后发送");
     if (!this.sessionId) throw new Error("会话尚未就绪");
     const clientMessageId = presentation.clientMessageId || crypto.randomUUID();
+    const visibleUserText = presentation.displayText ?? text;
     this.lastTouched = Date.now();
     this.working = true;
     const startedTurn = this.beginTurn(clientMessageId, presentation.suppressCompletion);
-    this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text, attachments: presentation.attachments, delivery: "sending" });
+    this.emitEvent({ type: "user-message", sessionId: this.sessionId, id: clientMessageId, clientMessageId, text: visibleUserText, attachments: presentation.attachments, delivery: "sending" });
     this.emitStatus("working", "Grok 正在处理…");
     try {
       const prompt: unknown[] = [{ type: "text", text: buildPromptText(text, attachments) }];
@@ -1280,6 +1416,112 @@ export class GrokAcpAdapter extends EventEmitter {
       throw error;
     }
   }
+
+  async promoteQueuedPromptToSteer(id: string, text?: string): Promise<QueueOperationReceipt> {
+    if (this.modelSelectionRequired) throw new Error(this.modelSelectionRequired);
+    if (this.nativeControlPending) throw new Error("原生控制正在进行，请稍后再试");
+    if (!this.sessionId) throw new Error("会话尚未就绪");
+    const initialEntry = this.promptQueue.find((value) => value.id === id);
+    if (!initialEntry || (initialEntry.state !== "queued" && initialEntry.state !== "send-now")) {
+      throw new Error("该消息已不在等待队列中");
+    }
+    const operationId = crypto.randomUUID();
+    const nextText = text !== undefined ? text.trim() : initialEntry.text;
+    if (!nextText && !initialEntry.attachmentPreviews?.length) {
+      throw new Error("插话引导消息不能为空");
+    }
+    const priorTurnId = this.activeTurn?.turnId;
+    if (initialEntry.toolSelection) await this.validateMcpSelection(initialEntry.toolSelection);
+
+    const entry = this.promptQueue.find((value) => value.id === id);
+    if (!entry || (entry.state !== "queued" && entry.state !== "send-now")) {
+      throw new Error("该消息已开始发送或已不在等待队列中");
+    }
+
+    if (this.activeTurn && this.working && !this.needsUser) {
+      this.pendingInterjections.set(id, {
+        text: nextText,
+        clientMessageId: entry.clientMessageId,
+        attachments: entry.attachmentPreviews,
+        source: "queued",
+      });
+      this.promptQueue = this.promptQueue.map((value) => (
+        value.id === id ? { ...value, state: "interjecting" as const, text: nextText } : value
+      ));
+      this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+      try {
+        const content = await buildPromptBlocks(nextText, attachmentsFromQueuePreview(entry.attachmentPreviews));
+        unwrapExtResult(await this.extension("x.ai/interject", { text: nextText, interjectionId: id, content }, INTERJECTION_ACK_TIMEOUT_MS));
+        this.pendingInterjections.delete(id);
+        this.ownedQueuedPromptIds.delete(id);
+        this.promptQueue = this.promptQueue.filter((value) => value.id !== id).map((value, position) => ({ ...value, position }));
+        this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+        this.emitInterjection(id, nextText, entry.clientMessageId, entry.attachmentPreviews, "queued");
+        return {
+          operationId,
+          entryId: id,
+          state: "interjected",
+          message: "队列消息已通过 x.ai/interject 注入当前回合",
+          acknowledgement: "cli",
+        };
+      } catch (error) {
+        this.pendingInterjections.delete(id);
+        if (!isMethodNotFound(error) && !isAcpCapabilityError(error)) {
+          this.promptQueue = this.promptQueue.map((value) => (
+            value.id === id ? { ...value, state: "queued" as const, text: nextText } : value
+          ));
+          this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+          throw error;
+        }
+      }
+    }
+
+    const stillActiveWork = Boolean(this.activeTurn || this.working || this.needsUser);
+    const activeTurnAtFallback = this.activeTurn?.turnId ?? priorTurnId;
+    const promoted: PromptQueueEntry = {
+      ...entry,
+      text: nextText,
+      state: "queued",
+      position: 0,
+    };
+    this.promptQueue = [
+      promoted,
+      ...this.promptQueue.filter((value) => value.id !== id),
+    ].map((value, position) => ({ ...value, position }));
+    this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    if (!stillActiveWork) {
+      this.scheduleLocalQueueDrain();
+    }
+    return {
+      operationId,
+      entryId: id,
+      state: "send-now",
+      ...(activeTurnAtFallback ? { priorTurnId: activeTurnAtFallback } : {}),
+      hadActiveWork: stillActiveWork,
+      message: stillActiveWork
+        ? "当前状态不支持回合内无损插话；已将消息置顶为下一回合（保留附件）并停止当前回合"
+        : "当前回合已结束；消息已置顶并立即发送",
+      fallback: true,
+      acknowledgement: "desktop",
+    };
+  }
+
+  async tryClearContextInPlace(): Promise<boolean> {
+    if (!this.sessionId || this.working || this.needsUser) return false;
+    if (!this.runtimeSupportsExtension("x.ai/session/clear")) return false;
+    try {
+      await this.extension("x.ai/session/clear", { sessionId: this.sessionId }, 30_000);
+      this.nextTurnOrdinal = 0;
+      this.settledTurns.clear();
+      this.turnsAwaitingAuthoritativeTerminal.clear();
+      this.recapHashes.clear();
+      this.pendingRecaps.clear();
+      return true;
+    } catch (error) {
+      if (isMethodNotFound(error) || isAcpCapabilityError(error)) return false;
+      throw error;
+    }
+  }
   async fork(targetPromptIndex?: string, newCwd = this.cwd): Promise<Record<string, unknown>> {
     const parsed = targetPromptIndex === undefined ? undefined : Number.parseInt(targetPromptIndex, 10);
     if (newCwd !== this.cwd && !this.runtimeHandshake?.sessionCapabilities?.fork) {
@@ -1304,10 +1546,18 @@ export class GrokAcpAdapter extends EventEmitter {
       throw error;
     }
   }
-  async rewind(pointId: string): Promise<void> {
+  async rewind(pointId: string, mode: import("../../shared/types").RewindMode = "conversation_only"): Promise<CliSessionInfo | undefined> {
     const targetPromptIndex = Number.parseInt(pointId, 10);
     if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) throw new Error("CLI 返回的回退点无效");
-    await this.extension("x.ai/rewind/execute", { targetPromptIndex, force: false, mode: "conversation_only" });
+    const safeMode: import("../../shared/types").RewindMode = mode === "all" || mode === "files_only" ? mode : "conversation_only";
+    await this.extension("x.ai/rewind/execute", { targetPromptIndex, force: false, mode: safeMode });
+    const refreshed = await this.sessionInfo().catch(() => undefined);
+    this.emitRuntimeUpdate("session", "rewind/execute", `已执行会话回退（${safeMode}）`, {
+      targetPromptIndex,
+      mode: safeMode,
+      ...(refreshed?.supported ? { contextUsedTokens: refreshed.contextUsedTokens, turnCount: refreshed.turnCount } : {}),
+    });
+    return refreshed;
   }
   async taskList(): Promise<Record<string, unknown>> {
     return unwrapExtResult(await this.extension("x.ai/task/list"));
@@ -1428,10 +1678,14 @@ export class GrokAcpAdapter extends EventEmitter {
     if (persist) this.emitEvent({ type: "mode", sessionId: this.sessionId, mode });
   }
 
-  respondPermission(requestId: JsonRpcId, optionId: string): void {
+  respondPermission(requestId: JsonRpcId, optionId: string, feedback?: string): void {
     const key = String(requestId);
     if (!this.pendingPermissionRequests.has(key)) throw new Error("权限请求已经结束或已被响应");
-    if (!this.write({ jsonrpc: "2.0", id: requestId, result: { outcome: { outcome: "selected", optionId } } })) {
+    const trimmedFeedback = feedback?.trim();
+    const outcome = trimmedFeedback
+      ? { outcome: "selected", optionId, feedback: trimmedFeedback }
+      : { outcome: "selected", optionId };
+    if (!this.write({ jsonrpc: "2.0", id: requestId, result: { outcome } })) {
       throw new Error("Grok 进程不可用，权限决定未提交");
     }
     this.pendingPermissionRequests.delete(key);
@@ -1890,7 +2144,12 @@ export class GrokAcpAdapter extends EventEmitter {
         return;
       case "subagent_spawned":
       case "subagent_progress":
-      case "subagent_finished":
+      case "subagent_finished": {
+        const childId = firstNonEmptyString(update.child_session_id, update.childSessionId, update.subagent_id, update.subagentId);
+        const subTitle = firstNonEmptyString(update.description, update.title, update.subagent_type, update.subagentType, update.agent_name, update.agentName);
+        if (childId && subTitle) {
+          (this.subagentTitles ?? new Map<string, string>()).set(childId, subTitle);
+        }
         // Preserve the official payload while pinning the normalized wire tag.
         // Some historical/future fixtures arrive with camel-case or dotted
         // discriminants; the renderer must still merge them into the same
@@ -1902,6 +2161,7 @@ export class GrokAcpAdapter extends EventEmitter {
         });
         this.emitRuntimeUpdate("subagent", updateType, firstNonEmptyString(update.description, update.message, update.status));
         return;
+      }
       case "turn_completed":
         {
         const terminalOutcome = normalizeTerminalTurnOutcome(update);
@@ -2203,6 +2463,23 @@ export class GrokAcpAdapter extends EventEmitter {
     pending.finish(confirmed);
   }
 
+  private resolveRequestingSubagent(params: Record<string, any>): { requestingSessionId?: string; subagentTitle?: string } {
+    const meta = recordValue(params._meta) ?? recordValue(params.meta);
+    const requestingSessionId = firstNonEmptyString(
+      meta?.["x.ai/requestingSessionId"],
+      meta?.requestingSessionId,
+      params.requestingSessionId,
+      params.requesting_session_id,
+    );
+    if (!requestingSessionId || requestingSessionId === this.sessionId) return {};
+    const subagentTitle = this.subagentTitles?.get(requestingSessionId)
+      ?? firstNonEmptyString(meta?.["x.ai/subagentTitle"], meta?.subagentTitle);
+    return {
+      requestingSessionId,
+      ...(subagentTitle ? { subagentTitle } : {}),
+    };
+  }
+
   private async handleServerRequest(method: string, id: JsonRpcId | undefined, params: Record<string, any>): Promise<void> {
     try {
       if (method.startsWith("x.ai/") || method.startsWith("_x.ai/")) this.observeRuntimeExtension(method.replace(/^_/, ""));
@@ -2291,8 +2568,13 @@ export class GrokAcpAdapter extends EventEmitter {
               else this.cancelPermission(id);
             } else {
               this.needsUser = true;
-              this.emitStatus("needs-user", "等待权限确认");
-              this.emitEvent({ type: "permission", sessionId: this.sessionId, request: { requestId: id ?? "", sessionId: this.sessionId, toolCall: params.toolCall, options } });
+              const subagentMeta = this.resolveRequestingSubagent(params);
+              this.emitStatus("needs-user", subagentMeta.subagentTitle ? `等待权限确认 · ${subagentMeta.subagentTitle}` : "等待权限确认");
+              this.emitEvent({
+                type: "permission",
+                sessionId: this.sessionId,
+                request: { requestId: id ?? "", sessionId: this.sessionId, toolCall: params.toolCall, options, ...subagentMeta },
+              });
             }
           }
           return;
@@ -2311,7 +2593,7 @@ export class GrokAcpAdapter extends EventEmitter {
           this.emitEvent({ type: "plan", sessionId: this.sessionId, requestId: id, text: params.planContent || params.plan || params.input?.plan || "", executionMode: this.planExecutionMode });
           return;
         case "x.ai/ask_user_question":
-        case "_x.ai/ask_user_question":
+        case "_x.ai/ask_user_question": {
           if (id === undefined) {
             this.respondError(id, -32602, "问题请求缺少请求 ID");
             return;
@@ -2319,9 +2601,40 @@ export class GrokAcpAdapter extends EventEmitter {
           this.pendingQuestionRequests.add(String(id));
           this.pendingInteractionRequestIds.set(String(id), id);
           this.needsUser = true;
-          this.emitStatus("needs-user", "等待回答");
-          this.emitEvent({ type: "question", sessionId: this.sessionId, requestId: id ?? "", questions: params.questions ?? [] });
+          const subagentMeta = this.resolveRequestingSubagent(params);
+          this.emitStatus("needs-user", subagentMeta.subagentTitle ? `等待回答 · ${subagentMeta.subagentTitle}` : "等待回答");
+          this.emitEvent({ type: "question", sessionId: this.sessionId, requestId: id ?? "", questions: params.questions ?? [], ...subagentMeta });
           return;
+        }
+        case "x.ai/folder_trust/request":
+        case "_x.ai/folder_trust/request": {
+          const folderPath = (firstNonEmptyString(params.folderPath, params.folder_path, params.cwd, params.path) ?? this.options?.cwd ?? "").trim();
+          const source = firstNonEmptyString(params.source, params.reason);
+          if (!folderPath) {
+            this.respondOk(id, { approved: false, trusted: false, outcome: "rejected" });
+            return;
+          }
+          if (this.options?.onFolderTrustRequest) {
+            this.emitStatus("needs-user", `等待确认目录信任 · ${folderPath}`);
+          }
+          let approved = false;
+          try {
+            approved = this.options?.onFolderTrustRequest
+              ? await this.options.onFolderTrustRequest({ folderPath, source }).catch(() => false)
+              : false;
+          } finally {
+            if (this.options?.onFolderTrustRequest) {
+              this.emitStatus(this.needsUser ? "needs-user" : this.working ? "working" : "idle");
+            }
+          }
+          this.emitRuntimeUpdate("folder-trust", "folder_trust/request", `${approved ? "已信任目录" : "已拒绝目录信任"} · ${folderPath}`, {
+            folderPath,
+            approved,
+            ...(source ? { source } : {}),
+          });
+          this.respondOk(id, { approved, trusted: approved, outcome: approved ? "approved" : "rejected" });
+          return;
+        }
         case "x.ai/mcp/elicit":
         case "_x.ai/mcp/elicit": {
           if (id === undefined) {
@@ -2513,6 +2826,16 @@ export class GrokAcpAdapter extends EventEmitter {
           this.emitRuntimeUpdate("announcement", "announcements/update", firstNonEmptyString(params.title, params.message));
           this.respondOk(id);
           return;
+        case "x.ai/limit_action":
+        case "_x.ai/limit_action":
+          this.emitRuntimeUpdate("limit", "limit_action", firstNonEmptyString(params.message, params.action, params.reason, params.status), recordValue(params));
+          this.respondOk(id);
+          return;
+        case "x.ai/memory/updated":
+        case "_x.ai/memory/updated":
+          this.emitRuntimeUpdate("memory", "memory/updated", firstNonEmptyString(params.message, params.scope));
+          this.respondOk(id);
+          return;
         default:
           await this.options.log.log(`[ACP unknown request] method=${method} schema=${wireSchemaVersion(params)} size=${wireSize(params)}`);
           this.respondError(id, -32601, `Unsupported ACP method: ${method}`);
@@ -2672,14 +2995,30 @@ export class GrokAcpAdapter extends EventEmitter {
     // Persist the hand-off boundary before writing session/prompt. A host crash
     // after this point is settled as interrupted and is never replayed twice.
     this.emitEvent({ type: "prompt-queue", sessionId: this.sessionId, entries: this.promptQueue });
+    const dispatchClientMessageId = entry.clientMessageId ?? entry.id;
+    let transformed: { wireText: string; displayText: string; rollback?: () => Promise<void> } | undefined;
     try {
+      transformed = this.options.transformQueuedPrompt
+        ? await this.options.transformQueuedPrompt(this.sessionId, entry.text)
+        : undefined;
       await this.prompt(
-        entry.text,
+        transformed ? transformed.wireText : entry.text,
         attachmentsFromQueuePreview(entry.attachmentPreviews),
         INTERACTIVE_PROMPT_TIMEOUT_MS,
-        { clientMessageId: entry.clientMessageId ?? entry.id, attachments: entry.attachmentPreviews, promptId: entry.id, sendNow: false, toolSelection:entry.toolSelection },
+        {
+          clientMessageId: dispatchClientMessageId,
+          displayText: transformed ? transformed.displayText : entry.text,
+          attachments: entry.attachmentPreviews,
+          promptId: entry.id,
+          sendNow: false,
+          toolSelection: entry.toolSelection,
+        },
       );
+      if (this.settledTurnOutcome(dispatchClientMessageId) === "failed") {
+        await transformed?.rollback?.().catch(() => undefined);
+      }
     } catch {
+      await transformed?.rollback?.().catch(() => undefined);
       // prompt() already emitted the structured failure and committed the
       // queue terminal state. Do not create a duplicate global error here.
     } finally {

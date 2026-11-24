@@ -36,7 +36,7 @@ import { app, clipboard, desktopCapturer, dialog, Menu, nativeImage, nativeTheme
 import { execFile, spawn } from "node:child_process";
 import { watch, type FSWatcher } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, copyFile, cp, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, cp, lstat, mkdir, mkdtemp, open, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { stableRuntimeTaskIdentifier } from "./services/runtime-task-identity";
@@ -184,6 +184,10 @@ import type {
   OfficialFeedbackCapability,
   OfficialFeedbackPreview,
   OfficialFeedbackReceipt,
+  OfficialSessionSearchHit,
+  OfficialSessionSearchResult,
+  RewindMode,
+  WorkflowCatalogItem,
 } from "../shared/types";
 import { resolveAutomationExecutionPolicy } from "./services/automation-execution-policy";
 import { detectMediaCapabilities } from "../shared/media";
@@ -194,7 +198,7 @@ import { AuthService } from "./services/auth-service";
 import { buildCliEnv, locateGrokCli, validateGrokCliExecutable } from "./services/cli-locator";
 import { CliUpdateService } from "./services/cli-update-service";
 import { normalizeOfficialGitStatus } from "./services/official-git-status";
-import { setOfficialFeedbackMenuAvailable } from "./app-menu";
+import { popupApplicationMenu, setOfficialFeedbackMenuAvailable } from "./app-menu";
 import { deleteCliSession } from "./services/cli-session-service";
 import { GrokProcessManager } from "./services/grok-process-manager";
 import { INTERACTIVE_PROMPT_TIMEOUT_MS } from "./services/grok-acp-adapter";
@@ -230,12 +234,21 @@ import { ExternalOpenToolService } from "./services/external-open-tool-service";
 import { inspectAttachmentPrivacy } from "./services/attachment-privacy-service";
 import { verifyResourceManifest, type ResourceIntegrityResult } from "./services/resource-integrity";
 import { backupUiMetadataForVersion } from "./services/metadata-migration";
-import { DEFAULT_THEME, mergeThemeSettings, ThemeService } from "./services/theme-service";
+import { DEFAULT_THEME, buildTitleBarOverlay, mergeThemeSettings, ThemeService } from "./services/theme-service";
 import { managedBaseUrlEnvironmentName, ProviderService, validateGrokConfig } from "./services/provider-service";
 import { AutomationService } from "./services/automation-service";
 import { resolveAutomationSessionAction } from "./services/automation-session-lifecycle";
 import { NotificationInboxService, sortInboxItems } from "./services/notification-inbox";
-import {readPullRequest} from "./services/pull-request-service";
+import {
+  createPullRequest,
+  discoverPullRequestTemplates,
+  getGitHubIssue,
+  listGitHubIssues,
+  readPullRequest,
+  readPullRequestStack,
+} from "./services/pull-request-service";
+import { GitCheckpointService } from "./services/git-checkpoint-service";
+import { WorkspaceScriptService } from "./services/workspace-script-service";
 import {DesktopNotifications,notificationContent,notificationText,notificationProject,parseNotificationUrl,type NotificationTarget,type DesktopNoticeKind} from "./services/desktop-notifications";
 import { CliCapabilityService } from "./services/cli-capability-service";
 import { NativeRunService } from "./services/native-run-service";
@@ -256,7 +269,7 @@ import { AttachmentCacheService } from "./services/attachment-cache-service";
 import { TurnPresentationService } from "./services/turn-presentation-service";
 import { buildCliMediaArgs, runCliMediaProcess } from "./services/media-cli-runner";
 import { fetchTrustedRemoteMediaArtifact, normalizeAcpMediaArtifactSource, resolveTrustedMediaArtifactSource, sessionCacheKey, sweepSessionMediaCache } from "./services/media-cache-service";
-import { canonicalExistingPath, hasCanonicalPath, rememberCanonicalPath, resolveTrustedRendererPath } from "./services/renderer-path-policy";
+import { canonicalExistingPath, hasCanonicalPath, pathInside, rememberCanonicalPath, resolveTrustedRendererPath } from "./services/renderer-path-policy";
 import {
   isOfflineUiSessionResponderEnabled,
   OFFLINE_UI_SESSION_IDS,
@@ -351,45 +364,211 @@ export class AppController {
   private window?: BrowserWindow;
   private workspaceBrowser?:WorkspaceBrowserService;
   private readonly previewServers=new Map<string,{workspace:string;script:string}>();
-  private readonly pullRequestWatches=new Map<string,NodeJS.Timeout>();
-  async getPullRequestStatus(workspace:string){const root=await this.requireToolWorkspace(workspace);return {...await readPullRequest(root,buildCliEnv(await this.settingsStore.get())),watching:this.pullRequestWatches.has(root)}}
-  async watchPullRequest(workspace: string, sessionId: string, enabled: boolean) {
+  private readonly gitCheckpoints = new GitCheckpointService();
+  private readonly workspaceScripts: WorkspaceScriptService;
+  private readonly pendingSettleOnTurnEnd = new Set<string>();
+  private readonly clearingSessions = new Set<string>();
+  private readonly activeCheckpointOrdinals = new Map<string, number>();
+  private readonly pendingFolderTrustDialogs = new Map<string, Promise<boolean>>();
+  private snoozeWakeTimer?: NodeJS.Timeout;
+  private readonly pullRequestWatches = new Map<string, { timer: NodeJS.Timeout; sessionId: string; settleOnMerge: boolean }>();
+
+  async getPullRequestStatus(workspace: string) {
     const root = await this.requireToolWorkspace(workspace);
-    const existing = this.pullRequestWatches.get(root);
-    if (existing) clearInterval(existing);
-    this.pullRequestWatches.delete(root);
+    const watchKey = normalizePathKey(root);
+    return { ...await readPullRequest(root, buildCliEnv(await this.settingsStore.get())), watching: this.pullRequestWatches.has(watchKey) };
+  }
+
+  async createPullRequest(input: import("../shared/workspace-tools").PullRequestCreateInput) {
+    const root = await this.requireToolWorkspace(input.workspace);
+    return createPullRequest({ ...input, workspace: root }, buildCliEnv(await this.settingsStore.get()));
+  }
+
+  async discoverPullRequestTemplates(workspace: string) {
+    const root = await this.requireToolWorkspace(workspace);
+    const cap = await this.git.capability(root);
+    return discoverPullRequestTemplates(cap.repositoryRoot ?? root);
+  }
+
+  async getPullRequestStack(workspace: string) {
+    const root = await this.requireToolWorkspace(workspace);
+    return readPullRequestStack(root, buildCliEnv(await this.settingsStore.get()));
+  }
+
+  async listGitHubIssues(workspace: string, query?: import("../shared/workspace-tools").GitHubIssueListQuery) {
+    const root = await this.requireToolWorkspace(workspace);
+    return listGitHubIssues(root, buildCliEnv(await this.settingsStore.get()), query);
+  }
+
+  async getGitHubIssue(workspace: string, issueNumber: number) {
+    const root = await this.requireToolWorkspace(workspace);
+    return getGitHubIssue(root, issueNumber, buildCliEnv(await this.settingsStore.get()));
+  }
+
+  async linkSessionIssue(sessionId: string, issue: import("../shared/workspace-tools").SessionLinkedIssue | null) {
+    if (issue !== null) {
+      if (!Number.isInteger(issue.number) || issue.number <= 0) throw new Error("Issue 编号无效");
+      if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+$/.test(issue.url)) throw new Error("Issue 链接必须是有效的 GitHub Issue URL");
+    }
+    const result = await this.catalog.linkIssue(sessionId, issue);
+    this.invalidateRemoteList();
+    this.activityChanged();
+    return result;
+  }
+
+  async watchPullRequest(workspace: string, sessionId: string, enabled: boolean, settleOnMerge = true): Promise<void> {
+    const root = await this.requireToolWorkspace(workspace);
+    const [runtime, assignment] = await Promise.all([
+      this.sessionRuntime.get(sessionId),
+      this.profiles.assignment(sessionId),
+    ]);
+    const ownerCwd = this.processes.snapshot(sessionId)?.cwd ?? runtime?.cwd ?? assignment?.cwd;
+    const pollRoot = ownerCwd && await stat(ownerCwd).then((info) => info.isDirectory()).catch(() => false)
+      ? ownerCwd
+      : root;
+    const watchKey = normalizePathKey(pollRoot);
+    for (const candidateKey of new Set([normalizePathKey(root), watchKey])) {
+      const existing = this.pullRequestWatches.get(candidateKey);
+      if (existing) clearInterval(existing.timer);
+      this.pullRequestWatches.delete(candidateKey);
+    }
     if (!enabled || this.disposing) return;
-    const owner = this.processes.snapshot(sessionId) ?? await this.sessionRuntime.get(sessionId);
-    if (!owner || !samePath(owner.cwd, root)) throw Error("PR 提醒必须绑定当前项目会话");
-    let previous = await this.getPullRequestStatus(root), reading = false;
-    if (!previous.available) throw Error(previous.reason);
+
+    const matchesProject = Boolean(
+      (ownerCwd && samePath(ownerCwd, root))
+      || (assignment?.sourceWorkspacePath && samePath(assignment.sourceWorkspacePath, root))
+      || await this.catalog.has(root, sessionId),
+    );
+    if (!matchesProject) throw new Error("PR 提醒必须绑定当前项目会话");
+
+    let previous = await this.getPullRequestStatus(pollRoot);
+    if (!previous.available) throw new Error(previous.reason);
+    if (String(previous.state).toUpperCase() === "MERGED") {
+      if (settleOnMerge) await this.settleSession(sessionId, true);
+      return;
+    }
+
+    let reading = false;
+    const watchEntry = { timer: undefined as unknown as NodeJS.Timeout, sessionId, settleOnMerge };
     const timer = setInterval(() => {
       if (reading || this.disposing) return;
       reading = true;
-      void this.getPullRequestStatus(root).then(async next => {
-        if (this.disposing || this.pullRequestWatches.get(root) !== timer) return;
+      void this.getPullRequestStatus(pollRoot).then(async (next) => {
+        if (this.disposing || this.pullRequestWatches.get(watchKey)?.timer !== timer) return;
+        const targetSessionId = watchEntry.sessionId;
+        if (next.available && next.number === previous.number && String(next.state).toUpperCase() === "MERGED") {
+          clearInterval(timer);
+          this.pullRequestWatches.delete(watchKey);
+          if (watchEntry.settleOnMerge) {
+            await this.settleSession(targetSessionId, true);
+          }
+          const mergeKey = `pr-merged:${watchKey}:${next.number ?? "pr"}`;
+          const content = await this.sessionNoticeContent(
+            targetSessionId,
+            "completion",
+            (watchEntry.settleOnMerge
+              ? `PR #${next.number ?? ""} ${next.title ?? ""} 已合并，关联会话已自动归档结算`
+              : `PR #${next.number ?? ""} ${next.title ?? ""} 已合并`
+            ).replace(/\s+/g, " ").trim(),
+          );
+          if (!this.disposing) {
+            const added = await this.inbox.addOnce({ kind: "completion", title: content.title, detail: content.body, sessionId: targetSessionId }, mergeKey);
+            if (added.added && !this.disposing) {
+              await this.notices().show(mergeKey, "completion", content.title, content.body, { kind: "session", id: targetSessionId });
+            }
+          }
+          return;
+        }
         if (next.available && next.number === previous.number && previous.pending && !next.pending) {
-          const key = `ci:${root}:${next.number}:${JSON.stringify(next.checks)}`;
-          const content = await this.sessionNoticeContent(sessionId, "completion", `PR #${next.number} ${next.title}：CI 检查已结束`);
-          if (this.disposing || this.pullRequestWatches.get(root) !== timer) return;
-          const result = await this.inbox.addOnce({ kind: "completion", title: content.title, detail: content.body, sessionId }, key);
-          if (result.added && !this.disposing) await this.notices().show(key, "completion", content.title, content.body, { kind: "session", id: sessionId });
+          const key = `ci:${watchKey}:${next.number}:${JSON.stringify(next.checks)}`;
+          const content = await this.sessionNoticeContent(targetSessionId, "completion", `PR #${next.number} ${next.title}：CI 检查已结束`);
+          if (this.disposing || this.pullRequestWatches.get(watchKey)?.timer !== timer) return;
+          const result = await this.inbox.addOnce({ kind: "completion", title: content.title, detail: content.body, sessionId: targetSessionId }, key);
+          if (result.added && !this.disposing) await this.notices().show(key, "completion", content.title, content.body, { kind: "session", id: targetSessionId });
         }
         if (next.available) previous = next;
-      }).catch(error => this.log.log(String(error))).catch(() => undefined).finally(() => { reading = false; });
+      }).catch((error) => this.log.log(String(error))).catch(() => undefined).finally(() => { reading = false; });
     }, 60_000);
     timer.unref();
-    this.pullRequestWatches.set(root, timer);
+    watchEntry.timer = timer;
+    this.pullRequestWatches.set(watchKey, watchEntry);
+  }
+
+  async listWorkspaceScripts(workspacePath: string, executionCwd?: string) {
+    const root = await this.requireToolWorkspace(workspacePath);
+    const execRoot = executionCwd ? await this.requireToolWorkspace(executionCwd) : undefined;
+    return this.workspaceScripts.list(root, execRoot);
+  }
+  async saveWorkspaceScript(input: import("../shared/workspace-tools").WorkspaceScriptSaveInput) {
+    const root = await this.requireToolWorkspace(input.workspacePath);
+    return this.workspaceScripts.saveUserScript({ ...input, workspacePath: root });
+  }
+  async deleteWorkspaceScript(workspacePath: string, scriptId: string) {
+    const root = await this.requireToolWorkspace(workspacePath);
+    return this.workspaceScripts.deleteUserScript(root, scriptId);
+  }
+  async approveWorkspaceScript(workspacePath: string, scriptId: string, commandHash: string, trusted: boolean, executionCwd?: string) {
+    const root = await this.requireToolWorkspace(workspacePath);
+    const execRoot = executionCwd ? await this.requireToolWorkspace(executionCwd) : undefined;
+    return this.workspaceScripts.approveRepoScript(root, scriptId, commandHash, trusted, execRoot);
+  }
+  async runWorkspaceScript(input: import("../shared/workspace-tools").WorkspaceScriptRunInput) {
+    const root = await this.requireToolWorkspace(input.workspacePath);
+    let executionCwd = root;
+    if (input.executionCwd) {
+      const candidate = await canonicalExistingPath(input.executionCwd, "directory");
+      const worktrees = await this.worktrees.list(root).catch(() => []);
+      if (!samePath(candidate, root) && !worktrees.some((wt) => samePath(wt.path, candidate))) {
+        throw new Error("脚本执行目录必须属于当前项目或其关联 Worktree");
+      }
+      executionCwd = candidate;
+    }
+    return this.workspaceScripts.run({ ...input, workspacePath: root, executionCwd });
+  }
+  async stopWorkspaceScript(runIdOrTerminalId: string): Promise<void> {
+    this.workspaceScripts.stop(runIdOrTerminalId);
+  }
+  async listRunningWorkspaceScripts(workspacePath: string) {
+    const root = await this.requireToolWorkspace(workspacePath);
+    return this.workspaceScripts.listRunning(root);
+  }
+  async listGitTurnCheckpoints(cwd: string, sessionId: string) {
+    const root = await this.resolveSessionOrWorkspaceCwd(cwd, sessionId);
+    return this.gitCheckpoints.listCheckpoints(root, sessionId);
+  }
+  async getGitTurnDiff(cwd: string, sessionId: string, turnOrdinal: number) {
+    const root = await this.resolveSessionOrWorkspaceCwd(cwd, sessionId);
+    return this.gitCheckpoints.turnDiff(root, sessionId, turnOrdinal);
+  }
+  private async resolveSessionOrWorkspaceCwd(cwd: string, sessionId: string): Promise<string> {
+    const assignment = await this.profiles.assignment(sessionId);
+    if (assignment && (samePath(assignment.cwd, cwd) || samePath(assignment.sourceWorkspacePath, cwd))) {
+      return canonicalExistingPath(assignment.cwd, "directory");
+    }
+    return this.requireToolWorkspace(cwd);
   }
   private readonly workspaceTerminals=new WorkspaceTerminalService(event=>{if(this.window&&!this.window.isDestroyed())this.window.webContents.send("grok:workspace-terminal",event)});
   private computerStateObserver?: (state: ComputerTaskState) => void;
   readonly desktopInboxListeners = new Set<(items: NotificationInboxItem[]) => void>();
   desktopContextHelperPath = "";
-  private desktopPetDelegate?: { list():Promise<import("../shared/desktop-pet").PetSkin[]>; command(command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId):Promise<void>; import():Promise<import("../shared/desktop-pet").PetSkin|null> };
+  private desktopPetDelegate?: {
+    list():Promise<import("../shared/desktop-pet").PetSkin[]>;
+    command(command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId):Promise<void>;
+    import():Promise<import("../shared/desktop-pet").PetSkin|null>;
+    importSpriteSheet?(input:import("../shared/desktop-pet").PetSpriteSheetImportInput):Promise<import("../shared/desktop-pet").PetSkin|null>;
+    exportSkin?(id:string,format:"grok"|"codex"):Promise<string|null>;
+    remove?(id:string):Promise<import("../shared/desktop-pet").PetSkin[]>;
+  };
   setDesktopPetDelegate(value: AppController["desktopPetDelegate"]):void { this.desktopPetDelegate=value; }
   listPetSkins(){ return this.desktopPetDelegate?.list()??Promise.resolve([]); }
   petCommand(command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId){return this.desktopPetDelegate?.command(command,clip)??Promise.resolve();}
   importPetSkin(){return this.desktopPetDelegate?.import()??Promise.resolve(null);}
+  importPetSpriteSheet(input:import("../shared/desktop-pet").PetSpriteSheetImportInput){return this.desktopPetDelegate?.importSpriteSheet?.(input)??Promise.resolve(null);}
+  exportPetSkin(id:string,format:"grok"|"codex"){return this.desktopPetDelegate?.exportSkin?.(id,format)??Promise.resolve(null);}
+  deletePetSkin(id:string){return this.desktopPetDelegate?.remove?.(id)??Promise.resolve([]);}
+  async popupAppMenu(position?: { x: number; y: number }): Promise<void> {
+    if (this.window && !this.window.isDestroyed()) popupApplicationMenu(this.window, position);
+  }
   observeDesktopInbox(listener: (items: NotificationInboxItem[]) => void): () => void {
     this.desktopInboxListeners.add(listener);
     return () => this.desktopInboxListeners.delete(listener);
@@ -398,9 +577,10 @@ export class AppController {
   async navigateDesktopPetTarget(target:NotificationTarget,current:()=>boolean=()=>true):Promise<void>{
     if(target.kind!=="session"){if(current())await this.navigateNotification(target);}
     else{
+      const live=Boolean(this.processes.snapshot(target.id));
       const row=this.processes.snapshot(target.id)??await this.sessionRuntime.get(target.id)??(await this.remoteSessions().catch(()=>[])).find(row=>row.id===target.id);
       if(!current())return;if(!row)throw Error("会话历史已不存在");
-      if(this.window&&!this.window.isDestroyed()){if(this.window.isMinimized())this.window.restore();this.window.show();this.window.focus();this.window.webContents.send("grok:navigate-session",{sessionId:target.id,cwd:row.cwd,previewOnly:true});}
+      if(this.window&&!this.window.isDestroyed()){if(this.window.isMinimized())this.window.restore();this.window.show();this.window.focus();this.window.webContents.send("grok:navigate-session",{sessionId:target.id,cwd:row.cwd,previewOnly:!live});}
     }
     if(current())await this.inbox.markTargetRead(target.kind,target.id);
   }
@@ -572,6 +752,14 @@ export class AppController {
     this.noticeContexts.set(id, context);
     let changed = false;
     if (event.type === "interaction-resolved") changed = this.pendingSessionNotices.delete(`${id}:${event.interaction}:${event.requestId}`);
+    if (event.type === "computer-state" && !["awaiting-app-permission", "awaiting-risk-confirmation"].includes(event.state.status)) {
+      for (const key of this.pendingSessionNotices.keys()) {
+        if (key.startsWith(`${id}:computer-permission:`) || key.startsWith(`${id}:computer-risk:`)) {
+          this.pendingSessionNotices.delete(key);
+          changed = true;
+        }
+      }
+    }
     if (event.type === "status" && ["working", "idle", "error", "cold"].includes(event.status) || event.type === "session-reset") {
       for (const key of this.pendingSessionNotices.keys()) if (key.startsWith(`${id}:`)) { this.pendingSessionNotices.delete(key); changed = true; }
     }
@@ -582,11 +770,11 @@ export class AppController {
       else if (event.status === "idle" || event.status === "cold") this.desktopSessionStates.delete(id);
     } else if (event.type === "error") this.desktopSessionStates.set(id, "error");
     else if (this.confirmationNotice(event)) this.desktopSessionStates.set(id, "awaiting");
-    else if (event.type === "interaction-resolved" && ![...this.pendingSessionNotices.keys()].some(key => key.startsWith(`${id}:`))) {
+    else if ((event.type === "interaction-resolved" || (event.type === "computer-state" && !["awaiting-app-permission", "awaiting-risk-confirmation"].includes(event.state.status))) && ![...this.pendingSessionNotices.keys()].some(key => key.startsWith(`${id}:`))) {
       if (this.runningSessions.has(id)) this.desktopSessionStates.set(id, "running"); else this.desktopSessionStates.delete(id);
     } else if (event.type === "session-reset") { this.desktopSessionStates.delete(id); this.noticeContexts.delete(id); }
     if (changed) this.inboxChanged();
-    if (["status", "error", "interaction-resolved", "session-reset", "session-title", "turn-started"].includes(event.type) || this.confirmationNotice(event)) this.activityChanged();
+    if (["status", "error", "interaction-resolved", "computer-state", "session-reset", "session-title", "turn-started"].includes(event.type) || this.confirmationNotice(event)) this.activityChanged();
   }
   private readonly projectionReplaying = new Set<string>();
   private readonly projectionOpenSessions = new Set<string>();
@@ -640,7 +828,7 @@ export class AppController {
         entries: await this.sessionRuntime.getQueue(sessionId),
         terminalEntries: await this.sessionRuntime.getTerminalQueue(sessionId),
       }),
-      isSessionActive: (sessionId) => Boolean(this.processes?.snapshot(sessionId)),
+      isSessionActive: (sessionId) => Boolean(this.processes?.snapshot(sessionId) || this.processes?.isRecovering(sessionId)),
       interruptQueue: (sessionId) => this.sessionRuntime.interruptInflightQueue(sessionId).then(() => undefined),
     });
     const offlineHome = (name: string) => process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1" ? join(userDataPath, name) : undefined;
@@ -730,7 +918,57 @@ export class AppController {
       (version) => this.updater?.isRuntimeVersionAllowed(version) ?? Promise.resolve(false),
       join(userDataPath, "session-ownership"),
       () => { this.assertCredentialStable(); return this.updater.assertRuntimeLaunchAllowed(); },
+      async (sessionId, text) => {
+        const stagedBacks = await this.sessionRuntime.consumeStagedMergeBacks(sessionId);
+        if (!stagedBacks.length) return { wireText: text, displayText: text };
+        return {
+          wireText: formatStagedMergeBackContext(stagedBacks, text),
+          displayText: text,
+          rollback: async () => {
+            await this.sessionRuntime.restoreStagedMergeBacks(sessionId, stagedBacks);
+          },
+        };
+      },
     );
+    this.processes.setFolderTrustHandler(async ({ folderPath }) => {
+      const canonical = await canonicalExistingPath(folderPath, "directory").catch(() => undefined);
+      if (!canonical) return false;
+      const settings = await this.settingsStore.get();
+      const known = [settings.activeWorkspace, ...settings.recentWorkspaces].filter(Boolean);
+      if (
+        hasCanonicalPath(this.trustedWorkspacePaths, canonical)
+        || hasCanonicalPath(this.trustedPickedPaths, canonical)
+        || known.some((value) => samePath(value, canonical))
+        || await this.isAuthorizedWorktreePath(canonical, known)
+      ) {
+        rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+        return true;
+      }
+      if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1" || !this.window || this.window.isDestroyed()) return false;
+      const dialogKey = normalizePathKey(canonical);
+      const existingPrompt = this.pendingFolderTrustDialogs.get(dialogKey);
+      if (existingPrompt) return existingPrompt;
+      const promptPromise = dialog.showMessageBox(this.window, {
+        type: "question",
+        title: "允许 Grok CLI 信任目录？",
+        message: "Grok CLI 请求访问并信任以下目录：",
+        detail: canonical,
+        buttons: ["信任目录", "拒绝"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      }).then((decision) => {
+        if (decision.response === 0) {
+          rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+          return true;
+        }
+        return false;
+      }).finally(() => {
+        this.pendingFolderTrustDialogs.delete(dialogKey);
+      });
+      this.pendingFolderTrustDialogs.set(dialogKey, promptPromise);
+      return promptPromise;
+    });
     this.definitions = new AgentDefinitionService(() => this.settingsStore.get(), {
       reload: {
         restartIdleSessions: () => this.processes.restartIdleSessions(),
@@ -740,6 +978,25 @@ export class AppController {
     this.profiles = new ExecutionProfileService(userDataPath, { resolveWorkspaceIdentity: async (cwd) => (await this.memory.resolveLayout(cwd)).workspaceIdentity });
     this.dashboard = new AgentDashboardService(userDataPath);
     this.worktrees = new WorktreeService(userDataPath, this.git, { requestExtension: (method, params) => this.processes.extensionRequest(method, params) });
+    this.workspaceScripts = new WorkspaceScriptService(userDataPath, this.git, this.workspaceTerminals, {
+      onOpenPreview: async (url, context) => {
+        if (this.disposing || !this.workspaceBrowser) return;
+        await this.createWorkspaceBrowserTab(url, context).catch((error) => this.log.log(`自动打开脚本预览失败：${String(error)}`));
+      },
+      hasOtherLiveSessionInWorktree: (_worktreeId, excludingSessionId, executionCwd) => {
+        if (!executionCwd) return false;
+        return this.processes.snapshots().some(
+          (snap) => snap.sessionId !== excludingSessionId && samePath(snap.cwd, executionCwd),
+        );
+      },
+    });
+    if (process.env.GROK_DESKTOP_AUTOMATION_WORKER !== "1" && process.env.GROK_DESKTOP_SCHEDULER_UNINSTALL !== "1") {
+      this.snoozeWakeTimer = setInterval(() => {
+        if (this.disposing) return;
+        void this.checkSnoozedSessions().catch((error) => this.log.log(`暂缓会话唤醒检查失败：${String(error)}`)).catch(() => undefined);
+      }, 30_000);
+      this.snoozeWakeTimer.unref();
+    }
     this.auth = new AuthService(
       this.vault,
       () => this.settingsStore.get(),
@@ -893,7 +1150,30 @@ export class AppController {
       : undefined;
   }
 
-  private async requireToolWorkspace(cwd:string):Promise<string>{const canonical=await canonicalExistingPath(cwd,"directory");const settings=await this.settingsStore.get();const known=[settings.activeWorkspace,...settings.recentWorkspaces];if(!hasCanonicalPath(this.trustedWorkspacePaths,canonical)&&!known.some(path=>samePath(path,canonical)))throw Error("请先在应用中打开此工作区");return canonical;}
+  private async isAuthorizedWorktreePath(canonical: string, knownRoots: string[]): Promise<boolean> {
+    const roots = knownRoots.filter(Boolean);
+    if (!roots.length) return false;
+    const assignments = await this.profiles.listAssignments().catch(() => []);
+    if (assignments.some((a) => samePath(a.cwd, canonical) && roots.some((r) => samePath(r, a.sourceWorkspacePath)))) {
+      return true;
+    }
+    for (const root of roots) {
+      const managed = await this.worktrees.list(root).catch(() => []);
+      if (managed.some((wt) => samePath(wt.path, canonical))) return true;
+    }
+    return false;
+  }
+
+  private async requireToolWorkspace(cwd:string):Promise<string>{
+    const canonical=await canonicalExistingPath(cwd,"directory");
+    const settings=await this.settingsStore.get();
+    const known=[settings.activeWorkspace,...settings.recentWorkspaces].filter(Boolean);
+    if(hasCanonicalPath(this.trustedWorkspacePaths,canonical)||known.some(path=>samePath(path,canonical))||await this.isAuthorizedWorktreePath(canonical,known)){
+      rememberCanonicalPath(this.trustedWorkspacePaths,canonical,64);
+      return canonical;
+    }
+    throw Error("请先在应用中打开此工作区");
+  }
   async pickWorkspaceArtifact(cwd:string){
     const root=await this.requireToolWorkspace(cwd);if(!this.window)throw Error("窗口不可用");
     const result=await dialog.showOpenDialog(this.window,{title:"选择工作区产物",defaultPath:root,properties:["openFile"]});
@@ -911,8 +1191,9 @@ export class AppController {
     await copyFile(source,destination);return true;
   }
   async readWorkspaceArtifact(cwd:string,path:string){
-    const artifact=await readWorkspaceArtifact(await this.requireToolWorkspace(cwd),path,{issuedPaths:this.trustedPickedPaths});
-    return artifact.kind==="html"?{...artifact,previewUrl:this.htmlPreviews.register(artifact.data,artifact.path)}:artifact;
+    const root=await this.requireToolWorkspace(cwd);
+    const artifact=await readWorkspaceArtifact(root,path,{issuedPaths:this.trustedPickedPaths});
+    return artifact.kind==="html"?{...artifact,previewUrl:this.htmlPreviews.register(artifact.data,{path:artifact.path,root:pathWithin(artifact.path,root)?root:undefined})}:artifact;
   }
   htmlPreviewResponse(url:string):Promise<Response>{return this.htmlPreviews.request(url);}
 
@@ -922,17 +1203,37 @@ export class AppController {
   resizeWorkspaceTerminal(id:string,cols:number,rows:number){this.workspaceTerminals.resize(id,cols,rows)}
   closeWorkspaceTerminal(id:string){this.workspaceTerminals.close(id)}
   listWorkspaceBrowserTabs(){return this.workspaceBrowser?.list()??[]}
-  async createWorkspaceBrowserTab(url:string,context?:{sessionId?:string;workspace?:string}){if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");if(context?.workspace)context={...context,workspace:await this.requireToolWorkspace(context.workspace)};if(context?.sessionId){const owner=this.processes.snapshot(context.sessionId)??await this.sessionRuntime.get(context.sessionId);if(!owner||context.workspace&&!samePath(context.workspace,owner.cwd))throw Error("网页关联会话与工作区不匹配");context={...context,workspace:owner.cwd}}return this.workspaceBrowser.create(url,context)}
+  async createWorkspaceBrowserTab(url:string,context?:{sessionId?:string;workspace?:string}){
+    if(!this.workspaceBrowser)throw Error("浏览器窗口不可用");
+    if(context?.workspace)context={...context,workspace:await this.requireToolWorkspace(context.workspace)};
+    if(context?.sessionId){
+      const targetSessionId=context.sessionId;
+      const [runtime,assignment]=await Promise.all([
+        this.sessionRuntime.get(targetSessionId),
+        this.profiles.assignment(targetSessionId),
+      ]);
+      const owner=this.processes.snapshot(targetSessionId)??runtime;
+      const sessionCwd=owner?.cwd??assignment?.cwd;
+      const sourceRoot=assignment?.sourceWorkspacePath;
+      if(sessionCwd){
+        if(context.workspace&&!samePath(context.workspace,sessionCwd)&&!(sourceRoot&&samePath(context.workspace,sourceRoot)))throw Error("网页关联会话与工作区不匹配");
+        context={...context,workspace:context.workspace&&sourceRoot&&samePath(context.workspace,sourceRoot)?sourceRoot:sessionCwd};
+      }else if(!context.workspace||!await this.catalog.has(context.workspace,targetSessionId)){
+        throw Error("网页关联会话与工作区不匹配");
+      }
+    }
+    return this.workspaceBrowser.create(url,context);
+  }
   async previewConfigurations(workspace:string):Promise<string[]>{const root=await this.requireToolWorkspace(workspace);try{const data=JSON.parse(await readFile(join(root,"package.json"),"utf8"));return Object.keys(data.scripts??{}).filter(script=>/^(dev|start|preview)(:[A-Za-z0-9_-]+)?$/.test(script))}catch{return []}}
   async startPreviewServer(workspace:string,script:string){const root=await this.requireToolWorkspace(workspace);if(!(await this.previewConfigurations(root)).includes(script))throw Error("开发服务器配置不存在，请刷新项目脚本");const terminal=await this.workspaceTerminals.create(root);try{this.workspaceTerminals.write(terminal.id,`${process.platform==="win32"?"npm.cmd":"npm"} run ${script}\r`);this.previewServers.set(terminal.id,{workspace:root,script});return terminal.id}catch(error){this.workspaceTerminals.close(terminal.id);throw error}}
-  listPreviewServers(workspace:string):import("../shared/workspace-tools").PreviewServer[]{const terminals=this.workspaceTerminals.list(workspace);return [...this.previewServers].filter(([,value])=>samePath(value.workspace,workspace)).map(([terminalId,value])=>{const terminal=terminals.find(row=>row.id===terminalId);const text=terminal?.output.replace(/\u001b\[[0-9;]*[A-Za-z]/g,"")??"";const url=text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}[^\s\u001b]*/)?.[0];return {terminalId,...value,status:terminal?.status??"exited",url}})}
-  stopPreviewServer(id:string){if(!this.previewServers.has(id))throw Error("开发服务器已不存在");this.workspaceTerminals.close(id);this.previewServers.delete(id)}
+  async listPreviewServers(workspace:string):Promise<import("../shared/workspace-tools").PreviewServer[]>{const root=await this.requireToolWorkspace(workspace);const terminals=this.workspaceTerminals.list(root);return [...this.previewServers].filter(([,value])=>samePath(value.workspace,root)).map(([terminalId,value])=>{const terminal=terminals.find(row=>row.id===terminalId);const text=terminal?.output.replace(/\u001b\[[0-9;]*[A-Za-z]/g,"")??"";const url=text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}[^\s\u001b]*/)?.[0];return {terminalId,...value,status:terminal?.status??"exited",url}})}
+  stopPreviewServer(id:string){if(!this.previewServers.has(id))throw Error("开发服务器已不存在");try{this.workspaceTerminals.close(id);}finally{this.previewServers.delete(id);}}
   async captureBrowserFeedback(id: string, pick?: PreviewElementPick) {
     if (!this.workspaceBrowser) throw Error("浏览器窗口不可用");
     const { image, state, revision, element } = await this.workspaceBrowser.capture(id, pick);
     const bytes = image.toPNG();
     if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw Error("网页截图不可用或过大");
-    const owner = state.sessionId || "browser:" + id;
+    const owner = state.sessionId || pick?.sessionId || this.focusedSessionId || "browser:" + id;
     const directory = join(this.userDataPath, "session-attachments", sessionCacheKey(owner));
     await mkdir(directory, { recursive: true });
     const path = join(directory, crypto.randomUUID() + ".png");
@@ -1097,11 +1398,18 @@ export class AppController {
     throw new Error("媒体预览路径不是本次应用文件选择器签发的路径");
   }
 
+  private syncTitleBarOverlay(theme: ThemeSettings): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.setTitleBarOverlay?.(buildTitleBarOverlay(theme, nativeTheme.shouldUseDarkColors));
+    }
+  }
+
   async prepareAppearance(): Promise<ThemeSettings> {
     const settings = await this.settingsStore.get();
     const theme = settings.theme ? mergeThemeSettings(DEFAULT_THEME, settings.theme) : structuredClone(DEFAULT_THEME);
     if (!settings.theme || JSON.stringify(theme) !== JSON.stringify(settings.theme)) await this.settingsStore.patch({ theme });
     applyNativeTheme(theme);
+    this.syncTitleBarOverlay(theme);
     return theme;
   }
 
@@ -1139,6 +1447,7 @@ export class AppController {
       settings = await this.settingsStore.patch({ fontScale: 130 });
     }
     await this.prepareAppearance();
+    await this.checkSnoozedSessions().catch(() => undefined);
     if (process.env.GROK_DESKTOP_OFFLINE_SMOKE !== "1" && process.env.GROK_DESKTOP_AUTOMATION_WORKER !== "1" && process.env.GROK_DESKTOP_SCHEDULER_UNINSTALL !== "1") void this.automations.repairRegistrations().catch((error) => this.log.log(`自动化注册修复失败：${error instanceof Error ? error.message : String(error)}`));
     settings = await this.settingsStore.get();
     const cliPath = await locateGrokCli(settings.cliPath);
@@ -1230,7 +1539,12 @@ export class AppController {
     for (const value of persisted) if (value) rememberCanonicalPath(this.trustedWorkspacePaths, value, 64);
     const canonical = await canonicalExistingPath(cwd, "directory");
     if (!hasCanonicalPath(this.trustedWorkspacePaths, canonical)) {
-      throw new Error("工作区必须来自应用目录选择器、最近项目或已发现项目");
+      const known = [settings.activeWorkspace, ...settings.recentWorkspaces].filter(Boolean);
+      if (await this.isAuthorizedWorktreePath(canonical, known)) {
+        rememberCanonicalPath(this.trustedWorkspacePaths, canonical, 64);
+      } else {
+        throw new Error("工作区必须来自应用目录选择器、最近项目或已发现项目");
+      }
     }
     const recent = [canonical, ...settings.recentWorkspaces.filter((value) => !samePath(value, canonical))].slice(0, 12);
     await this.settingsStore.patch({ activeWorkspace: canonical, recentWorkspaces: recent });
@@ -1258,16 +1572,24 @@ export class AppController {
     const rows = (await Promise.all(roots.map((root) => this.catalog.list(root, "", this.processes.liveStatuses(), includeDismissed)))).flat();
     const assignmentBySession = new Map(assignments.map((value) => [value.sessionId, value]));
     const queuedSessions = new Set(this.processes.promptQueues().filter((value) => value.entries.some((entry) => entry.state === "queued")).map((value) => value.sessionId));
-    let result = rows.map((row) => {
+    const mergeBackCounts = await this.sessionRuntime.allStagedMergeBackCounts();
+    let result = (await Promise.all(rows.map(async (row) => {
       const assignment = assignmentBySession.get(row.id);
+      const runtime = await this.sessionRuntime.get(row.id);
       const status = queuedSessions.has(row.id) && row.status !== "working" && row.status !== "needs-user" ? "queued" as const : row.status;
-      return assignment ? { ...row, status, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : { ...row, status };
-    }).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index);
+      const settleOnTurnEnd = this.pendingSettleOnTurnEnd.has(row.id) || Boolean(runtime?.settleOnTurnEnd);
+      const stagedMergeBackCount = mergeBackCounts.get(row.id) ?? 0;
+      const extras = {
+        ...(settleOnTurnEnd ? { settleOnTurnEnd: true } : {}),
+        ...(stagedMergeBackCount > 0 ? { stagedMergeBackCount } : {}),
+      };
+      return assignment ? { ...row, ...extras, status, executionProfileId: assignment.profileId, worktreeId: assignment.worktreeId, originKind: assignment.worktreeId && row.originKind === "normal" ? "worktree" : row.originKind, originId: assignment.worktreeId ?? row.originId, originTitle: assignment.worktreeId ? assignment.profileName : row.originTitle } : { ...row, ...extras, status };
+    }))).filter((row, index, values) => values.findIndex((value) => value.id === row.id) === index);
     const normalized = query.trim().toLocaleLowerCase();
     if (normalized) {
       const matches = await Promise.all(result.map(async (row) => {
         if (matchesAllWords(`${row.title}\n${row.id}`, normalized)) return true;
-        return conversationProjectionMatches(await this.conversationProjections.restore(row.id).catch(() => undefined), normalized);
+        return conversationProjectionMatches(await this.conversationProjections.inspect(row.id).catch(() => undefined), normalized);
       }));
       result = result.filter((_row, index) => matches[index]);
     }
@@ -1276,6 +1598,130 @@ export class AppController {
 
   listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult> {
     return this.processes.listOfficialSessions(cwd, cursor);
+  }
+
+  async snoozeSession(sessionId: string, snoozedUntil: string | null): Promise<void> {
+    await this.catalog.snooze(sessionId, snoozedUntil);
+    this.invalidateRemoteList();
+    this.activityChanged();
+  }
+
+  async setSessionUnread(sessionId: string, unread: boolean): Promise<void> {
+    await this.catalog.setUnread(sessionId, unread);
+    this.invalidateRemoteList();
+    this.activityChanged();
+  }
+
+  async setSessionSettleOnTurnEnd(sessionId: string, enabled: boolean): Promise<void> {
+    const cwd = this.processes.snapshot(sessionId)?.cwd
+      ?? (await this.sessionRuntime.get(sessionId))?.cwd
+      ?? (await this.profiles.assignment(sessionId))?.cwd
+      ?? (await this.settingsStore.get()).activeWorkspace;
+    if (enabled) this.pendingSettleOnTurnEnd.add(sessionId);
+    else this.pendingSettleOnTurnEnd.delete(sessionId);
+    await this.sessionRuntime.setSettleOnTurnEnd(sessionId, cwd, enabled);
+    if (enabled && !this.isSessionTurnBusy(sessionId)) {
+      await this.executeSessionSettle(sessionId, true);
+      return;
+    }
+    this.invalidateRemoteList();
+    this.activityChanged();
+  }
+
+  async settleSession(sessionId: string, settled: boolean): Promise<void> {
+    if (!settled) {
+      this.pendingSettleOnTurnEnd.delete(sessionId);
+      await this.sessionRuntime.setSettleOnTurnEnd(sessionId, "", false).catch(() => undefined);
+      await this.catalog.settle(sessionId, false);
+      this.invalidateRemoteList();
+      this.activityChanged();
+      return;
+    }
+    if (this.isSessionTurnBusy(sessionId)) {
+      await this.setSessionSettleOnTurnEnd(sessionId, true);
+      return;
+    }
+    await this.executeSessionSettle(sessionId, true);
+  }
+
+  private isSessionTurnBusy(sessionId: string): boolean {
+    if (this.runningSessions.has(sessionId)) return true;
+    if (!this.processes.snapshot(sessionId)) return false;
+    const adapter = this.processes.get(sessionId);
+    return adapter.working || adapter.needsUser || adapter.queuedPrompts().some((entry) => entry.state === "queued" || entry.state === "send-now");
+  }
+
+  private async executeSessionSettle(sessionId: string, settled: boolean): Promise<void> {
+    this.pendingSettleOnTurnEnd.delete(sessionId);
+    await this.sessionRuntime.setSettleOnTurnEnd(sessionId, "", false).catch(() => undefined);
+    await this.catalog.settle(sessionId, settled);
+    if (settled) {
+      const assignment = await this.profiles.assignment(sessionId);
+      const runtime = await this.sessionRuntime.get(sessionId);
+      const executionCwd = this.processes.snapshot(sessionId)?.cwd ?? assignment?.cwd ?? runtime?.cwd;
+      const projectWorkspacePath = assignment?.sourceWorkspacePath ?? executionCwd;
+      if (projectWorkspacePath && executionCwd) {
+        void this.workspaceScripts.onSessionSettled({
+          projectWorkspacePath,
+          executionCwd,
+          worktreeId: assignment?.worktreeId,
+          sessionId,
+        }).catch((error) => this.log.log(`会话结算脚本钩子执行失败：${error instanceof Error ? error.message : String(error)}`));
+      }
+    }
+    this.invalidateRemoteList();
+    this.activityChanged();
+  }
+
+  private async checkSnoozedSessions(): Promise<void> {
+    const woken = await this.catalog.wakeExpiredSnoozes();
+    if (!woken.length || this.disposing) return;
+    this.invalidateRemoteList();
+    this.activityChanged();
+    for (const sessionId of woken) {
+      if (this.disposing) return;
+      const content = await this.sessionNoticeContent(sessionId, "completion", "暂缓提醒时间已到，会话已重新回到待处理列表");
+      const key = `snooze-wake:${sessionId}:${new Date().toISOString().slice(0, 16)}`;
+      const added = await this.inbox.addOnce({ kind: "info", title: content.title, detail: content.body, sessionId }, key);
+      if (added.added && !this.disposing) {
+        await this.notices().show(key, "completion", content.title, content.body, { kind: "session", id: sessionId });
+      }
+    }
+  }
+
+  async searchOfficialSessions(query: string, cwd?: string, limit = 24): Promise<OfficialSessionSearchResult> {
+    const trimmed = query.trim();
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, Math.trunc(limit))) : 24;
+    if (!trimmed) return { supported: false, hits: [], totalEstimate: 0, source: "local-fallback" };
+    const official = await this.processes.searchOfficialSessions(trimmed, cwd, safeLimit).catch(() => undefined);
+    if (official?.supported) {
+      const decorated = await this.catalog.decorateSearchHits(official.hits);
+      return { ...official, hits: decorated.slice(0, safeLimit), totalEstimate: decorated.length };
+    }
+    const settings = await this.settingsStore.get();
+    const roots = cwd ? [cwd] : [...new Set([settings.activeWorkspace, ...settings.recentWorkspaces].filter(Boolean))];
+    const groups = await Promise.all(roots.map((root) => this.listSessions(root, trimmed).catch(() => [] as SessionSummary[])));
+    const seen = new Set<string>();
+    const hits: OfficialSessionSearchHit[] = [];
+    for (const row of groups.flat()) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      hits.push({
+        sessionId: row.id,
+        title: row.title,
+        cwd: row.cwd,
+        updatedAt: row.updatedAt,
+        snippet: row.preview,
+        score: Math.max(1, 100 - hits.length),
+      });
+      if (hits.length >= safeLimit) break;
+    }
+    return { supported: false, hits, totalEstimate: hits.length, source: "local-fallback" };
+  }
+
+  async listWorkflows(cwd?: string): Promise<WorkflowCatalogItem[]> {
+    const workspace = cwd || (await this.settingsStore.get()).activeWorkspace;
+    return this.processes.listWorkflows(workspace);
   }
 
   private async recordSessionCapabilities(sessionId: string, names: readonly import("../shared/types").CliCapabilityName[]): Promise<void> {
@@ -1320,9 +1766,16 @@ export class AppController {
     return { originalLength: normalized.length, preview, redacted: preview !== normalized };
   }
 
-  async submitOfficialFeedback(sessionId: string, text: string): Promise<OfficialFeedbackReceipt> {
+  async submitOfficialFeedback(sessionId: string, text: string, imagePaths?: string[]): Promise<OfficialFeedbackReceipt> {
     const preview = this.previewOfficialFeedback(text);
-    return this.processes.submitOfficialFeedback(sessionId, preview.preview);
+    const validatedImages = imagePaths?.length
+      ? await Promise.all(imagePaths.slice(0, 4).map((imgPath) => resolveTrustedRendererPath(imgPath, {
+          roots: [...this.trustedWorkspacePaths],
+          issuedPaths: this.trustedPickedPaths,
+          kind: "file",
+        })))
+      : undefined;
+    return this.processes.submitOfficialFeedback(sessionId, preview.preview, validatedImages);
   }
 
   sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt> {
@@ -1427,26 +1880,41 @@ export class AppController {
   }
 
   private async enrichWorkspaceActivity(rows: WorkspaceSummary[]): Promise<void> {
-    const drafts = await this.uiState.listDrafts();
+    const [drafts, assignments] = await Promise.all([
+      this.uiState.listDrafts(),
+      this.profiles.listAssignments().catch(() => []),
+    ]);
+    const assignmentBySession = new Map(assignments.map((a) => [a.sessionId, a]));
     const snapshots = this.processes.snapshots();
     const statuses = this.processes.liveStatuses();
     for (const row of rows) {
       row.draftCount = drafts.filter((draft) => draft.newTask?.projectId === row.projectId
         || draft.newTask?.workspacePath && samePath(draft.newTask.workspacePath, row.cwd)
         || draft.key.toLocaleLowerCase().startsWith("new:") && samePath(draft.key.slice(4), row.cwd)).length;
-      row.activeSessions = snapshots.filter((snapshot) => samePath(snapshot.cwd, row.cwd) && (statuses.get(snapshot.sessionId) === "working" || statuses.get(snapshot.sessionId) === "needs-user")).length;
+      row.activeSessions = snapshots.filter((snapshot) => {
+        const assignedRoot = assignmentBySession.get(snapshot.sessionId)?.sourceWorkspacePath;
+        const matchesProject = samePath(snapshot.cwd, row.cwd) || Boolean(assignedRoot && samePath(assignedRoot, row.cwd));
+        const st = statuses.get(snapshot.sessionId);
+        return matchesProject && (st === "working" || st === "needs-user");
+      }).length;
     }
   }
 
   searchWorkspaceFiles(cwd: string, query: string, limit = 12): Promise<WorkspaceFileCandidate[]> { return this.workspaceFiles.search(cwd, query, limit); }
   listWorkspaceTree(cwd: string, directoryPath = "", options: WorkspaceTreeOptions = {}): Promise<WorkspaceTreeNode[]> { return this.workspaceTree.list(cwd, directoryPath, options); }
-  openEditorDocument(cwd: string, path: string): Promise<EditorOpenResult> { return this.editor.open(cwd, path); }
+  private editorOpenOptions() {
+    return {
+      allowedExternalFiles: [...this.trustedPickedPaths],
+      allowedExternalRoots: [join(homedir(), ".grok", "memory")],
+    };
+  }
+  openEditorDocument(cwd: string, path: string): Promise<EditorOpenResult> { return this.editor.open(cwd, path, this.editorOpenOptions()); }
   saveEditorDocument(input: EditorSaveInput): Promise<EditorSaveResult> { return this.editor.save(input).then((result) => { if (result.saved) this.workspaceFiles.invalidate(input.workspacePath); return result; }); }
   createEditorFile(cwd: string, path: string, content = ""): Promise<EditorDocument> { return this.editor.createFile(cwd, path, content).then((result) => { this.workspaceFiles.invalidate(cwd); return result; }); }
   createEditorDirectory(cwd: string, path: string): Promise<void> { return this.editor.createDirectory(cwd, path).then(() => { this.workspaceFiles.invalidate(cwd); }); }
   renameEditorPath(cwd: string, path: string, targetPath: string): Promise<string> { return this.editor.rename(cwd, path, targetPath).then((result) => { this.workspaceFiles.invalidate(cwd); return result; }); }
   deleteEditorPath(cwd: string, path: string, confirmed: boolean): Promise<void> { return this.editor.delete(cwd, path, confirmed).then(() => { this.workspaceFiles.invalidate(cwd); }); }
-  async revealEditorPath(cwd: string, path: string): Promise<void> { const target = await this.editor.open(cwd, path); shell.showItemInFolder(target.path); }
+  async revealEditorPath(cwd: string, path: string): Promise<void> { const target = await this.editor.open(cwd, path, this.editorOpenOptions()); shell.showItemInFolder(target.path); }
   getGitRepositoryTrust(cwd: string): Promise<GitRepositoryTrust> { return this.git.getRepositoryTrust(cwd); }
   getGitWorkspaceCapability(cwd: string): Promise<GitWorkspaceCapability> { return this.git.capability(cwd); }
   setGitRepositoryTrust(cwd: string, repositoryRoot: string, trusted: boolean): Promise<GitRepositoryTrust> { return this.git.setRepositoryTrust(cwd, repositoryRoot, trusted); }
@@ -1473,7 +1941,11 @@ export class AppController {
   pushGitRepository(cwd: string, operationId: string): Promise<GitOperationResult> { return this.git.push(cwd, operationId); }
   cancelGitOperation(operationId: string): boolean { return this.git.cancelOperation(operationId); }
   listWorktrees(cwd: string): Promise<GrokWorktreeSummary[]> { return this.worktrees.list(cwd); }
-  createWorktree(input: WorktreeCreateInput): Promise<GrokWorktreeSummary> { return this.worktrees.create(input); }
+  async createWorktree(input: WorktreeCreateInput): Promise<GrokWorktreeSummary> {
+    const wt = await this.worktrees.create(input);
+    rememberCanonicalPath(this.trustedWorkspacePaths, wt.path, 64);
+    return wt;
+  }
   previewWorktreeApply(cwd: string, worktreeId: string): Promise<WorktreeApplyPreview> { return this.worktrees.previewApply(cwd, worktreeId); }
   applyWorktree(cwd: string, worktreeId: string, confirmationToken: string, confirmed: boolean, cleanup = false): Promise<WorktreeApplyResult> { return this.worktrees.apply(cwd, worktreeId, confirmationToken, confirmed, cleanup); }
   removeWorktree(cwd: string, worktreeId: string, confirmed: boolean): Promise<void> { return this.worktrees.remove(cwd, worktreeId, confirmed); }
@@ -1498,9 +1970,12 @@ export class AppController {
     if (!affectsLiveSession || !snapshot || !sessionId) return updated;
     try {
       const adapter = this.processes.get(sessionId);
-      const hasNativeToggle = adapter.commands.some((command) => command.name.replace(/^\//, "") === "memory");
-      if (!patch.enabled && hasNativeToggle) await adapter.prompt("/memory off");
-      else await this.processes.restartSession(sessionId, patch.enabled ? "正在启用 Memory 并恢复会话…" : "正在关闭 Memory 并恢复会话…");
+      const toggled = await adapter.memoryToggle(Boolean(patch.enabled)).catch(() => false);
+      if (!toggled) {
+        const hasNativeToggle = adapter.commands.some((command) => command.name.replace(/^\//, "") === "memory");
+        if (!patch.enabled && hasNativeToggle) await adapter.prompt("/memory off");
+        else await this.processes.restartSession(sessionId, patch.enabled ? "正在启用 Memory 并恢复会话…" : "正在关闭 Memory 并恢复会话…");
+      }
       return await this.memory.getSettingsForWorkspace(cwd);
     } catch (error) {
       await this.memory.updateSettings(cwd, { enabled: previous.enabled, saveOnSessionEnd: previous.saveOnSessionEnd, autoDream: previous.autoDream });
@@ -1542,7 +2017,9 @@ export class AppController {
     if (session.working || session.needsUser) throw new Error("当前会话正在运行或等待操作");
     await this.memory.markCommand(session.cwd, command, "running");
     try {
-      await session.prompt(`/${command}`);
+      if (!await this.processes.runMemoryExtension(sessionId, command)) {
+        await session.prompt(`/${command}`);
+      }
       return await this.memory.markCommand(session.cwd, command, "completed");
     } catch (error) {
       await this.memory.markCommand(session.cwd, command, "failed");
@@ -1649,11 +2126,18 @@ export class AppController {
   async trustRemoteWorkspace(id:string){const session=await this.requireRemoteSession(id);rememberCanonicalPath(this.trustedWorkspacePaths,await canonicalExistingPath(session.cwd,"directory"))}
   private async remoteReferences(references:NonNullable<RemoteCommand["references"]>):Promise<Attachment[]>{const workspaces=(await this.remoteOptions()).workspaces;const paths=await Promise.all(references.map(async reference=>{const workspace=workspaces.find(w=>w.id===reference.workspaceId);if(!workspace?.path)throw Error("引用所属项目已不可用");const path=await resolveTrustedRendererPath(reference.path,{roots:[workspace.path],kind:reference.kind==="folder"?"directory":"file"});rememberCanonicalPath(this.trustedPickedPaths,path);return path}));return this.buildAttachmentsFromPaths(paths)}
   private remoteConfigFlights=new Set<string>();
+  getSessionSendBlockReason(sessionId:string):string|undefined{
+    try{return this.processes.get(sessionId).modelSelectionRequired;}catch{return undefined;}
+  }
   private async remoteRuntime(id:string):Promise<import("../shared/remote").RemoteRuntime>{
     const preferences=await this.sessionRuntime.get(id);const live=this.processes.snapshot(id);let adapter:ReturnType<GrokProcessManager["get"]>|undefined;try{adapter=this.processes.get(id)}catch{}
     const config={modelId:live?.modelId??preferences?.modelId,providerId:preferences?.providerId,effort:live?.effort??preferences?.effort??"",mode:live?.mode??preferences?.mode??"agent"};
-    const queue=adapter?.queuedPrompts().filter(row=>row.state==="queued")??[];const busy=Boolean(adapter?.working||adapter?.needsUser||adapter?.nativeRunControlBusy||queue.length||this.remoteConfigFlights.has(id));
-    return {...config,revision:createHash("sha256").update(JSON.stringify(config)).digest("hex"),models:adapter?.models??[],mutable:!busy,reason:busy?"本轮运行、待确认或队列尚未结束，已提交任务保持原配置":undefined,interjectSupported:adapter?.runtimeHandshake?.extensions.includes("x.ai/interject")===true,commands:adapter?.commands??[]};
+    const modelSelectionRequired=adapter?.modelSelectionRequired;
+    const queue=adapter?.queuedPrompts().filter(row=>row.state==="queued")??[];
+    const coreBusy=Boolean(adapter?.working||adapter?.needsUser||adapter?.nativeRunControlBusy||this.remoteConfigFlights.has(id));
+    const busy=Boolean(coreBusy||queue.length);
+    const mutable=modelSelectionRequired?!coreBusy:!busy;
+    return {...config,revision:createHash("sha256").update(JSON.stringify(config)).digest("hex"),models:adapter?.models??[],mutable,reason:modelSelectionRequired||(busy?"本轮运行、待确认或队列尚未结束，已提交任务保持原配置":undefined),...(modelSelectionRequired?{modelSelectionRequired}:{}),interjectSupported:adapter?.runtimeHandshake?.extensions.includes("x.ai/interject")===true,commands:adapter?.commands??[]};
   }
   private remoteListFlight?:Promise<RemoteSession[]>;
   private remoteListCache?:RemoteSession[];
@@ -1696,11 +2180,12 @@ export class AppController {
   }
   private async loadRemoteSessions():Promise<RemoteSession[]>{
     const [settings,assignments,workspaces]=await Promise.all([this.settingsStore.get(),this.profiles.listAssignments(),this.discoverWorkspaces()]);
+    const assignmentBySession=new Map(assignments.map(a=>[a.sessionId,a]));
     const roots=[...new Set([settings.activeWorkspace,...settings.recentWorkspaces,...assignments.map(a=>a.cwd),...workspaces.map(w=>w.cwd)].filter(cwd=>cwd&&!isImageConversationFolder(cwd)))].slice(0,100);
     const rows=(await Promise.all(roots.map(cwd=>this.catalog.list(cwd,"",this.processes.liveStatuses()).catch(()=>[])))).flat();
     const byId=new Map(rows.map(row=>[row.id,row]));
     const cwds=[...new Set(rows.map(row=>row.cwd))];const missing=new Set((await Promise.all(cwds.map(async cwd=>(await stat(cwd).then(info=>info.isDirectory(),()=>false))?"":cwd))).filter(Boolean));
-    const projected:RemoteSession[]=[...byId.values()].map(row=>({...(missing.has(row.cwd)?{projectMissing:true}:{}),id:row.id,cwd:row.cwd,title:row.title,projectName:row.cwd.split(/[\\/]/).filter(Boolean).at(-1)||row.cwd,updatedAt:row.updatedAt,archived:row.archived,preview:row.preview,parentSessionId:row.parentSessionId,status:row.status,modelId:this.processes.snapshot(row.id)?.modelId||row.modelId,mode:this.processes.snapshot(row.id)?.mode,canSend:!row.parentSessionId&&(row.originKind!=="automation"||Boolean(this.processes.snapshot(row.id)))}));
+    const projected:RemoteSession[]=[...byId.values()].map(row=>{const assignment=assignmentBySession.get(row.id);const workspaceRoot=assignment?.sourceWorkspacePath||row.cwd;return {...(missing.has(row.cwd)?{projectMissing:true}:{}),id:row.id,cwd:row.cwd,workspaceId:createHash("sha256").update(normalizePathKey(workspaceRoot)).digest("hex").slice(0,24),title:row.title,projectName:row.cwd.split(/[\\/]/).filter(Boolean).at(-1)||row.cwd,updatedAt:row.updatedAt,archived:row.archived,preview:row.preview,parentSessionId:row.parentSessionId,status:row.status,modelId:this.processes.snapshot(row.id)?.modelId||row.modelId,mode:this.processes.snapshot(row.id)?.mode,canSend:!row.parentSessionId&&(row.originKind!=="automation"||Boolean(this.processes.snapshot(row.id)))};});
     for(const [id,child]of this.remoteChildren){if(!byId.has(child.parentSessionId??""))this.remoteChildren.delete(id);else if(!byId.has(id))projected.push(child)}return projected.sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt));
   }
   private async requireRemoteSession(id:string):Promise<RemoteSession>{const row=(await this.remoteSessions()).find(s=>s.id===id);if(!row||this.deletingSessions.has(id)||this.deletingWorkspaces.has(normalizePathKey(row.cwd)))throw Error("会话已删除、迁移或不属于已知项目，请刷新手机列表");return row;}
@@ -1709,7 +2194,7 @@ export class AppController {
     const proven=(projection?.events??[]).some(event=>{if(event.type!=="subagent")return false;const update=event.update as Record<string,unknown>|undefined;return update&&[update.child_session_id,update.childSessionId].includes(childId)});
     if(!proven||childId===parentId)throw Error("没有可核验的父子身份；未打开其他会话替代");
     const child=await this.conversationProjections.inspect(childId);if(!child)throw Error("CLI 尚未提供完整子会话历史，当前仅可查看父会话摘要");
-    const row:RemoteSession={id:childId,cwd:(await this.sessionRuntime.get(childId))?.cwd||parent.cwd,title:`子会话 · ${childId.slice(0,10)}`,projectName:parent.projectName,updatedAt:child.updatedAt,status:"cold",canSend:false,parentSessionId:parentId};
+    const row:RemoteSession={id:childId,cwd:(await this.sessionRuntime.get(childId))?.cwd||parent.cwd,...(parent.workspaceId?{workspaceId:parent.workspaceId}:{}),title:`子会话 · ${childId.slice(0,10)}`,projectName:parent.projectName,updatedAt:child.updatedAt,status:"cold",canSend:false,parentSessionId:parentId};
     this.remoteChildren.set(childId,row);
     this.remoteListCache=[...(await this.remoteSessions()).filter(s=>s.id!==childId),row];this.remoteListExpires=Date.now()+60_000;return row;
   }
@@ -1750,6 +2235,7 @@ export class AppController {
     if(command.action==="configure"){
       return this.configurationMutation(session.id,async()=>{if(this.remoteConfigFlights.has(session.id))throw Error("配置正在修改，请刷新后重试");const current=await this.remoteRuntime(session.id);if(current.revision!==command.revision)throw Error("配置已被其他端修改，请刷新后再选择");if(!current.mutable)throw Error(current.reason);
       const fields=["modelId","effort","mode"].filter(key=>command[key as "modelId"]!==undefined);if(fields.length!==1)throw Error("每次只能修改一个配置项");
+      if(command.modelId===undefined&&this.processes.get(session.id).queuedPrompts().some(row=>row.state==="queued"))throw Error("本轮运行、待确认或队列尚未结束，已提交任务保持原配置");
       this.remoteConfigFlights.add(session.id);try{if(command.modelId!==undefined)await this.setModelNow(session.id,command.modelId);if(command.effort!==undefined)await this.setEffortNow(session.id,command.effort);if(command.mode!==undefined)await this.processes.setMode(session.id,command.mode)}finally{this.remoteConfigFlights.delete(session.id)}return {state:"completed",message:"配置已应用"};});
     }
     if(command.action==="compact"){await this.compactSession(session.id);return {state:"completed"};}
@@ -1760,6 +2246,7 @@ export class AppController {
     if(command.action==="send"||command.action==="interject"){
       const adapter=this.processes.get(session.id);
       if(adapter.needsUser)throw Error("会话正在等待回答，请先处理确认或问题");
+      if(adapter.modelSelectionRequired)throw Error(adapter.modelSelectionRequired);
       const attachments=[...(command.attachmentIds?.length?await this.remoteTools().files.attachments(command.attachmentIds,deviceId??"",session.id):[]),...(command.references?.length?await this.remoteReferences(command.references):[])];await this.trustRemoteAttachments(attachments);
       if(command.action==="interject"){await this.interjectPrompt(session.id,command.text!,attachments,command.operationId.slice(14),undefined,undefined,command.toolSelection);return {state:"completed"};}
       if(adapter.working){await this.enqueuePrompt(session.id,command.text!,attachments,command.operationId.slice(14),undefined,undefined,command.toolSelection);return {state:"queued",message:"消息已进入当前会话队列"};}
@@ -1789,6 +2276,7 @@ export class AppController {
     if (compiled.profile.worktree) {
       worktree = await this.worktrees.create({ workspacePath: workspace, name: launch.worktreeName?.trim() || `${profileSlug(compiled.profile.name)}-${new Date().toISOString().slice(0, 10)}`, baseRef: launch.worktreeRef?.trim() || compiled.profile.worktreeRef, agentId: compiled.profile.agentId });
       targetCwd = worktree.path;
+      rememberCanonicalPath(this.trustedWorkspacePaths, worktree.path, 64);
     }
     const settings = await this.settingsStore.get();
     const modelId = launch.modelId || compiled.modelId || settings.defaultModel;
@@ -1797,7 +2285,7 @@ export class AppController {
     const mode = launch.mode ?? compiled.mode;
     let result: { sessionId: string };
     try {
-      result = await this.processes.createConfigured(targetCwd, effort, mode, modelId, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: mode === "auto" });
+      result = await this.processes.createConfigured(targetCwd, effort, mode, modelId, undefined, compiled.environment, { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: mode === "auto" }, { providerId, localModelId: modelId });
     } catch (error) {
       if (worktree) await this.worktrees.remove(workspace, worktree.id, true).catch(() => undefined);
       throw error;
@@ -1808,11 +2296,20 @@ export class AppController {
     const assignment: SessionExecutionAssignment = { sessionId: result.sessionId, sourceWorkspacePath: workspace, cwd: targetCwd, profileId: compiled.profile.id, profileName: compiled.profile.name, profile: compiled.profile, worktreeId: worktree?.id, createdAt: new Date().toISOString() };
     await this.profiles.assign(assignment);
     await this.persistSessionProviderIdentity(result.sessionId, targetCwd, modelId, providerId, compiled.profile.id);
-    if (worktree) await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "worktree", id: worktree.id, title: compiled.profile.name, suggestedTitle: worktree.name }]);
+    if (worktree) {
+      await this.catalog.recordOrigins([{ sessionId: result.sessionId, kind: "worktree", id: worktree.id, title: compiled.profile.name, suggestedTitle: worktree.name }]);
+      void this.workspaceScripts.runWorktreeCreateHooks({
+        projectWorkspacePath: workspace,
+        executionCwd: worktree.path,
+        worktreeId: worktree.id,
+        sessionId: result.sessionId,
+      }).catch((error) => this.log.log(`Worktree 初始化脚本执行失败：${error instanceof Error ? error.message : String(error)}`));
+    }
     return { sessionId: result.sessionId, cwd: targetCwd, profileId: compiled.profile.id, worktreeId: worktree?.id };
   }
 
   async previewSession(cwd: string, sessionId: string): Promise<SessionPreviewSnapshot> {
+    const live = Boolean(this.processes.snapshot(sessionId));
     const [projection, presentations, attachments, sessions] = await Promise.all([
       this.conversationProjections.restore(sessionId),
       this.turnPresentations.list(sessionId),
@@ -1826,6 +2323,7 @@ export class AppController {
       lastActivityAt: summary?.updatedAt,
       visibleSummary: projectionVisibleSummary(projection),
       status: summary?.status ?? "cold",
+      live,
       modelId: projection?.runtime?.modelId ?? summary?.modelId,
       attachmentCount: attachments.length,
       projectionUpdatedAt: projection?.updatedAt,
@@ -1863,6 +2361,7 @@ export class AppController {
   }
 
   private async openSessionOwned(cwd: string, sessionId: string, activate = true): Promise<{ sessionId: string; hydration?: import("../shared/types").SessionHydrationState; message?: string }> {
+    const alreadyLive = Boolean(this.processes.snapshot(sessionId));
     const generation = ++this.nextHydrationGeneration;
     this.sessionHydrationGenerations.set(sessionId, generation);
     const emitHydration = (state: import("../shared/types").SessionHydrationState, message?: string): void => {
@@ -1872,6 +2371,10 @@ export class AppController {
     if (activate) { this.focusedSessionId = sessionId; await this.catalog.markRead(sessionId); }
     const assignment = await this.profiles.assignment(sessionId);
     const targetCwd = assignment?.cwd ?? cwd;
+    if (assignment?.cwd) {
+      const canonicalAssigned = await canonicalExistingPath(assignment.cwd, "directory").catch(() => undefined);
+      if (canonicalAssigned) rememberCanonicalPath(this.trustedWorkspacePaths, canonicalAssigned, 64);
+    }
     const presentations = await this.turnPresentations.list(sessionId);
     let projection = await this.conversationProjections.restore(sessionId);
     let recoveryMessage = "";
@@ -1882,15 +2385,17 @@ export class AppController {
     }
     if (projection) {
       emitHydration("local");
-      this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent));
+      this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection, live: alreadyLive } satisfies ChatEvent));
     }
     const attachmentEntries = await this.attachmentCache.restore(sessionId);
     if (attachmentEntries.length) await this.handleEvent({ type: "user-attachments-restore", sessionId, entries: attachmentEntries });
     await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
 
     this.projectionOpenSessions.add(sessionId);
-    this.projectionReplaying.add(sessionId);
-    this.projectionReplayBuffers.set(sessionId, []);
+    if (!alreadyLive) {
+      this.projectionReplaying.add(sessionId);
+      this.projectionReplayBuffers.set(sessionId, []);
+    }
     emitHydration("connecting");
     try {
       const result = assignment
@@ -1907,7 +2412,7 @@ export class AppController {
         }
       }
       if (projection) {
-        this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection } satisfies ChatEvent));
+        this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection, live: alreadyLive } satisfies ChatEvent));
       } else {
         // Seed V2 from the only replay available, but never invent history.
         for (const event of replayed) {
@@ -1999,9 +2504,19 @@ export class AppController {
   }
 
   private async cleanupSessionState(sessionId: string, forgetTokens = true): Promise<void> {
+    const priorAssignment = await this.profiles.assignment(sessionId).catch(() => undefined);
+    const priorRuntime = await this.sessionRuntime.get(sessionId).catch(() => undefined);
+    const sessionCwdForCleanup = this.processes.snapshot(sessionId)?.cwd ?? priorRuntime?.cwd ?? priorAssignment?.cwd;
+    for (const [watchKey, watch] of [...this.pullRequestWatches.entries()]) {
+      if (watch.sessionId === sessionId) {
+        clearInterval(watch.timer);
+        this.pullRequestWatches.delete(watchKey);
+      }
+    }
     await this.nativeRuns?.forget(sessionId);
     await this.uiState.clearDraft(sessionId);
     this.sessionHydrationGenerations.delete(sessionId);
+    this.activeCheckpointOrdinals.delete(sessionId);
     await this.profiles.removeAssignment(sessionId);
     if (forgetTokens) await this.tokenActivity.forgetSession(sessionId).catch((error) => this.log.log(`Token 活动明细清理失败：${error instanceof Error ? error.message : String(error)}`));
     this.agentChanges.clear(sessionId);
@@ -2020,6 +2535,10 @@ export class AppController {
       this.mediaJobControls.delete(jobId);
       this.mediaJobs.delete(jobId);this.persistedImageStates?.delete(jobId);
     }
+    if (sessionCwdForCleanup) {
+      await this.gitCheckpoints.deleteSessionCheckpoints(sessionCwdForCleanup, sessionId).catch(() => undefined);
+    }
+    this.pendingSettleOnTurnEnd.delete(sessionId);
     await this.turnPresentations.delete(sessionId);
     await this.conversationProjections.delete(sessionId);
     await this.sessionRuntime.delete(sessionId);
@@ -2067,7 +2586,7 @@ export class AppController {
   readAutomationInstructions(id:string){return this.automations.instructions(id)}
   async saveImageComposerDraft(id:string,draft:import("../shared/image-workspace").ImageComposerDraft){
     const row=await this.imageWorkspace.get(id);if(!row)throw Error("图像会话已不存在");
-    for(const reference of draft.references){if(!reference.path)continue;const path=await realpath(reference.path);if(!pathWithin(path,row.cwd)&&!hasCanonicalPath(this.trustedPickedPaths,path)&&!row.composerDraft?.references.some(previous=>previous.path===reference.path)&&!row.jobs.some(record=>record.job.status==="completed"&&record.request?.referencePaths?.includes(reference.path!)))throw Error("请通过文件选择器重新授权参考图");}
+    for(const reference of draft.references){if(!reference.path)continue;const path=await realpath(reference.path);if(!pathWithin(path,row.cwd)&&!hasCanonicalPath(this.trustedPickedPaths,path)&&!row.composerDraft?.references.some(previous=>typeof previous.path==="string"&&(previous.path===reference.path||samePath(previous.path,path)))&&!row.jobs.some(record=>record.request?.referencePaths?.some(prev=>prev===reference.path||samePath(prev,path))))throw Error("请通过文件选择器重新授权参考图");}
     return this.imageWorkspace.composer(id,draft);
   }
   extendMediaWait(jobId:string):void{const extend=this.mediaWaitExtensions.get(jobId);if(!extend)throw Error("此任务已结束或尚未开始等待");extend();const job=this.mediaJobs.get(jobId);if(job){job.message="已延长本次等待，没有重新提交生成请求";job.updatedAt=new Date().toISOString();this.publishMediaJob(job)}}
@@ -2233,7 +2752,7 @@ export class AppController {
     if(!reserved.created)return reserved.job;
     try{
       const references=[...(input.request.referencePaths??[])];
-      for(const path of references)if(prior?.composerDraft?.references.some(reference=>reference.path===path)){const canonical=await realpath(path);this.trustedPickedPaths.add(process.platform==="win32"?canonical.toLowerCase():canonical);}
+      for(const path of references){const canonical=await realpath(path).catch(()=>undefined);if(canonical&&(prior?.composerDraft?.references.some(reference=>typeof reference.path==="string"&&(reference.path===path||samePath(reference.path,canonical)))||prior?.jobs.some(record=>record.request?.referencePaths?.some(prev=>prev===path||samePath(prev,canonical)))))this.trustedPickedPaths.add(process.platform==="win32"?canonical.toLowerCase():canonical);}
       for(const source of input.referenceSources??[]){const local=await this.mediaAccess.resolve(source);if(local.media!=="image")throw Error("参考产物必须是图片");this.trustedPickedPaths.add(process.platform==="win32"?local.path.toLowerCase():local.path);references.push(local.path)}
       if(references.length && input.request.route==="provider")throw Error("此 Provider 图片编辑合同尚未接入，请选择 CLI");
       return await this.startMediaGeneration({...input.request,referencePaths:references,sessionId:input.conversationId,projectOutputDirectory:"originals"},reserved.job.jobId,reserved.job.outputRoot)
@@ -2698,14 +3217,29 @@ export class AppController {
     const prepared = await this.prepareSubmissionAttachments(sessionId, attachments, draftKey).catch(async (error) => { await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined); throw error; });
     await this.attachmentCache.record(sessionId, clientMessageId, text, prepared.previews, "sending");
     let detachedDraftFiles: string[] = [];
+    let stagedBacks: import("../shared/workbench-types").StagedMergeBackRecord[] = [];
     try {
       detachedDraftFiles = await this.detachSubmissionDraft(sessionId, draftKey, draftSubmissionId);
       this.assertCredentialStable();
-      await this.processes.get(sessionId).prompt(text, prepared.attachments, INTERACTIVE_PROMPT_TIMEOUT_MS, { clientMessageId, attachments: prepared.previews, toolSelection });
+      const snapCwd = this.processes.snapshot(sessionId)?.cwd;
+      const adapter = this.processes.get(sessionId);
+      if (snapCwd) {
+        const nextOrd = (await this.turnPresentations.list(sessionId)).length;
+        this.activeCheckpointOrdinals.set(sessionId, nextOrd);
+        await this.gitCheckpoints.capturePreTurn(snapCwd, sessionId, nextOrd, clientMessageId).catch(() => undefined);
+      }
+      stagedBacks = await this.sessionRuntime.consumeStagedMergeBacks(sessionId);
+      const effectiveText = formatStagedMergeBackContext(stagedBacks, text);
+      await adapter.prompt(effectiveText, prepared.attachments, INTERACTIVE_PROMPT_TIMEOUT_MS, { clientMessageId, displayText: text, attachments: prepared.previews, toolSelection });
+      if (stagedBacks.length && adapter.settledTurnOutcome(clientMessageId) === "failed") {
+        await this.sessionRuntime.restoreStagedMergeBacks(sessionId, stagedBacks).catch(() => undefined);
+        stagedBacks = [];
+      }
       await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "sent").catch((error) => this.log.log(`发送已完成，附件账本更新失败：${String(error)}`).catch(() => undefined));
       await this.uiState.settleSubmission(draftSubmissionId, true).catch((error) => this.log.log(`提交已接收，恢复快照结算失败：${String(error)}`).catch(() => undefined));
       await this.discardSubmissionDraftFiles(draftKey, detachedDraftFiles).catch(() => undefined);
     } catch (error) {
+      if (stagedBacks.length) await this.sessionRuntime.restoreStagedMergeBacks(sessionId, stagedBacks).catch(() => undefined);
       await this.uiState.settleSubmission(draftSubmissionId, false).catch(() => undefined);
       await this.attachmentCache.updateDelivery(sessionId, clientMessageId, "failed").catch(() => undefined);
       await this.handleEvent({ type: "user-message", sessionId, id: clientMessageId, clientMessageId, text, attachments: prepared.previews, delivery: "failed" });
@@ -2719,6 +3253,7 @@ export class AppController {
     const sessionId = OFFLINE_UI_SESSION_IDS.conversation;
     const workspace = (await this.settingsStore.get()).activeWorkspace || process.cwd();
     const fixtureProject = await resolveProjectIdentity(workspace);
+    rememberCanonicalPath(this.trustedWorkspacePaths, fixtureProject.canonicalPath, 64);
     const fixtureDraftKey = `new:${fixtureProject.id}`;
     if (!(await this.uiState.getDraft(fixtureDraftKey))) {
       await this.uiState.setDraft(fixtureDraftKey, "0.8.1 本地草稿（尚未启动 CLI）", undefined, [], {
@@ -2996,6 +3531,7 @@ export class AppController {
       if(!Object.hasOwn(patch.desktopPet!,"position"))value.desktopPet={...patch.desktopPet!,position};
     }) : await this.settingsStore.patch(patch);
     applyNativeTheme(settings.theme);
+    this.syncTitleBarOverlay(settings.theme);
     for (const listener of this.settingsListeners) this.deliverObserver(listener, settings);
     return settings;
   }
@@ -3018,7 +3554,7 @@ export class AppController {
     if (result.canceled || !result.filePaths[0]) return null;
     await this.themeService.installBackground(result.filePaths[0]);
     const current = await this.settingsStore.get();
-    return this.updateTheme({ background: { ...current.theme.background, enabled: true } });
+    return this.updateTheme({ background: { ...current.theme.background, enabled: true, updatedAt: Date.now() } });
   }
   async removeThemeBackground(): Promise<AppSettings> {
     await this.themeService.removeBackground();
@@ -3544,6 +4080,401 @@ export class AppController {
     }
     return receipt;
   }
+
+  async promoteQueuedPromptToSteer(sessionId: string, id: string, text?: string): Promise<import("../shared/types").QueueOperationReceipt> {
+    this.assertCredentialStable();
+    const adapter = this.processes.get(sessionId);
+    const entry = adapter.queuedPrompts().find((value) => value.id === id);
+    const nextText = text !== undefined ? text.trim() : entry?.text;
+    const receipt = await adapter.promoteQueuedPromptToSteer(id, text);
+
+    if (entry?.clientMessageId && nextText !== undefined) {
+      await this.attachmentCache.updateRecord(
+        sessionId,
+        entry.clientMessageId,
+        receipt.state === "interjected"
+          ? { text: nextText, delivery: "sent", presentation: "interjection", eventId: id }
+          : { text: nextText, delivery: "queued", presentation: "user-message" },
+      ).catch((error) => this.log.log(`队列转向附件账本更新失败：${error instanceof Error ? error.message : String(error)}`));
+    }
+
+    if (
+      receipt.state === "send-now"
+      && receipt.hadActiveWork
+      && (!receipt.priorTurnId || adapter.activeTurnId === receipt.priorTurnId)
+    ) {
+      void this.cancelSession(sessionId).catch((cancelError) => {
+        void this.log.log(`队列转向停止当前回合恢复失败：${cancelError instanceof Error ? cancelError.message : String(cancelError)}`);
+      });
+    }
+    return receipt;
+  }
+
+  async previewMergeBackSession(
+    sessionId: string,
+    targetSessionId?: string,
+  ): Promise<import("../shared/workbench-types").MergeBackPreview> {
+    const childLiveStatus = this.processes.liveStatuses().get(sessionId);
+    if (childLiveStatus === "working" || childLiveStatus === "needs-user" || this.processes.isRecovering(sessionId)) {
+      throw new Error("子会话正在运行或等待确认，请先完成或停止当前回合后再执行合并回传");
+    }
+    const [assignment, runtime, catalogParentId] = await Promise.all([
+      this.profiles.assignment(sessionId),
+      this.sessionRuntime.get(sessionId),
+      this.catalog.parentOf(sessionId),
+    ]);
+    const childCwd = this.processes.snapshot(sessionId)?.cwd ?? assignment?.cwd ?? runtime?.cwd;
+    if (!childCwd) throw new Error("找不到子会话的工作区记录");
+
+    const parentSessionId = targetSessionId ?? catalogParentId;
+    if (!parentSessionId && !assignment?.worktreeId) {
+      throw new Error("当前会话既不是分叉子会话，也没有关联隔离 Worktree，无法执行合并回传");
+    }
+    if (parentSessionId === sessionId) throw new Error("不能将会话合并回自身");
+
+    const childRows = await this.catalog.list(childCwd, "", this.processes.liveStatuses(), true);
+    const childRow = childRows.find((row) => row.id === sessionId);
+    const childTitle = childRow?.title || "分叉会话";
+
+    let parentTitle: string | undefined;
+    let replacingExisting = false;
+    if (parentSessionId) {
+      const parentAssignment = await this.profiles.assignment(parentSessionId);
+      const parentRuntime = await this.sessionRuntime.get(parentSessionId);
+      const parentCwd = this.processes.snapshot(parentSessionId)?.cwd
+        ?? parentAssignment?.cwd
+        ?? parentRuntime?.cwd
+        ?? assignment?.sourceWorkspacePath
+        ?? childCwd;
+      const parentRows = await this.catalog.list(parentCwd, "", this.processes.liveStatuses(), true);
+      const parentRow = parentRows.find((row) => row.id === parentSessionId);
+      if (!parentRow) throw new Error("目标父会话已不存在，请重新选择回传目标");
+      parentTitle = parentRow.title;
+      const existingStaged = await this.sessionRuntime.getStagedMergeBacks(parentSessionId);
+      replacingExisting = existingStaged.some((item) => item.childSessionId === sessionId);
+    }
+
+    const projection = await this.conversationProjections.inspect(sessionId)
+      ?? await this.conversationProjections.inspectNative(sessionId, childCwd);
+    const extractedSummary = extractMergeBackSummary(projection, childRow?.preview);
+    const agentIndex = await this.getAgentChanges(sessionId, "session").catch(() => undefined);
+    const worktreePreview = assignment?.worktreeId
+      ? await this.worktrees.previewApply(assignment.sourceWorkspacePath, assignment.worktreeId).catch(() => undefined)
+      : undefined;
+
+    const keyChanges = [...new Set([
+      ...(worktreePreview?.files.map((f) => `${f.kind}: ${f.path}`) ?? []),
+      ...(agentIndex?.files.map((f) => `${f.status}: ${f.path}`) ?? []),
+    ])].slice(0, 40);
+
+    const canMergeBack = Boolean(parentSessionId || worktreePreview?.canApply);
+    const reason = !canMergeBack ? (worktreePreview?.reason || "当前没有可回传的目标会话或可应用的 Worktree 提交") : undefined;
+    const confirmationToken = createHash("sha256")
+      .update(JSON.stringify({
+        childSessionId: sessionId,
+        parentSessionId: parentSessionId ?? "",
+        worktreeToken: worktreePreview?.confirmationToken ?? "",
+        keyChanges,
+      }))
+      .digest("hex");
+
+    return {
+      childSessionId: sessionId,
+      childTitle,
+      ...(parentSessionId ? { parentSessionId } : {}),
+      ...(parentTitle ? { parentTitle } : {}),
+      summary: extractedSummary,
+      keyChanges,
+      replacingExisting,
+      ...(worktreePreview ? { worktreePreview } : {}),
+      canMergeBack,
+      ...(reason ? { reason } : {}),
+      confirmationToken,
+    };
+  }
+
+  async mergeBackSession(
+    input: import("../shared/workbench-types").MergeBackSessionInput,
+  ): Promise<import("../shared/workbench-types").MergeBackResult> {
+    if (!input.confirmed) throw new Error("执行合并回传前需要明确确认预览");
+    const preview = await this.previewMergeBackSession(input.sessionId, input.targetSessionId);
+    if (preview.confirmationToken !== input.confirmationToken) {
+      throw new Error("合并回传预览已变化，请刷新预览后重新确认");
+    }
+    if (!preview.canMergeBack) {
+      throw new Error(preview.reason || "当前无法执行合并回传");
+    }
+    if (!preview.parentSessionId && !input.applyWorktree) {
+      throw new Error("当前会话没有父会话且未勾选应用 Worktree 修改，无可执行的回传操作");
+    }
+
+    const assignment = await this.profiles.assignment(input.sessionId);
+    let worktreeResult: import("../shared/workbench-types").WorktreeApplyResult | undefined;
+    if (input.applyWorktree) {
+      if (!assignment?.worktreeId || !preview.worktreePreview?.canApply || !preview.worktreePreview.confirmationToken) {
+        throw new Error(preview.worktreePreview?.reason || "当前 Worktree 没有可安全应用的已提交修改");
+      }
+      worktreeResult = await this.worktrees.apply(
+        assignment.sourceWorkspacePath,
+        assignment.worktreeId,
+        preview.worktreePreview.confirmationToken,
+        true,
+        Boolean(input.cleanupWorktree),
+      );
+      if (worktreeResult.conflicted || !worktreeResult.applied) {
+        return {
+          merged: false,
+          conflicted: worktreeResult.conflicted,
+          childSessionId: input.sessionId,
+          ...(preview.parentSessionId ? { parentSessionId: preview.parentSessionId } : {}),
+          worktreeResult,
+          message: worktreeResult.message,
+        };
+      }
+    }
+
+    let stagedRecord: import("../shared/workbench-types").StagedMergeBackRecord | undefined;
+    if (preview.parentSessionId) {
+      const summaryText = (input.summary?.trim() || preview.summary || "已完成子会话探索与修改").slice(0, 32_768);
+      stagedRecord = {
+        childSessionId: input.sessionId,
+        parentSessionId: preview.parentSessionId,
+        childTitle: preview.childTitle,
+        summary: summaryText,
+        keyChanges: preview.keyChanges,
+        ...(assignment?.worktreeId ? { worktreeId: assignment.worktreeId } : {}),
+        ...(worktreeResult ? { worktreeApplied: worktreeResult.applied } : {}),
+        ...(preview.worktreePreview?.headRef ? { headCommit: preview.worktreePreview.headRef } : {}),
+        stagedAt: new Date().toISOString(),
+      };
+      await this.sessionRuntime.upsertStagedMergeBack(preview.parentSessionId, stagedRecord);
+    }
+
+    if (input.settleChild !== false) {
+      await this.settleSession(input.sessionId, true);
+    }
+
+    this.invalidateRemoteList();
+    this.activityChanged();
+    return {
+      merged: true,
+      conflicted: false,
+      childSessionId: input.sessionId,
+      ...(preview.parentSessionId ? { parentSessionId: preview.parentSessionId } : {}),
+      ...(stagedRecord ? { stagedRecord } : {}),
+      ...(worktreeResult ? { worktreeResult } : {}),
+      message: preview.parentSessionId && worktreeResult?.applied
+        ? "已将 Worktree 提交合并回主工作区，并将子会话摘要暂存至父会话下一轮上下文"
+        : preview.parentSessionId
+          ? (preview.replacingExisting ? "已幂等更新父会话中的子会话回传摘要" : "已将子会话结论暂存至父会话下一轮上下文")
+          : (worktreeResult?.message ?? "合并回传已完成"),
+    };
+  }
+
+  async dismissStagedMergeBack(parentSessionId: string, childSessionId: string): Promise<void> {
+    await this.sessionRuntime.removeStagedMergeBack(parentSessionId, childSessionId);
+    this.invalidateRemoteList();
+    this.activityChanged();
+  }
+
+  async clearSessionContextInPlace(
+    input: import("../shared/types").ClearSessionContextInput,
+  ): Promise<import("../shared/types").ClearSessionContextResult> {
+    this.assertCredentialStable();
+    const { sessionId } = input;
+    if (this.deletingSessions.has(sessionId)) throw new Error("此会话正在删除，无法清空上下文");
+    if (this.clearingSessions.has(sessionId) || this.sessionOpenFlights.has(sessionId) || this.processes.isRecovering(sessionId)) {
+      throw new Error("此会话正在切换或清空上下文，请稍后再试");
+    }
+    this.clearingSessions.add(sessionId);
+    try {
+      const liveSnapshot = this.processes.snapshot(sessionId);
+      const liveAdapter = liveSnapshot ? this.processes.get(sessionId) : undefined;
+      if (liveAdapter && (liveAdapter.working || liveAdapter.needsUser)) {
+        throw new Error("当前会话正在运行或等待确认，请先停止当前回合后再执行 /clear");
+      }
+
+      const [runtime, assignment] = await Promise.all([
+        this.sessionRuntime.get(sessionId),
+        this.profiles.assignment(sessionId),
+      ]);
+      const cwd = assignment?.cwd
+        ?? liveSnapshot?.cwd
+        ?? runtime?.cwd
+        ?? (input.cwd ? await this.requireToolWorkspace(input.cwd) : "");
+      if (!cwd) throw new Error("找不到会话所属的工作区路径");
+
+      const settings = await this.settingsStore.get();
+      const modelId = liveSnapshot?.modelId ?? runtime?.modelId ?? assignment?.profile.modelId ?? settings.defaultModel;
+      const providerId = runtime?.providerId ?? (await this.providers.managedProviderForModel(modelId))?.id;
+      const effort = liveSnapshot?.effort ?? runtime?.effort ?? assignment?.profile.effort ?? settings.defaultEffort;
+      const mode = liveSnapshot?.mode ?? runtime?.mode ?? assignment?.profile.mode ?? settings.defaultMode;
+
+      if (liveAdapter && await liveAdapter.tryClearContextInPlace()) {
+        this.activeCheckpointOrdinals.delete(sessionId);
+        await Promise.all([
+          this.conversationProjections.clearEvents(sessionId),
+          this.turnPresentations.delete(sessionId),
+          this.attachmentCache.cleanupSession(sessionId).catch(() => undefined),
+          this.mediaAccess.removeSession(sessionId).catch(() => undefined),
+          this.mediaThumbnails.removeSession(sessionId).catch(() => undefined),
+          this.gitCheckpoints.deleteSessionCheckpoints(cwd, sessionId).catch(() => undefined),
+        ]);
+        this.agentChanges.clear(sessionId);
+        this.turnFileChanges.clearSession(sessionId);
+        this.window?.webContents.send("grok:event", { type: "session-reset", sessionId } satisfies ChatEvent);
+        this.window?.webContents.send("grok:event", {
+          type: "session-ready",
+          sessionId,
+          models: liveAdapter.models,
+          currentModelId: liveAdapter.currentModelId,
+          effort: liveAdapter.effort,
+        } satisfies ChatEvent);
+        this.window?.webContents.send("grok:event", { type: "status", sessionId, status: "idle", text: "上下文已清空" } satisfies ChatEvent);
+        if (input.carryoverPrompt?.trim()) {
+          void this.sendPrompt(sessionId, input.carryoverPrompt.trim(), []).catch((err) => this.log.log(String(err)));
+        }
+        return {
+          previousSessionId: sessionId,
+          sessionId,
+          cwd,
+          rotated: false,
+          ...(assignment?.worktreeId ? { worktreeId: assignment.worktreeId } : {}),
+          ...(assignment?.profileId ?? runtime?.profileId ? { profileId: assignment?.profileId ?? runtime?.profileId } : {}),
+          ...(modelId ? { modelId } : {}),
+          effort,
+          mode,
+          message: "已在当前会话原地清空上下文",
+        };
+      }
+
+      const sourceWorkspace = assignment?.sourceWorkspacePath ?? cwd;
+      const compiled = assignment
+        ? await this.profiles.compileProfile(assignment.profile, await this.definitions.listAgents(cwd))
+        : await this.compileExecutionProfile(sourceWorkspace, runtime?.profileId);
+
+      const unsentQueue = (liveAdapter?.queuedPrompts() ?? await this.sessionRuntime.getQueue(sessionId))
+        .filter((entry) => entry.state === "queued");
+      const stagedMergeBacks = await this.sessionRuntime.getStagedMergeBacks(sessionId);
+      const wasFocused = this.focusedSessionId === sessionId || this.visibleConversationId === sessionId;
+
+      await this.processes.close(sessionId).catch(() => undefined);
+
+      const created = await this.processes.createConfigured(
+        cwd,
+        effort,
+        mode,
+        modelId,
+        undefined,
+        compiled.environment,
+        {
+          agentProfilePath: compiled.agentProfilePath,
+          sessionMeta: compiled.sessionMeta,
+          alwaysApprove: mode === "auto",
+        },
+        { providerId, localModelId: modelId },
+      );
+      const newSessionId = created.sessionId;
+
+      await this.profiles.assign({
+        sessionId: newSessionId,
+        sourceWorkspacePath: sourceWorkspace,
+        cwd,
+        profileId: compiled.profile.id,
+        profileName: compiled.profile.name,
+        profile: compiled.profile,
+        ...(assignment?.worktreeId ? { worktreeId: assignment.worktreeId } : {}),
+        createdAt: new Date().toISOString(),
+      });
+
+      await this.sessionRuntime.save({
+        sessionId: newSessionId,
+        cwd,
+        ...(modelId ? { modelId } : {}),
+        ...(providerId ? { providerId } : {}),
+        effort,
+        mode,
+        profileId: compiled.profile.id,
+        ...(runtime?.compaction ? { compaction: runtime.compaction } : {}),
+      });
+
+      for (const record of stagedMergeBacks) {
+        await this.sessionRuntime.upsertStagedMergeBack(newSessionId, { ...record, parentSessionId: newSessionId });
+      }
+      if (unsentQueue.length) {
+        await this.attachmentCache.cloneSession(sessionId, newSessionId).catch(() => undefined);
+        await this.sessionRuntime.saveQueue(newSessionId, unsentQueue.map((entry, position) => ({
+          ...entry,
+          sessionId: newSessionId,
+          position,
+        })));
+      }
+      await this.catalog.transferSessionMetadata(sessionId, newSessionId);
+      await this.catalog.markRead(newSessionId);
+      await this.uiState.moveDraft(sessionId, newSessionId).catch(() => null);
+
+      for (const watch of this.pullRequestWatches.values()) {
+        if (watch.sessionId === sessionId) watch.sessionId = newSessionId;
+      }
+      for (const task of await this.automations.list().catch(() => [])) {
+        if (task.destination === "current-session" && task.targetSessionId === sessionId) {
+          await this.automations.update(task.id, { targetSessionId: newSessionId }).catch(() => undefined);
+        }
+      }
+
+      if (input.keepHistoryArchive) {
+        await this.catalog.pin(sessionId, false).catch(() => undefined);
+        await this.catalog.snooze(sessionId, null).catch(() => undefined);
+        await this.sessionRuntime.setSettleOnTurnEnd(sessionId, "", false).catch(() => undefined);
+        await this.sessionRuntime.consumeStagedMergeBacks(sessionId).catch(() => undefined);
+        await this.sessionRuntime.saveQueue(sessionId, []).catch(() => undefined);
+        await this.catalog.archive(sessionId, true);
+        await this.catalog.settle(sessionId, true);
+      } else {
+        const cliPath = process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1" ? undefined : await locateGrokCli(settings.cliPath);
+        if (cliPath) {
+          const deleted = await deleteCliSession(cliPath, sessionId, buildCliEnv(settings, await this.auth.activeApiKey()))
+            .then(() => true)
+            .catch(() => false);
+          if (deleted) await this.catalog.delete(cwd, sessionId).catch(() => undefined);
+          else await this.catalog.dismiss(sessionId);
+        } else {
+          await this.catalog.dismiss(sessionId);
+        }
+        await this.cleanupSessionState(sessionId, false);
+      }
+
+      if (wasFocused) {
+        this.focusedSessionId = newSessionId;
+        if (this.visibleConversationId === sessionId) this.visibleConversationId = newSessionId;
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.webContents.send("grok:navigate-session", { sessionId: newSessionId, cwd });
+        }
+      }
+      this.invalidateRemoteList();
+      this.activityChanged();
+
+      if (input.carryoverPrompt?.trim()) {
+        void this.sendPrompt(newSessionId, input.carryoverPrompt.trim(), []).catch((err) => this.log.log(String(err)));
+      }
+
+      return {
+        previousSessionId: sessionId,
+        sessionId: newSessionId,
+        cwd,
+        rotated: true,
+        ...(assignment?.worktreeId ? { worktreeId: assignment.worktreeId } : {}),
+        profileId: compiled.profile.id,
+        ...(modelId ? { modelId } : {}),
+        effort,
+        mode,
+        message: "上下文已清空，已保留当前工作区、Worktree、模型与会话配置",
+      };
+    } finally {
+      this.clearingSessions.delete(sessionId);
+    }
+  }
+
   async forkSession(sessionId: string, rewindPointId?: string, launch?: ExecutionProfileLaunchInput): Promise<SessionForkResult> {
     const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
     const parentRuntime = await this.sessionRuntime.get(sessionId);
@@ -3559,6 +4490,7 @@ export class AppController {
     if (launch && compiled.profile.worktree) {
       worktree = await this.worktrees.create({ workspacePath: sourceWorkspace, name: launch.worktreeName?.trim() || `${profileSlug(compiled.profile.name)}-fork-${new Date().toISOString().slice(0, 10)}`, baseRef: launch.worktreeRef?.trim() || compiled.profile.worktreeRef, sourceSessionId: sessionId, agentId: compiled.profile.agentId });
       cwd = worktree.path;
+      rememberCanonicalPath(this.trustedWorkspacePaths, worktree.path, 64);
     }
     const result = await this.processes.get(sessionId).fork(rewindPointId, cwd);
     const childId = String(result.newSessionId ?? result.new_session_id ?? result.sessionId ?? result.forkedSessionId ?? result.session_id ?? "");
@@ -3590,6 +4522,14 @@ export class AppController {
       ...(launch ? { profileId: compiled.profile.id } : {}),
     });
     if (inheritedWorktreeId) await this.catalog.recordOrigins([{ sessionId: childId, kind: "worktree", id: inheritedWorktreeId, title: compiled.profile.name, suggestedTitle: worktree?.name || "Worktree 分叉" }]);
+    if (worktree) {
+      void this.workspaceScripts.runWorktreeCreateHooks({
+        projectWorkspacePath: sourceWorkspace,
+        executionCwd: worktree.path,
+        worktreeId: worktree.id,
+        sessionId: childId,
+      }).catch((error) => this.log.log(`分叉 Worktree 初始化脚本执行失败：${error instanceof Error ? error.message : String(error)}`));
+    }
     return { sessionId: childId, parentSessionId: sessionId, cwd, profileId: compiled.profile.id, worktreeId: inheritedWorktreeId };
   }
 
@@ -3599,8 +4539,15 @@ export class AppController {
       throw new Error("新项目位置必须通过应用文件夹选择器选择");
     }
     if (samePath(sourceCwd, canonicalTarget)) throw new Error("新旧项目位置相同");
-    const sessions = await this.catalog.list(sourceCwd, "", this.processes.liveStatuses());
-    if (!sessions.length) throw new Error("旧项目没有可重新绑定的 Grok 会话");
+    const allSessions = await this.catalog.list(sourceCwd, "", this.processes.liveStatuses());
+    if (!allSessions.length) throw new Error("旧项目没有可重新绑定的 Grok 会话");
+    const sessions: SessionSummary[] = [];
+    for (const candidate of allSessions) {
+      const assignment = await this.profiles.assignment(candidate.id);
+      if (assignment?.worktreeId) continue;
+      sessions.push(candidate);
+    }
+    if (!sessions.length) throw new Error("旧项目没有可迁移的本地会话（隔离 Worktree 会话保持各自独立工作树）");
     const receipt: WorkspaceRebindReceipt = { sourceCwd, targetCwd: canonicalTarget, completed: [], failures: [] };
     for (const session of sessions) {
       try {
@@ -3617,7 +4564,16 @@ export class AppController {
     return receipt;
   }
 
-  private async rebindSession(source: SessionSummary, targetCwd: string, openTarget: (cwd: string, sessionId: string) => Promise<{ sessionId: string }> = (cwd, id) => this.processes.open(cwd, id)): Promise<SessionRebindReceipt> {
+  private async rebindSession(
+    source: SessionSummary,
+    targetCwd: string,
+    openTarget: (cwd: string, sessionId: string) => Promise<{ sessionId: string }> = (cwd, id) => this.processes.open(cwd, id),
+    assignmentOverride?: {
+      sourceWorkspacePath: string;
+      worktreeId?: string;
+      profile?: CompiledExecutionProfile["profile"];
+    },
+  ): Promise<SessionRebindReceipt> {
     const parentRuntime = await this.sessionRuntime.get(source.id);
     const parentAssignment = await this.profiles.assignment(source.id);
     const originalLive = this.processes.snapshot(source.id);
@@ -3635,6 +4591,7 @@ export class AppController {
       targetMaterialized = true;
       try {
         await openTarget(targetCwd, source.id);
+        if (!originalLive) await this.processes.close(source.id, false).catch(() => undefined);
       } catch (error) {
         await this.processes.close(source.id, false).catch(() => undefined);
         await this.catalog.removeWorkspaceCopy(targetCwd, source.id).catch(() => undefined);
@@ -3643,30 +4600,46 @@ export class AppController {
         if (originalLive) await this.processes.open(source.cwd, source.id).catch(() => undefined);
         throw new Error(`复制后的会话无法由当前 CLI 重新打开：${error instanceof Error ? error.message : String(error)}`);
       }
-      const settings = await this.settingsStore.get();
-      const targetRuntime = buildForkRuntimePreferences(parentRuntime, {
-        sessionId: source.id, cwd: targetCwd,
-        modelId: parentRuntime?.modelId ?? settings.defaultModel,
-        providerId: parentRuntime?.providerId,
-        effort: parentRuntime?.effort ?? settings.defaultEffort,
-        mode: parentRuntime?.mode ?? settings.defaultMode,
-        profileId: parentRuntime?.profileId,
-        compaction: parentRuntime?.compaction,
-      });
+      const targetRuntime = parentRuntime
+        ? buildForkRuntimePreferences(parentRuntime, {
+            sessionId: source.id,
+            cwd: targetCwd,
+            modelId: parentRuntime.modelId,
+            providerId: parentRuntime.providerId,
+            effort: parentRuntime.effort,
+            mode: parentRuntime.mode,
+            profileId: parentRuntime.profileId,
+            compaction: parentRuntime.compaction,
+          })
+        : undefined;
       const restoreRuntime = async (): Promise<void> => {
         if (parentRuntime) await this.sessionRuntime.save(parentRuntime);
         else await this.sessionRuntime.deletePreferences(source.id);
       };
       try {
         await runSessionRebindTransaction([
-          ...(parentAssignment ? [{
+          ...((parentAssignment || assignmentOverride) ? [{
             name: "执行档案绑定",
-            apply: () => this.profiles.assign({ ...structuredClone(parentAssignment), sourceWorkspacePath: targetCwd, cwd: targetCwd, worktreeId: undefined, createdAt: new Date().toISOString() }),
-            rollback: () => this.profiles.assign(parentAssignment),
+            apply: async () => {
+              const baseProfile = assignmentOverride?.profile
+                ?? parentAssignment?.profile
+                ?? (await this.compileExecutionProfile(assignmentOverride?.sourceWorkspacePath ?? targetCwd)).profile;
+              await this.profiles.assign({
+                sessionId: source.id,
+                sourceWorkspacePath: assignmentOverride?.sourceWorkspacePath ?? targetCwd,
+                cwd: targetCwd,
+                profileId: baseProfile.id,
+                profileName: baseProfile.name,
+                profile: baseProfile,
+                worktreeId: assignmentOverride ? assignmentOverride.worktreeId : undefined,
+                createdAt: new Date().toISOString(),
+              });
+            },
+            rollback: () => parentAssignment ? this.profiles.assign(parentAssignment) : this.profiles.removeAssignment(source.id),
           }] : []),
           {
             name: "会话运行配置",
-            apply: () => this.sessionRuntime.save(targetRuntime).then(() => undefined),
+            apply: () => (targetRuntime ? this.sessionRuntime.save(targetRuntime).then(() => undefined) : this.sessionRuntime.deletePreferences(source.id)),
             // Runtime was already changed by ProcessManager.open; the initial
             // rollback below owns restoration and avoids duplicate writes.
             rollback: () => undefined,
@@ -3689,6 +4662,7 @@ export class AppController {
       const receipt: SessionRebindReceipt = {
         sessionId: source.id, parentSessionId: source.id, cwd: targetCwd,
         profileId: parentRuntime?.profileId ?? parentAssignment?.profileId,
+        ...(assignmentOverride?.worktreeId ? { worktreeId: assignmentOverride.worktreeId } : {}),
         sourceCwd: source.cwd, targetCwd, method: "desktop-copy", codeRestored: false,
         localProjectionCopied: true, attachmentLedgerCopied: true, mediaCacheCopied: true,
         completedAt: new Date().toISOString(),
@@ -3706,17 +4680,279 @@ export class AppController {
     }
   }
 
+  async handoffSessionToWorktree(
+    input: import("../shared/workbench-types").SessionWorktreeHandoffInput,
+  ): Promise<import("../shared/workbench-types").SessionWorktreeHandoffResult> {
+    if (this.deletingSessions.has(input.sessionId)) throw new Error("此会话正在删除，无法移交");
+    const liveStatus = this.processes.liveStatuses().get(input.sessionId);
+    if (liveStatus === "working" || liveStatus === "needs-user" || this.processes.isRecovering(input.sessionId)) {
+      throw new Error("会话正在运行或等待确认，请先停止或完成当前回合后再移交到 Worktree");
+    }
+
+    const [existingAssignment, runtime] = await Promise.all([
+      this.profiles.assignment(input.sessionId),
+      this.sessionRuntime.get(input.sessionId),
+    ]);
+    const requestedWorkspace = await this.requireToolWorkspace(input.workspacePath);
+    const sourceCwd = this.processes.snapshot(input.sessionId)?.cwd
+      ?? existingAssignment?.cwd
+      ?? runtime?.cwd
+      ?? requestedWorkspace;
+
+    if (existingAssignment?.worktreeId && (!input.worktreeId || existingAssignment.worktreeId === input.worktreeId)) {
+      throw new Error("当前会话已在目标隔离 Worktree 中运行");
+    }
+
+    const sourceRows = await this.catalog.list(sourceCwd, "", this.processes.liveStatuses(), true);
+    const sourceSession = sourceRows.find((row) => row.id === input.sessionId);
+    if (!sourceSession) throw new Error("在源工作区中未找到该会话记录");
+
+    const trust = await this.git.getRepositoryTrust(sourceCwd);
+    if (trust.required && !trust.trusted) {
+      throw new Error(`移交到 Worktree 前需要确认仓库信任范围：${trust.repositoryRoot}`);
+    }
+    const sourceStatus = await this.git.status(sourceCwd);
+    if (sourceStatus.conflicts.length > 0) {
+      throw new Error("源工作区存在未解决的 Git 冲突，请先解决冲突后再移交到 Worktree");
+    }
+
+    const sourceRepoRoot = sourceStatus.repositoryRoot;
+    const sourceWorkspacePath = existingAssignment?.sourceWorkspacePath ?? sourceRepoRoot;
+    const wasFocused = this.focusedSessionId === input.sessionId;
+    const wasLive = Boolean(this.processes.snapshot(input.sessionId));
+    const skipDirtyTransfer = input.carryDirtyChanges === "none";
+    const shouldCleanSource = Boolean(input.cleanSource || input.carryDirtyChanges === "move");
+
+    if (input.startFromOrigin) {
+      await this.execGitBuffer(["-C", sourceRepoRoot, "fetch", "--prune", "origin"]).catch(() => undefined);
+    }
+
+    const headCommit = await this.execGitBuffer(["-C", sourceRepoRoot, "rev-parse", "--verify", "HEAD^{commit}"])
+      .then((b) => b.toString("utf8").trim())
+      .catch(() => {
+        throw new Error("当前仓库尚无初始提交，请先提交一次后再移交到隔离 Worktree");
+      });
+
+    let binaryPatch: Buffer = Buffer.alloc(0);
+    let untrackedRelPaths: string[] = [];
+    if (!skipDirtyTransfer) {
+      binaryPatch = await this.execGitBuffer([
+        "-C", sourceRepoRoot, "-c", "core.quotepath=false", "diff", "--binary", "--ignore-submodules", "--no-ext-diff", "--no-color", headCommit,
+      ]);
+      const untrackedRaw = await this.execGitBuffer([
+        "-C", sourceRepoRoot, "-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard", "-z",
+      ]);
+      untrackedRelPaths = untrackedRaw
+        .toString("utf8")
+        .split("\0")
+        .filter(Boolean)
+        .filter((relPath) => !relPath.split(/[\\/]/).includes("..") && !isAbsolute(relPath));
+
+      for (const relPath of untrackedRelPaths) {
+        const fullSource = resolve(sourceRepoRoot, relPath);
+        if (!pathInside(sourceRepoRoot, fullSource)) throw new Error(`未跟踪文件路径超出仓库范围：${relPath}`);
+        const info = await lstat(fullSource).catch(() => undefined);
+        if (info?.isSymbolicLink()) throw new Error(`未跟踪路径包含符号链接，出于安全策略已拒绝自动移交：${relPath}`);
+      }
+    }
+
+    let createdWorktree: GrokWorktreeSummary | undefined;
+    const worktree = input.worktreeId
+      ? (await this.worktrees.list(sourceWorkspacePath)).find((wt) => wt.id === input.worktreeId)
+      : (createdWorktree = await this.worktrees.create({
+          workspacePath: sourceWorkspacePath,
+          name: input.worktreeName?.trim() || `${profileSlug(sourceSession.title)}-${new Date().toISOString().slice(5, 10)}`,
+          baseRef: input.baseRef?.trim() || "HEAD",
+          sourceSessionId: input.sessionId,
+          agentId: existingAssignment?.profile.agentId,
+        }));
+
+    if (!worktree) throw new Error("找不到目标 Worktree");
+    if (samePath(worktree.path, sourceCwd)) throw new Error("目标 Worktree 与当前会话目录相同");
+    rememberCanonicalPath(this.trustedWorkspacePaths, worktree.path, 64);
+
+    const rollbackCreatedWorktree = async (): Promise<void> => {
+      if (!createdWorktree) return;
+      await this.execGitBuffer(["-C", sourceRepoRoot, "worktree", "remove", "--force", createdWorktree.path]).catch(() => undefined);
+      if (createdWorktree.branch) {
+        await this.execGitBuffer(["-C", sourceRepoRoot, "branch", "-D", createdWorktree.branch]).catch(() => undefined);
+      }
+      await this.worktrees.remove(sourceWorkspacePath, createdWorktree.id, true).catch(() => undefined);
+    };
+
+    let rebindCommitted = false;
+    try {
+      if (!skipDirtyTransfer && binaryPatch.byteLength > 0) {
+        const applyResult = await this.applyBinaryPatchToWorktree(worktree.path, binaryPatch);
+        const wtStatus = await this.git.status(worktree.path);
+        if (!applyResult.ok || wtStatus.conflicts.length > 0) {
+          throw new Error(`未提交修改在目标基线 (${input.baseRef || "HEAD"}) 上发生三方合并冲突，已完整回滚且保留源工作区不变`);
+        }
+      }
+
+      let copiedUntracked = 0;
+      if (!skipDirtyTransfer) {
+        for (const relPath of untrackedRelPaths) {
+          const srcFile = resolve(sourceRepoRoot, relPath);
+          const destFile = resolve(worktree.path, relPath);
+          if (!pathInside(worktree.path, destFile)) throw new Error(`目标路径越界：${relPath}`);
+          const srcStat = await stat(srcFile).catch(() => undefined);
+          if (!srcStat?.isFile()) continue;
+          await mkdir(dirname(destFile), { recursive: true });
+          const destLstat = await lstat(destFile).catch(() => undefined);
+          if (destLstat?.isSymbolicLink()) throw new Error(`目标路径包含符号链接：${relPath}`);
+          await copyFile(srcFile, destFile);
+          copiedUntracked += 1;
+        }
+      }
+
+      const compiled = existingAssignment
+        ? await this.profiles.compileProfile({ ...existingAssignment.profile, worktree: true }, await this.definitions.listAgents(worktree.path))
+        : await this.compileExecutionProfile(sourceWorkspacePath, "builtin-worktree");
+
+      await this.rebindSession(
+        sourceSession,
+        worktree.path,
+        (cwd, id) => this.processes.openConfigured(
+          cwd,
+          id,
+          runtime?.effort ?? sourceSession.effort as ReasoningEffort ?? compiled.effort,
+          runtime?.mode ?? compiled.mode,
+          runtime?.modelId ?? sourceSession.modelId ?? compiled.modelId,
+          undefined,
+          compiled.environment,
+          { agentProfilePath: compiled.agentProfilePath, sessionMeta: compiled.sessionMeta, alwaysApprove: (runtime?.mode ?? compiled.mode) === "auto" },
+          true,
+        ),
+        {
+          sourceWorkspacePath,
+          worktreeId: worktree.id,
+          profile: { ...compiled.profile, worktree: true },
+        },
+      );
+      rebindCommitted = true;
+
+      await this.catalog.recordOrigins([{
+        sessionId: input.sessionId,
+        kind: "worktree",
+        id: worktree.id,
+        title: compiled.profile.name,
+      }]);
+
+      if (!skipDirtyTransfer && shouldCleanSource) {
+        const trackedPaths = sourceStatus.changes.filter((c) => c.kind !== "untracked").map((c) => c.path);
+        const allPaths = [...new Set([...trackedPaths, ...untrackedRelPaths])];
+        if (allPaths.length) {
+          await this.git.discard(sourceRepoRoot, {
+            trackedPaths,
+            untrackedPaths: untrackedRelPaths,
+            confirmedPaths: allPaths,
+            scope: "all",
+          }).catch((cleanupErr) => this.log.log(`源工作区清理跳过（移交已完成）：${String(cleanupErr)}`));
+        }
+      }
+
+      if (createdWorktree) {
+        void this.workspaceScripts.runWorktreeCreateHooks({
+          projectWorkspacePath: sourceWorkspacePath,
+          executionCwd: worktree.path,
+          worktreeId: worktree.id,
+          sessionId: input.sessionId,
+        }).catch((error) => this.log.log(`移交后 Worktree 初始化脚本执行失败：${String(error)}`));
+      }
+
+      if (wasLive || wasFocused) {
+        await this.openSession(worktree.path, input.sessionId, wasFocused).catch(() => undefined);
+      }
+      if (wasFocused && this.window && !this.window.isDestroyed()) {
+        this.window.webContents.send("grok:navigate-session", { sessionId: input.sessionId, cwd: worktree.path });
+      }
+      this.invalidateRemoteList();
+      this.activityChanged();
+
+      return {
+        sessionId: input.sessionId,
+        parentSessionId: input.sessionId,
+        cwd: worktree.path,
+        worktreeId: worktree.id,
+        sourceCwd,
+        targetCwd: worktree.path,
+        sourceWorkspacePath,
+        worktree,
+        transferredTrackedFiles: skipDirtyTransfer ? 0 : sourceStatus.changes.filter((c) => c.kind !== "untracked").length,
+        transferredUntrackedFiles: copiedUntracked,
+      };
+    } catch (error) {
+      if (!rebindCommitted) {
+        await rollbackCreatedWorktree();
+      }
+      throw error;
+    }
+  }
+
+  private execGitBuffer(args: string[]): Promise<Buffer> {
+    return new Promise((resolvePromise, reject) => {
+      execFile("git", args, { windowsHide: true, encoding: "buffer", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+        if (error) reject(new Error(stderr?.toString("utf8").trim() || error.message));
+        else resolvePromise(stdout);
+      });
+    });
+  }
+
+  private applyBinaryPatchToWorktree(worktreePath: string, patch: Buffer): Promise<{ ok: boolean; stderr: string }> {
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn("git", ["-C", worktreePath, "apply", "--3way", "--whitespace=nowarn", "-"], {
+        windowsHide: true,
+        shell: false,
+        stdio: ["pipe", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => { if (stderr.length < 16_384) stderr += chunk.toString("utf8"); });
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(patch);
+      child.once("error", reject);
+      child.once("close", (code) => resolvePromise({ ok: code === 0, stderr: stderr.trim() }));
+    });
+  }
+
   private async appendRebindJournal(entry: Record<string, unknown>): Promise<void> {
     const path = join(this.userDataPath, "session-rebind-history.jsonl");
     await appendFile(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
   }
   listRewindPoints(sessionId: string): Promise<RewindPoint[]> { return this.processes.get(sessionId).rewindPoints(); }
-  async rewindSession(sessionId: string, pointId: string): Promise<void> {
-    const snapshot = this.processes.snapshot(sessionId); if (!snapshot) throw new Error("会话当前未加载");
-    await this.processes.get(sessionId).rewind(pointId);
+  async rewindSession(sessionId: string, pointId: string, mode?: RewindMode): Promise<void> {
+    const snapshot = this.processes.snapshot(sessionId);
+    if (!snapshot) throw new Error("会话当前未加载");
+    const liveStatus = this.processes.liveStatuses().get(sessionId);
+    if (liveStatus === "working" || liveStatus === "needs-user" || this.processes.isRecovering(sessionId)) {
+      throw new Error("会话正在运行或等待确认，请先停止当前回合后再回退");
+    }
+    await this.processes.rewindSession(sessionId, pointId, mode);
+    if (mode === "files_only") {
+      return;
+    }
+    const promptIndex = /^\d+$/.test(pointId) ? Number.parseInt(pointId, 10) : Number.NaN;
+    if (Number.isInteger(promptIndex) && promptIndex >= 0) {
+      await Promise.all([
+        this.conversationProjections.truncateFromUserTurn(sessionId, promptIndex),
+        this.turnPresentations.truncateFromOrdinal(sessionId, promptIndex),
+      ]);
+    }
+    const assignment = await this.profiles.assignment(sessionId);
     await this.processes.close(sessionId, false);
     await this.handleEvent({ type: "session-reset", sessionId });
-    await this.processes.open(snapshot.cwd, sessionId);
+    if (assignment) {
+      await this.openAssignedSession(assignment);
+    } else {
+      await this.processes.open(snapshot.cwd, sessionId);
+    }
+    const presentations = await this.turnPresentations.list(sessionId);
+    const projection = await this.conversationProjections.restore(sessionId);
+    if (projection) {
+      this.window?.webContents.send("grok:event", await this.prepareVisibleEvent({ type: "conversation-projection-restore", sessionId, projection, live: true } satisfies ChatEvent));
+    }
+    await this.handleEvent({ type: "turn-presentations-restore", sessionId, presentations });
+    this.processes.get(sessionId).setNextTurnOrdinal(presentations.length);
   }
   archiveSession(sessionId: string, archived: boolean): Promise<void> { return this.catalog.archive(sessionId, archived); }
   async listBackgroundTasks(): Promise<BackgroundTaskSummary[]> {
@@ -3765,7 +5001,7 @@ export class AppController {
   async clearInbox(): Promise<NotificationInboxItem[]> { await this.inbox.clear(); return this.listInbox(); }
   listPromptSnippets() { return this.promptSnippets.list(); }
   savePromptSnippet(input: PromptSnippetInput) { return this.promptSnippets.save(input); }
-  deletePromptSnippet(id: string, updatedAt?: string) { return this.promptSnippets.delete(id, updatedAt); }
+  deletePromptSnippet(id: string, updatedAt: string) { return this.promptSnippets.delete(id, updatedAt); }
 
   async getDraft(key: string): Promise<ComposerDraftState | null> {
     const draft = await this.uiState.getDraft(key);
@@ -3838,6 +5074,7 @@ export class AppController {
   listComputerWindows(appId?: string): Promise<ComputerWindow[]> { return this.computer.listWindows(appId); }
   startComputer(input: { sessionId: string; appId: string; windowId?: string }): Promise<ComputerTaskState> {
     if (!this.resourceIntegrity.ok) throw new Error(`Computer Use 资源完整性校验失败：${this.resourceIntegrity.diagnostics.join("；")}`);
+    this.computer.clearEmergencyStop(input.sessionId);
     return this.computer.start(input);
   }
   pauseComputer(sessionId: string): Promise<ComputerTaskState> { return this.computer.pause(sessionId); }
@@ -3946,10 +5183,17 @@ export class AppController {
     const action = intent.action ?? "open";
     const effectiveSessionId = intent.sessionId ?? (this.focusedSessionId || undefined);
     const roots: string[] = [];
+    const imageConversation = effectiveSessionId?.startsWith("image-")
+      ? await this.imageWorkspace.get(effectiveSessionId).catch(() => undefined)
+      : undefined;
     const sessionRoot = effectiveSessionId
-      ? this.processes.snapshot(effectiveSessionId)?.cwd ?? (await this.profiles.assignment(effectiveSessionId))?.cwd
+      ? this.processes.snapshot(effectiveSessionId)?.cwd ?? (await this.profiles.assignment(effectiveSessionId))?.cwd ?? imageConversation?.cwd
       : undefined;
     if (sessionRoot) roots.push(sessionRoot);
+    if (imageConversation) {
+      const imageState = await this.imageWorkspace.list().catch(() => undefined);
+      if (imageState?.outputRoot) roots.push(imageState.outputRoot);
+    }
     const configuredWorkspace = (await this.settingsStore.get()).activeWorkspace;
     if (configuredWorkspace) roots.push(configuredWorkspace);
     if (effectiveSessionId) {
@@ -3963,6 +5207,12 @@ export class AppController {
     const canonicalRequestedRoot = requestedRoot
       ? await canonicalExistingPath(requestedRoot, "directory").catch(() => undefined)
       : undefined;
+    if (canonicalRequestedRoot && !roots.some((root) => samePath(root, canonicalRequestedRoot))) {
+      const imageState = await this.imageWorkspace.list().catch(() => undefined);
+      if (imageState && (samePath(imageState.outputRoot, canonicalRequestedRoot) || imageState.conversations.some((row) => samePath(row.cwd, canonicalRequestedRoot)))) {
+        roots.push(canonicalRequestedRoot);
+      }
+    }
     if (canonicalRequestedRoot && roots.some((root) => samePath(root, canonicalRequestedRoot))) roots.push(canonicalRequestedRoot);
     const relativeBase = sessionRoot
       ?? (canonicalRequestedRoot && roots.some((root) => samePath(root, canonicalRequestedRoot)) ? canonicalRequestedRoot : undefined)
@@ -4019,12 +5269,12 @@ export class AppController {
     if (!isAllowedExternalUrl(url)) throw new Error("仅允许打开 HTTP/HTTPS 链接");
     return shell.openExternal(url);
   }
-  async respondPermission(sessionId: string, requestId: string | number, optionId: string): Promise<void> {
+  async respondPermission(sessionId: string, requestId: string | number, optionId: string, feedback?: string): Promise<void> {
     if (this.offlineUiSessionResponder?.owns(sessionId)) {
       await this.offlineUiSessionResponder.respondPermission(sessionId, requestId, optionId);
       return;
     }
-    this.processes.get(sessionId).respondPermission(requestId, optionId);
+    this.processes.get(sessionId).respondPermission(requestId, optionId, feedback);
   }
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>) { this.processes.get(sessionId).respondQuestion(requestId, answers); }
   respondMcpElicitation(sessionId: string, requestId: string | number, outcome: "accept" | "decline" | "cancel", content?: Record<string, string | number | boolean>) {
@@ -4106,8 +5356,12 @@ export class AppController {
     this.activityListeners.clear();
     this.settingsListeners.clear();
     if (this.activityTimer) clearTimeout(this.activityTimer);
+    if (this.snoozeWakeTimer) clearInterval(this.snoozeWakeTimer);
+    this.snoozeWakeTimer = undefined;
     await this.remoteGateway?.dispose();
-    for(const timer of this.pullRequestWatches.values())clearInterval(timer);this.pullRequestWatches.clear();
+    for (const entry of this.pullRequestWatches.values()) clearInterval(entry.timer);
+    this.pullRequestWatches.clear();
+    this.workspaceScripts.dispose();
     this.workspaceTerminals.dispose();
     this.workspaceBrowser?.dispose();
     // The updater may currently be replacing grok.exe and still owes the user a
@@ -4405,7 +5659,14 @@ export class AppController {
       await this.turnPresentations.recordForSession(event.sessionId, event.presentation)
         .catch((error) => this.log.log(`回合展示记录失败：${error instanceof Error ? error.message : String(error)}`));
       if (event.type === "turn-completed") {
-        await this.tokenActivity.record(event.sessionId, event.presentation, { workspace: this.processes.snapshot(event.sessionId)?.cwd })
+        const snapshotCwd = this.processes.snapshot(event.sessionId)?.cwd;
+        const checkpointOrdinal = this.activeCheckpointOrdinals.get(event.sessionId) ?? event.presentation.ordinal;
+        this.activeCheckpointOrdinals.delete(event.sessionId);
+        if (!replayingAtEntry && snapshotCwd && this.gitCheckpoints) {
+          await this.gitCheckpoints.captureTurnCheckpoint(snapshotCwd, event.sessionId, checkpointOrdinal, event.presentation.turnId)
+            .catch((error) => this.log.log(`回合后 Git 检查点未创建：${error instanceof Error ? error.message : String(error)}`));
+        }
+        await this.tokenActivity.record(event.sessionId, event.presentation, { workspace: snapshotCwd })
           .catch((error) => this.log.log(`Token 活动记录失败：${error instanceof Error ? error.message : String(error)}`));
       }
     }
@@ -4437,6 +5698,11 @@ export class AppController {
     if (event.type === "turn-started") {
       const cwd = this.processes.snapshot(event.sessionId)?.cwd ?? "";
       this.agentChanges.beginTurn(event.sessionId, cwd, event.presentation.turnId);
+      if (!replayingAtEntry && cwd && this.gitCheckpoints && !this.activeCheckpointOrdinals.has(event.sessionId)) {
+        this.activeCheckpointOrdinals.set(event.sessionId, event.presentation.ordinal);
+        void this.gitCheckpoints.capturePreTurn(cwd, event.sessionId, event.presentation.ordinal, event.presentation.turnId)
+          .catch((error) => this.log.log(`回合前 Git 检查点未创建：${error instanceof Error ? error.message : String(error)}`));
+      }
     }
     if (event.type === "user-message-status") {
       await this.attachmentCache.updateDelivery(event.sessionId, event.clientMessageId, event.delivery)
@@ -4452,7 +5718,19 @@ export class AppController {
     if(event.type==="turn-completed"&&["cancelled","interrupted"].includes(event.presentation?.outcome??""))this.runningSessions.delete(event.sessionId);
     if (event.type === "status" && (event.status === "idle" || event.status === "error") && this.runningSessions.delete(event.sessionId)) {
       if (this.disposing) return;
-      if(this.visibleConversationId!==event.sessionId||!this.window?.isFocused())await this.catalog.markUnread(event.sessionId, event.status === "error");
+      const deferSettle = Boolean(this.pendingSettleOnTurnEnd?.has(event.sessionId))
+        || Boolean((await this.sessionRuntime?.get(event.sessionId))?.settleOnTurnEnd);
+      if (event.status === "idle" && deferSettle && !this.isSessionTurnBusy(event.sessionId)) {
+        await this.executeSessionSettle(event.sessionId, true);
+      } else {
+        if (event.status === "error" && deferSettle) {
+          this.pendingSettleOnTurnEnd?.delete(event.sessionId);
+          await this.sessionRuntime?.setSettleOnTurnEnd(event.sessionId, "", false).catch(() => undefined);
+        }
+        if (this.visibleConversationId !== event.sessionId || !this.window?.isFocused()) {
+          await this.catalog.markUnread(event.sessionId, event.status === "error");
+        }
+      }
       const kind = event.status === "error" ? "failure" : "completion";
       const content = await this.sessionNoticeContent(event.sessionId, kind, kind === "failure" ? event.text : undefined);
       const key = `session:${event.sessionId}:${this.noticeContexts?.get(event.sessionId)?.turnId || "turn"}`;
@@ -4532,12 +5810,18 @@ export class AppController {
     if (!settings.enabled || session.working || session.needsUser) return;
     if (settings.saveOnSessionEnd) {
       await this.memory.markCommand(session.cwd, "flush", "running");
-      try { await session.prompt("/flush", [], 120_000); await this.memory.markCommand(session.cwd, "flush", "completed"); }
+      try {
+        if (!await session.memoryFlush()) await session.prompt("/flush", [], 120_000);
+        await this.memory.markCommand(session.cwd, "flush", "completed");
+      }
       catch (error) { await this.memory.markCommand(session.cwd, "flush", "failed"); throw error; }
     }
     if (settings.autoDream) {
       await this.memory.markCommand(session.cwd, "dream", "running");
-      try { await session.prompt("/dream", [], 120_000); await this.memory.markCommand(session.cwd, "dream", "completed"); }
+      try {
+        if (!await session.memoryDream()) await session.prompt("/dream", [], 120_000);
+        await this.memory.markCommand(session.cwd, "dream", "completed");
+      }
       catch (error) { await this.memory.markCommand(session.cwd, "dream", "failed"); throw error; }
     }
   }
@@ -4655,7 +5939,7 @@ export class AppController {
 
 function normalizeBackgroundStatus(value: unknown): BackgroundTaskSummary["status"] { const text = String(value ?? "running").toLowerCase(); return /fail|error/.test(text) ? "failed" : /complete|success|done/.test(text) ? "completed" : /cancel|kill|stop/.test(text) ? "cancelled" : /wait|permission/.test(text) ? "needs-user" : /queue|pending/.test(text) ? "queued" : "running"; }
 
-function normalizePathKey(value: string): string { return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase(); }
+function normalizePathKey(value: string): string { return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase(); }
 function samePath(left: string, right: string): boolean { return normalizePathKey(left) === normalizePathKey(right); }
 function pathWithin(target: string, root: string): boolean {
   const value = relative(resolve(root), resolve(target));
@@ -4840,5 +6124,36 @@ function waitForAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
       (error) => finish(() => rejectPromise(error)),
     );
   });
+}
+
+function extractMergeBackSummary(projection: ConversationProjection | undefined, fallbackPreview?: string): string {
+  if (projection) {
+    for (let i = projection.events.length - 1; i >= 0; i -= 1) {
+      const ev = projection.events[i];
+      if (ev && typeof ev === "object" && ev.type === "session-recap" && typeof ev.text === "string" && ev.text.trim()) {
+        return ev.text.trim().slice(0, 8192);
+      }
+    }
+    const chunks: string[] = [];
+    for (let i = projection.events.length - 1; i >= 0; i -= 1) {
+      const ev = projection.events[i];
+      if (!ev || typeof ev !== "object") continue;
+      if (ev.type === "user-message") break;
+      if (ev.type === "message-chunk" && typeof ev.text === "string") chunks.unshift(ev.text);
+    }
+    const joined = chunks.join("").trim();
+    if (joined) return joined.slice(0, 8192);
+  }
+  return fallbackPreview?.trim() || "子会话已完成任务。";
+}
+
+function formatStagedMergeBackContext(records: readonly import("../shared/workbench-types").StagedMergeBackRecord[], userText: string): string {
+  if (!records.length) return userText;
+  const blocks = records.map((r) => [
+    `### 子会话回传：${r.childTitle} (${r.childSessionId.slice(0, 8)})${r.worktreeApplied ? " [代码已合并]" : ""}`,
+    r.summary,
+    ...(r.keyChanges.length ? ["涉及变更：", ...r.keyChanges.slice(0, 20).map((c) => `- ${c}`)] : []),
+  ].join("\n"));
+  return `<merged_subsession_context>\n${blocks.join("\n\n")}\n</merged_subsession_context>\n\n${userText}`;
 }
 import { electronProxyRules } from "./services/electron-proxy";

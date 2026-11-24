@@ -38,7 +38,8 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: 
   const cliModels=declaredModels.map(model=>({value:model.modelId,label:model.name||model.modelId}));
   const cachedComposers=useRef<Record<string,ImageComposerDraft>>((()=>{try{return JSON.parse(localStorage.getItem(FULL_DRAFT_KEY)||"{}")}catch{return {}}})());
   const [data, setData] = useState<ImageWorkspace>();
-  const [active, setActive] = useState(()=>localStorage.getItem("grok.image-notification-target")||"");
+  const [active, setActive] = useState(()=>{try{const target=localStorage.getItem("grok.image-notification-target")||"";if(target)localStorage.removeItem("grok.image-notification-target");return target;}catch{return "";}});
+  const hydratedTarget = useRef("");
   const [view, setView] = useState<ImageView>("session");
   const [collapsed, setCollapsed] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>((): Record<string, string> => {
@@ -113,8 +114,9 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: 
   },[fail]);
   useEffect(()=>{
     if(!data)return;
+    if(active&&!data.conversations.some(row=>row.id===active))setActive("");
     setPinned(values=>{const valid=values.filter(target=>data.conversations.some(row=>row.id===target.sessionId&&row.jobs.some(record=>record.job.artifacts.some(artifact=>artifact.id===target.messageId))));return valid.length===values.length?values:valid;});
-  },[data]);
+  },[data,active]);
   const refreshSequence=useRef(0);
   const refresh = useCallback(async (): Promise<ImageWorkspace> => {
     const sequence=++refreshSequence.current;
@@ -148,8 +150,9 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: 
     }
   };
   const capture=():ImageComposerDraft=>({draft:draftsRef.current[active]??row?.draft??"",...options,cliModel:options.cliModel||row?.execution?.modelId||defaultCliModel,references,sources});
-  const saveComposer=async()=>{const value=capture();cachedComposers.current[active]=value;try{localStorage.setItem(FULL_DRAFT_KEY,JSON.stringify(cachedComposers.current))}catch{}if(active)await window.grokDesktop.saveImageComposerDraft(active,value);};
-  useEffect(()=>{if(busy)return;clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>void saveComposer().catch(fail),350);return()=>clearTimeout(saveTimer.current)},[active,draft,options,references,sources,busy]);
+  const saveComposer=async()=>{if(active&&!row&&draftsRef.current[active]===undefined)return;const value=capture();cachedComposers.current[active]=value;try{localStorage.setItem(FULL_DRAFT_KEY,JSON.stringify(cachedComposers.current))}catch{}if(active)await window.grokDesktop.saveImageComposerDraft(active,value);};
+  useEffect(()=>{if(!active||!row||hydratedTarget.current===active)return;hydratedTarget.current=active;const restored=cachedComposers.current[active]??row.composerDraft;setOptions({ratio:restored?.ratio??"1:1",route:restored?.route??"cli",model:restored?.model??"",cliModel:restored?.cliModel||row.execution?.modelId||defaultCliModel});setReferences(restored?.references??[]);setSources(restored?.sources??[]);if(restored&&draftsRef.current[active]===undefined)setDrafts(value=>({...value,[active]:restored.draft}));},[active,row,defaultCliModel]);
+  useEffect(()=>{if(busy||(active&&!row))return;clearTimeout(saveTimer.current);saveTimer.current=setTimeout(()=>void saveComposer().catch(fail),350);return()=>clearTimeout(saveTimer.current)},[active,row,draft,options,references,sources,busy]);
   const flush = async (): Promise<void> => { clearTimeout(saveTimer.current); await saveComposer(); };
   /**
    * Leaves for coding mode. Switching modes is navigation, not a save, so a failed write must not
@@ -166,11 +169,18 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: 
     try {
       await flush();
       if (request !== navigation.current) return false;
-      const conversation=conversations.find(value=>value.id===id);
+      let conversation=conversations.find(value=>value.id===id);
+      if(id&&!conversation){
+        const latest=await refresh();
+        if(request!==navigation.current)return false;
+        conversation=latest.conversations.find(value=>value.id===id);
+      }
+      hydratedTarget.current=id;
       const restored=cachedComposers.current[id]??conversation?.composerDraft;
       setOptions({ratio:restored?.ratio??"1:1",route:restored?.route??"cli",model:restored?.model??"",cliModel:restored?.cliModel||conversation?.execution?.modelId||defaultCliModel});
       setReferences(restored?.references??[]);setSources(restored?.sources??[]);setCodeImages(undefined);
       if(restored)setDrafts(value=>({...value,[id]:restored.draft}));
+      try{localStorage.removeItem("grok.image-notification-target");}catch{}
       setActive(id); setView(next); setError("");
       return true;
     } catch (reason) { fail(reason); return false; }
@@ -275,7 +285,7 @@ export function ImageWorkspacePage({ onCode, onPanel, onNotice, registerDrop }: 
   const loadCodeImages = (): void => { void window.grokDesktop.listCodeImages().then(setCodeImages).catch(fail); };
   const pickRoot = (): void => { void window.grokDesktop.pickImageOutputRoot().then(() => refresh()).catch(fail); };
   const openFolder = (conversation: ImageConversation): void => {
-    void window.grokDesktop.openTarget({ target: conversation.cwd, executionRoot: conversation.cwd, action: "open" }).then((result) => { if (!result.ok) setError(result.message); }).catch(fail);
+    void window.grokDesktop.openTarget({ target: conversation.cwd, executionRoot: conversation.cwd, sessionId: conversation.id, action: "open" }).then((result) => { if (!result.ok) setError(result.message); }).catch(fail);
   };
 
   const composer: ComposerState = { draft, ...options, references, sources };

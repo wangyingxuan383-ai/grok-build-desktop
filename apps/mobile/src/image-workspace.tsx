@@ -93,7 +93,7 @@ export function ImageWorkspaceScreen({ client, theme, onAsset, initialConversati
         setSelection(undefined);
     };
     if (current)
-        return <ImageConversationView key={current.id} row={current} client={client} theme={theme} back={() => setSelected(undefined)} onAsset={onAsset} refresh={overview.refresh} />;
+        return <ImageConversationView key={current.id} row={current} client={client} theme={theme} back={() => setSelected(undefined)} onAsset={onAsset} refresh={() => overview.refresh().then(() => undefined)} />;
     const header = <View style={{ gap: space.md, paddingBottom: space.sm }}>
       <Segmented theme={theme} value={scope} onChange={setScope} items={[["images", "图像作品"], ["code", "代码产物"]] as const} />
       {scope === "images" ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: space.sm }}>{([["pictures", "图片"], ["favorites", favorites.length ? `收藏 ${favorites.length}` : "收藏"], ["conversations", "创作会话"], ["all", "全部记录"], ["failed", failedCount ? `失败 ${failedCount}` : "失败记录"]] as const).map(([id, label]) => <Chip key={id} label={label} selected={filter === id} theme={theme} onPress={() => setFilter(id)} />)}</ScrollView> : null}
@@ -130,7 +130,7 @@ export function ImageWorkspaceScreen({ client, theme, onAsset, initialConversati
         contentContainerStyle={{ paddingHorizontal: grid ? space.lg - 1.5 : space.lg, paddingTop: space.lg, paddingBottom: space.xxl }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void overview.refresh().finally(() => setRefreshing(false)); }} />} />
       {viewer ? <PhotoViewer client={client} photos={viewer.photos} index={viewer.index} onClose={() => setViewer(undefined)} favorites={favorites} onFavorite={favorite} onNotice={text => client.setNotice(text)}
-        onReuse={photo => { const target = photos.find(p => p.source === photo.source); setViewer(undefined); if (target) { void savedWrite(client.host!.fingerprint + ":image-reuse", photo.source); setSelected(target.conversation); } }} /> : null}
+        onReuse={photo => { const target = photos.find(p => p.source === photo.source); setViewer(undefined); if (target && client.host?.fingerprint) { void savedWrite(client.host.fingerprint + ":image-reuse", photo.source); setSelected(target.conversation); } }} /> : null}
       <ActionMenu visible={Boolean(photoMenu.target)} theme={theme} title={photoMenu.target?.prompt || "图片"} subtitle={photoMenu.target?.detail} onClose={photoMenu.close} items={photoMenu.target ? [
           { label: "全屏查看", onPress: () => openPhoto(photoMenu.target!.source) },
           { label: favorites.includes(photoMenu.target.source) ? "取消收藏" : "收藏", onPress: () => favorite(photoMenu.target!.source) },
@@ -154,7 +154,8 @@ function ImageConversationView({ row, client, theme, back, onAsset, refresh }: {
         name: string;
         size: number;
     }>>([]), [sources, setSources] = useState<string[]>([]), [title, setTitle] = useState(row.title), [showConfig, setShowConfig] = useState(false), [busy, setBusy] = useState(false), [progress, setProgress] = useState("");
-    const key = client.host!.fingerprint + ":image-draft:" + row.id, hydrated = useRef(false), touched=useRef(false), latest = useRef({ draft, ratio, config, route, attachments, sources });
+    const hostFp = client.host?.fingerprint || "disconnected";
+    const key = hostFp + ":image-draft:" + row.id, hydrated = useRef(false), touched=useRef(false), latest = useRef({ draft, ratio, config, route, attachments, sources });
     latest.current = { draft, ratio, config, route, attachments, sources };
     useEffect(() => { let disposed = false; void savedRead<typeof latest.current>(key).then(value => { if (!disposed && value && !touched.current) {
         setDraft(value.draft);
@@ -170,9 +171,9 @@ function ImageConversationView({ row, client, theme, back, onAsset, refresh }: {
     // Android back returns to the gallery (not the conversation home), keeping the draft.
     useBackLayer(true, () => { void savedWrite(key, latest.current); back(); });
     // "Use as reference" from the full-screen viewer hands the picture over through storage.
-    useEffect(() => { const reuseKey = client.host!.fingerprint + ":image-reuse"; let active = true; void savedRead<string>(reuseKey).then(source => { if (!active || !source) return; void savedWrite(reuseKey, ""); touched.current = true; setSources(previous => [...new Set([...previous, source])]); setDraft(previous => previous || "修改这张图片："); }); return () => { active = false; }; }, []);
+    useEffect(() => { if (!client.host?.fingerprint) return; const reuseKey = client.host.fingerprint + ":image-reuse"; let active = true; void savedRead<string>(reuseKey).then(source => { if (!active || !source) return; void savedWrite(reuseKey, ""); touched.current = true; setSources(previous => [...new Set([...previous, source])]); setDraft(previous => previous || "修改这张图片："); }); return () => { active = false; }; }, [client.host?.fingerprint]);
     const [pendingOperation,setPendingOperation]=useState<string>();
-    useEffect(()=>{if(!pendingOperation||client.receipt?.operationId!==pendingOperation)return;const state=client.receipt.state;if(state==="failed"||state==="cancelled"){setBusy(false);return;}if(state==="completed"){let active=true;void refresh().finally(()=>{if(active)setBusy(false);});return()=>{active=false;};}},[pendingOperation,client.receipt?.state]);
+    useEffect(()=>{if(!pendingOperation||client.receipt?.operationId!==pendingOperation)return;const state=client.receipt.state;if(state==="failed"||state==="cancelled"||state==="unknown"){setBusy(false);return;}if(state==="completed"){let active=true;void refresh().finally(()=>{if(active)setBusy(false);});return()=>{active=false;};}},[pendingOperation,client.receipt?.state]);
     const disabled = client.busy || !!client.unknown || client.connection.phase !== "online" || busy;
     const generating=row.jobs.some(record=>["queued","running","cancelling"].includes(record.job.status));
     const add = async () => {touched.current=true; setBusy(true); try {
@@ -192,12 +193,13 @@ function ImageConversationView({ row, client, theme, back, onAsset, refresh }: {
         setProgress("");
     } };
     const selectedModel=config.modelId||row.execution?.modelId||client.options?.defaults?.modelId;
-    const invalidModel=route==="cli"&&!client.options?.models?.some(model=>model.modelId===selectedModel);
+    const catalogModels=client.options?.models;
+    const invalidModel=route==="cli"&&Boolean(selectedModel)&&Boolean(catalogModels?.length)&&!catalogModels!.some(model=>model.modelId===selectedModel);
     useEffect(()=>{if(invalidModel&&client.options?.models?.length)setShowConfig(true)},[invalidModel,client.options?.models]);
     const send = async () => {
       if(invalidModel){setShowConfig(true);client.setError("请先选择当前可用的调度模型。");return}
       setBusy(true);let accepted=false;
-      try{await savedWrite(key, latest.current);const receipt=await client.mutate("image.submit",row.id,{request:{kind:"image",prompt:draft,aspectRatio:ratio,route,modelId:selectedModel,providerId:config.providerId},attachmentIds:attachments.map(a=>a.id),referenceSources:sources});if(receipt){accepted=true;setPendingOperation(receipt.operationId);client.setNotice("电脑已接收生成请求，结果在当前图像会话同步。")}}
+      try{await savedWrite(key, latest.current);const receipt=await client.mutate("image.submit",row.id,{request:{kind:"image",prompt:draft,aspectRatio:ratio,route,...(selectedModel?{modelId:selectedModel}:{}),...(config.providerId?{providerId:config.providerId}:{})},attachmentIds:attachments.map(a=>a.id),referenceSources:sources});if(receipt){accepted=true;setPendingOperation(receipt.operationId);setDraft("");setAttachments([]);setSources([]);latest.current={...latest.current,draft:"",attachments:[],sources:[]};await savedWrite(key,latest.current);client.setNotice("电脑已接收生成请求，结果在当前图像会话同步。")}}
       catch(error){client.setError(error instanceof Error?error.message:String(error))}
       finally{if(!accepted)setBusy(false)}
     };

@@ -1,14 +1,16 @@
 import { join } from "node:path";
 import type { PersistedPromptQueue, PromptQueueEntry, SessionCompactionPolicy, SessionRuntimePreferences } from "../../shared/types";
+import type { StagedMergeBackRecord } from "../../shared/workbench-types";
 import { JsonStore } from "./json-store";
 
 interface RuntimeStateFile {
   version: 1;
   sessions: Record<string, SessionRuntimePreferences>;
   queues: Record<string, PersistedPromptQueue>;
+  stagedMergeBacks?: Record<string, StagedMergeBackRecord[]>;
 }
 
-const DEFAULTS: RuntimeStateFile = { version: 1, sessions: {}, queues: {} };
+const DEFAULTS: RuntimeStateFile = { version: 1, sessions: {}, queues: {}, stagedMergeBacks: {} };
 
 /**
  * Local execution metadata that the Grok CLI history does not reliably retain.
@@ -31,9 +33,23 @@ export class SessionRuntimeStateService {
   }
 
   async save(input: Omit<SessionRuntimePreferences, "updatedAt"> & { updatedAt?: string }): Promise<SessionRuntimePreferences> {
-    const value: SessionRuntimePreferences = { ...input, updatedAt: input.updatedAt ?? new Date().toISOString() };
+    let value!: SessionRuntimePreferences;
     await this.store.mutate((current) => {
       current.version = 1;
+      const previous = current.sessions[input.sessionId];
+      const mapStaged = current.stagedMergeBacks?.[input.sessionId];
+      const mergedStaged = input.stagedMergeBacks !== undefined
+        ? input.stagedMergeBacks
+        : (mapStaged?.length ? structuredClone(mapStaged) : previous?.stagedMergeBacks);
+      const mergedSettle = input.settleOnTurnEnd !== undefined ? input.settleOnTurnEnd : previous?.settleOnTurnEnd;
+      const mergedNativeRuns = input.nativeRuns !== undefined ? input.nativeRuns : previous?.nativeRuns;
+      value = {
+        ...input,
+        ...(mergedStaged?.length ? { stagedMergeBacks: structuredClone(mergedStaged) } : {}),
+        ...(mergedSettle !== undefined ? { settleOnTurnEnd: mergedSettle } : {}),
+        ...(mergedNativeRuns !== undefined ? { nativeRuns: structuredClone(mergedNativeRuns) } : {}),
+        updatedAt: input.updatedAt ?? new Date().toISOString(),
+      };
       current.sessions[value.sessionId] = value;
     });
     return value;
@@ -153,10 +169,126 @@ export class SessionRuntimeStateService {
     return structuredClone(interrupted);
   }
 
+  async setSettleOnTurnEnd(sessionId: string, cwd: string, enabled: boolean): Promise<void> {
+    await this.store.mutate((current) => {
+      const existing = current.sessions[sessionId];
+      if (!existing && !enabled) return;
+      const base: SessionRuntimePreferences = existing ?? {
+        sessionId,
+        cwd,
+        effort: "",
+        mode: "agent",
+        updatedAt: new Date().toISOString(),
+      };
+      const next: SessionRuntimePreferences = { ...base, updatedAt: new Date().toISOString() };
+      if (enabled) next.settleOnTurnEnd = true;
+      else delete next.settleOnTurnEnd;
+      current.sessions[sessionId] = next;
+    });
+  }
+
+  async getStagedMergeBacks(parentSessionId: string): Promise<StagedMergeBackRecord[]> {
+    const state = await this.store.get();
+    return structuredClone(state.stagedMergeBacks?.[parentSessionId] ?? []);
+  }
+
+  async allStagedMergeBackCounts(): Promise<Map<string, number>> {
+    const state = await this.store.get();
+    return new Map(
+      Object.entries(state.stagedMergeBacks ?? {})
+        .filter(([, list]) => list.length > 0)
+        .map(([sessionId, list]) => [sessionId, list.length]),
+    );
+  }
+
+  /** Idempotent per-child overwrite: staging from the same `childSessionId` replaces its prior record. */
+  async upsertStagedMergeBack(parentSessionId: string, record: StagedMergeBackRecord): Promise<StagedMergeBackRecord[]> {
+    let updated: StagedMergeBackRecord[] = [];
+    await this.store.mutate((current) => {
+      current.stagedMergeBacks ??= {};
+      const existing = current.stagedMergeBacks[parentSessionId] ?? [];
+      const idx = existing.findIndex((item) => item.childSessionId === record.childSessionId);
+      const next = [...existing];
+      if (idx >= 0) next[idx] = structuredClone(record);
+      else next.push(structuredClone(record));
+      updated = next.slice(-32);
+      current.stagedMergeBacks[parentSessionId] = updated;
+      if (current.sessions[parentSessionId]) {
+        current.sessions[parentSessionId] = {
+          ...current.sessions[parentSessionId]!,
+          stagedMergeBacks: structuredClone(updated),
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    });
+    return structuredClone(updated);
+  }
+
+  async removeStagedMergeBack(parentSessionId: string, childSessionId: string): Promise<void> {
+    await this.store.mutate((current) => {
+      const existing = current.stagedMergeBacks?.[parentSessionId];
+      if (!existing) return;
+      const filtered = existing.filter((item) => item.childSessionId !== childSessionId);
+      if (filtered.length) current.stagedMergeBacks![parentSessionId] = filtered;
+      else delete current.stagedMergeBacks![parentSessionId];
+      if (current.sessions[parentSessionId]) {
+        const nextSession = { ...current.sessions[parentSessionId]!, updatedAt: new Date().toISOString() };
+        if (filtered.length) nextSession.stagedMergeBacks = structuredClone(filtered);
+        else delete nextSession.stagedMergeBacks;
+        current.sessions[parentSessionId] = nextSession;
+      }
+    });
+  }
+
+  async consumeStagedMergeBacks(parentSessionId: string): Promise<StagedMergeBackRecord[]> {
+    let consumed: StagedMergeBackRecord[] = [];
+    await this.store.mutate((current) => {
+      consumed = structuredClone(current.stagedMergeBacks?.[parentSessionId] ?? []);
+      if (current.stagedMergeBacks) delete current.stagedMergeBacks[parentSessionId];
+      if (current.sessions[parentSessionId]) {
+        const nextSession = { ...current.sessions[parentSessionId]!, updatedAt: new Date().toISOString() };
+        delete nextSession.stagedMergeBacks;
+        current.sessions[parentSessionId] = nextSession;
+      }
+    });
+    return consumed;
+  }
+
+  async restoreStagedMergeBacks(parentSessionId: string, records: StagedMergeBackRecord[]): Promise<void> {
+    if (!records.length) return;
+    await this.store.mutate((current) => {
+      current.stagedMergeBacks ??= {};
+      const next = [...(current.stagedMergeBacks[parentSessionId] ?? [])];
+      for (const record of records) {
+        const idx = next.findIndex((item) => item.childSessionId === record.childSessionId);
+        if (idx >= 0) {
+          const existingTime = Date.parse(next[idx]!.stagedAt);
+          const candidateTime = Date.parse(record.stagedAt);
+          if (Number.isFinite(existingTime) && Number.isFinite(candidateTime) && existingTime > candidateTime) {
+            continue;
+          }
+          next[idx] = structuredClone(record);
+        } else {
+          next.push(structuredClone(record));
+        }
+      }
+      const bounded = next.slice(-32);
+      if (bounded.length) current.stagedMergeBacks[parentSessionId] = bounded;
+      else delete current.stagedMergeBacks[parentSessionId];
+      if (current.sessions[parentSessionId]) {
+        const updatedSession = { ...current.sessions[parentSessionId]!, updatedAt: new Date().toISOString() };
+        if (bounded.length) updatedSession.stagedMergeBacks = structuredClone(bounded);
+        else delete updatedSession.stagedMergeBacks;
+        current.sessions[parentSessionId] = updatedSession;
+      }
+    });
+  }
+
   async delete(sessionId: string): Promise<void> {
     await this.store.mutate((current) => {
       delete current.sessions[sessionId];
       delete current.queues[sessionId];
+      if (current.stagedMergeBacks) delete current.stagedMergeBacks[sessionId];
     });
   }
 }

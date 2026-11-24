@@ -257,8 +257,11 @@ export class ComputerUseService {
     return stopped;
   }
 
-  /** Re-arms a session the user emergency-stopped. Only an explicit user action should call this. */
-  clearEmergencyStop(sessionId: string): void { this.emergencyStopped.delete(sessionId); }
+  /** Re-arms a session (or all sessions when omitted) the user emergency-stopped. Only an explicit user action should call this. */
+  clearEmergencyStop(sessionId?: string): void {
+    if (sessionId === undefined) this.emergencyStopped.clear();
+    else this.emergencyStopped.delete(sessionId);
+  }
   isEmergencyStopped(sessionId: string): boolean { return this.emergencyStopped.has(sessionId); }
 
   async dispose(): Promise<void> {
@@ -549,13 +552,101 @@ export function shouldConfirmComputerRisk(mode: SessionMode | undefined, risk: C
 }
 
 class ComputerHostClient {
-  private process?: ChildProcessWithoutNullStreams; private lines?: Interface; private nextId = 1; private readonly pending = new Map<number, PendingHost>();
+  private process?: ChildProcessWithoutNullStreams;
+  private lines?: Interface;
+  private nextId = 1;
+  private readonly pending = new Map<number, PendingHost>();
   private disposing = false;
+
   constructor(private readonly path: string, private readonly log: LogService, private readonly onUnexpectedExit: () => void) {}
-  call(action: string, input: Record<string, unknown>): Promise<unknown> { this.ensure(); const id = this.nextId++; return new Promise((resolve, reject) => { const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Computer Host ${action} 超时`)); }, 30_000); this.pending.set(id, { resolve, reject, timer }); this.process!.stdin.write(`${JSON.stringify({ id, action, input })}\n`); }); }
-  async dispose(): Promise<void> { this.disposing = true; this.lines?.close(); this.process?.kill(); this.process = undefined; for (const item of this.pending.values()) { clearTimeout(item.timer); item.reject(new Error("Computer Host 已停止")); } this.pending.clear(); }
-  private ensure(): void { if (this.process && !this.process.killed) return; this.disposing = false; this.process = spawn(this.path, [], { windowsHide: true }); this.lines = createInterface({ input: this.process.stdout }); this.lines.on("line", (line) => this.onLine(line)); this.process.stderr.on("data", (data) => void this.log.log(`[computer-host] ${String(data)}`)); this.process.on("exit", () => { const pending = Array.from(this.pending.values()); this.pending.clear(); for (const item of pending) { clearTimeout(item.timer); item.reject(new Error("Computer Host 意外退出")); } this.process = undefined; if (!this.disposing) this.onUnexpectedExit(); }); }
-  private onLine(line: string): void { try { const value = JSON.parse(line) as { id: number; ok: boolean; result?: unknown; error?: string }; const pending = this.pending.get(value.id); if (!pending) return; this.pending.delete(value.id); clearTimeout(pending.timer); if (value.ok) pending.resolve(value.result); else pending.reject(new Error(value.error || "Computer Host 操作失败")); } catch { void this.log.log("Computer Host 返回无效 JSON"); } }
+
+  call(action: string, input: Record<string, unknown>): Promise<unknown> {
+    try {
+      this.ensure();
+    } catch (error) {
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    const child = this.process;
+    const stdin = child?.stdin;
+    if (!child || child.killed || child.exitCode !== null || !stdin?.writable || stdin.destroyed) {
+      return Promise.reject(new Error("Computer Host 输入流不可用"));
+    }
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Computer Host ${action} 超时`));
+      }, 30_000);
+      this.pending.set(id, { resolve, reject, timer });
+      stdin.write(`${JSON.stringify({ id, action, input })}\n`, (error) => {
+        if (!error) return;
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        this.pending.delete(id);
+        clearTimeout(pending.timer);
+        pending.reject(new Error(`Computer Host 写入失败：${message(error)}`));
+      });
+    });
+  }
+
+  async dispose(): Promise<void> {
+    this.disposing = true;
+    this.lines?.close();
+    this.lines = undefined;
+    try { this.process?.kill(); } catch { /* process may already have exited */ }
+    this.process = undefined;
+    for (const item of this.pending.values()) {
+      clearTimeout(item.timer);
+      item.reject(new Error("Computer Host 已停止"));
+    }
+    this.pending.clear();
+  }
+
+  private ensure(): void {
+    if (this.process && !this.process.killed && this.process.exitCode === null && this.process.stdin?.writable) return;
+    this.disposing = false;
+    const child = spawn(this.path, [], { windowsHide: true });
+    this.process = child;
+    const failAll = (reason: string): void => {
+      const pending = Array.from(this.pending.values());
+      this.pending.clear();
+      for (const item of pending) {
+        clearTimeout(item.timer);
+        item.reject(new Error(reason));
+      }
+      if (this.process === child) {
+        this.lines?.close();
+        this.lines = undefined;
+        this.process = undefined;
+      }
+      if (!this.disposing) this.onUnexpectedExit();
+    };
+    child.on("error", (error) => {
+      void this.log.log(`[computer-host] spawn/process error: ${message(error)}`);
+      failAll(`Computer Host 进程错误：${message(error)}`);
+    });
+    child.stdin.on("error", (error) => {
+      void this.log.log(`[computer-host] stdin error: ${message(error)}`);
+    });
+    this.lines = createInterface({ input: child.stdout });
+    this.lines.on("line", (line) => this.onLine(line));
+    child.stderr.on("data", (data) => void this.log.log(`[computer-host] ${String(data)}`));
+    child.on("exit", () => failAll("Computer Host 意外退出"));
+  }
+
+  private onLine(line: string): void {
+    try {
+      const value = JSON.parse(line) as { id: number; ok: boolean; result?: unknown; error?: string };
+      const pending = this.pending.get(value.id);
+      if (!pending) return;
+      this.pending.delete(value.id);
+      clearTimeout(pending.timer);
+      if (value.ok) pending.resolve(value.result);
+      else pending.reject(new Error(value.error || "Computer Host 操作失败"));
+    } catch {
+      void this.log.log("Computer Host 返回无效 JSON");
+    }
+  }
 }
 
 function normalizeWindow(value: unknown): ComputerWindow { const row = value as Record<string, unknown>; const processName = string(row.processName); const executablePath = string(row.executablePath) || undefined; const title = string(row.title); const blocked = isBlockedComputerTarget(processName, title); const identity = executablePath ? createHash("sha256").update(executablePath.toLocaleLowerCase()).digest("hex").slice(0, 16) : string(row.appId); return { id: string(row.id), appId: `${processName.toLocaleLowerCase()}:${identity}`, processId: number(row.processId), processName, executablePath, title, bounds: { x: number(row.x), y: number(row.y), width: number(row.width), height: number(row.height) }, dpi: number(row.dpi) || 96, minimized: Boolean(row.minimized), foreground: Boolean(row.foreground), controllable: row.controllable !== false && !blocked, blockedReason: blocked ? "该应用位于 Computer Use 不可控制清单" : string(row.blockedReason) || undefined, ...(blockedCode(row, blocked) ? { blockedCode: blockedCode(row, blocked)! } : {}) }; }

@@ -8,6 +8,7 @@ export interface ReviewCommentDraft {
   body: string;
   snapshotId: string;
   scope: GitReviewScope;
+  immutableCheckpoint?: boolean;
 }
 
 export function formatReviewComments(comments: ReviewCommentDraft[]): string {
@@ -21,6 +22,7 @@ export async function findStaleReviewComment(
 ): Promise<ReviewCommentDraft | undefined> {
   const snapshots = new Map<string, string>();
   for (const comment of comments) {
+    if (comment.immutableCheckpoint) continue;
     const key = JSON.stringify(comment.scope);
     let currentId = snapshots.get(key);
     if (!currentId) {

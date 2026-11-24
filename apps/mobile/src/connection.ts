@@ -68,8 +68,8 @@ export class ConnectionManager {
     this.generation++;
     this.stopStream?.();
     this.stopStream = undefined;
-    if (this.retry) this.clear(this.retry);
-    if (this.throttle) this.clear(this.throttle);
+    if (this.retry !== undefined) this.clear(this.retry);
+    if (this.throttle !== undefined) this.clear(this.throttle);
     this.retry = undefined;
     this.throttle = undefined;
     this.dirty = false;
@@ -78,16 +78,29 @@ export class ConnectionManager {
     this.reading = false;
     this.refreshBusy = false;
   }
+  dispose() {
+    this.stop();
+  }
   refresh(sessionId?: string) {
     if (!this.active) return;
     if (sessionId) this.targets.add(sessionId);
     else this.allDirty = true;
     this.dirty = true;
-    if (!this.throttle && !this.refreshBusy)
+    if (this.throttle === undefined && !this.refreshBusy)
       this.throttle = this.later(() => {
         this.throttle = undefined;
         void this.flush(this.generation);
       }, 600);
+  }
+  private markStreamHealthy() {
+    const wasPolling = this.streamFailures >= 2;
+    this.streamFailures = 0;
+    this.failures = 0;
+    if (this.retry !== undefined) {
+      this.clear(this.retry);
+      this.retry = undefined;
+    }
+    return wasPolling;
   }
   private report(phase: ConnectionState["phase"], detail?: string) {
     this.deps.state({
@@ -98,7 +111,7 @@ export class ConnectionManager {
     });
   }
   private schedule(ms: number, token: number) {
-    if (this.retry) this.clear(this.retry);
+    if (this.retry !== undefined) this.clear(this.retry);
     this.retry = this.later(() => {
       this.retry = undefined;
       if (this.active && token === this.generation) void this.connect(token);
@@ -126,15 +139,12 @@ export class ConnectionManager {
             if (!this.active || token !== this.generation) return;
             this.cursor = signal.cursor;
             this.epoch = signal.epoch;
+            const recoveredFromPolling = this.markStreamHealthy();
             if (signal.type === "heartbeat" || signal.type === "connected") {
-              if (signal.type === "heartbeat") {
-                this.streamFailures = 0;
-                if (this.retry) this.clear(this.retry);
-                this.retry = undefined;
-              }
               this.report("online");
               return;
             }
+            if (recoveredFromPolling) this.report("online");
             this.refresh(signal.sessionId);
           },
           (error) => {
@@ -143,8 +153,8 @@ export class ConnectionManager {
             this.stopStream = undefined;
             this.streamFailures++;
             if (this.fatal(error)) {
+              this.stop();
               this.report("blocked", this.message(error));
-              this.active = false;
               return;
             }
             this.report("reconnecting");
@@ -157,8 +167,8 @@ export class ConnectionManager {
       if (!this.active || token !== this.generation) return;
       this.failures++;
       if (this.fatal(error)) {
+        this.stop();
         this.report("blocked", this.message(error));
-        this.active = false;
         return;
       }
       this.report(
@@ -196,7 +206,7 @@ export class ConnectionManager {
     } finally {
       if (token === this.generation) {
         this.refreshBusy = false;
-        if (this.dirty && !this.throttle)
+        if (this.dirty && this.throttle === undefined)
           this.throttle = this.later(() => {
             this.throttle = undefined;
             void this.flush(token);

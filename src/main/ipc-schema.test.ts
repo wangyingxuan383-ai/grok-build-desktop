@@ -192,4 +192,11 @@ describe("IPC runtime schemas", () => {
     expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], newTask, { forged: true }], 6)).toThrow("字符串");
     expect(() => validateIpcInvocation("draft:set", ["new:project-abc", "draft", undefined, [], { ...newTask, providerSecret: "forged" }], 5)).toThrow("未知字段");
   });
+
+  it("restricts desktop-pet:delete to custom UUID skin identifiers", () => {
+    expect(() => validateIpcInvocation("desktop-pet:delete", ["custom-2f0c2e69-5f7b-455a-8f04-e8eaa60acfae"], 1)).not.toThrow();
+    for (const invalid of ["a", "b", "", "../custom-2f0c2e69-5f7b-455a-8f04-e8eaa60acfae", "custom-not-a-uuid", 42]) {
+      expect(() => validateIpcInvocation("desktop-pet:delete", [invalid], 1)).toThrow();
+    }
+  });
 });

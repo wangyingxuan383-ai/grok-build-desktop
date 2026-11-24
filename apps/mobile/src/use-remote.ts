@@ -29,6 +29,26 @@ const initialConnection: ConnectionState = {
   failures: 0,
 };
 const message = (error: unknown) => readableActionError(error);
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
 export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostConnection)=>Promise<void>, visible=true) {
   const visibleRef=useRef(visible);visibleRef.current=visible;
   const [cachedAt,setCachedAt]=useState<number>(),[composer,setComposerState]=useState<NonNullable<Outgoing["composer"]>>({attachmentIds:[],attachments:[]});
@@ -101,10 +121,16 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
     return write(key, drafts.current.get(key) ?? value.draft);
   }, [write]);
   const snapshotFailures = useRef(0), snapshotRetry = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const clearSnapshotRetry = useCallback(() => {
+    if (snapshotRetry.current !== undefined) {
+      clearTimeout(snapshotRetry.current);
+      snapshotRetry.current = undefined;
+    }
+  }, []);
   const refreshSnapshot = useCallback(async () => {
     const target = active.current;
     if (!target.host || !target.sessionId) return;
-    if (snapshotRetry.current) { clearTimeout(snapshotRetry.current); snapshotRetry.current = undefined; }
+    clearSnapshotRetry();
     const version = ++snapshotVersion.current;
     try {
       const value = await api<RemoteSnapshot>(
@@ -168,11 +194,13 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
     mounted.current = true;
     return () => {
       mounted.current = false;
+      clearSnapshotRetry();
       void flushDraft();
     };
-  }, [flushDraft]);
+  }, [clearSnapshotRetry, flushDraft]);
   useEffect(() => {
     if (!host) {
+      clearSnapshotRetry();
       setSessions([]);
       setSessionId("");
       setSnapshot(undefined);
@@ -181,34 +209,47 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
       return;
     }
     let disposed = false;
-    if(lastComputer.current!==host.fingerprint){setSessions([]);setSessionId("");setSnapshot(undefined);setOlder([]);setComposerState({attachmentIds:[],attachments:[]})}lastComputer.current=host.fingerprint;
+    if(lastComputer.current!==host.fingerprint){clearSnapshotRetry();setSessions([]);setSessionId("");setSnapshot(undefined);setOlder([]);setComposerState({attachmentIds:[],attachments:[]})}lastComputer.current=host.fingerprint;
     listFresh.current="";void cacheRead<RemoteSession[]>(`${host.fingerprint}:sessions`).then(cached=>{if(!disposed&&cached&&listFresh.current!==host.fingerprint){setSessions(cached.value);setCachedAt(cached.updated)}}).catch(()=>undefined);
     setRecoveryReady(false);
     setSubmitted(undefined);
     setReceipt(undefined);
+    const parseStoredOutgoing = async (key: string, raw: string | null): Promise<Outgoing | undefined> => {
+      if (!raw) return undefined;
+      try {
+        const parsed = JSON.parse(raw) as Outgoing;
+        if (!parsed || typeof parsed !== "object" || !parsed.command?.operationId) throw Error("corrupt outgoing");
+        return parsed;
+      } catch {
+        await AsyncStorage.removeItem(key).catch(() => undefined);
+        return undefined;
+      }
+    };
     void Promise.all([
       AsyncStorage.getItem(storageKey(host, "unknown")),
       AsyncStorage.getItem(storageKey(host, "last-submission")),
     ])
-      .then(([pending, last]) => {
+      .then(async ([pendingRaw, lastRaw]) => {
+        const [pending, outgoing] = await Promise.all([
+          parseStoredOutgoing(storageKey(host, "unknown"), pendingRaw),
+          parseStoredOutgoing(storageKey(host, "last-submission"), lastRaw),
+        ]);
         if (disposed) return;
-        setUnknown(pending ? JSON.parse(pending) : undefined);
-        if (last) {
-          const outgoing = JSON.parse(last) as Outgoing;
-          if (
-            Date.now() - Date.parse(outgoing.createdAt) < 7 * 86400000 &&
-            outgoing.command?.operationId
-          ) {
-            setSubmitted(outgoing);
-            void api<RemoteReceipt>(
-              host,
-              `/v1/operations/${outgoing.command.operationId}`,
-            )
-              .then((value) => {
-                if (!disposed) setReceipt(value);
-              })
-              .catch(() => undefined);
-          }
+        setUnknown(pending);
+        if (
+          outgoing &&
+          Date.now() - Date.parse(outgoing.createdAt) < 7 * 86400000 &&
+          outgoing.command?.operationId
+        ) {
+          setSubmitted(outgoing);
+          void api<RemoteReceipt>(
+            host,
+            `/v1/operations/${outgoing.command.operationId}`,
+          )
+            .then((value) => {
+              if (!disposed) setReceipt(value);
+            })
+            .catch(() => undefined);
         }
       })
       .then(() => {
@@ -274,6 +315,7 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
     const sub = AppState.addEventListener("change", (state) => {
       if (state === "active") owner.start();
       else {
+        clearSnapshotRetry();
         owner.stop();
         void flushDraft();
         setConnection({ phase: "paused", mode: "live", failures: 0 });
@@ -281,6 +323,7 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
     });
     return () => {
       disposed = true;
+      clearSnapshotRetry();
       owner.stop();
       sub.remove();
       if (manager.current === owner) manager.current = undefined;
@@ -293,8 +336,10 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
     refreshList,
     refreshSnapshot,
     flushDraft,
+    clearSnapshotRetry,
   ]);
   useEffect(() => {
+    clearSnapshotRetry();
     snapshotVersion.current++;
     setSnapshot(undefined);
     snapshotFailures.current = 0;
@@ -342,8 +387,9 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
       });
     return () => {
       disposed = true;
+      clearSnapshotRetry();
     };
-  }, [host?.id, sessionId, refreshSnapshot, write]);
+  }, [host?.id, sessionId, refreshSnapshot, write, clearSnapshotRetry]);
   const setDraft = useCallback(
     (value: string) => {
       draftRevision.current++;
@@ -362,6 +408,7 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
   );
   const selectSession = useCallback(
     (id: string) => {
+      clearSnapshotRetry();
       void flushDraft();
       snapshotVersion.current++;
       setMaterialsReady(false);
@@ -369,7 +416,7 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
       composerRef.current={attachmentIds:[],attachments:[]};
       setSessionId(id);
     },
-    [flushDraft],
+    [clearSnapshotRetry, flushDraft],
   );
   const settle = useCallback(
     async (
@@ -427,15 +474,19 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
         setError("上次提交结果待确认，请先核对回执");
         return;
       }
-      if (["send","interject"].includes(action) && !materialsReady) {setError("正在恢复当前会话的材料草稿，请稍候。");return;}
-      if (action === "send" && !target.draft.trim()) return;
-      if (
-        action === "send" &&
-        encodeURIComponent(target.draft).replace(/%[0-9A-F]{2}/g, "x").length >
-          65536
-      ) {
-        setError("消息超过 64 KiB，请拆分发送；草稿已保留。");
-        return;
+      if (["send","interject"].includes(action)) {
+        if (!materialsReady) { setError("正在恢复当前会话的材料草稿，请稍候。"); return; }
+        const hasMaterials = composerRef.current.attachmentIds.length > 0 || (composerRef.current.references?.length ?? 0) > 0;
+        if (!target.draft.trim() && !hasMaterials) return;
+        const utf8Bytes = utf8ByteLength(target.draft);
+        if (utf8Bytes > 65536 || target.draft.length > 65536) {
+          setError("消息超过 64 KiB，请拆分发送；草稿已保留。");
+          return;
+        }
+        if (composerRef.current.attachmentIds.length > 12 || (composerRef.current.references?.length ?? 0) > 12) {
+          setError("单次最多附加 12 项附件和 12 项文件引用。");
+          return;
+        }
       }
       const connection = target.host;
       writeLock.current = true;
@@ -583,7 +634,7 @@ export function useRemote(host?: HostConnection,onEndpointRecovered?:(host:HostC
       setLoading(false);
     }
   }, [before, loading]);
-  const loadAround=useCallback(async(index:number)=>{const target=active.current;if(!target.host||!target.sessionId)return;setAnchorIndex(undefined);const result=await api<RemoteSnapshot>(target.host,`/v1/sessions/${encodeURIComponent(target.sessionId)}?around=${index}`);if(active.current.host?.id!==target.host.id||active.current.sessionId!==target.sessionId)return;historyLoaded.current=true;setOlder(old=>mergeEventWindows(result.events as WireEvent[],old));setBefore(result.before);setAnchorIndex(index)},[]);
+  const loadAround=useCallback(async(index:number)=>{const target=active.current;if(!target.host||!target.sessionId)return;setAnchorIndex(undefined);const result=await api<RemoteSnapshot>(target.host,`/v1/sessions/${encodeURIComponent(target.sessionId)}?around=${index}`);if(active.current.host?.id!==target.host.id||active.current.sessionId!==target.sessionId)return;historyLoaded.current=true;setOlder(old=>mergeEventWindows(result.events as WireEvent[],old));setBefore(prev=>prev===undefined?undefined:Math.min(prev,result.before??prev));setAnchorIndex(index)},[]);
   const loadOptions = useCallback(async (modelsOnly=false) => {
     if (!host) return;
     const key=`${host.fingerprint}:${host.host}:${modelsOnly}`;

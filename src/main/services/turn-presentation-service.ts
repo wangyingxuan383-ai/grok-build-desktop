@@ -36,6 +36,18 @@ export class TurnPresentationService {
     await this.store.mutate((state) => { delete state.sessions[sessionId]; });
   }
 
+  async truncateFromOrdinal(sessionId: string, dropFromOrdinal: number): Promise<TurnPresentation[]> {
+    let kept: TurnPresentation[] = [];
+    await this.store.mutate((state) => {
+      const existing = state.sessions[sessionId];
+      if (!existing?.length) return;
+      kept = existing.filter((item) => item.ordinal < dropFromOrdinal).sort((a, b) => a.ordinal - b.ordinal);
+      if (kept.length) state.sessions[sessionId] = kept;
+      else delete state.sessions[sessionId];
+    });
+    return kept;
+  }
+
   async cloneSession(sourceSessionId: string, targetSessionId: string): Promise<void> {
     await this.store.mutate((state) => {
       const source = state.sessions[sourceSessionId];

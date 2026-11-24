@@ -31,12 +31,15 @@ interface WorkbenchState {
   closeTab(key: string): void;
   setActiveTab(key: string): void;
   setActiveTerminal(id: string, workspace?: string): void;
+  focusTerminal(id: string, workspace?: string): void;
   setActiveBrowser(id: string): void;
   updateBuffer(key: string, value: string): void;
   updateCursor(key: string, cursor: { lineNumber: number; column: number }): void;
   replaceDocument(document: EditorDocument): void;
   acceptSave(document: EditorDocument, submitted: string): void;
   setConflict(key: string, conflict?: EditorSaveConflict): void;
+  renamePath(workspacePath: string, oldPath: string, newRelativePath: string): void;
+  closeDeletedPath(workspacePath: string, deletedPath: string): void;
   setSelectedPath(path: string): void;
   setTree(directory: string, nodes: WorkspaceTreeNode[]): void;
   toggleExpanded(directory: string, expanded?: boolean): void;
@@ -83,6 +86,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   }),
   setActiveTab: (activeTabKey) => set({ activeTabKey, activeView: "files" }),
   setActiveTerminal: (activeTerminalId, activeTerminalWorkspace) => set((state) => ({ activeTerminalId, activeTerminalWorkspace: activeTerminalWorkspace ?? state.activeTerminalWorkspace, activeView: "terminal" })),
+  focusTerminal: (activeTerminalId, activeTerminalWorkspace) => set((state) => ({ activeTerminalId, activeTerminalWorkspace: activeTerminalWorkspace ?? state.activeTerminalWorkspace })),
   setActiveBrowser: (activeBrowserId) => set({ activeBrowserId, activeView: "browser" }),
   updateBuffer: (key, buffer) => set((state) => ({ tabs: state.tabs.map((tab) => tab.key === key ? { ...tab, buffer, dirty: buffer !== tab.document.content } : tab) })),
   updateCursor: (key, cursor) => set((state) => ({ tabs: state.tabs.map((tab) => tab.key === key ? { ...tab, cursor } : tab) })),
@@ -96,6 +100,59 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     return { ...tab, document, buffer, dirty: buffer !== document.content, conflict: undefined };
   }) })),
   setConflict: (key, conflict) => set((state) => ({ tabs: state.tabs.map((tab) => tab.key === key ? { ...tab, conflict } : tab) })),
+  renamePath: (workspacePath, oldPath, newRelativePath) => set((state) => {
+    const wsNorm = processPlatformInsensitive(normalizeSlashes(workspacePath));
+    const oldNorm = processPlatformInsensitive(normalizeSlashes(oldPath));
+    const sep = oldPath.includes("\\") || workspacePath.includes("\\") ? "\\" : "/";
+    const cleanWs = workspacePath.replace(/[\\/]+$/, "");
+    const cleanRel = newRelativePath.replace(/^[\\/]+|[\\/]+$/g, "").replace(/[\\/]+/g, "/");
+    let nextActiveKey = state.activeTabKey;
+    const tabs = state.tabs.map((tab) => {
+      if (processPlatformInsensitive(normalizeSlashes(tab.document.workspacePath)) !== wsNorm) return tab;
+      const tabSlash = normalizeSlashes(tab.document.path);
+      const tabNorm = processPlatformInsensitive(tabSlash);
+      if (tabNorm !== oldNorm && !tabNorm.startsWith(`${oldNorm}/`)) return tab;
+      const suffix = tabSlash.slice(normalizeSlashes(oldPath).length);
+      const updatedRel = `${cleanRel}${suffix}`;
+      const updatedPath = `${cleanWs}${sep}${updatedRel.replace(/\//g, sep)}`;
+      const nextDoc: EditorDocument = {
+        ...tab.document,
+        path: updatedPath,
+        relativePath: updatedRel,
+      };
+      const nextKey = documentKey(nextDoc);
+      if (state.activeTabKey === tab.key) nextActiveKey = nextKey;
+      return { ...tab, key: nextKey, document: nextDoc };
+    });
+    return { tabs, activeTabKey: nextActiveKey };
+  }),
+  closeDeletedPath: (workspacePath, deletedPath) => set((state) => {
+    const wsNorm = processPlatformInsensitive(normalizeSlashes(workspacePath));
+    const delNorm = processPlatformInsensitive(normalizeSlashes(deletedPath));
+    const matches = (tab: EditorTabState): boolean => {
+      if (processPlatformInsensitive(normalizeSlashes(tab.document.workspacePath)) !== wsNorm) return false;
+      const tabNorm = processPlatformInsensitive(normalizeSlashes(tab.document.path));
+      return tabNorm === delNorm || tabNorm.startsWith(`${delNorm}/`);
+    };
+    const tabs = state.tabs.flatMap((tab) => {
+      if (!matches(tab)) return [tab];
+      if (!tab.dirty) return [];
+      return [{
+        ...tab,
+        conflict: {
+          kind: "deleted" as const,
+          path: tab.document.path,
+          expectedHash: tab.document.hash,
+          expectedModifiedAt: tab.document.modifiedAt,
+        },
+      }];
+    });
+    const activeStillPresent = tabs.some((tab) => tab.key === state.activeTabKey);
+    return {
+      tabs,
+      activeTabKey: activeStillPresent ? state.activeTabKey : (tabs[0]?.key ?? ""),
+    };
+  }),
   setSelectedPath: (selectedPath) => set({ selectedPath }),
   setTree: (directory, nodes) => set((state) => ({ treeByDirectory: { ...state.treeByDirectory, [normalizeDirectory(directory)]: nodes } })),
   toggleExpanded: (directory, expanded) => set((state) => {
@@ -111,6 +168,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
 
 function normalizeDirectory(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\.\/?/, "").replace(/\/$/, "");
+}
+
+function normalizeSlashes(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 function processPlatformInsensitive(value: string): string {

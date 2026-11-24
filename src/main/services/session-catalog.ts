@@ -2,16 +2,20 @@ import { cp, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { LiveStatus, SessionOriginKind, SessionSummary } from "../../shared/types";
+import type { SessionLinkedIssue } from "../../shared/workspace-tools";
 import { JsonStore } from "./json-store";
 
 interface SessionMetadata {
   renames: Record<string, string>;
   unread: Record<string, "ok" | "error">;
   pinned: Record<string, boolean>;
+  settled?: Record<string, boolean>;
   archived?: Record<string, boolean>;
   dismissed?: Record<string, boolean>;
   parents?: Record<string, string>;
   origins?: Record<string, { kind: SessionOriginKind; id?: string; title?: string }>;
+  snoozedUntil?: Record<string, string>;
+  linkedIssues?: Record<string, SessionLinkedIssue>;
 }
 
 interface GrokSummary {
@@ -61,7 +65,14 @@ export class SessionCatalog {
         const summary = JSON.parse(await readFile(join(root, entry.name, "summary.json"), "utf8")) as GrokSummary;
         const title = boundedSessionTitle(metadata.renames[entry.name] || summary.generated_title || summary.session_summary || "新会话");
         const unread = metadata.unread[entry.name];
-        const status = live.get(entry.name) ?? (unread === "error" ? "error" : unread === "ok" ? "unread" : "cold");
+        const unreadStatus: LiveStatus | undefined = unread === "error" ? "error" : unread === "ok" ? "unread" : undefined;
+        const liveStatus = live.get(entry.name);
+        const status: LiveStatus = liveStatus && liveStatus !== "idle"
+          ? liveStatus
+          : (unreadStatus ?? liveStatus ?? "cold");
+        const rawSnooze = metadata.snoozedUntil?.[entry.name];
+        const snoozedUntil = rawSnooze && Date.parse(rawSnooze) > Date.now() ? rawSnooze : undefined;
+        const linkedIssue = metadata.linkedIssues?.[entry.name];
         return {
           id: entry.name,
           cwd,
@@ -74,11 +85,14 @@ export class SessionCatalog {
           effort: summary.reasoning_effort,
           status,
           pinned: Boolean(metadata.pinned?.[entry.name]),
+          settled: Boolean(metadata.settled?.[entry.name]),
           archived: Boolean(metadata.archived?.[entry.name]),
           parentSessionId: metadata.parents?.[entry.name],
           originKind: metadata.origins?.[entry.name]?.kind ?? (metadata.parents?.[entry.name] ? "fork" : "normal"),
           originId: metadata.origins?.[entry.name]?.id,
           originTitle: metadata.origins?.[entry.name]?.title,
+          ...(snoozedUntil ? { snoozedUntil } : {}),
+          ...(linkedIssue ? { linkedIssue } : {}),
         };
       } catch {
         return null;
@@ -120,11 +134,120 @@ export class SessionCatalog {
   }
 
   async markUnread(sessionId: string, error = false): Promise<void> {
-    await this.meta.mutate((metadata) => { metadata.unread[sessionId] = error ? "error" : "ok"; });
+    await this.meta.mutate((metadata) => {
+      metadata.unread[sessionId] = error ? "error" : "ok";
+      if (metadata.settled) delete metadata.settled[sessionId];
+      if (metadata.snoozedUntil) delete metadata.snoozedUntil[sessionId];
+    });
+  }
+
+  async setUnread(sessionId: string, unread: boolean): Promise<void> {
+    if (unread) await this.markUnread(sessionId, false);
+    else await this.markRead(sessionId);
+  }
+
+  async snooze(sessionId: string, snoozedUntil: string | null): Promise<void> {
+    if (snoozedUntil !== null) {
+      const parsed = Date.parse(snoozedUntil);
+      if (!Number.isFinite(parsed) || parsed <= Date.now()) {
+        throw new Error("暂缓提醒时间必须是未来的有效时间");
+      }
+    }
+    await this.meta.mutate((metadata) => {
+      metadata.snoozedUntil ??= {};
+      if (snoozedUntil === null) {
+        delete metadata.snoozedUntil[sessionId];
+      } else {
+        metadata.snoozedUntil[sessionId] = new Date(Date.parse(snoozedUntil)).toISOString();
+        delete metadata.unread[sessionId];
+      }
+    });
+  }
+
+  async wakeExpiredSnoozes(now = Date.now()): Promise<string[]> {
+    const snapshot = await this.meta.get();
+    const entries = Object.entries(snapshot.snoozedUntil ?? {});
+    if (!entries.some(([, until]) => !(Date.parse(until) > now))) return [];
+    const woken: string[] = [];
+    await this.meta.mutate((metadata) => {
+      if (!metadata.snoozedUntil) return;
+      for (const [sessionId, until] of Object.entries(metadata.snoozedUntil)) {
+        if (!(Date.parse(until) > now)) {
+          delete metadata.snoozedUntil[sessionId];
+          if (metadata.dismissed?.[sessionId]) continue;
+          if (metadata.settled) delete metadata.settled[sessionId];
+          metadata.unread[sessionId] ??= "ok";
+          woken.push(sessionId);
+        }
+      }
+    });
+    return woken;
+  }
+
+  async linkIssue(sessionId: string, issue: SessionLinkedIssue | null): Promise<SessionLinkedIssue | null> {
+    let saved: SessionLinkedIssue | null = null;
+    await this.meta.mutate((metadata) => {
+      metadata.linkedIssues ??= {};
+      if (issue === null) {
+        delete metadata.linkedIssues[sessionId];
+        saved = null;
+      } else {
+        saved = {
+          number: issue.number,
+          title: boundedSessionTitle(issue.title, `Issue #${issue.number}`),
+          url: issue.url,
+          ...(issue.state ? { state: issue.state } : {}),
+          ...(issue.repository ? { repository: issue.repository } : {}),
+          linkedAt: issue.linkedAt || new Date().toISOString(),
+        };
+        metadata.linkedIssues[sessionId] = saved;
+      }
+    });
+    return saved;
+  }
+
+  async parentOf(sessionId: string): Promise<string | undefined> {
+    return (await this.meta.get()).parents?.[sessionId];
+  }
+
+  async transferSessionMetadata(sourceSessionId: string, targetSessionId: string): Promise<void> {
+    await this.meta.mutate((metadata) => {
+      if (metadata.renames[sourceSessionId]) metadata.renames[targetSessionId] = metadata.renames[sourceSessionId]!;
+      if (metadata.pinned[sourceSessionId]) metadata.pinned[targetSessionId] = true;
+      if (metadata.parents?.[sourceSessionId]) (metadata.parents ??= {})[targetSessionId] = metadata.parents[sourceSessionId]!;
+      if (metadata.origins?.[sourceSessionId]) (metadata.origins ??= {})[targetSessionId] = structuredClone(metadata.origins[sourceSessionId]!);
+      if (metadata.snoozedUntil?.[sourceSessionId]) (metadata.snoozedUntil ??= {})[targetSessionId] = metadata.snoozedUntil[sourceSessionId]!;
+      if (metadata.linkedIssues?.[sourceSessionId]) (metadata.linkedIssues ??= {})[targetSessionId] = structuredClone(metadata.linkedIssues[sourceSessionId]!);
+      if (metadata.parents) {
+        for (const [childId, parentId] of Object.entries(metadata.parents)) {
+          if (parentId === sourceSessionId) metadata.parents[childId] = targetSessionId;
+        }
+      }
+    });
   }
 
   async markRead(sessionId: string): Promise<void> {
     await this.meta.mutate((metadata) => { delete metadata.unread[sessionId]; });
+  }
+
+  async settle(sessionId: string, settled: boolean): Promise<void> {
+    await this.meta.mutate((metadata) => {
+      metadata.settled ??= {};
+      if (settled) {
+        metadata.settled[sessionId] = true;
+        delete metadata.unread[sessionId];
+        if (metadata.snoozedUntil) delete metadata.snoozedUntil[sessionId];
+      } else {
+        delete metadata.settled[sessionId];
+      }
+    });
+  }
+
+  async decorateSearchHits<T extends { sessionId: string; title?: string }>(hits: readonly T[]): Promise<T[]> {
+    const metadata = await this.meta.get();
+    return hits
+      .filter((hit) => !metadata.dismissed?.[hit.sessionId])
+      .map((hit) => (metadata.renames[hit.sessionId] ? { ...hit, title: metadata.renames[hit.sessionId] } : hit));
   }
 
   async pin(sessionId: string, pinned: boolean): Promise<void> {
@@ -221,12 +344,15 @@ export class SessionCatalog {
       delete metadata.renames[sessionId];
       delete metadata.unread[sessionId];
       delete metadata.pinned[sessionId];
+      if (metadata.settled) delete metadata.settled[sessionId];
       if (metadata.archived) delete metadata.archived[sessionId];
       if (metadata.parents) {
         delete metadata.parents[sessionId];
         for (const [child, parent] of Object.entries(metadata.parents)) if (parent === sessionId) delete metadata.parents[child];
       }
       if (metadata.origins) delete metadata.origins[sessionId];
+      if (metadata.snoozedUntil) delete metadata.snoozedUntil[sessionId];
+      if (metadata.linkedIssues) delete metadata.linkedIssues[sessionId];
       if (metadata.dismissed) delete metadata.dismissed[sessionId];
       if (dismissed) { metadata.dismissed ??= {}; metadata.dismissed[sessionId] = true; }
     });

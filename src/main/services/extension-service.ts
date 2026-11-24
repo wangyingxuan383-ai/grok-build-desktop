@@ -177,6 +177,20 @@ export class ExtensionService {
   }
 
   async listHooks(): Promise<HookSummary[]> {
+    if (process.env.GROK_DESKTOP_OFFLINE_SMOKE === "1") return [];
+    try {
+      const response = await this.requestExtension("x.ai/hooks/list");
+      const rawHooks = Array.isArray(response?.hooks) ? response.hooks : undefined;
+      if (rawHooks?.length) {
+        return rawHooks.map(asRecord).map((hook, index) => ({
+          id: asString(hook.id) || `hook:${index}`,
+          name: asString(hook.name || hook.event) || `Hook ${index + 1}`,
+          pluginId: asString(hook.pluginId || hook.plugin_id) || undefined,
+          source: asString(hook.source || hook.pluginName || hook.scope) || "local",
+          enabled: hook.enabled !== false,
+        }));
+      }
+    } catch { /* fall back to plugin manifest hook counts */ }
     const plugins = await this.listPlugins();
     return plugins.flatMap((plugin) => Array.from({ length: plugin.hookCount }, (_, index) => ({
       id: `${plugin.id}:${index}`,
@@ -208,8 +222,18 @@ export class ExtensionService {
   }
 
   async toggleMcp(name: string, enabled: boolean): Promise<McpServerSummary[]> {
-    const response = await this.requestExtension("x.ai/mcp/toggle", { serverName: name, enabled });
-    if (!response) throw new Error("当前没有空闲 Grok 会话；MCP 启停将在打开会话后可用");
+    if (!/^[a-zA-Z0-9._-]{1,80}$/.test(name.trim())) throw new Error("MCP 名称无效");
+    let toggledViaExtension = false;
+    try {
+      const response = await this.requestExtension("x.ai/mcp/toggle", { serverName: name.trim(), enabled });
+      toggledViaExtension = Boolean(response);
+    } catch (error) {
+      await this.log.log(`extension mcp/toggle fallback: ${errorMessage(error)}`);
+    }
+    if (!toggledViaExtension) {
+      await this.run(["mcp", enabled ? "enable" : "disable", name.trim()]);
+      await this.reload().catch(() => undefined);
+    }
     return this.listMcp(true);
   }
 
@@ -355,6 +379,8 @@ export function normalizeMcpList(value: unknown): McpServerSummary[] {
     const toolsRaw = Array.isArray(row.tools) ? row.tools : Array.isArray(session.tools) ? session.tools : [];
     const tools = toolsRaw.map(asRecord).map((tool) => ({ name: asString(tool.displayName || tool.name), description: asString(tool.description) || undefined }));
     const status = asString(row.status || session.status);
+    const hasHeadersHelper = Boolean(row.headersHelper || row.headers_helper || row.hasHeadersHelper);
+    const authUrl = asString(session.authUrl || row.authUrl) || undefined;
     return {
       name: asString(row.displayName || row.name), source: asString(row.source) || "local",
       enabled: row.enabled === undefined ? session.enabled !== false : row.enabled !== false,
@@ -362,6 +388,8 @@ export function normalizeMcpList(value: unknown): McpServerSummary[] {
       toolCount: asNumber(row.toolCount) || tools.length, tools,
       configSource: asString(row.configSource || row.sourceLabel) || undefined,
       oauth: Boolean(session.authRequired || row.authRequired),
+      ...(hasHeadersHelper ? { hasHeadersHelper: true } : {}),
+      ...(authUrl ? { authUrl } : {}),
     };
   }).filter((row) => row.name);
 }

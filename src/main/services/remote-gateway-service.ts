@@ -94,7 +94,11 @@ export class RemoteGatewayService {
     if(this.disposing||!this.server||!event.sessionId)return;
     this.signal(event.type,event.sessionId);
     if((event.type==="turn-started"||event.type==="turn-completed")&&event.presentation?.clientMessageId){const op=this.persisted?.operations.find(o=>o.operationId.slice(14)===event.presentation?.clientMessageId&&!TERMINAL.has(o.state));if(op){const outcome=event.presentation.outcome;void this.updateOperation(op,event.type==="turn-started"?"running":outcome==="failed"?"failed":outcome==="cancelled"||outcome==="interrupted"?"cancelled":"completed",outcome==="failed"?"本轮执行失败，请查看会话原因":outcome==="cancelled"||outcome==="interrupted"?"本轮已停止，历史保留":undefined).catch(()=>undefined)}}
-    if(event.type==="prompt-queue")for(const entry of event.entries){const op=this.persisted.operations.find(o=>o.operationId.slice(14)===entry.clientMessageId&&!TERMINAL.has(o.state));if(op&&["cancelled","failed"].includes(entry.state))void this.updateOperation(op,"failed",entry.state==="cancelled"?"排队消息已在电脑取消":"排队消息执行失败").catch(()=>undefined)}
+    if(event.type==="prompt-queue"){
+      const present=new Set(event.entries.map(entry=>entry.clientMessageId).filter(Boolean));
+      for(const entry of event.entries){const op=this.persisted.operations.find(o=>o.operationId.slice(14)===entry.clientMessageId&&!TERMINAL.has(o.state));if(op&&["cancelled","failed"].includes(entry.state))void this.updateOperation(op,"failed",entry.state==="cancelled"?"排队消息已在电脑取消":"排队消息执行失败").catch(()=>undefined)}
+      for(const op of this.persisted.operations)if(op.sessionId===event.sessionId&&op.action==="send"&&op.state==="queued"&&!present.has(op.operationId.slice(14)))void this.updateOperation(op,"cancelled","排队消息已移出队列").catch(()=>undefined);
+    }
   }
   private signal(type:string,sessionId?:string):void{const signal={cursor:++this.cursor,epoch:this.epoch,type,sessionId};this.signals.push(signal);if(this.signals.length>limits.signals)this.signals.shift();for(const [response]of this.subscribers){if(response.writableLength>256*1024){response.end();this.subscribers.delete(response)}else response.write(`id: ${signal.cursor}\ndata: ${JSON.stringify(signal)}\n\n`)}}
   private reply(response:ServerResponse,status:number,body:unknown):void{if(response.headersSent)return;if(response.destroyed)return;response.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store","X-Content-Type-Options":"nosniff"}).end(JSON.stringify(body))}
@@ -147,7 +151,7 @@ export function parseRemoteCommand(body:Record<string,unknown>):RemoteCommand{
   const action=String(body.action);if(!Object.hasOwn(fields,action))throw Error("不支持的远程操作");
   const allowed=["operationId","sessionId","action",...fields[action]!];if(Object.keys(body).some(k=>!allowed.includes(k)))throw Error("未知的操作字段");
   const command:RemoteCommand={operationId:body.operationId,sessionId:body.sessionId,action:action as RemoteCommand["action"]};
-  if(action==="send"){if(typeof body.text!=="string"||!body.text.trim()||Buffer.byteLength(body.text)>65536)throw Error("消息不能为空且不得超过 64 KiB");command.text=body.text}
+  if(action==="send"||action==="interject"){const hasMaterials=(Array.isArray(body.attachmentIds)&&body.attachmentIds.length>0)||(Array.isArray(body.references)&&body.references.length>0);if(typeof body.text!=="string"||(!body.text.trim()&&!hasMaterials)||Buffer.byteLength(body.text)>65536)throw Error("消息不能为空且不得超过 64 KiB");command.text=body.text}
   if(["permission","question","plan"].includes(String(action))){if((typeof body.requestId!=="string"&&typeof body.requestId!=="number")||String(body.requestId).length>256)throw Error("请求 ID 无效");command.requestId=body.requestId as string|number}
   if(action==="permission"){if(typeof body.optionId!=="string"||body.optionId.length>256)throw Error("权限选项无效");command.optionId=body.optionId}
   if(action==="question"){if(!body.answers||typeof body.answers!=="object"||Array.isArray(body.answers)||Object.keys(body.answers).length>32||Object.entries(body.answers).some(([k,v])=>k.length>256||typeof v!=="string"||v.length>8192||["__proto__","constructor","prototype"].includes(k)))throw Error("回答参数无效");command.answers=body.answers as Record<string,string>}

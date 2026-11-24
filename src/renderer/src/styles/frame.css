@@ -19,8 +19,8 @@
   background: var(--color-frame); border: 1px solid var(--color-border); border-radius: var(--radius-xl); overflow: hidden;
 }
 .right-utility-pane, .review-pane, .artifact-preview-pane, .agent-change-pane { border-left-width: 1px; }
-.workbench-page-host { background: var(--color-frame); }
-.conversation-wrap { background: var(--color-frame); }
+.workbench-page-host { background: transparent; }
+.conversation-wrap { background: transparent; }
 
 /* ---- Sidebar ---- */
 .sidebar { flex: 0 0 var(--sidebar-width); width: var(--sidebar-width); min-height: 0; display: flex; flex-direction: column; padding: 8px 6px 8px 10px; border: 0; background: transparent; color: var(--color-fg); }
@@ -108,7 +108,7 @@
 .status-dot.unread { background: var(--color-success); }
 .status-dot.error { background: var(--color-danger); }
 .status-dot.cold { border: 1px dashed var(--color-fg-subtlest); }
-.sb-session.child .status-dot { display: none; }
+.sb-session.child .status-dot:not(.working):not(.needs-user):not(.error):not(.unread):not(.queued) { display: none; }
 
 .sb-subhead { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 8px 0 10px; border: 0; border-radius: var(--radius-lg); background: transparent; color: var(--color-fg-subtlest); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; }
 .sb-subhead span { margin-left: auto; font-size: var(--text-xs); }
@@ -176,7 +176,7 @@
    The header already names the page and offers the way back, so the page is the frame itself:
    no breadcrumb row, and no second bordered card inside the pane. */
 .page-breadcrumb { display: none; }
-.workbench-page-host { background: var(--color-frame); }
+.workbench-page-host { background: transparent; }
 .workbench-page-surface { padding: 0; }
 .workbench-page-surface > section { max-width: none; width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .workbench-page-surface .settings-dialog { width: 100%; height: 100%; max-width: none; }

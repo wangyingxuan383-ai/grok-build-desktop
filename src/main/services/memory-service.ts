@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -51,7 +51,13 @@ export class MemoryService {
     const state = await this.store.get();
     const value = state.workspaces[layout.workspaceIdentity] ?? { enabled: false, saveOnSessionEnd: true, autoDream: true };
     const indexExists = await stat(join(layout.workspaceDirectory, "index.sqlite")).then((info) => info.isFile()).catch(() => false);
-    return { workspaceIdentity: layout.workspaceIdentity, ...value, indexStatus: value.enabled ? indexExists ? "ready" : "unknown" : "disabled" };
+    const memtraceStats = await readMemtraceStats(join(layout.workspaceDirectory, "memtrace"));
+    return {
+      workspaceIdentity: layout.workspaceIdentity,
+      ...value,
+      indexStatus: value.enabled ? indexExists ? "ready" : "unknown" : "disabled",
+      ...(memtraceStats ? { memtraceCount: memtraceStats.count, memtraceBytes: memtraceStats.bytes } : {}),
+    };
   }
 
   async updateSettings(workspacePath: string, patch: Partial<Pick<MemorySettings, "enabled" | "saveOnSessionEnd" | "autoDream">>): Promise<MemorySettings> {
@@ -83,7 +89,20 @@ export class MemoryService {
     const entries: MemoryEntry[] = [];
     entries.push(await readMemoryEntry(canonicalRoot, layout.globalFile, { id: "global", scope: "global", title: "全局 MEMORY.md", workspaceIdentity: layout.workspaceIdentity, readOnly: false }, true));
     entries.push(await readMemoryEntry(canonicalRoot, layout.workspaceFile, { id: "workspace", scope: "workspace", title: "工作区 MEMORY.md", workspaceIdentity: layout.workspaceIdentity, readOnly: false }, true));
-    const sessions = await readdir(layout.sessionsDirectory, { withFileTypes: true }).catch(() => []);
+    const topics = await readdir(layout.workspaceDirectory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const item of topics) {
+      if (!item.isFile() || item.isSymbolicLink()) continue;
+      if (!item.name.toLowerCase().endsWith(".md") || item.name.toUpperCase() === "MEMORY.MD") continue;
+      const path = join(layout.workspaceDirectory, item.name);
+      entries.push(await readMemoryEntry(canonicalRoot, path, { id: `topic:${item.name}`, scope: "topic", topicFile: item.name, title: item.name.replace(/\.md$/i, ""), workspaceIdentity: layout.workspaceIdentity, readOnly: false }, false));
+    }
+    const sessions = await readdir(layout.sessionsDirectory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    });
     for (const item of sessions) {
       if (!item.isFile() || item.isSymbolicLink() || !item.name.toLowerCase().endsWith(".md")) continue;
       const path = join(layout.sessionsDirectory, item.name);
@@ -95,7 +114,18 @@ export class MemoryService {
 
   async save(input: MemorySaveInput): Promise<MemorySaveResult> {
     const layout = await this.resolveLayout(input.workspacePath);
-    const target = input.scope === "global" ? layout.globalFile : layout.workspaceFile;
+    let target: string;
+    let entryId: string;
+    let fallbackTitle = "MEMORY.md";
+    if (input.scope === "topic") {
+      const topicFile = normalizeTopicFileName(input.topicFile);
+      target = join(layout.workspaceDirectory, topicFile);
+      entryId = `topic:${topicFile}`;
+      fallbackTitle = topicFile.replace(/\.md$/i, "");
+    } else {
+      target = input.scope === "global" ? layout.globalFile : layout.workspaceFile;
+      entryId = input.scope;
+    }
     await mkdir(resolve(target, ".."), { recursive: true });
     const exists = await lstat(target).then((value) => value.isFile() && !value.isSymbolicLink()).catch(() => false);
     if (!exists) {
@@ -104,7 +134,7 @@ export class MemoryService {
         await this.editor.createFile(layout.memoryRoot, relative(layout.memoryRoot, target), input.content);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const disk = await readMemoryEntry(await realpath(layout.memoryRoot), target, { id: input.scope, scope: input.scope, title: "MEMORY.md", readOnly: false }, false);
+        const disk = await readMemoryEntry(await realpath(layout.memoryRoot), target, { id: entryId, scope: input.scope, ...(input.scope === "topic" ? { topicFile: basename(target) } : {}), title: fallbackTitle, readOnly: false }, false);
         return { saved: false, conflict: { kind: "modified", path: target, expectedHash: "", actualHash: disk.hash, expectedModifiedAt: "", actualModifiedAt: disk.modifiedAt, diskContent: disk.content, diskEncoding: "utf8", diskLineEnding: "lf" } };
       }
     } else {
@@ -112,7 +142,7 @@ export class MemoryService {
       if (!result.saved) return result;
     }
     const entries = await this.list(input.workspacePath);
-    return { saved: true, entry: entries.find((entry) => entry.id === input.scope) };
+    return { saved: true, entry: entries.find((entry) => entry.id === entryId) };
   }
 
   async previewRemember(workspacePath: string, scope: "global" | "workspace", text: string): Promise<MemoryRememberPreview> {
@@ -144,15 +174,15 @@ export class MemoryService {
   }
 
   async listStructured(workspacePath: string, scope?: "global" | "workspace"): Promise<MemoryStructuredEntry[]> {
-    const entries = (await this.list(workspacePath)).filter((value) => value.scope !== "session" && (!scope || value.scope === scope));
-    return entries.flatMap((entry) => parseStructuredEntries(entry.scope as "global" | "workspace", entry.content));
+    const entries = (await this.list(workspacePath)).filter((value): value is MemoryEntry & { scope: "global" | "workspace" } => (value.scope === "global" || value.scope === "workspace") && (!scope || value.scope === scope));
+    return entries.flatMap((entry) => parseStructuredEntries(entry.scope, entry.content));
   }
 
   async previewDelete(workspacePath: string, entryId: string): Promise<MemoryDeletePreview> {
     const layout = await this.resolveLayout(workspacePath);
     const files = await this.list(workspacePath);
     for (const file of files) {
-      if (file.scope === "session") continue;
+      if (file.scope !== "global" && file.scope !== "workspace") continue;
       const parsed = parseStructuredEntriesWithOffsets(file.scope, file.content).find((value) => value.entry.id === entryId);
       if (!parsed) continue;
       const targetPath = file.scope === "global" ? layout.globalFile : layout.workspaceFile;
@@ -246,7 +276,35 @@ function slugify(input: string, maxLength: number): string {
 function isInside(root: string, path: string): boolean { const value = relative(root, path); return value === "" || (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value)); }
 function isAbsoluteLike(value: string): boolean { return /^[a-zA-Z]:[\\/]|^[/\\]/.test(value); }
 function sessionIdFromName(name: string): string | undefined { return name.match(/-([a-zA-Z0-9]{8})\.md$/)?.[1]; }
-function scopeOrder(scope: MemoryEntry["scope"]): number { return scope === "global" ? 0 : scope === "workspace" ? 1 : 2; }
+function scopeOrder(scope: MemoryEntry["scope"]): number { return scope === "global" ? 0 : scope === "workspace" ? 1 : scope === "topic" ? 2 : 3; }
+
+function normalizeTopicFileName(raw?: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("..")) {
+    throw new Error("无效的专题记忆文件名");
+  }
+  const withExt = trimmed.toLowerCase().endsWith(".md") ? trimmed : `${trimmed}.md`;
+  if (withExt.toUpperCase() === "MEMORY.MD" || !/^[a-zA-Z0-9._\-\u4e00-\u9fa5]{1,84}\.md$/i.test(withExt)) {
+    throw new Error("专题记忆文件名格式无效（不可使用 MEMORY.md）");
+  }
+  return withExt;
+}
+
+async function readMemtraceStats(memtraceDir: string): Promise<{ count: number; bytes: number } | undefined> {
+  const dirInfo = await lstat(memtraceDir).catch(() => undefined);
+  if (!dirInfo || !dirInfo.isDirectory() || dirInfo.isSymbolicLink()) return undefined;
+  const items = await readdir(memtraceDir, { withFileTypes: true }).catch(() => []);
+  let count = 0;
+  let bytes = 0;
+  for (const item of items) {
+    if (!item.isFile() || item.isSymbolicLink()) continue;
+    const info = await lstat(join(memtraceDir, item.name)).catch(() => undefined);
+    if (!info || !info.isFile()) continue;
+    count += 1;
+    bytes += info.size;
+  }
+  return { count, bytes };
+}
 function detectLineEnding(content: string): "lf" | "crlf" | "mixed" | "none" { const crlf = (content.match(/\r\n/g) ?? []).length; const lf = (content.match(/(?<!\r)\n/g) ?? []).length; return crlf && lf ? "mixed" : crlf ? "crlf" : lf ? "lf" : "none"; }
 
 interface ParsedStructuredEntry { entry: MemoryStructuredEntry; startOffset: number; endOffset: number }
@@ -282,7 +340,32 @@ function parseStructuredEntriesWithOffsets(scope: "global" | "workspace", conten
   return result;
 }
 
+function quoteWindowsBatchArg(value: string): string {
+  return `"${value.replace(/"/g, '""').replace(/%/g, "%%")}"`;
+}
+
 async function runCli(cliPath: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(cliPath)) {
+    const comspec = env.ComSpec || process.env.ComSpec || "cmd.exe";
+    const command = `"${[cliPath, ...args].map(quoteWindowsBatchArg).join(" ")}"`;
+    await new Promise<void>((resolvePromise, rejectPromise) => {
+      const child = spawn(comspec, ["/d", "/s", "/c", command], {
+        cwd,
+        env,
+        shell: false,
+        windowsVerbatimArguments: true,
+        windowsHide: true,
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { if (stderr.length < 8192) stderr += String(chunk); });
+      child.on("error", rejectPromise);
+      child.on("exit", (code) => {
+        if (code === 0) resolvePromise();
+        else rejectPromise(new Error(stderr.trim() || `grok memory exited (${String(code)})`));
+      });
+    });
+    return;
+  }
   await execFileAsync(cliPath, args, { cwd, env, windowsHide: true, shell: false, encoding: "utf8", maxBuffer: 5 * 1024 * 1024 });
 }
 

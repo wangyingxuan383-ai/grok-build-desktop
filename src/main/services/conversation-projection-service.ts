@@ -196,6 +196,15 @@ export class ConversationProjectionService {
     }));
   }
 
+  async clearEvents(sessionId: string): Promise<void> {
+    const pending = this.pending.get(sessionId);
+    if (pending) clearTimeout(pending.timer);
+    this.pending.delete(sessionId);
+    await this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
+      await this.compactWithoutLock(sessionId, [], 0);
+    }));
+  }
+
   /** Copies the Desktop-visible history to an official fork immediately. */
   async cloneSession(sourceSessionId: string, targetSessionId: string, targetCwd: string): Promise<ConversationProjection | undefined> {
     const source = await this.restore(sourceSessionId);
@@ -222,17 +231,42 @@ export class ConversationProjectionService {
     return this.restore(targetSessionId);
   }
 
+  /** Truncates projected conversation records starting at the target 0-indexed user prompt turn. */
+  async truncateFromUserTurn(sessionId: string, targetPromptIndex: number): Promise<void> {
+    if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) return;
+    const pending = this.pending.get(sessionId);
+    if (pending) clearTimeout(pending.timer);
+    this.pending.delete(sessionId);
+    await this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
+      const loaded = await this.restoreRecordsWithoutLock(sessionId);
+      let userTurnCount = 0;
+      let cutIndex = loaded.records.length;
+      for (let idx = 0; idx < loaded.records.length; idx += 1) {
+        if (loaded.records[idx]?.event.type === "user-message") {
+          if (userTurnCount === targetPromptIndex) {
+            cutIndex = idx;
+            break;
+          }
+          userTurnCount += 1;
+        }
+      }
+      if (cutIndex < loaded.records.length) {
+        await this.compactWithoutLock(sessionId, loaded.records.slice(0, cutIndex), loaded.truncatedEventCount);
+      }
+    }));
+  }
+
   /** Keep the visible projection attached to the same logical session after a project move. */
   async rebindRuntime(sessionId: string, targetCwd: string): Promise<void> {
     await this.flush(sessionId);
-    const state = await this.loadState(sessionId);
-    if (state.runtime) {
-      const previousTime = Date.parse(state.runtime.updatedAt);
-      const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
-      state.runtime = { ...state.runtime, cwd: targetCwd, updatedAt };
-      this.states.set(sessionId, state);
-    }
     await this.enqueue(sessionId, () => this.withSessionLock(sessionId, async () => {
+      const state = await this.loadState(sessionId);
+      if (state.runtime) {
+        const previousTime = Date.parse(state.runtime.updatedAt);
+        const updatedAt = new Date(Math.max(Date.now(), Number.isFinite(previousTime) ? previousTime + 1 : 0)).toISOString();
+        state.runtime = { ...state.runtime, cwd: targetCwd, updatedAt };
+        this.states.set(sessionId, state);
+      }
       const current = await this.restoreRecordsWithoutLock(sessionId);
       await this.compactWithoutLock(sessionId, current.records, current.truncatedEventCount);
     }));
@@ -353,20 +387,20 @@ export class ConversationProjectionService {
 
   private async recordState(event: Extract<ChatEvent, { type: "prompt-queue" | "session-ready" | "mode" }>): Promise<void> {
     await this.flush(event.sessionId);
-    const previous = await this.loadState(event.sessionId);
-    if (event.type === "prompt-queue") {
-      previous.queue = { version: 1, sessionId: event.sessionId, updatedAt: new Date().toISOString(), entries: structuredClone(event.entries) };
-    } else {
-      const runtime = previous.runtime ?? { sessionId: event.sessionId, cwd: "", effort: "", mode: "agent", updatedAt: new Date().toISOString() };
-      if (event.type === "session-ready") {
-        runtime.modelId = event.currentModelId ?? runtime.modelId;
-        runtime.effort = event.effort ?? runtime.effort;
-      } else runtime.mode = event.mode === "plan" || event.mode === "auto" ? event.mode : "agent";
-      runtime.updatedAt = new Date().toISOString();
-      previous.runtime = runtime;
-    }
-    this.states.set(event.sessionId, previous);
     await this.enqueue(event.sessionId, () => this.withSessionLock(event.sessionId, async () => {
+      const previous = await this.loadState(event.sessionId);
+      if (event.type === "prompt-queue") {
+        previous.queue = { version: 1, sessionId: event.sessionId, updatedAt: new Date().toISOString(), entries: structuredClone(event.entries) };
+      } else {
+        const runtime = previous.runtime ?? { sessionId: event.sessionId, cwd: "", effort: "", mode: "agent", updatedAt: new Date().toISOString() };
+        if (event.type === "session-ready") {
+          runtime.modelId = event.currentModelId ?? runtime.modelId;
+          runtime.effort = event.effort ?? runtime.effort;
+        } else runtime.mode = event.mode === "plan" || event.mode === "auto" ? event.mode : "agent";
+        runtime.updatedAt = new Date().toISOString();
+        previous.runtime = runtime;
+      }
+      this.states.set(event.sessionId, previous);
       const current = await this.restoreRecordsWithoutLock(event.sessionId);
       await this.compactWithoutLock(event.sessionId, current.records, current.truncatedEventCount);
     }));
@@ -646,12 +680,16 @@ function splitReplayTurns(events: ChatEvent[]): { prefix: ChatEvent[]; turns: Re
   return { prefix, turns };
 }
 
+function stripSyntheticPromptPrefix(text: string): string {
+  return text.replace(/^(?:<merged_subsession_context>[\s\S]*?<\/merged_subsession_context>\s*)+/, "");
+}
+
 function sameReplayUser(left?: Extract<ChatEvent, { type: "user-message" }>, right?: Extract<ChatEvent, { type: "user-message" }>): boolean {
   if (!left || !right) return false;
   const leftId = left.clientMessageId ?? left.id;
   const rightId = right.clientMessageId ?? right.id;
   if (leftId && rightId && leftId === rightId) return true;
-  return left.text === right.text
+  return stripSyntheticPromptPrefix(left.text) === stripSyntheticPromptPrefix(right.text)
     && JSON.stringify((left.attachments ?? []).map((item) => [item.name, item.size, item.mimeType]))
       === JSON.stringify((right.attachments ?? []).map((item) => [item.name, item.size, item.mimeType]));
 }

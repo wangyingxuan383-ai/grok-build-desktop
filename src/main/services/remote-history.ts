@@ -19,8 +19,8 @@ export function remotePendingInteractions(events:ChatEvent[]):ChatEvent[] {
   const pending=new Map<string,ChatEvent>();
   for(const event of events){
     if(event.type==="permission")pending.set(`permission:${event.request.requestId}`,sanitizeRemoteEvent(event));
-    if(event.type==="question")pending.set(`question:${event.requestId}`,event);
-    if(event.type==="plan"&&event.requestId!==undefined)pending.set(`plan:${event.requestId}`,event);
+    if(event.type==="question")pending.set(`question:${event.requestId}`,sanitizeRemoteEvent(event));
+    if(event.type==="plan"&&event.requestId!==undefined)pending.set(`plan:${event.requestId}`,sanitizeRemoteEvent(event));
     if(event.type==="interaction-resolved")pending.delete(`${event.interaction}:${event.requestId}`);
     if(event.type==="session-reset"||event.type==="turn-completed"||event.type==="error")pending.clear();
   }

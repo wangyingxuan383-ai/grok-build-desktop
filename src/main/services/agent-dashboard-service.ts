@@ -61,12 +61,27 @@ export class AgentDashboardService {
         if (root.status === "waiting") root.waitingReason = event.text || "等待用户操作";
         if (root.status === "failed") root.failureReason = event.text || "会话运行失败";
       } else if (event.type === "tool-call") {
-        const tools = new Set(root.toolIds ?? []); tools.add(event.tool.toolCallId); root.toolIds = [...tools]; root.toolCount = tools.size;
+        const tools = new Set(root.toolIds ?? []);
+        const isNewTool = !tools.has(event.tool.toolCallId);
+        tools.add(event.tool.toolCallId);
+        root.toolIds = [...tools].slice(-500);
+        root.toolCount = isNewTool ? (root.toolCount ?? 0) + 1 : Math.max(root.toolCount ?? 0, tools.size);
         root.latestAction = event.tool.title || event.tool.kind || "工具调用";
         if (event.tool.status === "failed") root.failureReason = event.tool.error || "工具调用失败";
       } else if (event.type === "turn-completed") {
-        if (root.status === "running") root.status = "completed";
-        root.completedAt = now; root.latestAction = "本轮已完成";
+        const outcome = event.presentation?.outcome;
+        if (outcome === "failed") {
+          root.status = "failed";
+          root.failureReason ||= "本轮执行失败";
+          root.latestAction = "本轮执行失败";
+        } else if (outcome === "cancelled" || outcome === "interrupted") {
+          root.status = "stopped";
+          root.latestAction = "本轮已停止";
+        } else {
+          if (root.status === "running") root.status = "completed";
+          root.latestAction = "本轮已完成";
+        }
+        root.completedAt = now;
       } else if (event.type === "permission" || event.type === "question") {
         root.status = "waiting"; root.waitingReason = event.type === "permission" ? "等待工具权限确认" : "等待问题答复"; root.latestAction = root.waitingReason;
       } else if (event.type === "error") {
@@ -174,16 +189,24 @@ function updateSubagent(records: Record<string, DashboardRecord>, root: Dashboar
   const stopped = ["cancelled", "canceled", "stopped", "aborted"].includes(terminalStatus);
   const failed = !stopped && (eventName.includes("fail") || update.success === false || ["failed", "error"].includes(terminalStatus));
   const finished = eventName.includes("finish") || eventName.includes("complete") || ["completed", "success", "succeeded"].includes(terminalStatus);
-  current.status = stopped ? "stopped" : failed ? "failed" : finished ? "completed" : eventName.includes("wait") ? "waiting" : "running";
+  const alreadyTerminal = ["completed", "failed", "stopped"].includes(current.status);
+  if (stopped || failed || finished) {
+    current.status = stopped ? "stopped" : failed ? "failed" : "completed";
+  } else if (!alreadyTerminal) {
+    current.status = eventName.includes("wait") ? "waiting" : "running";
+  }
   if (!current.startedAt) current.startedAt = now;
   if (finished || failed || stopped) current.completedAt = now;
   current.durationMs = numberValue(update.duration_ms) ?? duration(current.startedAt, current.completedAt);
   current.toolCount = numberValue(update.tool_call_count ?? update.toolCallCount ?? update.tool_calls) ?? current.toolCount;
   current.contextUsed = numberValue(update.context_used ?? update.contextTokensUsed) ?? current.contextUsed;
   current.contextLimit = numberValue(update.context_limit ?? update.contextWindow ?? update.context_window_tokens) ?? current.contextLimit;
-  current.latestAction = textValue(update.latest_action ?? update.action) || (stopped ? "子 Agent 已停止" : finished ? "子 Agent 已完成" : "子 Agent 运行中");
-  current.waitingReason = textValue(update.waiting_reason);
-  current.failureReason = failed ? textValue(update.error ?? update.output) || "子 Agent 失败" : undefined;
+  if (stopped || failed || finished || !alreadyTerminal) {
+    current.latestAction = textValue(update.latest_action ?? update.action) || (stopped ? "子 Agent 已停止" : failed ? "子 Agent 失败" : finished ? "子 Agent 已完成" : "子 Agent 运行中");
+  }
+  current.waitingReason = alreadyTerminal && !(stopped || failed || finished) ? current.waitingReason : textValue(update.waiting_reason);
+  if (failed) current.failureReason = textValue(update.error ?? update.output) || "子 Agent 失败";
+  else if (stopped || finished) current.failureReason = undefined;
   current.summary = finished && !failed ? textValue(update.output ?? update.summary) : current.summary;
   current.isolation = String(update.isolation ?? "").toLowerCase().includes("worktree") ? "worktree" : current.isolation;
   current.worktreeId = textValue(update.worktree_id ?? update.worktreeId) || current.worktreeId;

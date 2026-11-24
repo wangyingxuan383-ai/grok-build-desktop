@@ -7,6 +7,7 @@ export interface QuickEntryController {
   discoverWorkspaces(): Promise<Array<{ cwd: string; name: string; exists: boolean; hidden: boolean }>>;
   listSessions(cwd: string): Promise<SessionSummary[]>;
   getDesktopActivity(): Promise<{ sessions: Array<{ sessionId: string; status: string }> }>;
+  getSessionSendBlockReason?(sessionId: string): string | undefined;
   openSession(cwd: string, sessionId: string, activate?: boolean): Promise<{ sessionId: string; hydration?: string }>;
   createSession?(cwd: string, activate?: boolean): Promise<{ sessionId: string; cwd?: string }>;
   sendPrompt(sessionId: string, text: string, attachments: Attachment[], clientMessageId?: string): Promise<void>;
@@ -34,10 +35,12 @@ export class DesktopQuickEntryDraft {
     this.assertActive(this.id);
     const settings = await this.controller.getSettings();
     const discovered = await this.controller.discoverWorkspaces();
+    const unavailable = new Set(discovered.filter(row => !row.exists || row.hidden).map(row => row.cwd.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()));
     const workspaces = discovered.filter(row => row.exists && !row.hidden).map(({ cwd, name }) => ({ cwd, name }));
-    // Settings roots are useful before a project catalog has been populated.
+    // Settings roots are useful before a project catalog has been populated, unless discovery proved them missing or hidden.
     for (const path of [settings.activeWorkspace, ...settings.recentWorkspaces]) {
-      if (path && !workspaces.some(row => row.cwd === path)) workspaces.push({ cwd: path, name: path.split(/[\\/]/).filter(Boolean).at(-1) || path });
+      const normalized = path ? path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() : "";
+      if (path && !unavailable.has(normalized) && !workspaces.some(row => row.cwd === path)) workspaces.push({ cwd: path, name: path.split(/[\\/]/).filter(Boolean).at(-1) || path });
     }
     const recoveryWorkspace = this.recovery?.sourceWorkspacePath || this.recovery?.cwd;
     const recoveredWorkspace = workspaces.some(row => row.cwd === recoveryWorkspace) ? recoveryWorkspace : "";
@@ -131,6 +134,8 @@ export class DesktopQuickEntryDraft {
     if (activity.sessions.some(row => row.sessionId === sessionId && ["running", "awaiting"].includes(row.status))) {
       throw new Error("此会话正在运行或等你处理，请前往主窗口");
     }
+    const reason = this.controller.getSessionSendBlockReason?.(sessionId);
+    if (reason) throw new Error(reason);
   }
 
   private views(): QuickEntryAttachment[] {

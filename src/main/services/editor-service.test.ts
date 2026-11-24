@@ -17,17 +17,38 @@ describe("workspace tree and editor services", () => {
     expect((await service.open(alias,join(alias,"inside.txt"))).document).toMatchObject({editable:true,relativePath:"inside.txt"});
     await expect(service.open(alias,join(alias,"escape","outside.txt"))).rejects.toThrow("超出当前工作区");
   });
-  it("opens explicitly selected absolute outside files read-only while writes remain scoped", async () => {
+  it("rejects out-of-workspace files by default and opens explicitly allowlisted external files read-only", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-view-outside-"));
     const workspace = join(root, "project");
+    const allowedDir = join(root, "allowed");
+    const siblingDir = join(root, "allowed-extra");
+    const fakeGrokDir = join(root, ".grok");
     await mkdir(workspace);
+    await mkdir(allowedDir);
+    await mkdir(siblingDir);
+    await mkdir(fakeGrokDir);
     const path = join(root, "log.txt");
+    const allowedSubFile = join(allowedDir, "report.txt");
+    const siblingSecret = join(siblingDir, "secret.txt");
+    const authJson = join(fakeGrokDir, "auth.json");
     await writeFile(path, "outside log");
+    await writeFile(allowedSubFile, "allowed root file");
+    await writeFile(siblingSecret, "sibling secret");
+    await writeFile(authJson, '{"token":"secret"}');
+    await writeFile(join(workspace, "inside.ts"), "export const ok = true;\n");
+
     const service = new EditorService();
-    const result = await service.open(workspace, path);
+    expect((await service.open(workspace, "inside.ts")).document).toMatchObject({ editable: true, content: "export const ok = true;\n" });
+    await expect(service.open(workspace, authJson)).rejects.toThrow("不允许打开工作区外的未授权文件");
+    await expect(service.open(workspace, path)).rejects.toThrow("不允许打开工作区外的未授权文件");
+    await expect(service.open(workspace, siblingSecret, { allowedExternalRoots: [allowedDir] })).rejects.toThrow("不允许打开工作区外的未授权文件");
+
+    const result = await service.open(workspace, path, { allowedExternalFiles: [path] });
     expect(result.document).toMatchObject({ editable: false, content: "outside log", workspacePath: await realpath(workspace) });
-    await expect(service.save({workspacePath: workspace,path,content:"changed",encoding:"utf8",lineEnding:"lf",expectedHash:result.document!.hash,expectedModifiedAt:result.document!.modifiedAt})).rejects.toThrow("超出当前工作区");
-    await expect(service.open(workspace, "../log.txt")).rejects.toThrow("超出当前工作区");
+    const rootAllowed = await service.open(workspace, allowedSubFile, { allowedExternalRoots: [allowedDir] });
+    expect(rootAllowed.document).toMatchObject({ editable: false, content: "allowed root file" });
+    await expect(service.save({ workspacePath: workspace, path, content: "changed", encoding: "utf8", lineEnding: "lf", expectedHash: result.document!.hash, expectedModifiedAt: result.document!.modifiedAt })).rejects.toThrow("超出当前工作区");
+    await expect(service.open(workspace, "../log.txt", { allowedExternalFiles: [path] })).rejects.toThrow("超出当前工作区");
     expect(await readFile(path, "utf8")).toBe("outside log");
   });
   it("lists one lazy directory level and hides ignored/build/hidden entries by default", async () => {

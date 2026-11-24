@@ -55,7 +55,7 @@ function inline(tokens: Token[], theme: Theme, onLink?: (url: string) => void): 
         return <Text key={index} style={{ fontWeight: bold ? "700" : undefined, fontStyle: italic ? "italic" : undefined, textDecorationLine: strike ? "line-through" : url ? "underline" : "none", color: url ? theme.accent : theme.text, ...(token.type === "code_inline" ? { fontFamily: "monospace", backgroundColor: theme.raised, fontSize: 14 } : {}) }} onPress={url ? () => { if (onLink && !/^https?:\/\//i.test(url))
             onLink(url);
         else if (/^https?:\/\//i.test(url))
-            void Linking.openURL(url).catch(() => undefined); } : undefined}>{token.type === "image" ? `[图片：${token.content || "点击查看"}]` : token.content}</Text>;
+            void Linking.openURL(url).catch(() => undefined); } : undefined}>{token.type === "image" ? `[图片：${token.content || token.children?.map(c => c.content).join("") || token.attrGet("alt") || "点击查看"}]` : token.content}</Text>;
     });
 }
 export const Markdown = React.memo(function Markdown({ value, theme, onLink }: {
@@ -65,22 +65,30 @@ export const Markdown = React.memo(function Markdown({ value, theme, onLink }: {
 }) {
     const tokens = useMemo(() => parser.parse(value, {}), [value]);
     const scale = React.useContext(ReadingScale);
-    let depth = 0, ordered = 0, item = false, quote = 0, heading = 0;
+    const listStack: Array<{ kind: "bullet" | "ordered"; next: number }> = [];
+    let item = false, quote = 0, heading = 0;
     const rows: React.ReactNode[] = [];
     for (let i = 0; i < tokens.length; i++) {
         const token = tokens[i]!;
         if (token.type === "bullet_list_open" || token.type === "ordered_list_open") {
-            depth++;
-            ordered = token.type === "ordered_list_open" ? Number(token.attrGet("start") || 1) : 0;
+            listStack.push({
+                kind: token.type === "ordered_list_open" ? "ordered" : "bullet",
+                next: token.type === "ordered_list_open" ? Number(token.attrGet("start") || 1) : 0,
+            });
+            item = false;
             continue;
         }
         if (token.type.endsWith("list_close")) {
-            depth = Math.max(0, depth - 1);
-            ordered = 0;
+            listStack.pop();
+            item = false;
             continue;
         }
         if (token.type === "list_item_open") {
             item = true;
+            continue;
+        }
+        if (token.type === "list_item_close") {
+            item = false;
             continue;
         }
         if (token.type === "blockquote_open") {
@@ -88,7 +96,7 @@ export const Markdown = React.memo(function Markdown({ value, theme, onLink }: {
             continue;
         }
         if (token.type === "blockquote_close") {
-            quote--;
+            quote = Math.max(0, quote - 1);
             continue;
         }
         if (token.type === "heading_open") {
@@ -101,25 +109,38 @@ export const Markdown = React.memo(function Markdown({ value, theme, onLink }: {
         }
         if (token.type === "fence" || token.type === "code_block")
             rows.push(<View key={i} style={{ borderRadius: 12, backgroundColor: theme.raised, marginVertical: 8, overflow: "hidden" }}><View style={[ui.row, { paddingHorizontal: 12, paddingTop: 8, justifyContent: "space-between" }]}><Text style={{ color: theme.muted, fontSize: 12 }}>{token.info || "代码"}</Text><Button compact title="复制代码" theme={theme} onPress={() => void Clipboard.setStringAsync(token.content)}/></View><ScrollView horizontal contentContainerStyle={{ padding: 14 }}><Text selectable style={{ fontFamily: "monospace", fontSize: scale.code, lineHeight: scale.codeLine, color: theme.text }}>{token.content.trimEnd()}</Text></ScrollView></View>);
-        else if (token.type === "inline")
-            rows.push(<View key={i} style={{ flexDirection: "row", marginVertical: heading ? 9 : 5, marginLeft: Math.max(0, depth - 1) * 14, paddingLeft: quote ? 12 : 0, borderLeftWidth: quote ? 3 : 0, borderColor: theme.border }}>{item ? <Text style={{ color: theme.muted, marginRight: 8, lineHeight: scale.line - 1 }}>{ordered ? `${ordered++}.` : "•"}</Text> : null}<Text selectable style={{ flexShrink: 1, fontSize: heading ? Math.max(scale.body + 1, scale.body + 10 - heading * 2) : scale.body, fontWeight: heading ? "700" : "400", lineHeight: heading ? scale.line + 4 : scale.line, color: theme.text }}>{inline(token.children ?? [], theme, onLink)}</Text></View>);
-        else if (token.type === "paragraph_close")
+        else if (token.type === "inline") {
+            const topList = listStack.at(-1);
+            const marker = item && topList
+                ? (topList.kind === "ordered" ? `${topList.next++}.` : "•")
+                : undefined;
+            if (item) item = false;
+            rows.push(<View key={i} style={{ flexDirection: "row", marginVertical: heading ? 9 : 5, marginLeft: Math.max(0, listStack.length - 1) * 14, paddingLeft: quote ? 12 : 0, borderLeftWidth: quote ? 3 : 0, borderColor: theme.border }}>{marker ? <Text style={{ color: theme.muted, marginRight: 8, lineHeight: scale.line - 1 }}>{marker}</Text> : null}<Text selectable style={{ flexShrink: 1, fontSize: heading ? Math.max(scale.body + 1, scale.body + 10 - heading * 2) : scale.body, fontWeight: heading ? "700" : "400", lineHeight: heading ? scale.line + 4 : scale.line, color: theme.text }}>{inline(token.children ?? [], theme, onLink)}</Text></View>);
+        } else if (token.type === "paragraph_close")
             item = false;
         else if (token.type === "hr")
             rows.push(<View key={i} style={{ height: 1, backgroundColor: theme.border, marginVertical: 12 }}/>);
         else if (token.type === "table_open") {
-            const table: string[][] = [];
-            let line: string[] = [];
+            const table: Token[][][] = [];
+            let line: Token[][] = [];
+            let cellTokens: Token[] = [];
+            let inCell = false;
             while (++i < tokens.length && tokens[i]!.type !== "table_close") {
                 const cell = tokens[i]!;
                 if (cell.type === "tr_open")
                     line = [];
-                if (cell.type === "inline")
-                    line.push(cell.content);
-                if (cell.type === "tr_close")
+                else if (cell.type === "th_open" || cell.type === "td_open") {
+                    inCell = true;
+                    cellTokens = [];
+                } else if (cell.type === "inline" && inCell) {
+                    cellTokens = cell.children ?? [];
+                } else if (cell.type === "th_close" || cell.type === "td_close") {
+                    line.push(cellTokens);
+                    inCell = false;
+                } else if (cell.type === "tr_close")
                     table.push(line);
             }
-            rows.push(<ScrollView horizontal key={`table-${i}`} style={{ marginVertical: 10 }}><View>{table.map((cells, index) => <View key={index} style={{ flexDirection: "row", backgroundColor: index === 0 ? theme.raised : "transparent" }}>{cells.map((cell, column) => <View key={column} style={{ width: 160, padding: 10, borderWidth: .5, borderColor: theme.border }}><Text selectable style={{ color: theme.text, fontSize: 14, fontWeight: index === 0 ? "600" : "400" }}>{cell}</Text></View>)}</View>)}</View></ScrollView>);
+            rows.push(<ScrollView horizontal key={`table-${i}`} style={{ marginVertical: 10 }}><View>{table.map((cells, index) => <View key={index} style={{ flexDirection: "row", backgroundColor: index === 0 ? theme.raised : "transparent" }}>{cells.map((cellChildren, column) => <View key={column} style={{ width: 160, padding: 10, borderWidth: .5, borderColor: theme.border }}><Text selectable style={{ color: theme.text, fontSize: 14, fontWeight: index === 0 ? "600" : "400" }}>{inline(cellChildren, theme, onLink)}</Text></View>)}</View>)}</View></ScrollView>);
         }
     }
     return <View>{rows}</View>;

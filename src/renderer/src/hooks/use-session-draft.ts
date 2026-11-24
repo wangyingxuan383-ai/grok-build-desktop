@@ -41,6 +41,7 @@ export function useSessionDraft(input: {
   const [loadedKey, setLoadedKey] = useState("");
   const [reloadRevision, setReloadRevision] = useState(0);
   const fallbackTaskRef = useRef<NewTaskDraft | undefined>(undefined);
+  const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
   const reloadDraft = useCallback((fallback?: NewTaskDraft) => {
     // Reopening the same target must not replace a locally edited, not-yet-saved draft.
     if (loadedKey && loadedKey === draftKey && (composer || input.attachments.length)) {
@@ -49,7 +50,7 @@ export function useSessionDraft(input: {
     }
     fallbackTaskRef.current = fallback;
     setReloadRevision((value) => value + 1);
-  }, [loadedKey, composer, input.attachments.length, input.activeSessionId, newTask, input.newDraftKey, input.workspace]);
+  }, [loadedKey, draftKey, composer, input.attachments.length, input.activeSessionId, newTask]);
   const loadGenerationRef = useRef(0);
   const touchedGenerationRef = useRef(0);
   const attachmentRevisionRef = useRef(0);
@@ -61,7 +62,6 @@ export function useSessionDraft(input: {
   const draftEditRevision = useCallback(() => userRevisionRef.current + attachmentRevisionRef.current, []);
   const nextSubmissionClaimRef = useRef(0);
   const submissionClaimsRef = useRef(new Map<number, DraftSubmissionClaim>());
-  const draftKey = input.activeSessionId || input.newDraftKey || (input.workspace ? `new:${input.workspace}` : "");
   const ownerRef = useRef<DraftOwner>({ draftKey, workspace: input.workspace, foreignSessionOpen: input.foreignSessionOpen });
   ownerRef.current = { draftKey, workspace: input.workspace, foreignSessionOpen: input.foreignSessionOpen };
   const editEpochRef = useRef(0);
@@ -103,7 +103,7 @@ export function useSessionDraft(input: {
         return false;
       }
       input.addAttachments([attachment]);
-      setComposer("");
+      setComposer((current) => (current === text ? "" : current));
       return true;
     } catch (error) {
       if (!isCurrent() || !stillOwned()) return false;

@@ -37,7 +37,7 @@ export function RightDock({ tool, active, sessionId, cwd, lastTurnPaths, reviewI
   const paneKey = sessionScopedPaneKey(sessionId, cwd, tool);
   return <Suspense fallback={<aside className="right-utility-pane workbench-loading" role="status"><div className="spinner"/><span>正在加载侧栏…</span></aside>}>
     {tool === "agent-changes" ? <AgentChangePane key={paneKey} sessionId={sessionId} onClose={onClose} onNavigate={onNavigate} onError={onError}/>
-      : tool === "review" ? <ReviewPane key={paneKey} cwd={cwd} sessionId={sessionId} lastTurnPaths={lastTurnPaths} initialKind={reviewInitialScope} onClose={onClose} onNavigate={onNavigate} onAddComment={onAddComment} onError={onError}/>
+      : tool === "review" ? <ReviewPane key={paneKey} cwd={cwd} sessionId={sessionId} lastTurnPaths={lastTurnPaths} initialKind={reviewInitialScope} onTool={onTool} onClose={onClose} onNavigate={onNavigate} onAddComment={onAddComment} onError={onError}/>
         : <RightUtilityPane key={paneKey} tool={tool} turn={turn} cwd={cwd} sessionId={sessionId} paths={lastTurnPaths} queue={queue} runtimeUpdates={runtimeUpdates} sessionStatus={sessionStatus} onTool={onTool} onClose={onClose} onNavigate={onNavigate} onExpandResult={onExpandResult} onError={onError} confirmAction={confirmAction}/>}
   </Suspense>;
 }

@@ -1,0 +1,89 @@
+.window-frame-root {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-window);
+  color: var(--color-fg);
+}
+.window-frame-root > .shell-titlebar { position: relative; z-index: 30; }
+.window-frame-root > .app-shell { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; }
+.main-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* ---- Acrylic Glass V2: zero double-opaque blocking & zero backdrop-filter on scrolling Virtuoso ---- */
+.window-frame-root.background-window > .shell-titlebar,
+.window-frame-root.has-aurora > .shell-titlebar {
+  background: var(--surface-glass-sidebar) !important;
+  border-bottom-color: var(--border-glass-hairline) !important;
+  backdrop-filter: blur(16px) saturate(1.18);
+}
+.window-frame-root.background-window > .app-shell,
+.window-frame-root.has-aurora > .app-shell {
+  background: transparent;
+}
+.window-frame-root.background-window .sidebar,
+.window-frame-root.has-aurora .sidebar {
+  background: var(--surface-glass-sidebar);
+  backdrop-filter: blur(14px) saturate(1.14);
+}
+.window-frame-root.background-window :is(.main-pane, .right-utility-pane, .review-pane, .artifact-preview-pane, .agent-change-pane),
+.window-frame-root.has-aurora :is(.main-pane, .right-utility-pane, .review-pane, .artifact-preview-pane, .agent-change-pane) {
+  background: var(--surface-glass-pane);
+  border-color: var(--border-glass-hairline);
+}
+.window-frame-root.background-window :is(.conversation-surface, .conversation-content, .conversation-wrap, .composer-zone, .workbench-page-host, .thread-stage, .thread-stage-body, .git-main-grid, .memory-workbench, .definition-workbench, .profile-workbench, .agent-dashboard-workbench, .file-workbench, .git-workbench, .worktree-workbench),
+.window-frame-root.has-aurora :is(.conversation-surface, .conversation-content, .conversation-wrap, .composer-zone, .workbench-page-host, .thread-stage, .thread-stage-body, .git-main-grid, .memory-workbench, .definition-workbench, .profile-workbench, .agent-dashboard-workbench, .file-workbench, .git-workbench, .worktree-workbench) {
+  background: transparent;
+}
+.window-frame-root.background-window .composer,
+.window-frame-root.has-aurora .composer {
+  background: var(--surface-glass-card);
+  border-color: var(--border-glass-hairline);
+  backdrop-filter: blur(16px);
+}
+.window-frame-root.background-window :is(.ui-popover, .ui-menu, .ui-dialog, .control-panel),
+.window-frame-root.has-aurora :is(.ui-popover, .ui-menu, .ui-dialog, .control-panel),
+:root:has(.window-frame-root.background-window) :is(.ui-popover, .ui-menu, .ui-dialog, .control-panel),
+:root:has(.window-frame-root.has-aurora) :is(.ui-popover, .ui-menu, .ui-dialog, .control-panel) {
+  background: var(--surface-glass-elevated);
+  border-color: var(--border-glass-hairline);
+  backdrop-filter: blur(20px) saturate(1.22);
+}
+
+/* ---- TurnCapsule, PromptQueueStack, SecretGuardBar, StagedMergeBackCard, Telemetry ---- */
+.turn-capsule-trigger { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--border-glass-hairline, var(--color-border)); background: var(--surface-glass-card, var(--color-card)); color: var(--color-fg); font-size: var(--text-xs); font-weight: 600; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.turn-capsule-trigger.has-waiting { border-color: color-mix(in srgb, var(--color-warning) 52%, var(--color-border)); background: color-mix(in srgb, var(--color-warning) 12%, var(--color-card)); }
+.turn-capsule-trigger.has-stalled:not(.has-waiting) { border-color: color-mix(in srgb, var(--color-warning) 42%, var(--color-border)); }
+.turn-capsule-popover { width: min(380px, calc(100vw - 24px)); display: grid; gap: 8px; padding: 10px; }
+.turn-capsule-row { display: grid; gap: 6px; padding: 8px; border-radius: var(--radius-lg); border: 1px solid var(--color-border); background: var(--color-card); }
+.turn-capsule-row.waiting { border-color: color-mix(in srgb, var(--color-warning) 48%, var(--color-border)); }
+.turn-capsule-row.stalled { border-color: color-mix(in srgb, var(--color-warning) 36%, var(--color-border)); }
+.session-status-strip .telemetry-stalled { color: var(--color-warning); font-weight: 600; }
+.session-status-strip .telemetry-live { color: var(--color-accent); }
+
+.prompt-queue-stack { width: min(var(--content-width), calc(100% - 40px)); margin: 0 auto 6px; border: 1px solid var(--border-glass-hairline, var(--color-border)); border-radius: 12px; background: var(--surface-glass-card, var(--color-card)); box-shadow: 0 6px 22px var(--shadow); overflow: hidden; }
+.prompt-queue-bar-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px; }
+.prompt-queue-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 4px 6px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-fg); font-size: var(--text-xs); text-align: left; cursor: pointer; }
+.prompt-queue-toggle:hover { background: var(--color-hover); }
+.prompt-queue-steer-btn { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--color-accent) 48%, var(--color-border)); border-radius: 999px; background: var(--color-accent-soft); color: var(--color-accent); font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.prompt-queue-steer-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+
+.secret-guard-bar, .staged-merge-card { width: min(var(--content-width), calc(100% - 40px)); margin: 0 auto 8px; padding: 8px 11px; border-radius: 12px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--text-xs); }
+.secret-guard-bar { border: 1px solid color-mix(in srgb, var(--color-warning) 55%, var(--color-border)); background: color-mix(in srgb, var(--color-warning) 11%, var(--surface-glass-card, var(--color-card))); color: var(--color-fg); }
+.staged-merge-card { border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border)); background: var(--surface-glass-card, var(--color-card)); }
+
+@media (max-width: 1080px) {
+  .shell-toolbar-label, .project-scripts-trigger span { display: none; }
+}
+@media (max-width: 900px) {
+  .shell-titlebar { grid-template-columns: minmax(0, auto) minmax(120px, 1fr) minmax(0, auto) !important; }
+  .shell-open-in-split { display: none !important; }
+}
+@media (max-width: 680px) {
+  .git-actions-toolbar .git-toolbar-pill span, .shell-omni-trigger .ui-kbd { display: none; }
+}

@@ -23,7 +23,7 @@ if (process.env.GITHUB_BUILD_COMMIT && evidence.sourceCommit !== process.env.GIT
 }
 const bytes = await readFile(join(directory, name));
 if (bytes.length !== evidence.size || createHash("sha256").update(bytes).digest("hex") !== evidence.sha256) throw Error("Companion release checksum does not match signed artifact");
-if (evidence.signingCertificateSha256 !== "87e00a382a5e0e76772583964ea9c2b695eaf80e75ac4241cf07aa6767f2b114") throw Error("Companion signing identity changed");
+if (evidence.signingCertificateSha256 !== "7a18ebbaae01423d83824a37580a9d6ba02e791b380016de7f2fe8b86af1215b") throw Error("Companion signing identity changed");
 const result = spawnSync(process.execPath, [fileURLToPath(new URL("check-mobile-artifact.mjs", import.meta.url)), join(directory, name)], { stdio: "inherit" });
 if (result.status !== 0) throw Error("Companion artifact scan failed");
 console.log(`Companion release verified: ${mobile.version}, code ${mobile.android.versionCode}, SHA-256 ${evidence.sha256}`);

@@ -193,6 +193,7 @@ export class ProviderService {
     let environmentChanged = false;
     let previousEnvironmentCleared = false;
     let storeChanged = false;
+    let configWritten = false;
     try {
       if (input.credentialMode === "managed" && input.credentialValue) {
         await this.environment.write(envName!, input.credentialValue);
@@ -204,6 +205,7 @@ export class ProviderService {
         previousEnvironmentCleared = true;
       }
       await this.replaceManagedBlock(originalConfig, nextProviders, originalHash, data.providers);
+      configWritten = true;
       await this.options.validateConfig?.();
       await this.store.set({ providers: nextProviders });
       storeChanged = true;
@@ -213,7 +215,7 @@ export class ProviderService {
       await this.options.reloadModels?.();
       return this.list();
     } catch (error) {
-      await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      if (configWritten) await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.store.set(data).catch((rollbackError) => this.log.log(`提供商索引回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.profileRecovery.save(data.providers).catch((rollbackError) => this.log.log(`提供商安全备份回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (environmentChanged && envName) await this.environment.write(envName, previousSecret).catch((rollbackError) => this.log.log(`提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
@@ -242,8 +244,10 @@ export class ProviderService {
     const previousBaseUrl = await this.environment.read(baseUrlEnv);
     let storeChanged = false;
     let environmentChanged = false;
+    let configWritten = false;
     try {
       await this.replaceManagedBlock(originalConfig, nextProviders, hash(originalConfig), data.providers);
+      configWritten = true;
       await this.options.validateConfig?.();
       await this.store.set({ providers: nextProviders });
       storeChanged = true;
@@ -260,7 +264,7 @@ export class ProviderService {
       await this.options.reloadModels?.();
       return this.list();
     } catch (error) {
-      await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+      if (configWritten) await this.restoreConfig(originalConfig).catch((rollbackError) => this.log.log(`提供商配置文件回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.store.set(data).catch((rollbackError) => this.log.log(`提供商索引回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (storeChanged) await this.profileRecovery.save(data.providers).catch((rollbackError) => this.log.log(`提供商安全备份回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
       if (environmentChanged && target.credentialEnv) await this.environment.write(target.credentialEnv, previousSecret).catch((rollbackError) => this.log.log(`提供商凭据回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
@@ -317,18 +321,23 @@ export class ProviderService {
       environment[name] = await this.gateway.route(provider.id, scopeId);
     }
     if (needsMigration) {
-      try {
-        await this.replaceManagedBlock(config, storedProviders, hash(config), storedProviders);
-        await this.options.validateConfig?.();
-      } catch (error) {
-        // `replaceManagedBlock` is atomic as a file write, but validation is a
-        // separate CLI operation. Never leave a syntactically/semantically
-        // rejected managed block behind for the next launch to mistake as a
-        // successful migration.
-        await this.restoreConfig(config).catch((rollbackError) => this.log.log(`提供商管理块迁移回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
-        if (requiredProviderId) throw error;
-        await this.log.log(`提供商管理块迁移失败，本次会话沿用现有 config.toml：${error instanceof Error ? error.message : String(error)}`);
-      }
+      await this.serializeProviderMutation(async () => {
+        const latestConfig = await readFile(this.configPath, "utf8").catch(() => "");
+        let configWritten = false;
+        try {
+          await this.replaceManagedBlock(latestConfig, storedProviders, hash(latestConfig), storedProviders);
+          configWritten = true;
+          await this.options.validateConfig?.();
+        } catch (error) {
+          // `replaceManagedBlock` is atomic as a file write, but validation is a
+          // separate CLI operation. Never leave a syntactically/semantically
+          // rejected managed block behind for the next launch to mistake as a
+          // successful migration, and never overwrite an external edit when hash check failed.
+          if (configWritten) await this.restoreConfig(latestConfig).catch((rollbackError) => this.log.log(`提供商管理块迁移回滚失败：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`));
+          if (requiredProviderId) throw error;
+          await this.log.log(`提供商管理块迁移失败，本次会话沿用现有 config.toml：${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
     }
     return environment;
   }
@@ -1049,13 +1058,15 @@ export class ProviderService {
     if (!data.providers.some((provider) => provider.enabled !== false && provider.models.some((model) => model.enabled !== false && model.id === modelId))) throw new Error("只能选择已启用的应用管理模型作为 CLI 默认值");
     const original = await readFile(this.configPath, "utf8").catch(() => "");
     const next = setModelsDefault(original, modelId);
+    let configWritten = false;
     try {
       await this.atomicWrite(next, hash(original));
+      configWritten = true;
       await this.options.validateConfig?.();
       await this.options.reloadModels?.();
       return this.list();
     } catch (error) {
-      await this.restoreConfig(original);
+      if (configWritten) await this.restoreConfig(original);
       throw error;
     }
   }

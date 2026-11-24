@@ -12,6 +12,7 @@ export type ThemeBase = "dark" | "light";
 export type BackgroundScope = "conversation" | "window";
 export type BackgroundFit = "cover" | "contain";
 export type BackgroundPosition = "center" | "top" | "bottom" | "left" | "right";
+export type ThemeAuroraPreset = "none" | "nebula" | "cedar" | "jade";
 
 export interface ThemeColors {
   background: string;
@@ -26,6 +27,14 @@ export interface ThemeSettings {
   mode: ThemeMode;
   customBase: ThemeBase;
   colors: ThemeColors;
+  presetId?: string;
+  darkPresetId?: string;
+  lightPresetId?: string;
+  autoExtractWallpaperPalette?: boolean;
+  aurora?: ThemeAuroraPreset;
+  customCss?: string;
+  seedCanvas?: string;
+  seedAccent?: string;
   background: {
     enabled: boolean;
     scope: BackgroundScope;
@@ -34,6 +43,7 @@ export interface ThemeSettings {
     opacity: number;
     blur: number;
     dim: number;
+    updatedAt?: number;
   };
 }
 
@@ -56,10 +66,11 @@ export type ComposerCapabilitySelection = {
 } | { kind: "mcp"; label: string; command: ""; source?: string; selection: McpToolSelection };
 
 export type AppMenuCommand =
-  | "command-search" | "open-inbox" | "open-pet-settings"
+  | "command-search" | "open-inbox" | "open-pet-settings" | "open-app-menu"
   | "new-session" | "choose-workspace" | "add-attachment" | "export-session"
   | "search-sessions" | "search-conversation" | "focus-composer" | "stop-generation" | "copy-final-answer"
-  | "toggle-sidebar" | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
+  | "toggle-sidebar" | "toggle-terminal" | "toggle-inspector" | "toggle-diff" | "split-pane" | "stash-draft"
+  | "open-accounts" | "open-media" | "open-extensions" | "open-computer"
   | "open-settings" | "open-diagnostics" | "open-onboarding" | "open-about" | "open-task-center" | "open-feedback";
 
 export interface BuildInfo {
@@ -735,6 +746,8 @@ export interface SessionRuntimePreferences {
   compaction?: SessionCompactionPolicy;
   /** Last known native run summaries; restored values are read-only until confirmed live. */
   nativeRuns?: import("./native-runs").NativeRunSnapshot[];
+  settleOnTurnEnd?: boolean;
+  stagedMergeBacks?: import("./workbench-types").StagedMergeBackRecord[];
   updatedAt: string;
 }
 
@@ -793,6 +806,8 @@ export interface QueueOperationReceipt {
   state: "queued" | "interjected" | "send-now" | "updated" | "removed" | "reordered" | "cleared";
   message: string;
   fallback?: boolean;
+  priorTurnId?: string;
+  hadActiveWork?: boolean;
   /**
    * `desktop` means the operation was committed to the Desktop-owned durable
    * queue. `transport`/`cli` are retained for compatibility with receipts from
@@ -818,6 +833,8 @@ export interface BackgroundTaskSummary {
   updatedAt: string;
   detail?: string;
 }
+
+export type RewindMode = "all" | "conversation_only" | "files_only";
 
 export interface RewindPoint {
   id: string;
@@ -891,6 +908,7 @@ export interface SessionSummary {
   effort?: string;
   status: LiveStatus;
   pinned?: boolean;
+  settled?: boolean;
   archived?: boolean;
   parentSessionId?: string;
   originKind?: SessionOriginKind;
@@ -898,6 +916,10 @@ export interface SessionSummary {
   originTitle?: string;
   executionProfileId?: string;
   worktreeId?: string;
+  snoozedUntil?: string;
+  settleOnTurnEnd?: boolean;
+  linkedIssue?: import("./workspace-tools").SessionLinkedIssue;
+  stagedMergeBackCount?: number;
 }
 
 export type WorkspaceSource = "pinned" | "recent" | "grok" | "codex" | "claude";
@@ -1099,6 +1121,7 @@ export interface SessionPreviewSnapshot {
   lastActivityAt?: string;
   visibleSummary: string;
   status: LiveStatus;
+  live?: boolean;
   modelId?: string;
   attachmentCount: number;
   projectionUpdatedAt?: string;
@@ -1189,6 +1212,8 @@ export interface McpServerSummary {
   tools: Array<{ name: string; description?: string }>;
   configSource?: string;
   oauth?: boolean;
+  hasHeadersHelper?: boolean;
+  authUrl?: string;
 }
 
 export interface McpDiagnostic {
@@ -1688,6 +1713,8 @@ export interface PermissionOption {
 export interface PermissionRequest {
   requestId: string | number;
   sessionId: string;
+  requestingSessionId?: string;
+  subagentTitle?: string;
   toolCall: unknown;
   options: PermissionOption[];
 }
@@ -1760,7 +1787,7 @@ export interface SubagentConversationSnapshot {
 export type ChatEvent =
   | { type: "session-reset"; sessionId: string }
   | { type: "session-hydration"; sessionId: string; state: SessionHydrationState; generation: number; message?: string }
-  | { type: "conversation-projection-restore"; sessionId: string; projection: ConversationProjection }
+  | { type: "conversation-projection-restore"; sessionId: string; projection: ConversationProjection; live?: boolean }
   | { type: "history-recovery"; sessionId: string; status: "recovered" | "unavailable"; message: string }
   | { type: "session-ready"; sessionId: string; models: ModelInfo[]; currentModelId?: string; effort?: ReasoningEffort; modes?: unknown[]; modelSelectionRequired?: string }
   | { type: "user-message"; sessionId: string; text: string; id?: string; clientMessageId?: string; attachments?: UserMessageAttachmentPreview[]; delivery?: UserMessageDeliveryState }
@@ -1771,7 +1798,7 @@ export type ChatEvent =
   | { type: "thought-chunk"; sessionId: string; text: string }
   | { type: "tool-call"; sessionId: string; tool: ToolCallState }
   | { type: "permission"; sessionId: string; request: PermissionRequest }
-  | { type: "question"; sessionId: string; requestId: string | number; questions: QuestionItem[] }
+  | { type: "question"; sessionId: string; requestId: string | number; questions: QuestionItem[]; requestingSessionId?: string; subagentTitle?: string }
   | { type: "mcp-elicitation"; sessionId: string; request: McpElicitationRequest }
   | { type: "plan"; sessionId: string; requestId?: string | number; text: string; executionMode?: "agent" | "auto" }
   | { type: "interaction-resolved"; sessionId: string; interaction: "permission" | "question" | "plan" | "mcp-elicitation"; requestId: string | number; outcome?: string }
@@ -1878,6 +1905,26 @@ export interface SessionCompactReceipt {
   completedAt?: string;
   beforeTokens?: number;
   afterTokens?: number;
+  message: string;
+}
+
+export interface ClearSessionContextInput {
+  sessionId: string;
+  cwd?: string;
+  carryoverPrompt?: string;
+  keepHistoryArchive?: boolean;
+}
+
+export interface ClearSessionContextResult {
+  previousSessionId: string;
+  sessionId: string;
+  cwd: string;
+  rotated: boolean;
+  worktreeId?: string;
+  profileId?: string;
+  modelId?: string;
+  effort: ReasoningEffort;
+  mode: SessionMode;
   message: string;
 }
 
@@ -2016,11 +2063,36 @@ export interface CliUpdateReceipt {
 }
 
 export interface CliRuntimeUpdate {
-  kind: "model" | "settings" | "goal" | "workflow" | "subagent" | "monitor" | "scheduled-task" | "mcp" | "git" | "announcement" | "session";
+  kind: "model" | "settings" | "goal" | "workflow" | "subagent" | "monitor" | "scheduled-task" | "mcp" | "git" | "announcement" | "session" | "limit" | "folder-trust" | "memory";
   name: string;
   at: string;
   summary?: string;
   data?: Record<string, unknown>;
+}
+
+export interface OfficialSessionSearchHit {
+  sessionId: string;
+  cwd?: string;
+  title?: string;
+  snippet?: string;
+  score?: number;
+  matchedFields?: string[];
+  updatedAt?: string;
+}
+
+export interface OfficialSessionSearchResult {
+  supported: boolean;
+  hits: OfficialSessionSearchHit[];
+  totalEstimate?: number;
+  source: "acp" | "local-fallback";
+}
+
+export interface WorkflowCatalogItem {
+  id: string;
+  name: string;
+  description?: string;
+  source?: string;
+  command?: string;
 }
 
 /**
@@ -2170,6 +2242,10 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   listPetSkins(): Promise<import("./desktop-pet").PetSkin[]>;
   petCommand(command: "show" | "hide" | "reset" | "preview", clip?: import("./desktop-pet").PetClipId): Promise<void>;
   importPetSkin(): Promise<import("./desktop-pet").PetSkin | null>;
+  importPetSpriteSheet?(input: import("./desktop-pet").PetSpriteSheetImportInput): Promise<import("./desktop-pet").PetSkin | null>;
+  exportPetSkin?(id: string, format: "grok" | "codex"): Promise<string | null>;
+  deletePetSkin(id: string): Promise<import("./desktop-pet").PetSkin[]>;
+  popupAppMenu?(position?: { x: number; y: number }): Promise<void>;
   getDesktopActivity(): Promise<DesktopActivitySnapshot>;
   onDesktopActivityChanged(listener: (state: DesktopActivitySnapshot) => void): () => void;
   onInboxChanged(listener: () => void): () => void;
@@ -2315,6 +2391,8 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   inspectAttachmentPrivacy(cwd: string, attachments: Attachment[]): Promise<AttachmentPrivacyFinding[]>;
   listSessions(cwd?: string, query?: string): Promise<SessionSummary[]>;
   listOfficialSessions(cwd?: string, cursor?: string): Promise<CliSessionListResult>;
+  searchOfficialSessions?(query: string, cwd?: string, limit?: number): Promise<OfficialSessionSearchResult>;
+  listWorkflows?(cwd?: string): Promise<WorkflowCatalogItem[]>;
   createSession(input: string | import("./workbench-types").ExecutionProfileLaunchInput): Promise<import("./workbench-types").SessionLaunchResult>;
   previewSession(cwd: string, sessionId: string): Promise<SessionPreviewSnapshot>;
   inspectSession(cwd: string, sessionId: string): Promise<ConversationProjection | undefined>;
@@ -2327,12 +2405,13 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   sendBtwPrompt(sessionId: string, text: string): Promise<CliBtwReceipt>;
   getOfficialFeedbackCapability(sessionId: string): Promise<OfficialFeedbackCapability>;
   previewOfficialFeedback(text: string): Promise<OfficialFeedbackPreview>;
-  submitOfficialFeedback(sessionId: string, text: string): Promise<OfficialFeedbackReceipt>;
+  submitOfficialFeedback(sessionId: string, text: string, imagePaths?: string[]): Promise<OfficialFeedbackReceipt>;
   renameSession(sessionId: string, title: string): Promise<void>;
   deleteSession(cwd: string, sessionId: string): Promise<void>;
   deleteDesktopSessionData(cwd: string, sessionId: string): Promise<void>;
   clearSessions(cwd: string, keepSessionId?: string): Promise<void>;
   pinSession(sessionId: string, pinned: boolean): Promise<void>;
+  settleSession?(sessionId: string, settled: boolean): Promise<void>;
   exportSessionMarkdown(cwd: string, sessionId: string): Promise<string | null>;
   getMediaCapabilities(sessionId: string): Promise<MediaCapabilities>;
   startMediaGeneration(request: MediaCreationRequest & { sessionId: string }): Promise<MediaGenerationJob>;
@@ -2346,7 +2425,7 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   setModel(sessionId: string, modelId: string): Promise<void>;
   setEffort(sessionId: string, effort: ReasoningEffort): Promise<void>;
   setMode(sessionId: string, mode: SessionMode): Promise<void>;
-  respondPermission(sessionId: string, requestId: string | number, optionId: string): Promise<void>;
+  respondPermission(sessionId: string, requestId: string | number, optionId: string, feedback?: string): Promise<void>;
   respondQuestion(sessionId: string, requestId: string | number, answers: Record<string, string>): Promise<void>;
   respondMcpElicitation(sessionId: string, requestId: string | number, outcome: "accept" | "decline" | "cancel", content?: Record<string, McpElicitationPrimitive>): Promise<void>;
   respondPlan(sessionId: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string, executionMode?: "agent" | "auto"): Promise<PlanDecisionReceipt>;
@@ -2375,7 +2454,8 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   openExternal(url: string): Promise<void>;
   getSettings(): Promise<AppSettings>;
   getPullRequestStatus(workspace:string):Promise<import("./workspace-tools").PullRequestStatus>;
-  watchPullRequest(workspace:string,sessionId:string,enabled:boolean):Promise<void>;
+  createPullRequest?(input: import("./workspace-tools").PullRequestCreateInput): Promise<import("./workspace-tools").PullRequestCreateResult>;
+  watchPullRequest(workspace:string,sessionId:string,enabled:boolean,settleOnMerge?:boolean):Promise<void>;
   updateSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   listModelCatalog(refresh?: boolean): Promise<ModelInfo[]>;
   getTheme(): Promise<ThemeSettings>;
@@ -2449,7 +2529,7 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   forkSession(sessionId: string, rewindPointId?: string, launch?: import("./workbench-types").ExecutionProfileLaunchInput): Promise<SessionForkResult>;
   rebindWorkspaceSessions(sourceCwd: string, targetCwd: string): Promise<WorkspaceRebindReceipt>;
   listRewindPoints(sessionId: string): Promise<RewindPoint[]>;
-  rewindSession(sessionId: string, pointId: string): Promise<void>;
+  rewindSession(sessionId: string, pointId: string, mode?: RewindMode): Promise<void>;
   archiveSession(sessionId: string, archived: boolean): Promise<void>;
   listBackgroundTasks(): Promise<BackgroundTaskSummary[]>;
   listNativeRuns(sessionId?: string): Promise<import("./native-runs").NativeRunSnapshot[]>;
@@ -2511,6 +2591,29 @@ export interface GrokDesktopApi extends PromptSnippetApi, SessionExportApi {
   getCliCompatibilitySnapshot(): Promise<CliCompatibilitySnapshot>;
   getCliUpdateHistory(): Promise<CliUpdateRecord[]>;
   exportLogs(): Promise<string | null>;
+  listWorkspaceScripts(workspacePath: string, executionCwd?: string): Promise<import("./workspace-tools").WorkspaceScriptListResult>;
+  saveWorkspaceScript(input: import("./workspace-tools").WorkspaceScriptSaveInput): Promise<import("./workspace-tools").WorkspaceScript>;
+  deleteWorkspaceScript(workspacePath: string, scriptId: string): Promise<void>;
+  approveWorkspaceScript(workspacePath: string, scriptId: string, commandHash: string, trusted: boolean, executionCwd?: string): Promise<import("./workspace-tools").WorkspaceScript>;
+  runWorkspaceScript(input: import("./workspace-tools").WorkspaceScriptRunInput): Promise<import("./workspace-tools").WorkspaceScriptRunReceipt>;
+  stopWorkspaceScript(runIdOrTerminalId: string): Promise<void>;
+  listRunningWorkspaceScripts(workspacePath: string): Promise<import("./workspace-tools").WorkspaceScriptRunReceipt[]>;
+  listGitTurnCheckpoints(cwd: string, sessionId: string): Promise<import("./workbench-types").GitTurnCheckpoint[]>;
+  getGitTurnDiff(cwd: string, sessionId: string, turnOrdinal: number): Promise<import("./workbench-types").GitDiffSnapshot>;
+  handoffSessionToWorktree(input: import("./workbench-types").SessionWorktreeHandoffInput): Promise<import("./workbench-types").SessionWorktreeHandoffResult>;
+  snoozeSession(sessionId: string, snoozedUntil: string | null): Promise<void>;
+  setSessionUnread(sessionId: string, unread: boolean): Promise<void>;
+  setSessionSettleOnTurnEnd(sessionId: string, enabled: boolean): Promise<void>;
+  previewMergeBackSession(sessionId: string, targetSessionId?: string): Promise<import("./workbench-types").MergeBackPreview>;
+  mergeBackSession(input: import("./workbench-types").MergeBackSessionInput): Promise<import("./workbench-types").MergeBackResult>;
+  dismissStagedMergeBack(parentSessionId: string, childSessionId: string): Promise<void>;
+  promoteQueuedPromptToSteer(sessionId: string, id: string, text?: string): Promise<QueueOperationReceipt>;
+  clearSessionContextInPlace(input: ClearSessionContextInput): Promise<ClearSessionContextResult>;
+  discoverPullRequestTemplates(workspace: string): Promise<import("./workspace-tools").PullRequestTemplate[]>;
+  getPullRequestStack(workspace: string): Promise<import("./workspace-tools").PullRequestStackSnapshot>;
+  listGitHubIssues(workspace: string, query?: import("./workspace-tools").GitHubIssueListQuery): Promise<import("./workspace-tools").GitHubIssueListResult>;
+  getGitHubIssue(workspace: string, issueNumber: number): Promise<import("./workspace-tools").GitHubIssueDetail>;
+  linkSessionIssue(sessionId: string, issue: import("./workspace-tools").SessionLinkedIssue | null): Promise<import("./workspace-tools").SessionLinkedIssue | null>;
   onEvent(listener: (event: ChatEvent) => void): () => void;
   onLogin(listener: (state: LoginState) => void): () => void;
   onAttachmentDrop(listener: (event: import("./attachment-drop").AttachmentDropEvent) => void): () => void;
@@ -2592,6 +2695,14 @@ export type {
   SessionExecutionAssignment,
   SessionExecutionProfileScope,
   SessionLaunchResult,
+  SessionWorktreeHandoffInput,
+  SessionWorktreeHandoffResult,
+  StagedMergeBackRecord,
+  MergeBackPreview,
+  MergeBackSessionInput,
+  MergeBackResult,
+  GitTurnCheckpoint,
+  GitDiffSnapshot,
   WorktreeApplyPreview,
   WorktreeApplyResult,
   WorktreeCreateInput,

@@ -206,12 +206,31 @@ export class WorktreeService {
 
   async previewGc(workspacePath: string): Promise<WorktreeGcPreview> {
     const target = await this.git.status(workspacePath);
-    const result = await this.run(["-C", target.repositoryRoot, "worktree", "prune", "--expire=now", "--dry-run", "--verbose"]);
-    const candidates = `${result.stdout}\n${result.stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
-      const match = line.match(/^Removing worktrees\/([^:]+):\s*(.*)$/i);
-      return { path: match?.[1] ?? line, reason: match?.[2] ?? "Git 标记为可清理" };
-    });
-    return { repositoryRoot: target.repositoryRoot, candidates, confirmationToken: createHash("sha256").update(JSON.stringify(candidates)).digest("hex") };
+    const listResult = await this.run(["-C", target.repositoryRoot, "worktree", "list", "--porcelain", "-z"]);
+    const records = parseWorktreeList(listResult.stdout).filter((record) => !samePath(record.path, target.repositoryRoot));
+    const candidates: Array<{ path: string; reason: string }> = [];
+    for (const record of records) {
+      const resolvedPath = resolve(record.path);
+      const exists = await stat(resolvedPath).then((v) => v.isDirectory()).catch(() => false);
+      if (record.prunable || !exists) {
+        candidates.push({
+          path: resolvedPath,
+          reason: record.prunableReason || (!exists ? "Worktree 目录已不存在" : "Git 标记为可清理"),
+        });
+      }
+    }
+    if (!candidates.length) {
+      const pruneDry = await this.run(["-C", target.repositoryRoot, "worktree", "prune", "--expire=now", "--dry-run", "--verbose"]);
+      for (const line of `${pruneDry.stdout}\n${pruneDry.stderr}`.split(/\r?\n/).map((v) => v.trim()).filter(Boolean)) {
+        const match = line.match(/^Removing worktrees\/([^:]+):\s*(.*)$/i);
+        candidates.push({ path: match?.[1] ?? line, reason: match?.[2] ?? "Git 标记为可清理" });
+      }
+    }
+    return {
+      repositoryRoot: target.repositoryRoot,
+      candidates,
+      confirmationToken: createHash("sha256").update(JSON.stringify(candidates)).digest("hex"),
+    };
   }
 
   async gc(workspacePath: string, confirmationToken: string, confirmed: boolean): Promise<WorktreeGcPreview> {
@@ -221,8 +240,20 @@ export class WorktreeService {
     if (preview.confirmationToken !== confirmationToken) throw new Error("GC 预览已变化，请重新预览");
     const official = await this.tryOfficial("x.ai/git/worktree/gc", { workspacePath: preview.repositoryRoot });
     if (!official) await this.run(["-C", preview.repositoryRoot, "worktree", "prune", "--expire=now", "--verbose"]);
+    const candidatePaths = preview.candidates.filter((c) => c.path.includes("/") || c.path.includes("\\")).map((c) => c.path);
+    const missingIds = new Set<string>();
+    const currentState = await this.store.get();
+    for (const entry of currentState.entries) {
+      if (!samePath(entry.repositoryRoot, preview.repositoryRoot)) continue;
+      if (candidatePaths.some((candidatePath) => samePath(entry.path, candidatePath))) {
+        missingIds.add(entry.id);
+        continue;
+      }
+      const stillExists = await stat(entry.path).then((v) => v.isDirectory()).catch(() => false);
+      if (!stillExists) missingIds.add(entry.id);
+    }
     await this.store.mutate((state) => {
-      state.entries = state.entries.filter((entry) => entry.repositoryRoot !== preview.repositoryRoot || !preview.candidates.some((candidate) => candidate.path.includes(basename(entry.path))));
+      state.entries = state.entries.filter((entry) => !missingIds.has(entry.id));
     });
     return this.previewGc(workspacePath);
   }
@@ -253,11 +284,24 @@ export class WorktreeService {
 
   private async recordMetadata(input: Omit<WorktreeMetadata, "id" | "createdAt" | "lastUsedAt"> & { id?: string }): Promise<WorktreeMetadata> {
     const now = new Date().toISOString();
-    const metadata: WorktreeMetadata = { ...input, id: input.id ?? randomUUID(), createdAt: now, lastUsedAt: now };
+    let saved!: WorktreeMetadata;
     await this.store.mutate((state) => {
-      state.entries = [...state.entries.filter((entry) => entry.id !== metadata.id && !samePath(entry.path, metadata.path)), metadata];
+      const existing = state.entries.find((entry) => (input.id && entry.id === input.id) || samePath(entry.path, input.path));
+      saved = {
+        ...existing,
+        ...input,
+        id: input.id ?? existing?.id ?? randomUUID(),
+        name: input.name || existing?.name || basename(input.path),
+        branch: input.branch ?? existing?.branch,
+        baseRef: input.baseRef ?? existing?.baseRef,
+        sourceSessionId: input.sourceSessionId ?? existing?.sourceSessionId,
+        agentId: input.agentId ?? existing?.agentId,
+        createdAt: existing?.createdAt ?? now,
+        lastUsedAt: now,
+      };
+      state.entries = [...state.entries.filter((entry) => entry.id !== saved.id && !samePath(entry.path, saved.path)), saved];
     });
-    return metadata;
+    return saved;
   }
 
   private async mergeOfficialMetadata(repositoryRoot: string, result: Record<string, unknown>): Promise<void> {
@@ -291,9 +335,9 @@ export class WorktreeService {
   }
 }
 
-function parseWorktreeList(output: string): Array<{ path: string; head?: string; branch?: string; prunable?: boolean }> {
-  const result: Array<{ path: string; head?: string; branch?: string; prunable?: boolean }> = [];
-  let current: { path: string; head?: string; branch?: string; prunable?: boolean } | undefined;
+function parseWorktreeList(output: string): Array<{ path: string; head?: string; branch?: string; prunable?: boolean; prunableReason?: string }> {
+  const result: Array<{ path: string; head?: string; branch?: string; prunable?: boolean; prunableReason?: string }> = [];
+  let current: { path: string; head?: string; branch?: string; prunable?: boolean; prunableReason?: string } | undefined;
   for (const field of output.split("\0")) {
     if (!field) { if (current) result.push(current); current = undefined; continue; }
     const split = field.indexOf(" ");
@@ -302,7 +346,7 @@ function parseWorktreeList(output: string): Array<{ path: string; head?: string;
     if (key === "worktree") { if (current) result.push(current); current = { path: value }; }
     else if (current && key === "HEAD") current.head = value;
     else if (current && key === "branch") current.branch = value;
-    else if (current && key === "prunable") current.prunable = true;
+    else if (current && key === "prunable") { current.prunable = true; if (value) current.prunableReason = value; }
   }
   if (current) result.push(current);
   return result;

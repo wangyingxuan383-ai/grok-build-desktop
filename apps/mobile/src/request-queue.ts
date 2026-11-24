@@ -15,7 +15,7 @@ export class CancelledError extends Error {
 }
 
 interface Waiter<T> { resolve: (value: T) => void; reject: (error: unknown) => void; cancelled: boolean }
-interface Job<T> { key: string; priority: Priority; order: number; run: () => Promise<T>; waiters: Waiter<T>[]; started: boolean }
+interface Job<T> { key: string; priority: Priority; order: number; run: (priority: () => Priority) => Promise<T>; waiters: Waiter<T>[]; started: boolean }
 
 export interface Ticket<T> { promise: Promise<T>; cancel: () => void }
 
@@ -29,13 +29,13 @@ export function createRequestQueue(maxParallel = 3) {
             const job = pending.shift()!;
             if (!live(job)) { jobs.delete(job.key); continue; }
             job.started = true; active++;
-            job.run().then(
+            job.run(() => job.priority).then(
                 value => { for (const w of job.waiters) if (!w.cancelled) w.resolve(value); },
                 error => { for (const w of job.waiters) if (!w.cancelled) w.reject(error); },
             ).finally(() => { active--; jobs.delete(job.key); pump(); });
         }
     };
-    function request<T>(key: string, priority: Priority, run: () => Promise<T>): Ticket<T> {
+    function request<T>(key: string, priority: Priority, run: (priority: () => Priority) => Promise<T>): Ticket<T> {
         let job = jobs.get(key) as Job<T> | undefined;
         if (!job) {
             job = { key, priority, order: order++, run, waiters: [], started: false };

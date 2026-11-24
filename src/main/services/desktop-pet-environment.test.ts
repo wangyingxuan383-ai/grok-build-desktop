@@ -13,4 +13,17 @@ describe("restricted native context",()=>{
   child.stdout.write(JSON.stringify({id:child.writes[0].id,ok:true,result:value})+"\n");expect(changes).toHaveLength(1);clock=999;vi.advanceTimersByTime(999);expect(child.writes).toHaveLength(1);clock=1000;vi.advanceTimersByTime(1);expect(child.writes).toHaveLength(2);
   env.stop();child.stdout.write(JSON.stringify({id:child.writes[1].id,ok:true,result:{...value,fullScreen:true}})+"\n");expect(changes).toHaveLength(1);expect(child.kill).toHaveBeenCalledOnce();env.dispose();
  });
+ it("forwards sanitized ownProcessIds and reports healthy only while the worker is alive",()=>{
+  const workers:any[]=[],changes:any[]=[];
+  const spawn=vi.fn(()=>{const child:any=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.writes=[];child.stdin=new Writable({write(chunk,_enc,done){child.writes.push(JSON.parse(chunk.toString()));done();}});child.kill=vi.fn();workers.push(child);return child;});
+  const env=new DesktopPetEnvironment("helper.exe",v=>changes.push(v),{spawn,now:()=>0,ownProcessIds:()=>[4242,-1,0,4242,3.5,9_999_999_999]});
+  expect(env.healthy).toBe(false);
+  env.start();
+  expect(env.healthy).toBe(true);
+  expect(workers[0].writes[0]).toEqual({id:1,method:"context",ownProcessIds:[4242]});
+  workers[0].emit("exit",1);
+  expect(env.healthy).toBe(false);
+  expect(changes.at(-1)).toMatchObject({locked:true});
+  env.dispose();
+ });
 });

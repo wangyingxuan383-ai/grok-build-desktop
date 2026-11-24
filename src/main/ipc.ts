@@ -19,6 +19,10 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("desktop-pet:skins", () => controller.listPetSkins());
   handle("desktop-pet:command", (command:"show"|"hide"|"reset"|"preview",clip?:import("../shared/desktop-pet").PetClipId) => controller.petCommand(command,clip));
   handle("desktop-pet:import", () => controller.importPetSkin());
+  handle("desktop-pet:import-sheet", (input: import("../shared/desktop-pet").PetSpriteSheetImportInput) => controller.importPetSpriteSheet(input));
+  handle("desktop-pet:export", (id: string, format: "grok" | "codex") => controller.exportPetSkin(id, format));
+  handle("desktop-pet:delete", (id: string) => controller.deletePetSkin(id));
+  handle("app:popup-menu", (position?: { x: number; y: number }) => controller.popupAppMenu(position));
   handle("cli:config-state", () => controller.getCliConfigState());
   handle("inbox:mark-all-read", () => controller.markAllInboxRead());
   handle("snippets:list", () => controller.listPromptSnippets());
@@ -160,6 +164,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("attachment:inspect-privacy", (cwd: string, attachments: Attachment[]) => controller.inspectAttachmentPrivacy(cwd, attachments));
   handle("session:list", (cwd?: string, query?: string) => controller.listSessions(cwd, query));
   handle("session:official-list", (cwd?: string, cursor?: string) => controller.listOfficialSessions(cwd, cursor));
+  handle("session:search", (query: string, cwd?: string, limit?: number) => controller.searchOfficialSessions(query, cwd, limit));
+  handle("workflows:list", (cwd?: string) => controller.listWorkflows(cwd));
   handle("session:create", (input: string | ExecutionProfileLaunchInput) => controller.createSession(input));
   handle("session:preview", (cwd: string, id: string) => controller.previewSession(cwd, id));
   handle("session:inspect", (cwd: string, id: string) => controller.inspectSession(cwd, id));
@@ -172,12 +178,13 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:btw", (id: string, text: string) => controller.sendBtwPrompt(id, text));
   handle("feedback:capability", (id: string) => controller.getOfficialFeedbackCapability(id));
   handle("feedback:preview", (text: string) => controller.previewOfficialFeedback(text));
-  handle("feedback:submit", (id: string, text: string) => controller.submitOfficialFeedback(id, text));
+  handle("feedback:submit", (id: string, text: string, imagePaths?: string[]) => controller.submitOfficialFeedback(id, text, imagePaths));
   handle("session:rename", (id: string, title: string) => controller.renameSession(id, title));
   handle("session:delete", (cwd: string, id: string) => controller.deleteSession(cwd, id));
   handle("session:delete-desktop-data", (cwd: string, id: string) => controller.deleteDesktopSessionData(cwd, id));
   handle("session:clear", (cwd: string, keep?: string) => controller.clearSessions(cwd, keep));
   handle("session:pin", (id: string, pinned: boolean) => controller.pinSession(id, pinned));
+  handle("session:settle", (id: string, settled: boolean) => controller.settleSession(id, settled));
   handle("session:export-markdown", (cwd: string, id: string) => controller.exportSessionMarkdown(cwd, id));
   handle("session:media-capabilities", (id: string) => controller.getMediaCapabilities(id));
   handle("media:start", (request: MediaCreationRequest & { sessionId: string }) => controller.startMediaGeneration(request));
@@ -209,7 +216,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:fork", (sessionId: string, pointId?: string, launch?: ExecutionProfileLaunchInput) => controller.forkSession(sessionId, pointId, launch));
   handle("workspace:rebind-sessions", (sourceCwd: string, targetCwd: string) => controller.rebindWorkspaceSessions(sourceCwd, targetCwd));
   handle("session:rewind-points", (sessionId: string) => controller.listRewindPoints(sessionId));
-  handle("session:rewind", (sessionId: string, pointId: string) => controller.rewindSession(sessionId, pointId));
+  handle("session:rewind", (sessionId: string, pointId: string, mode?: import("../shared/types").RewindMode) => controller.rewindSession(sessionId, pointId, mode));
   handle("session:archive", (sessionId: string, archived: boolean) => controller.archiveSession(sessionId, archived));
   handle("tasks:list", () => controller.listBackgroundTasks());
   handle("native-runs:list", (id?: string) => controller.listNativeRuns(id));
@@ -226,7 +233,7 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("session:model", (id: string, model: string) => controller.setModel(id, model));
   handle("session:effort", (id: string, effort: ReasoningEffort) => controller.setEffort(id, effort));
   handle("session:mode", (id: string, mode: SessionMode) => controller.setMode(id, mode));
-  handle("permission:respond", (id: string, requestId: string | number, optionId: string) => controller.respondPermission(id, requestId, optionId));
+  handle("permission:respond", (id: string, requestId: string | number, optionId: string, feedback?: string) => controller.respondPermission(id, requestId, optionId, feedback));
   handle("question:respond", (id: string, requestId: string | number, answers: Record<string, string>) => controller.respondQuestion(id, requestId, answers));
   handle("mcp-elicitation:respond", (id: string, requestId: string | number, outcome: "accept" | "decline" | "cancel", content?: Record<string, string | number | boolean>) => controller.respondMcpElicitation(id, requestId, outcome, content));
   handle("plan:respond", (id: string, requestId: string | number | undefined, verdict: "approved" | "rejected" | "cancelled", comment?: string, executionMode?: "agent" | "auto") => controller.respondPlan(id, requestId, verdict, comment, executionMode));
@@ -243,7 +250,8 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("system:open-external", (url: string) => controller.openExternal(url));
   handle("settings:get", () => controller.getSettings());
   handle("git:pull-request",(workspace:string)=>controller.getPullRequestStatus(workspace));
-  handle("git:watch-pull-request",(workspace:string,sessionId:string,enabled:boolean)=>controller.watchPullRequest(workspace,sessionId,enabled));
+  handle("git:create-pull-request", (input: import("../shared/workspace-tools").PullRequestCreateInput) => controller.createPullRequest(input));
+  handle("git:watch-pull-request",(workspace:string,sessionId:string,enabled:boolean,settleOnMerge?:boolean)=>controller.watchPullRequest(workspace,sessionId,enabled,settleOnMerge));
   handle("settings:update", (patch: Partial<AppSettings>) => controller.updateSettings(patch));
   handle("models:catalog", (refresh?: boolean) => controller.listModelCatalog(refresh));
   handle("theme:get", () => controller.getTheme());
@@ -355,6 +363,33 @@ export function registerIpc(controller: AppController, window: BrowserWindow, po
   handle("cli:compatibility", () => controller.getCliCompatibilitySnapshot());
   handle("cli:update-history", () => controller.getCliUpdateHistory());
   handle("logs:export", () => controller.exportLogs());
+
+  handle("workspace-scripts:list", (workspacePath: string, executionCwd?: string) => controller.listWorkspaceScripts(workspacePath, executionCwd));
+  handle("workspace-scripts:save", (input: import("../shared/workspace-tools").WorkspaceScriptSaveInput) => controller.saveWorkspaceScript(input));
+  handle("workspace-scripts:delete", (workspacePath: string, scriptId: string) => controller.deleteWorkspaceScript(workspacePath, scriptId));
+  handle("workspace-scripts:approve", (workspacePath: string, scriptId: string, commandHash: string, trusted: boolean, executionCwd?: string) => controller.approveWorkspaceScript(workspacePath, scriptId, commandHash, trusted, executionCwd));
+  handle("workspace-scripts:run", (input: import("../shared/workspace-tools").WorkspaceScriptRunInput) => controller.runWorkspaceScript(input));
+  handle("workspace-scripts:stop", (runIdOrTerminalId: string) => controller.stopWorkspaceScript(runIdOrTerminalId));
+  handle("workspace-scripts:running", (workspacePath: string) => controller.listRunningWorkspaceScripts(workspacePath));
+
+  handle("git:checkpoints:list", (cwd: string, sessionId: string) => controller.listGitTurnCheckpoints(cwd, sessionId));
+  handle("git:checkpoints:turn-diff", (cwd: string, sessionId: string, turnOrdinal: number) => controller.getGitTurnDiff(cwd, sessionId, turnOrdinal));
+
+  handle("session:handoff-worktree", (input: import("../shared/workbench-types").SessionWorktreeHandoffInput) => controller.handoffSessionToWorktree(input));
+  handle("session:snooze", (sessionId: string, snoozedUntil: string | null) => controller.snoozeSession(sessionId, snoozedUntil));
+  handle("session:unread", (sessionId: string, unread: boolean) => controller.setSessionUnread(sessionId, unread));
+  handle("session:settle-on-turn-end", (sessionId: string, enabled: boolean) => controller.setSessionSettleOnTurnEnd(sessionId, enabled));
+  handle("session:merge-back:preview", (sessionId: string, targetSessionId?: string) => controller.previewMergeBackSession(sessionId, targetSessionId));
+  handle("session:merge-back", (input: import("../shared/workbench-types").MergeBackSessionInput) => controller.mergeBackSession(input));
+  handle("session:merge-back:dismiss", (parentSessionId: string, childSessionId: string) => controller.dismissStagedMergeBack(parentSessionId, childSessionId));
+  handle("session:queue:steer", (sessionId: string, id: string, text?: string) => controller.promoteQueuedPromptToSteer(sessionId, id, text));
+  handle("session:clear-context", (input: import("../shared/types").ClearSessionContextInput) => controller.clearSessionContextInPlace(input));
+
+  handle("git:pull-request:templates", (workspace: string) => controller.discoverPullRequestTemplates(workspace));
+  handle("git:pull-request:stack", (workspace: string) => controller.getPullRequestStack(workspace));
+  handle("github:issues:list", (workspace: string, query?: import("../shared/workspace-tools").GitHubIssueListQuery) => controller.listGitHubIssues(workspace, query));
+  handle("github:issues:get", (workspace: string, issueNumber: number) => controller.getGitHubIssue(workspace, issueNumber));
+  handle("session:link-issue", (sessionId: string, issue: import("../shared/workspace-tools").SessionLinkedIssue | null) => controller.linkSessionIssue(sessionId, issue));
 }
 
 function assertTrustedIpcSender(event: IpcMainInvokeEvent, window: BrowserWindow, policy: RendererTrustPolicy): void {

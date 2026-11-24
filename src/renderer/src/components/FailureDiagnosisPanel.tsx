@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FailureDiagnosisReport, TurnFailure } from "../../../shared/types";
 import { summarizeTurnFailure } from "../../../shared/turn-failure";
+import "../styles/diagnostics-onboarding.css";
 
 /**
  * Diagnoses one specific failed turn. Distinct from the compatibility centre on

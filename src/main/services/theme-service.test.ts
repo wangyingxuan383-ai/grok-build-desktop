@@ -17,6 +17,30 @@ describe("ThemeService", () => {
     expect(value.background.dim).toBe(.9);
   });
 
+  it("preserves and validates preset ids and wallpaper palette extraction flags", () => {
+    const withPresets = mergeThemeSettings(DEFAULT_THEME, {
+      mode: "system",
+      presetId: "Tokyo-Night",
+      darkPresetId: "mirasim- dusk",
+      lightPresetId: "catppuccin-latte",
+      autoExtractWallpaperPalette: true,
+    });
+    expect(withPresets.presetId).toBe("tokyo-night");
+    expect(withPresets.darkPresetId).toBe("mirasim-dusk");
+    expect(withPresets.lightPresetId).toBe("catppuccin-latte");
+    expect(withPresets.autoExtractWallpaperPalette).toBe(true);
+
+    const cleared = mergeThemeSettings(withPresets, {
+      presetId: "",
+      darkPresetId: "../invalid-traversal",
+      autoExtractWallpaperPalette: false,
+    });
+    expect(cleared.presetId).toBeUndefined();
+    expect(cleared.darkPresetId).toBeUndefined();
+    expect(cleared.lightPresetId).toBe("catppuccin-latte");
+    expect(cleared.autoExtractWallpaperPalette).toBe(false);
+  });
+
   it("copies a validated image under an app-owned fixed name and removes it", async () => {
     const root = await mkdtemp(join(tmpdir(), "grok-theme-")); roots.push(root);
     const source = join(root, "来源 图片.png");
